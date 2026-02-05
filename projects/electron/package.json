@@ -1,0 +1,114 @@
+{
+  "name": "OpenADE",
+  "version": "1.0.0",
+  "scripts": {
+    "postinstall": "electron-rebuild -f -w node-pty",
+    "clean": "rm -rf ./dist",
+    "build": "npm run clean && node ./build.mjs",
+    "watch": "yarn && modd",
+    "start": "npm install && RELEASE=head DEBUG=1 npm run build && npx electron dist/main.js",
+    "typecheck": "tsgo --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest run --coverage",
+    "build:web": "cd ../web && yarn install && yarn build && cd ../electron && cp -r ../web/dist ./dist/web",
+    "build:test-mac": "npm run build && npm run build:web && NONOTARY=1 CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir && rm -rf /Applications/OpenADE.app && cp -R dist/electron/mac-arm64/OpenADE.app /Applications/OpenADE.app && xattr -cr /Applications/OpenADE.app && open /Applications/OpenADE.app",
+    "knip": "knip"
+  },
+  "description": "Task planning and execution powered by Claude.",
+  "author": "OpenADE",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.31",
+    "@sentry/electron": "^5.10.0",
+    "electron-context-menu": "^3.6.1",
+    "electron-log": "^4.4.8",
+    "electron-store": "^8.1.0",
+    "electron-updater": "^5.3.0",
+    "fs-extra": "^11.1.0",
+    "fuzzysort": "^3.1.0",
+    "lodash": "^4.17.21",
+    "node-pty": "^1.1.0",
+    "smol-toml": "^1.6.0",
+    "yjs": "^13.6.29",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@electron/notarize": "^3.1.1",
+    "@types/lodash": "^4.14.186",
+    "@typescript/native-preview": "^7.0.0-dev.20260107.1",
+    "@vitest/ui": "^4.0.16",
+    "electron": "^39.2.7",
+    "electron-builder": "^26.0.0",
+    "esbuild": "^0.19.8",
+    "knip": "^5.83.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
+  },
+  "main": "./dist/main.js",
+  "build": {
+    "generateUpdatesFilesForAllChannels": true,
+    "files": [
+      "dist/main.js"
+    ],
+    "asarUnpack": [
+      "node_modules/@anthropic-ai/claude-agent-sdk/**"
+    ],
+    "extraResources": [
+      "dist/pages/**",
+      "dist/web/**"
+    ],
+    "afterSign": "build/notarize.js",
+    "appId": "com.openade.app",
+    "directories": {
+      "output": "./dist/electron"
+    },
+    "copyright": "Copyright OpenADE",
+    "mac": {
+      "x64ArchFiles": "**",
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "extendInfo": {
+        "LSUIElement": "true"
+      },
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "sign": true,
+      "contents": [
+        {
+          "x": 140,
+          "y": 130
+        },
+        {
+          "x": 405,
+          "y": 130,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "bearlyai",
+      "repo": "OpenADE"
+    }
+  }
+}

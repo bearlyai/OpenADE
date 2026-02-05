@@ -1,0 +1,31 @@
+{
+    "compilerOptions": {
+        "moduleResolution": "Bundler",
+        "esModuleInterop": true,
+        "lib": ["es2020", "ESNext", "dom"],
+        "jsx": "react",
+        "target": "ESNext",
+        "module": "ESNext",
+        "removeComments": true,
+        "allowUnreachableCode": false,
+        "noFallthroughCasesInSwitch": true,
+        "noImplicitReturns": true,
+        "forceConsistentCasingInFileNames": true,
+        "noImplicitThis": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "strictFunctionTypes": true,
+        "useDefineForClassFields": true,
+        "strictPropertyInitialization": false,
+        "experimentalDecorators": true,
+        "strictNullChecks": true,
+        "skipLibCheck": true,
+        "strict": true,
+        "noEmit": true,
+        "sourceMap": true,
+        "outDir": "dist",
+        "types": ["node"]
+    },
+    "include": ["src/**/*"],
+    "exclude": ["node_modules"]
+}

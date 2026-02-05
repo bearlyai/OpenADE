@@ -1,0 +1,7 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": ["src/preload.ts", "build/notarize.js"],
+  "ignore": ["build/notarize.js"],
+  "ignoreDependencies": ["macos-notification-state", "@vitest/coverage-v8"],
+  "ignoreBinaries": ["electron-rebuild", "modd", "xattr", "open"]
+}

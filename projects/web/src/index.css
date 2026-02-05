@@ -1,0 +1,77 @@
+@import "./tw.css";
+
+/* Clash Grotesk Variable Font - Licensed under Fontshare FF EULA (see LICENSE.txt in fonts/clash/) */
+@font-face {
+    font-family: "Clash Grotesk";
+    src: url("./assets/fonts/clash/ClashGrotesk-Variable.woff2") format("woff2"), url("./assets/fonts/clash/ClashGrotesk-Variable.woff") format("woff");
+    font-weight: 200 700;
+    font-display: swap;
+    font-style: normal;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+* {
+    margin: 0;
+}
+
+:root {
+    /* Clash Grotesk with system font fallbacks */
+    font-family: "Clash Grotesk", Inter, Roboto, "Helvetica Neue", "Arial Nova", "Nimbus Sans", Arial, sans-serif;
+}
+html,
+body {
+    height: 100%;
+}
+body {
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+img,
+picture,
+video,
+canvas,
+svg {
+    display: block;
+    max-width: 100%;
+}
+input,
+button,
+textarea,
+select {
+    font: inherit;
+}
+p,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    overflow-wrap: break-word;
+}
+
+button {
+    outline: none;
+    border: 0;
+}
+
+button:focus {
+    outline: none;
+    border: 0;
+}
+
+#root,
+#__next {
+    height: 100%;
+    isolation: isolate;
+}
+
+.electron-drag-region {
+    /* DO NOT CHANGE WITHOUT GREP! */
+
+    -webkit-app-region: drag;
+}

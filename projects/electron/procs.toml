@@ -1,0 +1,24 @@
+[[process]]
+name = "Install"
+type = "setup"
+command = "yarn install"
+
+[[process]]
+name = "Dev Server"
+type = "daemon"
+command = "modd"
+
+[[process]]
+name = "Build"
+type = "task"
+command = "npm run build"
+
+[[process]]
+name = "Typecheck"
+type = "check"
+command = "npm run typecheck"
+
+[[process]]
+name = "Test"
+type = "check"
+command = "npm run test"

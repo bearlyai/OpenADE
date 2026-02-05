@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "WebFetch"
+    ],
+    "deny": []
+  },
+  "includeCoAuthoredBy": false
+}

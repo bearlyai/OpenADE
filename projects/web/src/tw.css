@@ -1,0 +1,327 @@
+@import "tailwindcss/theme.css";
+@import "tailwindcss/utilities.css";
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+ * Code Module Theme - Standalone theme definitions
+ *
+ * This is the theme system for the code/ module.
+ * Uses OKLCH color space for perceptual uniformity and easy variant generation.
+ * Opacity modifiers work: bg-primary/10, text-error/50, etc.
+ *
+ * Usage: Apply className="code-theme-light" or "code-theme-black" to root element.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * COLOR REFERENCE (DaisyUI-compatible semantic colors)
+ * ═══════════════════════════════════════════════════════════════════════════════
+ *
+ * BRAND COLORS:
+ *   primary          - Primary brand color. The main color of your brand.
+ *   primary-content  - Foreground content color to use on primary color.
+ *   secondary        - Secondary brand color. The optional, secondary color of your brand.
+ *   secondary-content- Foreground content color to use on secondary color.
+ *   accent           - Accent brand color. The optional, accent color of your brand.
+ *   accent-content   - Foreground content color to use on accent color.
+ *   neutral          - Neutral dark color. For non-saturated parts of UI.
+ *   neutral-content  - Foreground content color to use on neutral color.
+ *
+ * BASE COLORS (surfaces):
+ *   base-100         - Base surface color of page. Used for blank backgrounds.
+ *   base-200         - Base color, darker shade. To create elevations.
+ *   base-300         - Base color, even more darker shade. To create elevations.
+ *   base-content     - Foreground content color to use on base color.
+ *
+ * SEMANTIC STATES:
+ *   info             - Info color. For informative/helpful messages.
+ *   info-content     - Foreground content color to use on info color.
+ *   success          - Success color. For success/safe messages.
+ *   success-content  - Foreground content color to use on success color.
+ *   warning          - Warning color. For warning/caution messages.
+ *   warning-content  - Foreground content color to use on warning color.
+ *   error            - Error color. For error/danger/destructive messages.
+ *   error-content    - Foreground content color to use on error color.
+ *
+ * ADDITIONAL TOKENS (custom):
+ *   border           - Border color for UI elements.
+ *   input            - Background color for input fields.
+ *   muted            - Muted/subtle text color.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════════ */
+
+/* Register color tokens with Tailwind (defaults for light theme, overridden by theme classes) */
+@theme {
+    /* Brand colors */
+    --color-primary: oklch(0.702 0.191 41.6);
+    --color-primary-content: oklch(1 0 0);
+    --color-secondary: oklch(0.92 0 0);
+    --color-secondary-content: oklch(0.15 0 0);
+    --color-accent: oklch(0.702 0.191 41.6);
+    --color-accent-content: oklch(1 0 0);
+    --color-neutral: oklch(0.702 0.191 41.6 / 0.1);
+    --color-neutral-content: oklch(0.702 0.191 41.6);
+
+    /* Base colors (surfaces) */
+    --color-base-100: oklch(0.98 0 0);
+    --color-base-200: oklch(1 0 0);
+    --color-base-300: oklch(0.88 0 0);
+    --color-base-content: oklch(0.15 0 0);
+
+    /* Semantic states */
+    --color-info: oklch(0.62 0.19 250);
+    --color-info-content: oklch(1 0 0);
+    --color-success: oklch(0.72 0.22 142);
+    --color-success-content: oklch(1 0 0);
+    --color-warning: oklch(0.75 0.18 70);
+    --color-warning-content: oklch(1 0 0);
+    --color-error: oklch(0.63 0.26 25);
+    --color-error-content: oklch(1 0 0);
+
+    /* Custom tokens */
+    --color-border: oklch(0.87 0 0);
+    --color-input: oklch(0.96 0 0);
+    --color-muted: oklch(0.45 0 0);
+
+    /* Editor/Terminal background (overridden per theme) */
+    --color-editor-background: #ffffff;
+}
+
+/* Code Theme - Light mode */
+.code-theme-light {
+    color: var(--color-base-content);
+    background-color: var(--color-base-100);
+
+    /* Editor theme for syntax highlighting */
+    --editor-theme: pierre-light;
+    --color-editor-background: #ffffff;
+    /* Terminal theme */
+    --terminal-theme: pierre-light;
+
+    --color-base-100: oklch(100% 0 0);
+    --color-base-200: oklch(98% 0 0);
+    --color-base-300: oklch(95% 0 0);
+    --color-base-content: oklch(21% 0.006 285.885);
+    --color-primary: oklch(45% 0.24 277.023);
+    --color-primary-content: oklch(93% 0.034 272.788);
+    --color-secondary: oklch(65% 0.241 354.308);
+    --color-secondary-content: oklch(94% 0.028 342.258);
+    --color-accent: oklch(77% 0.152 181.912);
+    --color-accent-content: oklch(38% 0.063 188.416);
+    --color-neutral: oklch(14% 0.005 285.823);
+    --color-neutral-content: oklch(92% 0.004 286.32);
+    --color-info: oklch(74% 0.16 232.661);
+    --color-info-content: oklch(29% 0.066 243.157);
+    --color-success: oklch(76% 0.177 163.223);
+    --color-success-content: oklch(37% 0.077 168.94);
+    --color-warning: oklch(82% 0.189 84.429);
+    --color-warning-content: oklch(41% 0.112 45.904);
+    --color-error: oklch(71% 0.194 13.428);
+    --color-error-content: oklch(27% 0.105 12.094);
+    --color-border: oklch(0.87 0 0);
+    --color-input: oklch(0.96 0 0);
+    --color-muted: oklch(0.45 0 0);
+}
+
+/* Code Theme - Bright (vibrant light theme with colorful accents) */
+.code-theme-bright {
+    color: var(--color-base-content);
+    background-color: var(--color-base-100);
+    --editor-theme: light-plus;
+    --color-editor-background: #ffffff;
+    --terminal-theme: atom-one-light;
+
+    --color-base-100: oklch(98% 0 0);
+    --color-base-200: oklch(95% 0 0);
+    --color-base-300: oklch(91% 0 0);
+    --color-base-content: oklch(0% 0 0);
+    --color-primary: oklch(71.9% 0.357 330.759);
+    --color-primary-content: oklch(14.38% 0.071 330.759);
+    --color-secondary: oklch(73.37% 0.224 48.25);
+    --color-secondary-content: oklch(14.674% 0.044 48.25);
+    --color-accent: oklch(92.78% 0.264 122.962);
+    --color-accent-content: oklch(18.556% 0.052 122.962);
+    --color-neutral: oklch(21.31% 0.128 278.68);
+    --color-neutral-content: oklch(84.262% 0.025 278.68);
+    --color-info: oklch(60.72% 0.227 252.05);
+    --color-info-content: oklch(12.144% 0.045 252.05);
+    --color-success: oklch(85.72% 0.266 158.53);
+    --color-success-content: oklch(17.144% 0.053 158.53);
+    --color-warning: oklch(91.01% 0.212 100.5);
+    --color-warning-content: oklch(18.202% 0.042 100.5);
+    --color-error: oklch(64.84% 0.293 29.349);
+    --color-error-content: oklch(12.968% 0.058 29.349);
+    --color-border: oklch(0.88 0 0);
+    --color-input: oklch(0.95 0 0);
+    --color-muted: oklch(0.45 0 0);
+}
+
+/* Code Theme - Clean (minimal light theme with pure black/white) */
+.code-theme-clean {
+    color: var(--color-base-content);
+    background-color: var(--color-base-100);
+    --editor-theme: light-plus;
+    --color-editor-background: #ffffff;
+    --terminal-theme: atom-one-light;
+
+    --color-base-100: oklch(100% 0 0);
+    --color-base-200: oklch(97% 0 0);
+    --color-base-300: oklch(94% 0 0);
+    --color-base-content: oklch(0% 0 0);
+    --color-primary: oklch(15.906% 0 0);
+    --color-primary-content: oklch(100% 0 0);
+    --color-secondary: oklch(21.455% 0.001 17.278);
+    --color-secondary-content: oklch(100% 0 0);
+    --color-accent: oklch(26.861% 0 0);
+    --color-accent-content: oklch(100% 0 0);
+    --color-neutral: oklch(0% 0 0);
+    --color-neutral-content: oklch(100% 0 0);
+    --color-info: oklch(79.54% 0.103 205.9);
+    --color-info-content: oklch(15.908% 0.02 205.9);
+    --color-success: oklch(90.13% 0.153 164.14);
+    --color-success-content: oklch(18.026% 0.03 164.14);
+    --color-warning: oklch(88.37% 0.135 79.94);
+    --color-warning-content: oklch(17.674% 0.027 79.94);
+    --color-error: oklch(78.66% 0.15 28.47);
+    --color-error-content: oklch(15.732% 0.03 28.47);
+    --color-border: oklch(0.9 0 0);
+    --color-input: oklch(0.97 0 0);
+    --color-muted: oklch(0.45 0 0);
+}
+
+/* Code Theme - Black mode (true black for OLED) */
+.code-theme-black {
+    color: var(--color-base-content);
+    background-color: var(--color-base-100);
+    --editor-theme: pierre-dark;
+    --color-editor-background: #000000;
+    --terminal-theme: pierre-black;
+
+    --color-base-100: oklch(0% 0 0);
+    --color-base-200: oklch(19% 0 0);
+    --color-base-300: oklch(22% 0 0);
+    --color-base-content: oklch(87.609% 0 0);
+    --color-primary: var(--color-orange-700);
+    --color-primary-content: oklch(1 0 0);
+    --color-secondary: oklch(0.27 0 0);
+    --color-secondary-content: oklch(0.95 0 0);
+    --color-accent: oklch(35% 0 0);
+    --color-accent-content: oklch(100% 0 0);
+    --color-neutral: oklch(35% 0 0);
+    --color-neutral-content: oklch(100% 0 0);
+    --color-info: oklch(50.201% 0.313 264.052);
+    --color-info-content: oklch(89.04% 0.062 264.052);
+    --color-success: oklch(51.975% 0.176 142.495);
+    --color-success-content: oklch(90.395% 0.035 142.495);
+    --color-warning: oklch(96.798% 0.211 109.769);
+    --color-warning-content: oklch(19.359% 0.042 109.769);
+    --color-error: oklch(62.795% 0.257 29.233);
+    --color-error-content: oklch(12.559% 0.051 29.233);
+    --color-border: oklch(0.25 0 0 / 0.5);
+    --color-input: oklch(0.19 0 0);
+    --color-muted: oklch(0.55 0 0);
+}
+
+/* Code Theme - Synthwave (retro neon aesthetic) */
+.code-theme-synthwave {
+    color: var(--color-base-content);
+    background-color: var(--color-base-100);
+    --editor-theme: tokyo-night;
+    --color-editor-background: #1a1b26;
+    --terminal-theme: tokyo-night;
+
+    --color-base-100: oklch(15% 0.09 281.288);
+    --color-base-200: oklch(20% 0.09 281.288);
+    --color-base-300: oklch(25% 0.09 281.288);
+    --color-base-content: oklch(78% 0.115 274.713);
+    --color-primary: oklch(71% 0.202 349.761);
+    --color-primary-content: oklch(28% 0.109 3.907);
+    --color-secondary: oklch(82% 0.111 230.318);
+    --color-secondary-content: oklch(29% 0.066 243.157);
+    --color-accent: oklch(75% 0.183 55.934);
+    --color-accent-content: oklch(26% 0.079 36.259);
+    --color-neutral: oklch(45% 0.24 277.023);
+    --color-neutral-content: oklch(87% 0.065 274.039);
+    --color-info: oklch(74% 0.16 232.661);
+    --color-info-content: oklch(29% 0.066 243.157);
+    --color-success: oklch(77% 0.152 181.912);
+    --color-success-content: oklch(27% 0.046 192.524);
+    --color-warning: oklch(90% 0.182 98.111);
+    --color-warning-content: oklch(42% 0.095 57.708);
+    --color-error: oklch(73.7% 0.121 32.639);
+    --color-error-content: oklch(23.501% 0.096 290.329);
+    --color-border: oklch(0.35 0.09 281.288 / 0.5);
+    --color-input: oklch(0.2 0.09 281.288);
+    --color-muted: oklch(0.55 0.08 274.713);
+}
+
+/* Code Theme - Dracula (popular dark theme with vibrant colors) */
+.code-theme-dracula {
+    color: var(--color-base-content);
+    background-color: var(--color-base-100);
+    --editor-theme: dracula;
+    --color-editor-background: #282a36;
+    --terminal-theme: dracula;
+
+    --color-base-100: oklch(28.822% 0.022 277.508);
+    --color-base-200: oklch(26.805% 0.02 277.508);
+    --color-base-300: oklch(24.787% 0.019 277.508);
+    --color-base-content: oklch(97.747% 0.007 106.545);
+    --color-primary: oklch(75.461% 0.183 346.812);
+    --color-primary-content: oklch(15.092% 0.036 346.812);
+    --color-secondary: oklch(74.202% 0.148 301.883);
+    --color-secondary-content: oklch(14.84% 0.029 301.883);
+    --color-accent: oklch(83.392% 0.124 66.558);
+    --color-accent-content: oklch(16.678% 0.024 66.558);
+    --color-neutral: oklch(39.445% 0.032 275.524);
+    --color-neutral-content: oklch(87.889% 0.006 275.524);
+    --color-info: oklch(88.263% 0.093 212.846);
+    --color-info-content: oklch(17.652% 0.018 212.846);
+    --color-success: oklch(87.099% 0.219 148.024);
+    --color-success-content: oklch(17.419% 0.043 148.024);
+    --color-warning: oklch(95.533% 0.134 112.757);
+    --color-warning-content: oklch(19.106% 0.026 112.757);
+    --color-error: oklch(68.22% 0.206 24.43);
+    --color-error-content: oklch(13.644% 0.041 24.43);
+    --color-border: oklch(0.35 0.022 277.508 / 0.5);
+    --color-input: oklch(0.26 0.02 277.508);
+    --color-muted: oklch(0.6 0.01 277.508);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+ * Low specificity resets
+ * ═══════════════════════════════════════════════════════════════════════════════ */
+
+:where(.code-theme) :where(.btn) {
+    all: unset;
+    outline: revert;
+    cursor: pointer;
+    box-sizing: border-box;
+}
+
+:where(.code-theme) :where(.input) {
+    outline: none;
+    border-width: 0;
+    padding: 0.5rem 1rem;
+    border-radius: 0;
+    color: var(--color-base-content);
+    background: var(--color-input);
+}
+
+:where(.code-theme) :where(.input::placeholder) {
+    color: var(--color-muted);
+}
+
+:where(.code-theme) :where(.input:read-only) {
+    cursor: text;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+ * Animations
+ * ═══════════════════════════════════════════════════════════════════════════════ */
+
+@keyframes shimmer {
+    0% {
+        transform: translateX(-100%);
+    }
+    100% {
+        transform: translateX(100%);
+    }
+}

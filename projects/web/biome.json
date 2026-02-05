@@ -1,0 +1,71 @@
+{
+    "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+    "organizeImports": {
+        "enabled": true
+    },
+    "files": {
+        "include": ["src"]
+    },
+    "linter": {
+        "enabled": true,
+        "rules": {
+            "recommended": true,
+            "suspicious": {
+                "noExplicitAny": "off",
+                "noDoubleEquals": {
+                    "fix": "safe",
+                    "level": "error",
+                    "options": {
+                        "ignoreNull": true
+                    }
+                },
+                "noArrayIndexKey": "off"
+            },
+            "complexity": {
+                "noForEach": "off"
+            },
+            "a11y": {
+                "noSvgWithoutTitle": "off",
+                "useKeyWithClickEvents": "off",
+                "useMediaCaption": "off",
+                "useSemanticElements": "off",
+                "useFocusableInteractive": "off",
+                "noAutofocus": "off"
+            },
+            "correctness": {
+                "noUnusedImports": "error",
+                "useExhaustiveDependencies": "info",
+                "noUnnecessaryContinue": "off"
+            },
+            "style": {
+                "useTemplate": "off",
+                "noUselessElse": "off",
+                "useSelfClosingElements": {
+                    "fix": "safe",
+                    "level": "error"
+                },
+                "noUnusedTemplateLiteral": {
+                    "fix": "safe",
+                    "level": "error"
+                },
+                "noNonNullAssertion": "off",
+                "noParameterAssign": "off"
+            }
+        }
+    },
+    "formatter": {
+        "enabled": true,
+        "indentWidth": 4,
+        "indentStyle": "space",
+        "lineWidth": 160
+    },
+    "javascript": {
+        "formatter": {
+            "arrowParentheses": "always",
+            "bracketSameLine": false,
+            "quoteProperties": "asNeeded",
+            "semicolons": "asNeeded",
+            "trailingCommas": "es5"
+        }
+    }
+}

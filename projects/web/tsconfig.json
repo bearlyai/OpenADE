@@ -1,0 +1,42 @@
+{
+    "compilerOptions": {
+        "esModuleInterop": true,
+        "experimentalDecorators": true,
+        "jsx": "react-jsx",
+        "lib": ["es2020", "ESNext", "dom"],
+        "removeComments": true,
+        "useDefineForClassFields": true,
+
+        "allowUnreachableCode": false,
+        "forceConsistentCasingInFileNames": true,
+        "noFallthroughCasesInSwitch": true,
+        "noImplicitReturns": true,
+        "noImplicitThis": true,
+        "noUncheckedIndexedAccess": false,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "skipLibCheck": true,
+        "strict": true,
+        "strictFunctionTypes": true,
+        "strictNullChecks": true,
+        "strictPropertyInitialization": true,
+
+
+        "target": "ESNext",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "noEmit": true,
+        "resolveJsonModule": true,
+        "isolatedModules": true,
+        "types": ["vite/client"],
+        "paths": {
+            "@/*": [
+                "./src/*"
+            ]
+        }
+
+
+    },
+    "include": ["src/**/*"],
+    "exclude": ["node_modules", "src/gen/**/*" ]
+}

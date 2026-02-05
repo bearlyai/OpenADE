@@ -1,0 +1,169 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Prevent concurrent releases
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-macos:
+    runs-on: macos-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set version from tag
+        working-directory: projects/electron
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          npm pkg set version=$VERSION
+
+      # Build web UI first
+      - name: Install web dependencies
+        working-directory: projects/web
+        run: yarn install --frozen-lockfile
+
+      - name: Build web UI
+        working-directory: projects/web
+        run: yarn build
+
+      # Build electron
+      - name: Install electron dependencies
+        working-directory: projects/electron
+        run: yarn install --frozen-lockfile
+
+      - name: Typecheck electron
+        working-directory: projects/electron
+        run: yarn typecheck
+
+      - name: Build electron
+        working-directory: projects/electron
+        run: yarn build
+
+      # Copy web build into electron
+      - name: Bundle web UI into electron
+        run: cp -r projects/web/dist projects/electron/dist/web
+
+      - name: Build & Publish
+        working-directory: projects/electron
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.MACOS_SIGNING_CERT_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_NOTARIZATION_EMAIL }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_NOTARIZATION_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder --mac --universal --publish always
+
+  release-windows:
+    runs-on: windows-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set version from tag
+        working-directory: projects/electron
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          npm pkg set version=$VERSION
+
+      # Build web UI first
+      - name: Install web dependencies
+        working-directory: projects/web
+        run: yarn install --frozen-lockfile
+
+      - name: Build web UI
+        working-directory: projects/web
+        run: yarn build
+
+      # Build electron
+      - name: Install electron dependencies
+        working-directory: projects/electron
+        run: yarn install --frozen-lockfile
+
+      - name: Typecheck electron
+        working-directory: projects/electron
+        run: yarn typecheck
+
+      - name: Build electron
+        working-directory: projects/electron
+        run: yarn build
+
+      # Copy web build into electron
+      - name: Bundle web UI into electron
+        shell: bash
+        run: cp -r projects/web/dist projects/electron/dist/web
+
+      - name: Build & Publish
+        working-directory: projects/electron
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AZURE_TENANT_ID: ${{ secrets.WINDOWS_AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.WINDOWS_AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.WINDOWS_AZURE_CLIENT_SECRET }}
+        run: npx electron-builder --win --x64 --publish always
+
+  release-linux:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set version from tag
+        working-directory: projects/electron
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          npm pkg set version=$VERSION
+
+      # Build web UI first
+      - name: Install web dependencies
+        working-directory: projects/web
+        run: yarn install --frozen-lockfile
+
+      - name: Build web UI
+        working-directory: projects/web
+        run: yarn build
+
+      # Build electron
+      - name: Install electron dependencies
+        working-directory: projects/electron
+        run: yarn install --frozen-lockfile
+
+      - name: Typecheck electron
+        working-directory: projects/electron
+        run: yarn typecheck
+
+      - name: Build electron
+        working-directory: projects/electron
+        run: yarn build
+
+      # Copy web build into electron
+      - name: Bundle web UI into electron
+        run: cp -r projects/web/dist projects/electron/dist/web
+
+      - name: Build & Publish
+        working-directory: projects/electron
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --linux --x64 --arm64 --publish always

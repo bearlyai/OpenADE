@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en" style="height: 100%; width: 100%">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>OpenADE | Connection Error</title>
+        <style>
+            /*
+1. Use a more-intuitive box-sizing model.
+*/
+            *,
+            *::before,
+            *::after {
+                box-sizing: border-box;
+            }
+
+            * {
+                margin: 0;
+            }
+
+            html,
+            body {
+                height: 100%;
+            }
+
+            body {
+                line-height: 1.5;
+                -webkit-font-smoothing: antialiased;
+            }
+
+            img,
+            picture,
+            video,
+            canvas,
+            svg {
+                display: block;
+                max-width: 100%;
+            }
+
+            input,
+            button,
+            textarea,
+            select {
+                font: inherit;
+            }
+
+            p,
+            h1,
+            h2,
+            h3,
+            h4,
+            h5,
+            h6 {
+                overflow-wrap: break-word;
+            }
+
+            body {
+                margin: 0;
+
+                background-color: #202124;
+                color: #f2f5f7;
+                font-family: "main-font", sans-serif;
+            }
+
+            .row {
+                display: flex;
+                flex-direction: row;
+            }
+
+            .column {
+                display: flex;
+                flex-direction: column;
+            }
+
+            .jc {
+                justify-content: center;
+            }
+
+            .ac {
+                align-items: center;
+            }
+
+            .logo {
+                height: 80px;
+                margin: 30px 30px;
+            }
+        </style>
+    </head>
+    <body style="width: 100%; height: 100%">
+        <div class="column ac" style="width: 100%; height: 100%; padding: 0 10px">
+            <h1 style="margin-top: 60px; font-size: 2rem;">OpenADE</h1>
+            <h2 style="margin-top: 40px; text-align: center">Unable to connect. Please check your network.</h2>
+            <p style="text-align: center; color: red" id="error-code">Error Unknown</p>
+            <p style="text-align: center">This page will automatically retry your connections every 5 seconds until we can connect.</p>
+            <p style="text-align: center">If your network is fine, try quitting and restarting.</p>
+        </div>
+    </body>
+    <script type="text/javascript">
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get("errCode")
+      const msg =  params.get("errMessage")
+      if(code || msg){
+        document.getElementById("error-code").innerText = `ERROR: ${code} - ${msg}`
+      }
+
+    </script>
+</html>
