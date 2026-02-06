@@ -3,6 +3,7 @@ import { observer } from "mobx-react"
 import { type ReactNode, useCallback, useEffect, useState } from "react"
 import { twMerge } from "tailwind-merge"
 import { UpdateBanner } from "../components/UpdateBanner"
+import { ReleaseNotification } from "../components/notifications/ReleaseNotification"
 import { CodeSidebar } from "../components/sidebar/Sidebar"
 import { codeSidebarManager } from "../components/sidebar/sidebarManager"
 import SidebarIcon from "../components/sidebar/static/sidebar.svg?react"
@@ -172,6 +173,7 @@ export const CodeAppLayout = observer((props: CodeAppLayoutProps) => {
                                 </div>
                             </div>
                         </div>
+                        <ReleaseNotification />
                     </PortalContainerProvider>
                 </NiceModal.Provider>
             </FramedApp>

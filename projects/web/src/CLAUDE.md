@@ -159,6 +159,8 @@ Users leave inline comments on plans, diffs, code. Comments are "consumed" when 
 
 **Philosophy: Flat, square, clean, spacious.** No rounded corners.
 
+**IMPORTANT: All `<button>` elements must include the `btn` class.** The code module uses a low-specificity CSS reset (`.btn { all: unset }` in `tw.css`) to clear inherited browser/dashboard button styles. Without `btn`, buttons may render with unexpected padding, borders, or backgrounds.
+
 **IMPORTANT: Always read `tw.css` before working with colors.** The code module has its own standalone theme system. Only use color tokens defined in `tw.css`. Never use legacy color tokens from the dashboard's `src/tw.css` or any other color system unless explicitly asked.
 
 ### Theme System
