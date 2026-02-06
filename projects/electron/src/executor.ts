@@ -110,9 +110,15 @@ const startExecutor = () => {
     })
 
     // Block Cmd+W (macOS) and Ctrl+W (Windows/Linux) from closing the window
+    // Intercept Cmd+R / Ctrl+R to do a graceful reload instead of Electron's default
+    // which causes a transient did-fail-load and briefly shows the cantLoad page
     mbExecutor.webContents.on("before-input-event", (event, input) => {
         if (input.key.toLowerCase() === "w" && (input.meta || input.control) && !input.alt && !input.shift) {
             event.preventDefault()
+        }
+        if (input.key.toLowerCase() === "r" && (input.meta || input.control) && !input.alt && !input.shift && input.type === "keyDown") {
+            event.preventDefault()
+            loadSite()
         }
     })
 
