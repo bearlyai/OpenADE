@@ -70,10 +70,10 @@
     tslib "^2.4.1"
     web-vitals "5.1.0"
 
-"@anthropic-ai/claude-agent-sdk@^0.2.31":
-  version "0.2.31"
-  resolved "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.2.31.tgz"
-  integrity sha512-ZepnDG6r91je1LvrHST2C67m3olgmiYfrhnj4Elyj8AGqOHGYig1zDIPVhGF0u62y0rVVri2mGFDYQI0oW/LBw==
+"@anthropic-ai/claude-agent-sdk@^0.2.32":
+  version "0.2.33"
+  resolved "https://registry.yarnpkg.com/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.2.33.tgz#75853920a5cc7abaca578021b3f05b9a75cb5ce5"
+  integrity sha512-Ox7Vb8hXgnZyq9f5OtZJCmJ4Ag2LtAXmCJ3e/RD4pohYVUZelRaPeMeUHuS5bAykbHYdu4r9hloSaTCSsNiiVw==
   optionalDependencies:
     "@img/sharp-darwin-arm64" "^0.33.5"
     "@img/sharp-darwin-x64" "^0.33.5"

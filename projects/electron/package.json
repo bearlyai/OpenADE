@@ -19,7 +19,7 @@
   "description": "Task planning and execution powered by Claude.",
   "author": "OpenADE",
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.31",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.32",
     "@sentry/electron": "^5.10.0",
     "electron-context-menu": "^3.6.1",
     "electron-log": "^4.4.8",
