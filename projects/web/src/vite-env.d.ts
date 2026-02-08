@@ -122,6 +122,7 @@ interface OpenADEAPI {
     shell: {
         selectDirectory: (params: unknown) => Promise<unknown>
         openUrl: (params: unknown) => Promise<void>
+        createDirectory: (params: unknown) => Promise<unknown>
     }
     subprocess: {
         setGlobalEnv: (args: { env: Record<string, string> }) => Promise<unknown>

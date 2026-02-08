@@ -49,6 +49,21 @@ export function getFileDir(path: string): string {
 }
 
 /**
+ * Convert a string to a filesystem-safe slug.
+ * Lowercases, replaces non-alphanumeric characters with hyphens,
+ * collapses consecutive hyphens, and trims leading/trailing hyphens.
+ *
+ * Example: "My Cool Idea!" -> "my-cool-idea"
+ * Example: "  hello   world  " -> "hello-world"
+ */
+export function slugify(name: string): string {
+    return name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+}
+
+/**
  * Normalize a path to use forward slashes consistently.
  * Useful for internal storage/comparison where we want consistent formatting.
  *

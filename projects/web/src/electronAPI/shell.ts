@@ -14,6 +14,11 @@ export interface SelectDirectoryResponse {
     path: string | null
 }
 
+export interface CreateDirectoryResponse {
+    success: boolean
+    error?: string
+}
+
 // ============================================================================
 // Shell API Functions
 // ============================================================================
@@ -30,6 +35,18 @@ export async function selectDirectory(defaultPath?: string): Promise<string | nu
 
     const response = (await window.openadeAPI.shell.selectDirectory({ defaultPath })) as SelectDirectoryResponse
     return response.path
+}
+
+/**
+ * Create a directory at the specified path (recursive)
+ */
+export async function createDirectory(path: string): Promise<CreateDirectoryResponse> {
+    if (!window.openadeAPI) {
+        console.warn("[ShellAPI] Not running in Electron")
+        return { success: false, error: "Not running in Electron" }
+    }
+
+    return (await window.openadeAPI.shell.createDirectory({ path })) as CreateDirectoryResponse
 }
 
 /**

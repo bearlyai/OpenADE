@@ -7,6 +7,7 @@
 
 import { ipcMain, dialog, shell, type IpcMainInvokeEvent } from "electron"
 import logger from "electron-log"
+import fs from "fs/promises"
 import { isDev } from "../../config"
 
 // ============================================================================
@@ -24,6 +25,15 @@ interface SelectDirectoryResponse {
 
 interface OpenUrlParams {
     url: string
+}
+
+interface CreateDirectoryParams {
+    path: string
+}
+
+interface CreateDirectoryResponse {
+    success: boolean
+    error?: string
 }
 
 // ============================================================================
@@ -88,6 +98,36 @@ async function handleOpenUrl(params: OpenUrlParams): Promise<void> {
     logger.info("[Shell:openUrl] URL opened", JSON.stringify({ duration: Date.now() - startTime }))
 }
 
+/**
+ * Create a directory (with recursive parent creation)
+ */
+async function handleCreateDirectory(params: CreateDirectoryParams): Promise<CreateDirectoryResponse> {
+    const startTime = Date.now()
+    logger.info("[Shell:createDirectory] Creating directory", JSON.stringify({ path: params.path }))
+
+    try {
+        if (!params.path || !params.path.trim()) {
+            return { success: false, error: "Path is required" }
+        }
+
+        await fs.mkdir(params.path, { recursive: true })
+
+        logger.info("[Shell:createDirectory] Directory created", JSON.stringify({
+            path: params.path,
+            duration: Date.now() - startTime,
+        }))
+        return { success: true }
+    } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to create directory"
+        logger.error("[Shell:createDirectory] Error creating directory", JSON.stringify({
+            path: params.path,
+            error: message,
+            duration: Date.now() - startTime,
+        }))
+        return { success: false, error: message }
+    }
+}
+
 // ============================================================================
 // Module Export
 // ============================================================================
@@ -103,6 +143,11 @@ export const load = () => {
     ipcMain.handle("code:shell:openUrl", async (event, params: OpenUrlParams) => {
         if (!checkAllowed(event)) throw new Error("not allowed")
         return handleOpenUrl(params)
+    })
+
+    ipcMain.handle("code:shell:createDirectory", async (event, params: CreateDirectoryParams) => {
+        if (!checkAllowed(event)) throw new Error("not allowed")
+        return handleCreateDirectory(params)
     })
 
     logger.info("[Shell] IPC handlers registered successfully")

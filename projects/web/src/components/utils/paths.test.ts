@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { getDisambiguatedPaths, getFileDir, getFileName } from "./paths"
+import { getDisambiguatedPaths, getFileDir, getFileName, slugify } from "./paths"
 
 describe("getFileName", () => {
     it("extracts filename from path", () => {
@@ -14,6 +14,43 @@ describe("getFileDir", () => {
         expect(getFileDir("src/components/Button.tsx")).toBe("src/components")
         expect(getFileDir("Button.tsx")).toBe("")
         expect(getFileDir("a/b/c/d.ts")).toBe("a/b/c")
+    })
+})
+
+describe("slugify", () => {
+    it("converts to lowercase and replaces spaces with hyphens", () => {
+        expect(slugify("My Cool Idea")).toBe("my-cool-idea")
+    })
+
+    it("replaces special characters with hyphens", () => {
+        expect(slugify("hello@world!")).toBe("hello-world")
+        expect(slugify("foo/bar\\baz")).toBe("foo-bar-baz")
+    })
+
+    it("collapses consecutive hyphens", () => {
+        expect(slugify("hello   world")).toBe("hello-world")
+        expect(slugify("a---b")).toBe("a-b")
+    })
+
+    it("trims leading and trailing hyphens", () => {
+        expect(slugify("  hello  ")).toBe("hello")
+        expect(slugify("--hello--")).toBe("hello")
+        expect(slugify("!hello!")).toBe("hello")
+    })
+
+    it("handles empty and whitespace-only input", () => {
+        expect(slugify("")).toBe("")
+        expect(slugify("   ")).toBe("")
+        expect(slugify("!!!")).toBe("")
+    })
+
+    it("preserves numbers", () => {
+        expect(slugify("version 2.0")).toBe("version-2-0")
+        expect(slugify("123abc")).toBe("123abc")
+    })
+
+    it("handles unicode characters", () => {
+        expect(slugify("caf\u00e9 latt\u00e9")).toBe("caf-latt")
     })
 })
 

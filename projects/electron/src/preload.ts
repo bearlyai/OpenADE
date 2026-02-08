@@ -213,6 +213,7 @@ const openadeAPI = {
     shell: {
         selectDirectory: (params: unknown) => ipcRenderer.invoke("code:shell:selectDirectory", params),
         openUrl: (params: unknown) => ipcRenderer.invoke("code:shell:openUrl", params),
+        createDirectory: (params: unknown) => ipcRenderer.invoke("code:shell:createDirectory", params),
     },
 
     // ========================================================================
