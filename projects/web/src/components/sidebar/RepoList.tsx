@@ -101,11 +101,7 @@ const RepoItem = ({
             }}
             title={repo.path}
         >
-            {isRunning ? (
-                <Loader2 className="w-4 h-4 animate-spin flex-shrink-0 text-muted" />
-            ) : (
-                <FolderOpen className="w-4 h-4 flex-shrink-0" />
-            )}
+            {isRunning ? <Loader2 className="w-4 h-4 animate-spin flex-shrink-0 text-muted" /> : <FolderOpen className="w-4 h-4 flex-shrink-0" />}
             <span className="truncate min-w-0 flex-1 select-none">{repo.name}</span>
             <RepoMenuButton repo={repo} onSettings={onSettings} onDelete={onDelete} />
         </div>

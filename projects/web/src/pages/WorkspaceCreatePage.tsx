@@ -280,9 +280,7 @@ export const WorkspaceCreatePage = observer(() => {
                             type="button"
                             onClick={() => handleModeChange("new")}
                             className={`btn flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium border -ml-px transition-all cursor-pointer ${
-                                mode === "new"
-                                    ? "bg-primary/10 text-primary border-primary z-10"
-                                    : "bg-base-200 text-muted border-border hover:bg-base-300"
+                                mode === "new" ? "bg-primary/10 text-primary border-primary z-10" : "bg-base-200 text-muted border-border hover:bg-base-300"
                             }`}
                         >
                             <FolderPlus size="1em" />
@@ -349,8 +347,8 @@ export const WorkspaceCreatePage = observer(() => {
                                             <div className="flex-1">
                                                 <h3 className="text-sm font-semibold text-base-content mb-1">Not a Git Repository</h3>
                                                 <p className="text-sm text-muted mb-3">
-                                                    This directory is not under git version control. The agent may make changes that cannot be recovered. We recommend
-                                                    initializing a git repository first.
+                                                    This directory is not under git version control. The agent may make changes that cannot be recovered. We
+                                                    recommend initializing a git repository first.
                                                 </p>
                                                 <button
                                                     type="button"
@@ -454,7 +452,9 @@ export const WorkspaceCreatePage = observer(() => {
                                     )}
                                     {hasValidParent && hasValidNewDirName && (
                                         <p className="mt-1 text-xs text-muted">
-                                            Will create: {parentPathInfo?.resolvedPath}{getPathSeparator()}{newDirName.trim()}
+                                            Will create: {parentPathInfo?.resolvedPath}
+                                            {getPathSeparator()}
+                                            {newDirName.trim()}
                                         </p>
                                     )}
                                 </div>
@@ -483,16 +483,12 @@ export const WorkspaceCreatePage = observer(() => {
                                     placeholder="My cool idea"
                                     className="w-full px-4 py-3 bg-input text-base-content border border-border focus:outline-none focus:border-primary transition-all placeholder:text-muted/50"
                                 />
-                                {protoFullPath && (
-                                    <p className="mt-1 text-xs text-muted">{protoFullPath}</p>
-                                )}
+                                {protoFullPath && <p className="mt-1 text-xs text-muted">{protoFullPath}</p>}
                             </div>
                         )}
 
                         {/* Submit Error */}
-                        {submitError && (
-                            <p className="text-sm text-error">{submitError}</p>
-                        )}
+                        {submitError && <p className="text-sm text-error">{submitError}</p>}
 
                         {/* Submit Button */}
                         <div className="flex flex-col sm:flex-row gap-3 mt-2">

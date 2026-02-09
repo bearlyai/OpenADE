@@ -198,8 +198,12 @@ function MonthRow({ month }: { month: MonthStats }) {
         <div className="flex items-center justify-between py-1.5 px-1 text-sm border-b border-border/50 last:border-b-0">
             <span className="text-base-content font-medium text-xs">{month.label}</span>
             <div className="flex items-center gap-4 text-xs text-muted">
-                <span>{month.taskCount} {month.taskCount === 1 ? "task" : "tasks"}</span>
-                <span>{month.eventCount} {month.eventCount === 1 ? "run" : "runs"}</span>
+                <span>
+                    {month.taskCount} {month.taskCount === 1 ? "task" : "tasks"}
+                </span>
+                <span>
+                    {month.eventCount} {month.eventCount === 1 ? "run" : "runs"}
+                </span>
                 <span>{formatTokens(totalTokens)}</span>
                 <span className="text-base-content font-medium">{formatCost(month.totalCostUsd)}</span>
             </div>

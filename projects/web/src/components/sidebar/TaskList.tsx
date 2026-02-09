@@ -321,16 +321,16 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
                                 />
                             ))}
                             {sortedPreviews.map((preview) => (
-                                    <TaskItem
-                                        key={preview.id}
-                                        preview={preview}
-                                        isActive={taskId === preview.id}
-                                        isUnread={!preview.closed && !!preview.lastEventAt && (!preview.lastViewedAt || preview.lastEventAt > preview.lastViewedAt)}
-                                        inProgressEvent={getInProgressEventForTask(codeStore, preview.id)}
-                                        onSelect={() => handleSelectTask(preview.id)}
-                                        onDelete={() => handleDeleteTask(preview.id)}
-                                        onToggleClosed={() => handleToggleClosed(preview.id, preview.closed ?? false)}
-                                    />
+                                <TaskItem
+                                    key={preview.id}
+                                    preview={preview}
+                                    isActive={taskId === preview.id}
+                                    isUnread={!preview.closed && !!preview.lastEventAt && (!preview.lastViewedAt || preview.lastEventAt > preview.lastViewedAt)}
+                                    inProgressEvent={getInProgressEventForTask(codeStore, preview.id)}
+                                    onSelect={() => handleSelectTask(preview.id)}
+                                    onDelete={() => handleDeleteTask(preview.id)}
+                                    onToggleClosed={() => handleToggleClosed(preview.id, preview.closed ?? false)}
+                                />
                             ))}
                         </>
                     )}
