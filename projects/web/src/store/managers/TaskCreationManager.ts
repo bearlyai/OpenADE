@@ -300,12 +300,13 @@ export class TaskCreationManager {
             this.generateTitleAsync(task.id, creation.repoId, creation.description)
 
             setTimeout(() => {
+                const input = { userInput: creation.description, images: [] }
                 if (creation.mode === "plan") {
-                    this.store.execution.executePlan(task.id, creation.description)
+                    this.store.execution.executePlan(task.id, input)
                 } else if (creation.mode === "ask") {
-                    this.store.execution.executeAsk({ taskId: task.id, userInput: creation.description })
+                    this.store.execution.executeAsk({ taskId: task.id, input })
                 } else {
-                    this.store.execution.executeAction({ taskId: task.id, userInput: creation.description })
+                    this.store.execution.executeAction({ taskId: task.id, input })
                 }
             }, 0)
         } catch (err) {

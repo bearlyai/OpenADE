@@ -10,7 +10,8 @@
  * Managers are retrieved by ID and workspaceId via SmartEditorManagerStore.
  */
 
-import { makeAutoObservable } from "mobx"
+import { makeAutoObservable, observable } from "mobx"
+import type { ImageAttachment } from "../../types"
 
 // ============================================================================
 // Types
@@ -51,6 +52,10 @@ export class SmartEditorManager {
     files: string[] = [] // Currently mentioned files in editor
     // TipTap JSON content - source of truth for editor state
     editorContent: Record<string, unknown> | null = null
+    // Pending image attachments (not yet submitted)
+    pendingImages: ImageAttachment[] = []
+    // In-memory data URLs for previewing pending images (keyed by image ID)
+    pendingImageDataUrls: Map<string, string> = observable.map()
 
     // Callbacks registered by SmartEditor
     private onInsertFile: ((path: string) => void) | null = null
@@ -81,10 +86,27 @@ export class SmartEditorManager {
         this.value = ""
         this.files = []
         this.editorContent = null
+        // Revoke object URLs to prevent memory leaks
+        for (const url of this.pendingImageDataUrls.values()) {
+            URL.revokeObjectURL(url)
+        }
+        this.pendingImages = []
+        this.pendingImageDataUrls.clear()
         if (this.onClear) {
             this.onClear()
-        } else {
         }
+    }
+
+    addImage(image: ImageAttachment, dataUrl: string): void {
+        this.pendingImages.push(image)
+        this.pendingImageDataUrls.set(image.id, dataUrl)
+    }
+
+    removeImage(id: string): void {
+        const url = this.pendingImageDataUrls.get(id)
+        if (url) URL.revokeObjectURL(url)
+        this.pendingImages = this.pendingImages.filter((img) => img.id !== id)
+        this.pendingImageDataUrls.delete(id)
     }
 
     // === Editor callbacks (registered by SmartEditor) ===

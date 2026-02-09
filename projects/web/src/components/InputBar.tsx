@@ -1,5 +1,5 @@
 import cx from "classnames"
-import { GitBranch } from "lucide-react"
+import { GitBranch, ImagePlus, X } from "lucide-react"
 import { observer } from "mobx-react"
 import { useRef } from "react"
 import { Z_INDEX } from "../constants"
@@ -11,6 +11,7 @@ import type { SmartEditorManager } from "../store/managers/SmartEditorManager"
 import type { TrayManager } from "../store/managers/TrayManager"
 import type { Comment } from "../types"
 import { ModelPicker } from "./ModelPicker"
+import { processImageBlob } from "../utils/imageAttachment"
 import { SmartEditor, type SmartEditorRef } from "./SmartEditor"
 import { CommentsSection } from "./events/CommentsSection"
 import { TrayButtons, TraySlideOut, getTrayConfig } from "./tray"
@@ -103,10 +104,12 @@ export const InputBar = observer(function InputBar({
     hideTray?: boolean
 }) {
     const editorRef = useRef<SmartEditorRef>(null)
+    const fileInputRef = useRef<HTMLInputElement>(null)
 
     // Get commands from InputManager
     const { commands } = input
     const hasComments = unsubmittedComments.length > 0
+    const hasPendingImages = editorManager.pendingImages.length > 0
 
     // Get tray content from config
     const trayConfig = tray.openTray ? getTrayConfig(tray.openTray) : null
@@ -141,20 +144,72 @@ export const InputBar = observer(function InputBar({
                 {/* Pending comments section */}
                 {hasComments && <CommentsSection comments={unsubmittedComments} variant="pending" />}
 
-                {/* Text input area */}
-                <SmartEditor
-                    ref={editorRef}
-                    manager={editorManager}
-                    fileMentionsDir={fileMentionsDir}
-                    slashCommandsDir={slashCommandsDir}
-                    sdkCapabilities={sdkCapabilities}
-                    placeholder={input.isDisabled ? "Task is closed. Click Reopen to continue." : "What would you like to do?"}
-                    className={cx(
-                        "min-h-[58px] max-h-[150px] overflow-y-auto text-sm leading-[20px] border-x-0 focus-within:border-border",
-                        input.isDisabled && "opacity-50 pointer-events-none"
-                    )}
-                    editorClassName="px-2.5 py-[9px]"
-                />
+                {/* Text input area with image attach overlay */}
+                <div className="relative">
+                    <SmartEditor
+                        ref={editorRef}
+                        manager={editorManager}
+                        fileMentionsDir={fileMentionsDir}
+                        slashCommandsDir={slashCommandsDir}
+                        sdkCapabilities={sdkCapabilities}
+                        placeholder={input.isDisabled ? "Task is closed. Click Reopen to continue." : "What would you like to do?"}
+                        className={cx(
+                            "min-h-[58px] max-h-[150px] overflow-y-auto text-sm leading-[20px] border-x-0 focus-within:border-border",
+                            input.isDisabled && "opacity-50 pointer-events-none"
+                        )}
+                        editorClassName="px-2.5 py-[9px]"
+                    />
+                    {/* Image attach button - bottom right of textarea */}
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/jpeg,image/png,image/gif,image/webp"
+                        className="hidden"
+                        onChange={(e) => {
+                            const file = e.target.files?.[0]
+                            if (file) {
+                                processImageBlob(file)
+                                    .then(({ attachment, dataUrl }) => editorManager.addImage(attachment, dataUrl))
+                                    .catch((err) => console.error("[InputBar] Failed to process image:", err))
+                                e.target.value = ""
+                            }
+                        }}
+                    />
+                    <button
+                        type="button"
+                        className={cx(
+                            "btn absolute bottom-1.5 right-1.5 p-1.5 text-muted hover:text-base-content hover:bg-base-300/50 transition-colors",
+                            input.isDisabled && "opacity-50 pointer-events-none"
+                        )}
+                        onClick={() => fileInputRef.current?.click()}
+                        title="Attach image"
+                    >
+                        <ImagePlus size={14} />
+                    </button>
+                </div>
+
+                {/* Image preview strip */}
+                {hasPendingImages && (
+                    <div className="flex gap-2 px-3 py-2 border-t border-border overflow-x-auto">
+                        {editorManager.pendingImages.map((img) => (
+                            <div key={img.id} className="relative shrink-0 group">
+                                <img
+                                    src={editorManager.pendingImageDataUrls.get(img.id)}
+                                    alt=""
+                                    className="h-20 object-cover"
+                                    style={{ aspectRatio: `${img.resizedWidth}/${img.resizedHeight}` }}
+                                />
+                                <button
+                                    type="button"
+                                    className="btn absolute -top-1.5 -right-1.5 bg-base-300 p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                                    onClick={() => editorManager.removeImage(img.id)}
+                                >
+                                    <X size={12} />
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
 
                 {/* Action buttons row - rendered from centralized commands */}
                 <div className="flex items-center gap-2 px-2 py-2 bg-base-200">

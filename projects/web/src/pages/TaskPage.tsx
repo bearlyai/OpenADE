@@ -1,6 +1,7 @@
 import cx from "classnames"
+import { Paperclip } from "lucide-react"
 import { observer } from "mobx-react"
-import { type ReactNode, useCallback, useEffect, useRef } from "react"
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { useHotkeys } from "react-hotkeys-hook"
 import { EnvironmentSetupView } from "../components/EnvironmentSetupView"
 import { EventLog } from "../components/EventLog"
@@ -10,6 +11,7 @@ import { ScrollArea } from "../components/ui/ScrollArea"
 import { Z_INDEX } from "../constants"
 import type { TaskModel } from "../store/TaskModel"
 import { useCodeStore } from "../store/context"
+import { processImageBlob } from "../utils/imageAttachment"
 
 function InputWrapper({ trayOpen, onClose, children }: { trayOpen: boolean; onClose: () => void; children: ReactNode }) {
     return (
@@ -114,13 +116,65 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
         taskModel.refreshGitState()
     }, [taskModel])
 
+    // Page-level drop zone for images
+    const [isDragOver, setIsDragOver] = useState(false)
+    const dragCounter = useRef(0)
+
+    const handleDragEnter = useCallback((e: React.DragEvent) => {
+        e.preventDefault()
+        dragCounter.current++
+        if (e.dataTransfer?.types.includes("Files")) {
+            setIsDragOver(true)
+        }
+    }, [])
+
+    const handleDragOver = useCallback((e: React.DragEvent) => {
+        e.preventDefault()
+    }, [])
+
+    const handleDragLeave = useCallback((e: React.DragEvent) => {
+        e.preventDefault()
+        dragCounter.current--
+        if (dragCounter.current <= 0) {
+            dragCounter.current = 0
+            setIsDragOver(false)
+        }
+    }, [])
+
+    const handleDrop = useCallback(
+        (e: React.DragEvent) => {
+            e.preventDefault()
+            dragCounter.current = 0
+            setIsDragOver(false)
+            const files = e.dataTransfer?.files
+            if (!files) return
+            for (const file of Array.from(files)) {
+                if (file.type.startsWith("image/")) {
+                    processImageBlob(file)
+                        .then(({ attachment, dataUrl }) => editorManager.addImage(attachment, dataUrl))
+                        .catch((err) => console.error("[TaskPage] Failed to process dropped image:", err))
+                }
+            }
+        },
+        [editorManager]
+    )
+
     // Show environment setup UI if needed
     if (taskModel.needsEnvironmentSetup) {
         return <EnvironmentSetupView taskModel={taskModel} onComplete={handleSetupComplete} />
     }
 
     return (
-        <div className="h-full relative">
+        <div className="h-full relative" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+            {isDragOver && (
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm pointer-events-none">
+                    <div className="rounded-2xl border-2 border-dashed border-primary bg-base-100/90 px-12 py-10 text-center">
+                        <Paperclip className="mx-auto mb-3 h-10 w-10 text-primary" />
+                        <p className="text-lg font-medium text-base-content">Drop images here</p>
+                        <p className="text-sm text-muted mt-1">PNG, JPG, GIF, WebP</p>
+                    </div>
+                </div>
+            )}
             <InputWrapper trayOpen={tray.isOpen} onClose={() => tray.close()}>
                 <ScrollArea viewportRef={scrollViewportRef} viewportClassName="pb-56">
                     <EventLog taskId={taskId} events={events} />

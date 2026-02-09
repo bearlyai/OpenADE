@@ -14,7 +14,7 @@ import { CheckCircle, FileText, GitCommit, MessageCircleQuestion, Play, RefreshC
 import { makeAutoObservable } from "mobx"
 import { track } from "../../analytics"
 import { ACTION_PROMPTS } from "../../prompts/prompts"
-import type { ActionEvent } from "../../types"
+import type { ActionEvent, UserInputContext } from "../../types"
 import type { CodeStore } from "../store"
 import type { SmartEditorManager } from "./SmartEditorManager"
 
@@ -63,7 +63,7 @@ export class InputManager {
     }
 
     private get hasInput(): boolean {
-        return this.editorManager.value.trim().length > 0
+        return this.editorManager.value.trim().length > 0 || this.editorManager.pendingImages.length > 0
     }
 
     private get hasUnsubmittedComments(): boolean {
@@ -131,11 +131,11 @@ export class InputManager {
         this.editorManager.clear()
     }
 
-    private captureAndClear(): { value: string; files: string[] } {
-        const value = this.editorManager.value.trim()
-        const files = [...this.editorManager.files]
+    private captureAndClear(): UserInputContext {
+        const userInput = this.editorManager.value.trim()
+        const images = [...this.editorManager.pendingImages]
         this.editorManager.clear()
-        return { value, files }
+        return { userInput, images }
     }
 
     // === Commands ===
@@ -168,7 +168,7 @@ export class InputManager {
                 action: async () => {
                     await this.store.execution.executeAction({
                         taskId: this.taskId,
-                        userInput: ACTION_PROMPTS.retry,
+                        input: { userInput: ACTION_PROMPTS.retry, images: [] },
                         label: this.retryLabel,
                         includeComments: false,
                     })
@@ -185,8 +185,8 @@ export class InputManager {
                 show: this.hasActivePlan && !this.isWorking,
                 enabled: true,
                 action: async () => {
-                    const { value } = this.captureAndClear()
-                    await this.store.execution.executeRunPlan(this.taskId, value)
+                    const input = this.captureAndClear()
+                    await this.store.execution.executeRunPlan(this.taskId, input)
                 },
             },
 
@@ -200,8 +200,8 @@ export class InputManager {
                 show: this.hasActivePlan && !this.isWorking,
                 enabled: this.hasFeedback,
                 action: async () => {
-                    const { value } = this.captureAndClear()
-                    await this.store.execution.executeRevise(this.taskId, value)
+                    const input = this.captureAndClear()
+                    await this.store.execution.executeRevise(this.taskId, input)
                 },
             },
 
@@ -231,8 +231,8 @@ export class InputManager {
                 show: !this.hasActivePlan && !this.isWorking,
                 enabled: this.hasFeedback,
                 action: async () => {
-                    const { value } = this.captureAndClear()
-                    await this.store.execution.executeAction({ taskId: this.taskId, userInput: value })
+                    const input = this.captureAndClear()
+                    await this.store.execution.executeAction({ taskId: this.taskId, input })
                 },
             },
 
@@ -246,8 +246,8 @@ export class InputManager {
                 show: !this.hasActivePlan && !this.isWorking,
                 enabled: this.hasFeedback,
                 action: async () => {
-                    const { value } = this.captureAndClear()
-                    await this.store.execution.executePlan(this.taskId, value)
+                    const input = this.captureAndClear()
+                    await this.store.execution.executePlan(this.taskId, input)
                 },
             },
 
@@ -261,8 +261,8 @@ export class InputManager {
                 show: !this.isWorking,
                 enabled: this.hasFeedback,
                 action: async () => {
-                    const { value } = this.captureAndClear()
-                    await this.store.execution.executeAsk({ taskId: this.taskId, userInput: value })
+                    const input = this.captureAndClear()
+                    await this.store.execution.executeAsk({ taskId: this.taskId, input })
                 },
             },
 
@@ -278,7 +278,7 @@ export class InputManager {
                 action: async () => {
                     await this.store.execution.executeAction({
                         taskId: this.taskId,
-                        userInput: ACTION_PROMPTS.commit,
+                        input: { userInput: ACTION_PROMPTS.commit, images: [] },
                         label: "Commit",
                         includeComments: false,
                     })

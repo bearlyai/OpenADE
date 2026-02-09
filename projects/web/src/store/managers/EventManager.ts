@@ -13,7 +13,7 @@ import { exhaustive } from "exhaustive"
 import type { ClaudeStreamEvent } from "../../electronAPI/claude"
 import { snapshotsApi } from "../../electronAPI/snapshots"
 import { syncTaskPreviewFromStore, taskFromStore } from "../../persistence"
-import type { ActionEvent, ActionEventSource, GitRefs, SnapshotEvent } from "../../types"
+import type { ActionEvent, ActionEventSource, GitRefs, ImageAttachment, SnapshotEvent } from "../../types"
 import { ulid } from "../../utils/ulid"
 import type { CodeStore } from "../store"
 
@@ -125,6 +125,7 @@ export class EventManager {
     createActionEvent({
         taskId,
         userInput,
+        images,
         executionId,
         source,
         includesCommentIds = [],
@@ -133,6 +134,7 @@ export class EventManager {
     }: {
         taskId: string
         userInput: string
+        images?: ImageAttachment[]
         executionId: string
         source: ActionEventSource
         includesCommentIds?: string[]
@@ -150,6 +152,7 @@ export class EventManager {
             status: "in_progress",
             createdAt: now,
             userInput,
+            ...(images && images.length > 0 ? { images } : {}),
             execution: {
                 type: "claude-code",
                 executionId,

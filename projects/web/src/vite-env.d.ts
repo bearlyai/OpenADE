@@ -133,10 +133,10 @@ interface OpenADEAPI {
         delete: (args: { id: string }) => Promise<void>
         list: () => Promise<unknown>
     }
-    snapshots: {
-        save: (args: { id: string; patch: string }) => Promise<void>
-        load: (args: { id: string }) => Promise<string | null>
-        delete: (args: { id: string }) => Promise<void>
+    data: {
+        save: (args: { folder: string; id: string; data: string | ArrayBuffer; ext: string }) => Promise<void>
+        load: (args: { folder: string; id: string; ext: string }) => Promise<ArrayBuffer | string | null>
+        delete: (args: { folder: string; id: string; ext: string }) => Promise<void>
     }
     codeWindowFrame: {
         enabled: () => Promise<boolean>

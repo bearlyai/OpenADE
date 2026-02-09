@@ -24,7 +24,7 @@ import { load as loadShell, cleanup as cleanupShell } from "./modules/code/shell
 import { load as loadMcp, cleanup as cleanupMcp } from "./modules/code/mcp"
 import { load as loadPlatform, cleanup as cleanupPlatform } from "./modules/code/platform"
 import { load as loadYjsStorage, cleanup as cleanupYjsStorage } from "./modules/code/yjsStorage"
-import { load as loadSnapshots, cleanup as cleanupSnapshots } from "./modules/code/snapshots"
+import { load as loadDataFolder, cleanup as cleanupDataFolder } from "./modules/code/dataFolder"
 import { load as loadCapabilities, cleanup as cleanupCapabilities } from "./modules/code/capabilities"
 import { load as loadBinaries, cleanup as cleanupBinaries } from "./modules/code/binaries"
 import { load as loadCodeWindowFrame, cleanup as cleanupCodeWindowFrame } from "./modules/code/windowFrame"
@@ -59,7 +59,7 @@ const main = () => {
     loadMcp()
     loadPlatform()
     loadYjsStorage()
-    loadSnapshots()
+    loadDataFolder()
     loadCodeWindowFrame()
 
     ipcMain.handle("quit-app", () => {
@@ -101,7 +101,7 @@ const main = () => {
         cleanupMcp()
         cleanupPlatform()
         cleanupYjsStorage()
-        cleanupSnapshots()
+        cleanupDataFolder()
         cleanupCapabilities()
         cleanupBinaries()
         cleanupCodeWindowFrame()
@@ -121,7 +121,7 @@ const main = () => {
         cleanupMcp()
         cleanupPlatform()
         cleanupYjsStorage()
-        cleanupSnapshots()
+        cleanupDataFolder()
         cleanupCapabilities()
         cleanupBinaries()
         cleanupCodeWindowFrame()
@@ -142,7 +142,7 @@ const main = () => {
         cleanupMcp()
         cleanupPlatform()
         cleanupYjsStorage()
-        cleanupSnapshots()
+        cleanupDataFolder()
         cleanupCapabilities()
         cleanupBinaries()
         cleanupCodeWindowFrame()

@@ -429,10 +429,15 @@ class ClaudeQueryManagerImpl {
     /**
      * Start a new execution
      */
-    async startExecution(prompt: string, options: ClientQueryOptions = {}, executionId?: string): Promise<ClaudeQuery | null> {
+    async startExecution(
+        prompt: string | import("./claudeEventTypes").ContentBlock[],
+        options: ClientQueryOptions = {},
+        executionId?: string
+    ): Promise<ClaudeQuery | null> {
+        const promptPreview = typeof prompt === "string" ? prompt.slice(0, 100) : `[${prompt.length} content blocks]`
         console.debug("[ClaudeQueryManager] startExecution called", {
             promptLength: prompt.length,
-            promptPreview: prompt.slice(0, 100),
+            promptPreview,
             executionId,
             model: options.model,
             cwd: options.cwd,
@@ -441,6 +446,7 @@ class ClaudeQueryManagerImpl {
             hasMcpServerConfigs: !!options.mcpServerConfigs,
             resume: options.resume,
             forkSession: options.forkSession,
+            hasImages: Array.isArray(prompt),
         })
 
         if (!window.openadeAPI) {

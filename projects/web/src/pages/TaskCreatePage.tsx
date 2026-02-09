@@ -1,7 +1,21 @@
 import { Popover } from "@base-ui-components/react/popover"
 import cx from "classnames"
 import { exhaustive } from "exhaustive"
-import { AlertCircle, AlertTriangle, ChevronDown, Code, FileText, GitBranch, Loader2, MessageCircle, RotateCcw, Settings, Star, X } from "lucide-react"
+import {
+    AlertCircle,
+    AlertTriangle,
+    ChevronDown,
+    Code,
+    FileText,
+    GitBranch,
+    ImagePlus,
+    Loader2,
+    MessageCircle,
+    RotateCcw,
+    Settings,
+    Star,
+    X,
+} from "lucide-react"
 import { observer } from "mobx-react"
 import { useEffect, useRef, useState } from "react"
 import { ModelPicker } from "../components/ModelPicker"
@@ -14,6 +28,7 @@ import { useCodeNavigate } from "../routing"
 import { useCodeStore } from "../store/context"
 import type { CreationPhase, TaskCreation } from "../store/managers/TaskCreationManager"
 import type { Repo } from "../types"
+import { processImageBlob } from "../utils/imageAttachment"
 
 interface TaskCreatePageProps {
     workspaceId: string
@@ -127,6 +142,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
     const [pendingNavigationCreationId, setPendingNavigationCreationId] = useState<string | null>(null)
     const [selectedMcpServerIds, setSelectedMcpServerIds] = useState<string[]>([])
     const editorRef = useRef<SmartEditorRef>(null)
+    const fileInputRef = useRef<HTMLInputElement>(null)
 
     // Get SmartEditorManager for task creation
     const editorManager = codeStore.smartEditors.getManager("task-create", workspaceId)
@@ -297,6 +313,29 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
 
             {/* Bottom bar */}
             <div className="flex-shrink-0 border-t border-border bg-base-100">
+                {/* Image preview strip */}
+                {editorManager.pendingImages.length > 0 && (
+                    <div className="flex gap-2 px-4 py-2 border-b border-border overflow-x-auto">
+                        {editorManager.pendingImages.map((img) => (
+                            <div key={img.id} className="relative shrink-0 group">
+                                <img
+                                    src={editorManager.pendingImageDataUrls.get(img.id)}
+                                    alt=""
+                                    className="h-20 object-cover"
+                                    style={{ aspectRatio: `${img.resizedWidth}/${img.resizedHeight}` }}
+                                />
+                                <button
+                                    type="button"
+                                    className="btn absolute -top-1.5 -right-1.5 bg-base-300 p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                                    onClick={() => editorManager.removeImage(img.id)}
+                                >
+                                    <X size={12} />
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
                 {/* Uncommitted changes warning */}
                 {showUncommittedWarning && (
                     <div className="flex items-center gap-2 px-4 py-2 bg-warning/10 border-b border-warning/20">
@@ -322,8 +361,31 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                         </div>
                     </div>
 
-                    {/* Model picker */}
-                    <div className="flex items-center border-l border-border pl-4">
+                    {/* Image attach + Model picker */}
+                    <div className="flex items-center gap-1">
+                        <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept="image/jpeg,image/png,image/gif,image/webp"
+                            className="hidden"
+                            onChange={(e) => {
+                                const file = e.target.files?.[0]
+                                if (file) {
+                                    processImageBlob(file).then(({ attachment, dataUrl }) => {
+                                        editorManager.addImage(attachment, dataUrl)
+                                    })
+                                    e.target.value = ""
+                                }
+                            }}
+                        />
+                        <button
+                            type="button"
+                            className="btn p-2 text-muted hover:text-base-content hover:bg-base-200 transition-colors"
+                            onClick={() => fileInputRef.current?.click()}
+                            title="Attach image"
+                        >
+                            <ImagePlus size={16} />
+                        </button>
                         <ModelPicker value={codeStore.defaultModel} onChange={(m) => codeStore.setDefaultModel(m)} />
                     </div>
 

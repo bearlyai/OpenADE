@@ -235,12 +235,15 @@ const openadeAPI = {
     },
 
     // ========================================================================
-    // Snapshots
+    // Data Folder (unified storage for images, snapshots, etc.)
     // ========================================================================
-    snapshots: {
-        save: (args: { id: string; patch: string }) => ipcRenderer.invoke("code:snapshots:save", args),
-        load: (args: { id: string }) => ipcRenderer.invoke("code:snapshots:load", args),
-        delete: (args: { id: string }) => ipcRenderer.invoke("code:snapshots:delete", args),
+    data: {
+        save: (args: { folder: string; id: string; data: string | Buffer; ext: string }) =>
+            ipcRenderer.invoke("code:data:save", args),
+        load: (args: { folder: string; id: string; ext: string }) =>
+            ipcRenderer.invoke("code:data:load", args),
+        delete: (args: { folder: string; id: string; ext: string }) =>
+            ipcRenderer.invoke("code:data:delete", args),
     },
 
     // ========================================================================

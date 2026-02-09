@@ -2,53 +2,35 @@
  * Snapshots API Bridge
  *
  * Client-side API for snapshot patch storage operations.
- * Communicates with Electron main process via openadeAPI.
+ * Delegates to the unified DataFolder API with folder="snapshots".
  *
- * Patches are stored at ~/.openade/snapshots/{snapshotId}.patch
+ * Patches are stored at ~/.openade/data/snapshots/{snapshotId}.patch
  */
 
-import { isCodeModuleAvailable } from "./capabilities"
+import { dataFolderApi } from "./dataFolder"
 
 // ============================================================================
 // Snapshots API Functions
 // ============================================================================
 
-/**
- * Save a snapshot patch to the filesystem
- */
 async function save(id: string, patch: string): Promise<void> {
-    if (!window.openadeAPI?.snapshots) {
-        throw new Error("Snapshots API not available")
-    }
-    await window.openadeAPI.snapshots.save({ id, patch })
+    await dataFolderApi.save("snapshots", id, patch, "patch")
 }
 
-/**
- * Load a snapshot patch from the filesystem
- * Returns null if the patch file doesn't exist
- */
 async function load(id: string): Promise<string | null> {
-    if (!window.openadeAPI?.snapshots) {
-        throw new Error("Snapshots API not available")
-    }
-    return (await window.openadeAPI.snapshots.load({ id })) as string | null
+    const result = await dataFolderApi.load("snapshots", id, "patch")
+    if (result === null) return null
+    // Convert Buffer/ArrayBuffer to string if needed
+    if (typeof result === "string") return result
+    return new TextDecoder().decode(result)
 }
 
-/**
- * Delete a snapshot patch from the filesystem
- */
 async function deletePatch(id: string): Promise<void> {
-    if (!window.openadeAPI?.snapshots) {
-        throw new Error("Snapshots API not available")
-    }
-    await window.openadeAPI.snapshots.delete({ id })
+    await dataFolderApi.delete("snapshots", id, "patch")
 }
 
-/**
- * Check if the snapshots API is available
- */
 function isAvailable(): boolean {
-    return isCodeModuleAvailable() && !!window.openadeAPI?.snapshots
+    return dataFolderApi.isAvailable()
 }
 
 // ============================================================================

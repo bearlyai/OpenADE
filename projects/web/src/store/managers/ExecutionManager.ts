@@ -13,8 +13,17 @@ import { USE_SAME_MODEL_FOR_AGENTS, getModelFullId } from "../../constants"
 import { type ClaudeStreamEvent, type McpServerConfig, getClaudeQueryManager, isClaudeApiAvailable } from "../../electronAPI/claude"
 import { getGitStatus, isGitApiAvailable } from "../../electronAPI/git"
 import { buildMcpServerConfigs } from "../../electronAPI/mcp"
-import { type PromptResult, buildAskPrompt, buildDoPrompt, buildPlanGenerationPrompt, buildRevisePrompt, buildRunPlanPrompt } from "../../prompts/prompts"
-import type { ActionEventSource, Comment, GitRefs, Repo, Task } from "../../types"
+import {
+    type ContentBlock,
+    type PromptBuildContext,
+    type PromptResult,
+    buildAskPrompt,
+    buildDoPrompt,
+    buildPlanGenerationPrompt,
+    buildRevisePrompt,
+    buildRunPlanPrompt,
+} from "../../prompts/prompts"
+import type { ActionEventSource, GitRefs, Repo, UserInputContext } from "../../types"
 import type { TaskModel } from "../TaskModel"
 import type { CodeStore } from "../store"
 
@@ -22,17 +31,12 @@ type AfterEventCallback = (taskId: string, eventType: ActionEventSource["type"])
 
 interface ActionParams {
     taskId: string
-    userInput: string
+    input: UserInputContext
     source: ActionEventSource
-    buildPrompt: (ctx: PromptContext) => PromptResult
+    buildPrompt: (ctx: PromptBuildContext) => Promise<PromptResult>
     readOnly: boolean
     createSnapshot?: boolean
-}
-
-interface PromptContext {
-    task: Task
-    userInput: string
-    pendingComments: Comment[]
+    includeComments?: boolean
 }
 
 export class ExecutionManager {
@@ -78,9 +82,9 @@ export class ExecutionManager {
     // === Core execution ===
 
     private async runAction(params: ActionParams): Promise<void> {
-        const { taskId, userInput, source, buildPrompt, readOnly, createSnapshot } = params
+        const { taskId, input, source, buildPrompt, readOnly, createSnapshot, includeComments = true } = params
 
-        console.debug("[ExecutionManager] runAction called", { taskId, source: source.type, userInput: userInput.slice(0, 50) })
+        console.debug("[ExecutionManager] runAction called", { taskId, source: source.type, userInput: input.userInput.slice(0, 50) })
 
         // Get prerequisites
         const taskModel = this.store.tasks.getTaskModel(taskId)
@@ -104,10 +108,16 @@ export class ExecutionManager {
         }
 
         // Get pending comments - the prompt builder decides which to consume
-        const pendingComments = this.store.comments.getUnsubmittedComments(taskId)
+        const pendingComments = includeComments ? this.store.comments.getUnsubmittedComments(taskId) : []
+
+        // Build prompt context from UserInputContext + comments
+        const promptCtx: PromptBuildContext = {
+            ...input,
+            comments: pendingComments,
+        }
 
         // Build prompt - returns system prompt, user message, and consumed comment IDs
-        const { systemPrompt, userMessage, consumedCommentIds } = buildPrompt({ task, userInput, pendingComments })
+        const { systemPrompt, userMessage, consumedCommentIds } = await buildPrompt(promptCtx)
 
         this.store.setTaskWorking(taskId, true)
         let executionId: string | undefined
@@ -128,7 +138,8 @@ export class ExecutionManager {
                 cwd,
                 additionalDirectories,
                 readOnly,
-                userInputLength: userInput.length,
+                userInputLength: input.userInput.length,
+                imageCount: input.images.length,
             })
 
             executionId = crypto.randomUUID()
@@ -139,7 +150,8 @@ export class ExecutionManager {
             // Create event with consumed comment IDs and git refs
             const eventResult = this.store.events.createActionEvent({
                 taskId,
-                userInput,
+                userInput: input.userInput,
+                images: input.images.length > 0 ? input.images : undefined,
                 executionId,
                 source,
                 includesCommentIds: consumedCommentIds,
@@ -230,7 +242,7 @@ export class ExecutionManager {
         taskId: string
         eventId: string
         executionId: string
-        prompt: string
+        prompt: string | ContentBlock[]
         appendSystemPrompt?: string
         cwd: string
         additionalDirectories?: string[]
@@ -248,6 +260,7 @@ export class ExecutionManager {
             parentSessionId: ctx.parentSessionId,
             hasMcpServerConfigs: !!ctx.mcpServerConfigs,
             promptLength: ctx.prompt.length,
+            hasImages: Array.isArray(ctx.prompt),
         })
 
         const manager = getClaudeQueryManager()
@@ -363,67 +376,66 @@ export class ExecutionManager {
 
     // === Public execution methods ===
 
-    async executePlan(taskId: string, userInput: string): Promise<void> {
+    async executePlan(taskId: string, input: UserInputContext): Promise<void> {
         return this.runAction({
             taskId,
-            userInput,
+            input,
             source: { type: "plan", userLabel: "Plan" },
-            buildPrompt: ({ userInput: input, pendingComments }) => buildPlanGenerationPrompt(input, pendingComments),
+            buildPrompt: (ctx) => buildPlanGenerationPrompt(ctx),
             readOnly: true,
         })
     }
 
-    async executeRevise(taskId: string, userInput: string): Promise<void> {
+    async executeRevise(taskId: string, input: UserInputContext): Promise<void> {
         // Find the latest completed plan to revise
         const parentPlanEvent = this.store.events.getTaskLatestCompletedPlanEvent(taskId)
         if (!parentPlanEvent) {
-            return this.executePlan(taskId, userInput)
+            return this.executePlan(taskId, input)
         }
 
         return this.runAction({
             taskId,
-            userInput: userInput.trim(),
+            input: { ...input, userInput: input.userInput.trim() },
             source: { type: "revise", userLabel: "Revise Plan", parentEventId: parentPlanEvent.id },
-            buildPrompt: ({ userInput: input, pendingComments }) => buildRevisePrompt(input, pendingComments),
+            buildPrompt: (ctx) => buildRevisePrompt(ctx),
             readOnly: true,
         })
     }
 
     async executeAction({
         taskId,
-        userInput,
+        input,
         label,
         includeComments = true,
     }: {
         taskId: string
-        userInput: string
+        input: UserInputContext
         label?: string
         includeComments?: boolean
     }): Promise<void> {
-        const trimmed = userInput.trim()
         return this.runAction({
             taskId,
-            userInput: trimmed,
+            input: { ...input, userInput: input.userInput.trim() },
             source: { type: "do", userLabel: label || "Do" },
-            buildPrompt: ({ userInput: input, pendingComments }) => buildDoPrompt(input, includeComments ? pendingComments : []),
+            buildPrompt: (ctx) => buildDoPrompt(ctx),
             readOnly: false,
             createSnapshot: true,
+            includeComments,
         })
     }
 
-    async executeAsk({ taskId, userInput }: { taskId: string; userInput: string }): Promise<void> {
-        const trimmed = userInput.trim()
+    async executeAsk({ taskId, input }: { taskId: string; input: UserInputContext }): Promise<void> {
         return this.runAction({
             taskId,
-            userInput: trimmed,
+            input: { ...input, userInput: input.userInput.trim() },
             source: { type: "ask", userLabel: "Ask" },
-            buildPrompt: ({ userInput: input, pendingComments }) => buildAskPrompt(input, pendingComments),
+            buildPrompt: (ctx) => buildAskPrompt(ctx),
             readOnly: true,
             createSnapshot: true,
         })
     }
 
-    async executeRunPlan(taskId: string, userInput?: string): Promise<void> {
+    async executeRunPlan(taskId: string, input: UserInputContext): Promise<void> {
         const planEvent = this.store.events.getTaskLatestCompletedPlanEvent(taskId)
         if (!planEvent) {
             console.error("[ExecutionManager] executeRunPlan: No completed plan event found")
@@ -432,9 +444,9 @@ export class ExecutionManager {
 
         return this.runAction({
             taskId,
-            userInput: userInput?.trim() || "",
+            input: { ...input, userInput: input.userInput?.trim() || "" },
             source: { type: "run_plan", userLabel: "Run Plan", planEventId: planEvent.id },
-            buildPrompt: ({ pendingComments, userInput: input }) => buildRunPlanPrompt(input, pendingComments),
+            buildPrompt: (ctx) => buildRunPlanPrompt(ctx),
             readOnly: false,
             createSnapshot: true,
         })

@@ -149,8 +149,12 @@ type ClaudeExecutionEventBase =
 
 type ClaudeExecutionEvent = ClaudeExecutionEventBase & { id: string }
 
+type ContentBlock =
+	| { type: "text"; text: string }
+	| { type: "image"; source: { type: "base64"; media_type: string; data: string } }
+
 type ClaudeCommandEvent =
-	| { id: string; type: "start_query"; executionId: string; prompt: string; options: QueryOptions }
+	| { id: string; type: "start_query"; executionId: string; prompt: string | ContentBlock[]; options: QueryOptions }
 	| { id: string; type: "tool_response"; executionId: string; callId: string; result?: ToolResult; error?: string }
 	| { id: string; type: "abort"; executionId: string }
 	| { id: string; type: "reconnect"; executionId: string }
@@ -430,11 +434,11 @@ export const load = () => {
 			event,
 			args: {
 				executionId: string
-				prompt: string
+				prompt: string | ContentBlock[]
 				options?: QueryOptions
 			}
 		) => {
-			console.debug("[ClaudeSdk] IPC claude:query received", { executionId: args.executionId, promptLength: args.prompt?.length })
+			console.debug("[ClaudeSdk] IPC claude:query received", { executionId: args.executionId, promptLength: args.prompt?.length, hasImages: Array.isArray(args.prompt) })
 			if (!checkAllowed(event)) {
 				console.debug("[ClaudeSdk] IPC claude:query BLOCKED by checkAllowed", { executionId: args.executionId })
 				throw new Error("not allowed")
@@ -506,10 +510,12 @@ async function handleStartQuery(
 	command: ClaudeCommandEvent & { type: "start_query" }
 ): Promise<{ ok: boolean; error?: string }> {
 	const { executionId, prompt, options } = command
+	const promptPreview = typeof prompt === "string" ? prompt.slice(0, 100) : `[${prompt.length} content blocks]`
 	console.debug("[ClaudeSdk] handleStartQuery called", {
 		executionId,
 		promptLength: prompt.length,
-		promptPreview: prompt.slice(0, 100),
+		promptPreview,
+		hasImages: Array.isArray(prompt),
 		hasClientTools: !!(options.clientTools && options.clientTools.length > 0),
 		clientToolCount: options.clientTools?.length ?? 0,
 		model: options.model,
@@ -666,6 +672,7 @@ async function handleStartQuery(
 	console.debug("[ClaudeSdk] handleStartQuery: calling query()", {
 		executionId,
 		promptLength: prompt.length,
+		hasImages: Array.isArray(prompt),
 		model: mergedOptions.model,
 		cwd: mergedOptions.cwd,
 		hasMcpServers: !!mergedOptions.mcpServers,
@@ -676,10 +683,30 @@ async function handleStartQuery(
 
 	let response: ReturnType<typeof query>
 	try {
-		response = query({
-			prompt,
-			options: mergedOptions,
-		})
+		if (Array.isArray(prompt)) {
+			// Structured content with images — use AsyncIterable<SDKUserMessage>
+			const sdkPrompt = (async function* () {
+				yield {
+					type: "user" as const,
+					message: {
+						role: "user" as const,
+						content: prompt,
+					},
+					parent_tool_use_id: null,
+					session_id: "",
+				}
+			})()
+			response = query({
+				prompt: sdkPrompt,
+				options: mergedOptions,
+			})
+		} else {
+			// Plain text prompt
+			response = query({
+				prompt,
+				options: mergedOptions,
+			})
+		}
 		console.debug("[ClaudeSdk] handleStartQuery: query() returned successfully (async iterator created)", { executionId })
 	} catch (err) {
 		const errorMessage = err instanceof Error ? err.message : "Unknown error"

@@ -71,8 +71,11 @@ export type ClaudeExecutionEvent =
  * These are requests/actions the client wants to perform
  * Each command has a unique `id` for tracking/deduplication
  */
+/** Content block for Vision API support — text or base64 image */
+export type ContentBlock = { type: "text"; text: string } | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
+
 export type ClaudeCommandEvent =
-    | { id: string; type: "start_query"; executionId: string; prompt: string; options: QueryOptions }
+    | { id: string; type: "start_query"; executionId: string; prompt: string | ContentBlock[]; options: QueryOptions }
     | { id: string; type: "tool_response"; executionId: string; callId: string; result?: ToolResult; error?: string }
     | { id: string; type: "abort"; executionId: string }
     | { id: string; type: "reconnect"; executionId: string }

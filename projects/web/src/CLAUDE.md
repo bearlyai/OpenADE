@@ -190,6 +190,27 @@ const portalContainer = usePortalContainer()
 
 See `_docs/design.md` for full patterns and `tw.css` for color definitions.
 
+## Data Folder (Unified Storage)
+
+Files are stored at `~/.openade/data/{folder}/{id}.{ext}` via three IPC channels that take `folder` as a parameter:
+- `code:data:save` — atomic write (temp+rename)
+- `code:data:load` — returns Buffer/string or null
+- `code:data:delete` — best-effort unlink
+
+Allowed folders: `images`, `snapshots`. Web side uses `dataFolderApi` from `electronAPI/dataFolder.ts`. Snapshots use a thin wrapper (`snapshotsApi`) that delegates to `dataFolderApi` with `folder: "snapshots"`.
+
+### Image Attachments
+
+Users can paste images (Cmd+V) or click the attach button. Flow:
+1. **Capture**: Paste handler or file input → `processImageBlob()` in `utils/imageAttachment.ts`
+2. **Resize**: `resizeImage()` constrains to 1568px max dimension / 1.15MP (configurable in `IMAGE_CONSTRAINTS`)
+3. **Store**: Original saved to `~/.openade/data/images/{ulid}.{ext}`, preview held as in-memory data URL
+4. **Submit**: `SmartEditorManager.pendingImages` → `InputManager.captureAndClear()` → `UserInputContext` → `ExecutionManager` → prompt builders
+5. **Prompt**: `buildImageContentBlocks()` loads from disk, resizes, base64-encodes → `ContentBlock[]` sent to Claude SDK
+6. **Render**: `ActionEvent.images` → `ImageAttachments` component loads from disk, renders thumbnails with lightbox
+
+The `UserInputContext` type bundles `userInput` + `images` and threads from UI through execution to prompt building. `PromptBuildContext` extends it with `comments`.
+
 ## Settings & Environment Variables
 
 User settings managed via Settings modal (accessed from sidebar). Uses YJS persistence (`PersonalSettingsStore`).
@@ -287,6 +308,11 @@ Import from `../components/ui` not `@/funktionalChat/components`.
 | Claude IPC | `electronAPI/claude.ts` |
 | Git IPC | `electronAPI/git.ts` |
 | Shell IPC | `electronAPI/shell.ts` |
+| Data folder IPC | `electronAPI/dataFolder.ts` |
+| Image resize utility | `utils/imageResize.ts` |
+| Image attachment pipeline | `utils/imageAttachment.ts` |
+| Image lightbox | `components/ui/ImageLightbox.tsx` |
+| Image thumbnails (events) | `components/events/ImageAttachments.tsx` |
 | Portal container hook | `hooks/usePortalContainer.tsx` |
 | Terminal themes | `themes/terminalThemes.ts` |
 | Terminal theme hook | `hooks/useTerminalTheme.ts` |

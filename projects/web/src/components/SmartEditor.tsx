@@ -21,6 +21,7 @@ import { fuzzySearch, isFilesApiAvailable } from "../electronAPI/files"
 import { usePortalContainer } from "../hooks/usePortalContainer"
 import type { SdkCapabilitiesManager, SlashCommandEntry } from "../store/managers/SdkCapabilitiesManager"
 import type { SmartEditorManager } from "../store/managers/SmartEditorManager"
+import { processImageBlob } from "../utils/imageAttachment"
 import { getFileName } from "./utils/paths"
 
 interface SmartEditorProps {
@@ -634,8 +635,38 @@ export const SmartEditor = observer(
                         attributes: {
                             class: "outline-none h-full",
                         },
-                        handlePaste: () => {
-                            // Let TipTap handle paste natively - it preserves structure correctly
+                        handleDrop: (_view, event) => {
+                            const files = event.dataTransfer?.files
+                            if (files) {
+                                for (const file of Array.from(files)) {
+                                    if (file.type.startsWith("image/")) {
+                                        event.preventDefault()
+                                        processImageBlob(file)
+                                            .then(({ attachment, dataUrl }) => manager.addImage(attachment, dataUrl))
+                                            .catch((err) => console.error("[SmartEditor] Failed to process dropped image:", err))
+                                        return true
+                                    }
+                                }
+                            }
+                            return false
+                        },
+                        handlePaste: (_view, event) => {
+                            const items = event.clipboardData?.items
+                            if (items) {
+                                for (const item of Array.from(items)) {
+                                    if (item.type.startsWith("image/")) {
+                                        const file = item.getAsFile()
+                                        if (file) {
+                                            event.preventDefault()
+                                            processImageBlob(file)
+                                                .then(({ attachment, dataUrl }) => manager.addImage(attachment, dataUrl))
+                                                .catch((err) => console.error("[SmartEditor] Failed to process pasted image:", err))
+                                            return true
+                                        }
+                                    }
+                                }
+                            }
+                            // Let TipTap handle text paste natively
                             return false
                         },
                         handleKeyDown: (_view, event) => {
@@ -735,16 +766,50 @@ export const SmartEditor = observer(
                 }
             }
 
+            const [isDragOver, setIsDragOver] = useState(false)
+            const dragCounterRef = useRef(0)
+
+            const handleDragEnter = useCallback((e: React.DragEvent) => {
+                e.preventDefault()
+                dragCounterRef.current++
+                if (e.dataTransfer?.types.includes("Files")) {
+                    setIsDragOver(true)
+                }
+            }, [])
+
+            const handleDragLeave = useCallback((e: React.DragEvent) => {
+                e.preventDefault()
+                dragCounterRef.current--
+                if (dragCounterRef.current === 0) {
+                    setIsDragOver(false)
+                }
+            }, [])
+
+            const handleDragOver = useCallback((e: React.DragEvent) => {
+                e.preventDefault()
+            }, [])
+
+            const handleDrop = useCallback((_e: React.DragEvent) => {
+                dragCounterRef.current = 0
+                setIsDragOver(false)
+                // Actual drop handling is done by TipTap's handleDrop in editorProps
+            }, [])
+
             return (
                 <div className="relative w-full">
                     <div
                         className={twMerge(
                             "w-full bg-input text-base-content border border-border cursor-text",
                             "focus-within:border-primary transition-colors",
+                            isDragOver && "border-primary ring-1 ring-primary/50",
                             disabled && "opacity-50 cursor-not-allowed",
                             className
                         )}
                         onClick={handleContainerClick}
+                        onDragEnter={handleDragEnter}
+                        onDragLeave={handleDragLeave}
+                        onDragOver={handleDragOver}
+                        onDrop={handleDrop}
                     >
                         <EditorContent
                             editor={editor}

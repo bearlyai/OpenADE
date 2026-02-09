@@ -1,4 +1,6 @@
-import type { Comment } from "../types"
+import { dataFolderApi } from "../electronAPI/dataFolder"
+import type { Comment, ImageAttachment, UserInputContext } from "../types"
+import { blobToBase64 } from "../utils/imageResize"
 import { makeSimpleXmlTag } from "../utils/makeXML"
 
 // =============================================================================
@@ -299,40 +301,72 @@ function formatUserInlineComments(comments: Comment[]): string {
     return makeSimpleXmlTag("user_inline_comments", {}, `\n${commentTags.join("\n")}\n`)
 }
 
+// Re-export ContentBlock from canonical definition
+export type { ContentBlock } from "../electronAPI/claudeEventTypes"
+import type { ContentBlock } from "../electronAPI/claudeEventTypes"
+
 // === Complete Prompt Builders ===
+
+/** Full context available to prompt builders. Extends UserInputContext with comments (added by ExecutionManager). */
+export interface PromptBuildContext extends UserInputContext {
+    comments: Comment[]
+}
 
 /** Return type for all prompt builders */
 export interface PromptResult {
     /** System prompt to append via SDK's appendSystemPrompt (undefined for 'do' mode) */
     systemPrompt?: string
-    /** The user message content */
-    userMessage: string
+    /** The user message content — string when no images, ContentBlock[] when images present */
+    userMessage: string | ContentBlock[]
     /** IDs of comments included in this prompt */
     consumedCommentIds: string[]
 }
 
-/**
- * Build the prompt for plan generation.
- * User description and comments go in user message; mode instructions go to system prompt.
- */
-export function buildPlanGenerationPrompt(description: string, comments: Comment[]): PromptResult {
+/** Load already-resized images from disk and build content blocks (images placed before text per Claude best practice) */
+async function buildImageContentBlocks(images: ImageAttachment[]): Promise<ContentBlock[]> {
+    const blocks: ContentBlock[] = []
+    for (const img of images) {
+        try {
+            const data = await dataFolderApi.load("images", img.id, img.ext)
+            if (!data) continue
+            const blob = new Blob([data], { type: img.mediaType })
+            const base64 = await blobToBase64(blob)
+            blocks.push({
+                type: "image",
+                source: { type: "base64", media_type: img.mediaType, data: base64 },
+            })
+        } catch (err) {
+            console.error("[prompts] Failed to load image for prompt:", img.id, err)
+        }
+    }
+    return blocks
+}
+
+/** Wrap text in ContentBlock[] with optional image blocks prepended */
+async function buildUserMessage(textContent: string, images: ImageAttachment[]): Promise<string | ContentBlock[]> {
+    if (images.length === 0) {
+        return textContent
+    }
+    const imageBlocks = await buildImageContentBlocks(images)
+    return [...imageBlocks, { type: "text" as const, text: textContent }]
+}
+
+export async function buildPlanGenerationPrompt(ctx: PromptBuildContext): Promise<PromptResult> {
+    const { userInput, comments, images } = ctx
     const commentsXML = formatUserInlineComments(comments)
-    const userParts = [PLAN_MODE_REMINDER, description]
+    const userParts = [PLAN_MODE_REMINDER, userInput]
     if (commentsXML) {
         userParts.push(commentsXML)
     }
     return {
         systemPrompt: MODE_INSTRUCTIONS.plan,
-        userMessage: userParts.join("\n\n"),
+        userMessage: await buildUserMessage(userParts.join("\n\n"), images),
         consumedCommentIds: comments.map((c) => c.id),
     }
 }
 
-/**
- * Build the prompt for plan revision.
- * User feedback and comments go in user message; mode instructions go to system prompt.
- */
-export function buildRevisePrompt(userInput: string, comments: Comment[] = []): PromptResult {
+export async function buildRevisePrompt(ctx: PromptBuildContext): Promise<PromptResult> {
+    const { userInput, comments, images } = ctx
     const commentsXML = formatUserInlineComments(comments)
     const updateRequestXML = makeSimpleXmlTag("update_request", {}, userInput)
 
@@ -344,40 +378,31 @@ export function buildRevisePrompt(userInput: string, comments: Comment[] = []): 
 
     return {
         systemPrompt: MODE_INSTRUCTIONS.revise,
-        userMessage: userParts.join("\n\n"),
+        userMessage: await buildUserMessage(userParts.join("\n\n"), images),
         consumedCommentIds: comments.map((c) => c.id),
     }
 }
 
-/**
- * Build the prompt for running a plan.
- * User input and comments go in user message; mode instructions go to system prompt.
- * Note: The plan itself is in the conversation context, not repeated here.
- */
-export function buildRunPlanPrompt(userInput: string, comments: Comment[]): PromptResult {
+export async function buildRunPlanPrompt(ctx: PromptBuildContext): Promise<PromptResult> {
+    const { userInput, comments, images } = ctx
     const commentsXML = formatUserInlineComments(comments)
     const userParts: string[] = []
     if (commentsXML) {
         userParts.push(commentsXML)
     }
-    // If user provided input, wrap it in final_notes
     if (userInput.trim()) {
         userParts.push(makeSimpleXmlTag("final_notes", {}, userInput))
     }
-    // Always include execution instruction
     userParts.push("The plan has been approved. Please proceed with the implementation.")
     return {
         systemPrompt: MODE_INSTRUCTIONS.execute,
-        userMessage: userParts.join("\n\n"),
+        userMessage: await buildUserMessage(userParts.join("\n\n"), images),
         consumedCommentIds: comments.map((c) => c.id),
     }
 }
 
-/**
- * Build prompt for Ask (explore) queries.
- * User question and comments go in user message; mode instructions go to system prompt.
- */
-export function buildAskPrompt(userInput: string, comments: Comment[]): PromptResult {
+export async function buildAskPrompt(ctx: PromptBuildContext): Promise<PromptResult> {
+    const { userInput, comments, images } = ctx
     const commentsXML = formatUserInlineComments(comments)
     const userParts: string[] = [ASK_MODE_REMINDER]
     if (commentsXML) {
@@ -386,17 +411,13 @@ export function buildAskPrompt(userInput: string, comments: Comment[]): PromptRe
     userParts.push(userInput)
     return {
         systemPrompt: MODE_INSTRUCTIONS.ask,
-        userMessage: userParts.join("\n\n"),
+        userMessage: await buildUserMessage(userParts.join("\n\n"), images),
         consumedCommentIds: comments.map((c) => c.id),
     }
 }
 
-/**
- * Build prompt for Do (direct action) queries.
- * Pure user input with optional comments. No system prompt—keeps it clean for
- * slash commands and varied use cases.
- */
-export function buildDoPrompt(userInput: string, comments: Comment[]): PromptResult {
+export async function buildDoPrompt(ctx: PromptBuildContext): Promise<PromptResult> {
+    const { userInput, comments, images } = ctx
     const commentsXML = formatUserInlineComments(comments)
     const userParts: string[] = []
     if (commentsXML) {
@@ -405,7 +426,7 @@ export function buildDoPrompt(userInput: string, comments: Comment[]): PromptRes
     userParts.push(userInput)
     return {
         systemPrompt: undefined,
-        userMessage: userParts.join("\n\n"),
+        userMessage: await buildUserMessage(userParts.join("\n\n"), images),
         consumedCommentIds: comments.map((c) => c.id),
     }
 }

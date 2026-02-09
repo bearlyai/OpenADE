@@ -90,6 +90,26 @@ export interface Comment {
 }
 
 // ============================================================================
+// Image Attachments
+// ============================================================================
+
+export interface ImageAttachment {
+    id: string // ULID, maps to file on disk at ~/.openade/data/images/{id}.{ext}
+    mediaType: string // "image/jpeg" | "image/png" | "image/webp" | "image/gif"
+    ext: string // "jpg" | "png" | "webp" | "gif"
+    originalWidth: number
+    originalHeight: number
+    resizedWidth: number // Dimensions after resize (equals original if no resize needed)
+    resizedHeight: number
+}
+
+/** Everything the user submits with an action. Threaded from UI → execution → prompt building. */
+export interface UserInputContext {
+    userInput: string
+    images: ImageAttachment[]
+}
+
+// ============================================================================
 // Event Types
 // ============================================================================
 
@@ -116,6 +136,7 @@ export interface ActionEvent extends BaseEvent {
     execution: Execution // Required - actions always have an execution
     source: ActionEventSource // Required - describes what triggered this action
     includesCommentIds: string[] // Tracks which comments were included in this event
+    images?: ImageAttachment[] // Image attachments submitted with this action
     result?: {
         success: boolean
     }
@@ -137,7 +158,7 @@ export interface SnapshotEvent extends BaseEvent {
     referenceBranch: string // Branch we're comparing against (e.g., "main") - for display
     mergeBaseCommit: string // Actual commit SHA we diffed against (frozen at worktree creation)
     fullPatch: string // Diff from mergeBaseCommit to current working tree (empty string if stored in file)
-    patchFileId?: string // ID of the patch file in ~/.openade/snapshots/ (if stored externally)
+    patchFileId?: string // ID of the patch file in ~/.openade/data/snapshots/ (if stored externally)
     stats: {
         filesChanged: number
         insertions: number

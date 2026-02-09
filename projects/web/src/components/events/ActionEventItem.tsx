@@ -5,6 +5,7 @@ import { useCodeStore } from "../../store/context"
 import type { ActionEvent } from "../../types"
 import { InlineMessages, type SessionInfo, UserInputMessage } from "../InlineMessages"
 import { CommentsSection } from "./CommentsSection"
+import { ImageAttachments } from "./ImageAttachments"
 import { type BaseEventItemProps, CollapsibleEvent } from "./shared"
 
 export type DisplayMode = "full" | "compact"
@@ -69,6 +70,11 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
             expanded={expanded}
             onToggle={onToggle}
         >
+            {event.images && event.images.length > 0 && (
+                <div className="px-3">
+                    <ImageAttachments images={event.images} />
+                </div>
+            )}
             {event.userInput && <UserInputMessage text={event.userInput} />}
             {includedComments.length > 0 && <CommentsSection comments={includedComments} variant="submitted" />}
 
