@@ -197,8 +197,11 @@ const activeExecutions = new Map<string, ExecutionState>()
 // Track pending tool calls waiting for renderer response
 const pendingToolCalls = new Map<string, PendingToolCall>()
 
-// Buffer retention time (10 minutes)
-const BUFFER_RETENTION_MS = 10 * 60 * 1000
+// Buffer retention time (30 minutes)
+// This must be longer than the longest possible single LLM turn, since
+// the timer only resets when complete SDK messages are yielded (partial
+// streaming messages are not included by default).
+const BUFFER_RETENTION_MS = 30 * 60 * 1000
 
 // ============================================================================
 // Helper Functions
