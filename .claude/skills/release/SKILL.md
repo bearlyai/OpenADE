@@ -58,6 +58,7 @@ Ask the user:
 
 Once the user approves:
 - Add the new entry to the top of the `RELEASE_NOTES` array in `projects/web/src/versions.ts`
+- Update the `version` field in `projects/electron/package.json` to the new version number (e.g., `"version": "0.53.0"`). This is what Electron's "About" dialog displays.
 - Create a commit with the message `release: v<version>`
 - Create a git tag `v<version>`
 - Push the commit and tag (`git push && git push --tags`)
