@@ -2,6 +2,9 @@
 
 Task planning and execution system with Claude Agent SDK. Users describe tasks, Claude generates plans, users can review/revise before execution.
 
+This is a TypeScript-first codebase. When fixing type errors, focus on proper TypeScript solutions rather than workarounds.
+
+
 ## Tray System
 
 Slide-out panels (Files, Search, Changes, Terminal, Processes) managed by `TrayManager`. Each tray type is defined declaratively in `components/tray/trayConfigs.tsx`.
@@ -316,6 +319,7 @@ Call `TaskManager.invalidateTaskModel(taskId)` when task changes significantly.
 ### Event Hooks
 
 ExecutionManager broadcasts after events complete. Use `onAfterEvent()` to subscribe - returns disposer.
+
 
 ## Access Control
 

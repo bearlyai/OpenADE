@@ -165,6 +165,8 @@ export function syncTaskPreviewFromStore(repoStore: RepoStore, repoId: string, t
         lastEvent,
         closed: meta.closed,
         usage,
+        lastViewedAt: meta.lastViewedAt,
+        lastEventAt: meta.lastEventAt,
     })
 }
 

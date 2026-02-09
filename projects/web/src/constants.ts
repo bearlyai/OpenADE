@@ -27,6 +27,34 @@ export function setLastViewed(data: LastViewed): void {
     localStorage.setItem(LAST_VIEWED_KEY, JSON.stringify(data))
 }
 
+const WORKSPACE_LAST_VIEWED_KEY = "_code_workspace_last_viewed"
+
+interface WorkspaceLastViewed {
+    taskId?: string
+}
+
+export function getWorkspaceLastViewed(workspaceId: string): WorkspaceLastViewed | null {
+    try {
+        const data = localStorage.getItem(WORKSPACE_LAST_VIEWED_KEY)
+        if (!data) return null
+        const map = JSON.parse(data) as Record<string, WorkspaceLastViewed>
+        return map[workspaceId] ?? null
+    } catch {
+        return null
+    }
+}
+
+export function setWorkspaceLastViewed(workspaceId: string, data: WorkspaceLastViewed): void {
+    try {
+        const existing = localStorage.getItem(WORKSPACE_LAST_VIEWED_KEY)
+        const map: Record<string, WorkspaceLastViewed> = existing ? JSON.parse(existing) : {}
+        map[workspaceId] = data
+        localStorage.setItem(WORKSPACE_LAST_VIEWED_KEY, JSON.stringify(map))
+    } catch {
+        // Ignore storage errors
+    }
+}
+
 // ============================================================================
 // MCP Server Presets
 // ============================================================================

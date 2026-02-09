@@ -48,6 +48,8 @@ export interface TaskPreview {
     closed?: boolean
     createdAt: string // ISO timestamp
     usage?: TaskPreviewUsage
+    lastViewedAt?: string // ISO timestamp - for unread badge computation
+    lastEventAt?: string // ISO timestamp - for unread badge computation
 }
 
 /**
@@ -180,6 +182,8 @@ export function updateTaskPreview(store: RepoStore, repoId: string, taskId: stri
             if (updates.lastEvent !== undefined) task.lastEvent = updates.lastEvent
             if (updates.closed !== undefined) task.closed = updates.closed
             if (updates.usage !== undefined) task.usage = updates.usage
+            if (updates.lastViewedAt !== undefined) task.lastViewedAt = updates.lastViewedAt
+            if (updates.lastEventAt !== undefined) task.lastEventAt = updates.lastEventAt
         }
     })
 }

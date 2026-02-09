@@ -1,7 +1,8 @@
 import cx from "classnames"
-import { FolderOpen, FolderPlus, MoreHorizontal, Settings, Trash2 } from "lucide-react"
+import { FolderOpen, FolderPlus, Loader2, MoreHorizontal, Settings, Trash2 } from "lucide-react"
 import { observer } from "mobx-react"
 import { useState } from "react"
+import { getWorkspaceLastViewed } from "../../constants"
 import { useCodeNavigate } from "../../routing"
 import { useCodeStore } from "../../store/context"
 import type { Repo } from "../../types"
@@ -68,10 +69,20 @@ const RepoMenuButton = ({ onSettings, onDelete }: { repo: Repo; onSettings: () =
 const RepoItem = ({
     repo,
     isActive,
+    unreadCount,
+    isRunning,
     onSelect,
     onSettings,
     onDelete,
-}: { repo: Repo; isActive: boolean; onSelect: () => void; onSettings: () => void; onDelete: () => void }) => {
+}: {
+    repo: Repo
+    isActive: boolean
+    unreadCount: number
+    isRunning: boolean
+    onSelect: () => void
+    onSettings: () => void
+    onDelete: () => void
+}) => {
     return (
         <div
             role="button"
@@ -91,6 +102,12 @@ const RepoItem = ({
         >
             <FolderOpen className="w-4 h-4 flex-shrink-0" />
             <span className="truncate min-w-0 flex-1 select-none">{repo.name}</span>
+            {isRunning && <Loader2 className="w-3 h-3 animate-spin flex-shrink-0 text-muted" />}
+            {unreadCount > 0 && (
+                <span className="text-[10px] font-medium bg-primary text-primary-content w-4 h-4 flex items-center justify-center flex-shrink-0">
+                    {unreadCount}
+                </span>
+            )}
             <RepoMenuButton repo={repo} onSettings={onSettings} onDelete={onDelete} />
         </div>
     )
@@ -104,14 +121,40 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
     const codeStore = useCodeStore()
     const navigate = useCodeNavigate()
 
+    const getUnreadCount = (repoId: string): number => {
+        const repo = codeStore.repoStore?.repos.get(repoId)
+        if (!repo) return 0
+        return repo.tasks.filter((t) => {
+            if (t.closed) return false
+            if (!t.lastEventAt) return false
+            if (!t.lastViewedAt) return true
+            return t.lastEventAt > t.lastViewedAt
+        }).length
+    }
+
+    const getIsRunning = (repoId: string): boolean => {
+        const repo = codeStore.repoStore?.repos.get(repoId)
+        if (!repo) return false
+        return repo.tasks.some((t) => codeStore.workingTaskIds.has(t.id))
+    }
+
     const handleAddRepo = () => {
         // Navigate to workspace create page
         navigate.go("CodeWorkspaceCreate")
     }
 
     const handleSelectRepo = (repoId: string) => {
-        // Navigate to workspace page
-        navigate.go("CodeWorkspace", { workspaceId: repoId })
+        // Restore last viewed page for this workspace, or fall back to task create
+        const lastViewed = getWorkspaceLastViewed(repoId)
+        if (lastViewed?.taskId) {
+            const repo = codeStore.repoStore?.repos.get(repoId)
+            const taskExists = repo?.tasks.some((t) => t.id === lastViewed.taskId)
+            if (taskExists) {
+                navigate.go("CodeWorkspaceTask", { workspaceId: repoId, taskId: lastViewed.taskId })
+                return
+            }
+        }
+        navigate.go("CodeWorkspaceTaskCreate", { workspaceId: repoId })
     }
 
     const handleSettingsRepo = (repoId: string) => {
@@ -141,6 +184,8 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
                             key={repo.id}
                             repo={repo}
                             isActive={workspaceId === repo.id}
+                            unreadCount={getUnreadCount(repo.id)}
+                            isRunning={getIsRunning(repo.id)}
                             onSelect={() => handleSelectRepo(repo.id)}
                             onSettings={() => handleSettingsRepo(repo.id)}
                             onDelete={() => handleDeleteRepo(repo.id)}

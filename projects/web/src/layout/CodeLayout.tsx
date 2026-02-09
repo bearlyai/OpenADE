@@ -4,7 +4,7 @@ import { observer } from "mobx-react"
 import { type ReactNode, useCallback, useEffect, useState } from "react"
 import { useHotkeys } from "react-hotkeys-hook"
 import { SettingsModal, type SettingsTab } from "../components/settings/SettingsModal"
-import { setLastViewed } from "../constants"
+import { setLastViewed, setWorkspaceLastViewed } from "../constants"
 import { initCodeModuleCapabilities } from "../electronAPI/capabilities"
 import { fetchPlatformInfo } from "../electronAPI/platform"
 import { processApi } from "../electronAPI/process"
@@ -161,6 +161,7 @@ export const CodeLayout = observer(({ children, isCodeModuleAvailable, workspace
     useEffect(() => {
         if (workspaceId) {
             setLastViewed({ workspaceId, taskId })
+            setWorkspaceLastViewed(workspaceId, { taskId })
         }
     }, [workspaceId, taskId])
 

@@ -239,6 +239,11 @@ export class TaskManager {
             draft.lastViewedAt = new Date().toISOString()
             draft.updatedAt = new Date().toISOString()
         })
+
+        // Sync to RepoStore so sidebar unread badge updates
+        if (this.store.repoStore) {
+            syncTaskPreviewFromStore(this.store.repoStore, taskStore.meta.current.repoId, taskStore)
+        }
     }
 
     private markTaskHasNewEvent(taskId: string): void {
