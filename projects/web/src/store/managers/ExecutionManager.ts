@@ -9,6 +9,7 @@
  */
 
 import { captureError, track } from "../../analytics"
+import { USE_SAME_MODEL_FOR_AGENTS, getModelFullId } from "../../constants"
 import { type ClaudeStreamEvent, type McpServerConfig, getClaudeQueryManager, isClaudeApiAvailable } from "../../electronAPI/claude"
 import { getGitStatus, isGitApiAvailable } from "../../electronAPI/git"
 import { buildMcpServerConfigs } from "../../electronAPI/mcp"
@@ -253,17 +254,27 @@ export class ExecutionManager {
 
         console.debug("[ExecutionManager] runExecutionLoop: calling manager.startExecution")
         const taskModel = this.store.tasks.getTaskModel(ctx.taskId)
+        const selectedModel = taskModel?.model ?? this.store.defaultModel
+        const modelEnvVars = USE_SAME_MODEL_FOR_AGENTS
+            ? {
+                  ANTHROPIC_DEFAULT_OPUS_MODEL: getModelFullId(selectedModel),
+                  ANTHROPIC_DEFAULT_SONNET_MODEL: getModelFullId(selectedModel),
+                  ANTHROPIC_DEFAULT_HAIKU_MODEL: getModelFullId(selectedModel),
+                  CLAUDE_CODE_SUBAGENT_MODEL: getModelFullId(selectedModel),
+              }
+            : undefined
         const query = await manager.startExecution(
             ctx.prompt,
             {
                 cwd: ctx.cwd,
                 additionalDirectories: ctx.additionalDirectories,
-                model: taskModel?.model ?? this.store.defaultModel,
+                model: selectedModel,
                 resume: ctx.parentSessionId,
                 forkSession: !!ctx.parentSessionId,
                 readOnly: ctx.readOnly,
                 appendSystemPrompt: ctx.appendSystemPrompt,
                 mcpServerConfigs: ctx.mcpServerConfigs,
+                modelEnvVars,
             },
             ctx.executionId
         )

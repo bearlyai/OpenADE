@@ -201,10 +201,21 @@ export const MCP_PRESET_IDS = Object.keys(MCP_PRESETS) as (keyof typeof MCP_PRES
 // ============================================================================
 
 export const CLAUDE_MODELS = [
-    { id: "claude-opus-4-6", label: "Opus 4.6" },
-    { id: "claude-sonnet-4-5-20250929", label: "Sonnet 4.5" },
-    { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
+    { id: "opus", fullId: "claude-opus-4-6", label: "Opus 4.6" },
+    { id: "sonnet", fullId: "claude-sonnet-4-5-20250929", label: "Sonnet 4.5" },
+    { id: "haiku", fullId: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
 ] as const
 
-export const DEFAULT_MODEL = "claude-opus-4-6"
+export const DEFAULT_MODEL = "opus"
 export type ClaudeModelId = (typeof CLAUDE_MODELS)[number]["id"]
+
+/** Get the full model ID (e.g. "claude-opus-4-6") from an alias (e.g. "opus") */
+export function getModelFullId(alias: ClaudeModelId): string {
+    return CLAUDE_MODELS.find((m) => m.id === alias)!.fullId
+}
+
+/**
+ * When true, sets ANTHROPIC_DEFAULT_*_MODEL and CLAUDE_CODE_SUBAGENT_MODEL env vars
+ * to force all nested agents/subagents to use the same model as the selected one.
+ */
+export const USE_SAME_MODEL_FOR_AGENTS = true

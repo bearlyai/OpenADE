@@ -127,6 +127,8 @@ type QueryOptions = Omit<
 	clientTools?: SerializedToolDefinition[]
 	/** MCP server configurations passed from frontend (keyed by server name) */
 	mcpServerConfigs?: Record<string, McpServerConfig>
+	/** Environment variables to control model selection for nested agents */
+	modelEnvVars?: Record<string, string>
 }
 
 // SDK message type
@@ -610,8 +612,8 @@ async function handleStartQuery(
 	const clientToolNames = clientTools?.map((t) => `mcp__client-tools__${t.name}`) || []
 
 	// Merge frontend options with runtime necessities (abortController, mcpServers, stderr)
-	// Note: mcpServerConfigs is our custom field - extract it before spreading to SDK options
-	const { mcpServerConfigs: _extractedMcpConfigs, ...restSdkOptions } = sdkOptions
+	// Note: mcpServerConfigs and modelEnvVars are our custom fields - extract before spreading to SDK options
+	const { mcpServerConfigs: _extractedMcpConfigs, modelEnvVars, ...restSdkOptions } = sdkOptions
 	// Use managed bun binary if available (resolved via PATH after enhancePath()),
 	// otherwise fall back to ELECTRON_RUN_AS_NODE.
 	// The managed binary avoids creating a separate dock icon on macOS.
@@ -625,6 +627,7 @@ async function handleStartQuery(
 					...process.env,
 					DISABLE_TELEMETRY: "1",
 					DISABLE_ERROR_REPORTING: "1",
+					...modelEnvVars,
 					...sdkOptions.env,
 				},
 			}
@@ -635,6 +638,7 @@ async function handleStartQuery(
 					ELECTRON_RUN_AS_NODE: "1",
 					DISABLE_TELEMETRY: "1",
 					DISABLE_ERROR_REPORTING: "1",
+					...modelEnvVars,
 					...sdkOptions.env,
 				},
 			}

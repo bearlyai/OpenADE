@@ -64,6 +64,8 @@ export type ClientQueryOptions = Omit<Options, "abortController" | "mcpServers" 
     appendSystemPrompt?: string
     /** MCP server configurations to use for this execution (keyed by server name) */
     mcpServerConfigs?: Record<string, McpServerConfig>
+    /** Environment variables to control model selection for nested agents */
+    modelEnvVars?: Record<string, string>
 }
 
 // ============================================================================
@@ -458,7 +460,7 @@ class ClaudeQueryManagerImpl {
 
         const mergedOptions: ClientQueryOptions = {
             // Defaults that can be overridden
-            model: "claude-sonnet-4-5-20250929",
+            model: "sonnet",
             tools: { type: "preset", preset: "claude_code" },
             permissionMode: "bypassPermissions",
             settingSources: ["user", "project", "local"],
@@ -490,8 +492,9 @@ class ClaudeQueryManagerImpl {
         }))
 
         // Build IPC options - exclude client-side-only fields
-        const { clientTools: _, appendSystemPrompt: __, readOnly: ___, ...restOptions } = mergedOptions
-        const ipcOptions: QueryOptions = serializedTools ? { ...restOptions, clientTools: serializedTools } : restOptions
+        const { clientTools: _, appendSystemPrompt: __, readOnly: ___, modelEnvVars: extractedModelEnvVars, ...restOptions } = mergedOptions
+        const baseIpcOptions = { ...restOptions, ...(extractedModelEnvVars ? { modelEnvVars: extractedModelEnvVars } : {}) }
+        const ipcOptions: QueryOptions = serializedTools ? { ...baseIpcOptions, clientTools: serializedTools } : baseIpcOptions
 
         // Start the query
         console.debug("[ClaudeQueryManager] startExecution: invoking openadeAPI.claude.query", {

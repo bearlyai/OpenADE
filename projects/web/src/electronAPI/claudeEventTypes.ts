@@ -28,6 +28,8 @@ export type QueryOptions = Omit<Options, "abortController" | "mcpServers" | "can
     clientTools?: SerializedToolDefinition[]
     /** MCP server configurations to use for this execution (keyed by server name) */
     mcpServerConfigs?: Record<string, McpServerConfig>
+    /** Environment variables to control model selection for nested agents */
+    modelEnvVars?: Record<string, string>
 }
 
 /** Serialized tool definition for IPC (no handler, JSON Schema) */
