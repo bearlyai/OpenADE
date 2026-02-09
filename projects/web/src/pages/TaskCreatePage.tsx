@@ -208,6 +208,23 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
         checkUncommitted()
     }, [gitInfoLoaded, workspaceId, codeStore.repos])
 
+    // Refresh uncommitted changes when window regains focus
+    useEffect(() => {
+        if (!gitInfoLoaded) return
+
+        const handleFocus = async () => {
+            try {
+                const result = await codeStore.repos.getGitStatus(workspaceId)
+                setUncommittedChanges(result)
+            } catch (err) {
+                console.error("[TaskCreatePage] Failed to refresh uncommitted changes:", err)
+            }
+        }
+
+        window.addEventListener("focus", handleFocus)
+        return () => window.removeEventListener("focus", handleFocus)
+    }, [gitInfoLoaded, workspaceId, codeStore.repos])
+
     useEffect(() => {
         localStorage.setItem(getCreateMoreKey(workspaceId), String(createMore))
     }, [createMore, workspaceId])
