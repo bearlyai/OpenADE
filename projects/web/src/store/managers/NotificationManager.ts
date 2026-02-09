@@ -1,7 +1,7 @@
-import type { ActionEvent } from "../../types"
+import type { ActionEvent, ActionEventSource } from "../../types"
 import type { CodeStore } from "../store"
 
-type NotifiableEventType = "plan" | "revise" | "action" | "runPlan"
+type NotifiableEventType = Exclude<ActionEventSource["type"], "ask">
 
 const NOTIFICATION_CLEANUP_MS = 5 * 60 * 1000
 
@@ -30,8 +30,8 @@ export class NotificationManager {
         }
     }
 
-    private isNotifiableEvent(eventType: string): eventType is NotifiableEventType {
-        return ["plan", "revise", "action", "runPlan"].includes(eventType)
+    private isNotifiableEvent(eventType: ActionEventSource["type"]): eventType is NotifiableEventType {
+        return eventType !== "ask"
     }
 
     private getNotificationMessage(eventType: NotifiableEventType, label?: string): string {
@@ -40,10 +40,14 @@ export class NotificationManager {
                 return "Planning complete."
             case "revise":
                 return "Plan revision complete."
-            case "action":
+            case "do":
                 return label ? `${label} complete.` : "Action complete."
-            case "runPlan":
+            case "run_plan":
                 return "Plan execution complete."
+            default: {
+                const _exhaustive: never = eventType
+                return `${_exhaustive} complete.`
+            }
         }
     }
 
@@ -58,13 +62,13 @@ export class NotificationManager {
         return undefined
     }
 
-    private handleEvent(taskId: string, eventType: string): void {
+    private handleEvent(taskId: string, eventType: ActionEventSource["type"]): void {
         if (!this.isNotifiableEvent(eventType)) return
 
         const task = this.store.tasks.getTask(taskId)
         if (!task) return
 
-        const label = eventType === "action" ? this.getActionLabel(taskId) : undefined
+        const label = eventType === "do" ? this.getActionLabel(taskId) : undefined
         const message = this.getNotificationMessage(eventType, label)
 
         this.sendNotification(taskId, task.repoId, task.title, message)

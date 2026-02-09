@@ -17,6 +17,8 @@ import type { ActionEventSource, Comment, GitRefs, Repo, Task } from "../../type
 import type { TaskModel } from "../TaskModel"
 import type { CodeStore } from "../store"
 
+type AfterEventCallback = (taskId: string, eventType: ActionEventSource["type"]) => void
+
 interface ActionParams {
     taskId: string
     userInput: string
@@ -33,20 +35,20 @@ interface PromptContext {
 }
 
 export class ExecutionManager {
-    private afterEventCallbacks: Array<(taskId: string, eventType: string) => void> = []
+    private afterEventCallbacks: AfterEventCallback[] = []
 
     constructor(private store: CodeStore) {}
 
     // === Event hooks ===
 
-    onAfterEvent(callback: (taskId: string, eventType: string) => void): () => void {
+    onAfterEvent(callback: AfterEventCallback): () => void {
         this.afterEventCallbacks.push(callback)
         return () => {
             this.afterEventCallbacks = this.afterEventCallbacks.filter((cb) => cb !== callback)
         }
     }
 
-    private fireAfterEvent(taskId: string, eventType: string, success: boolean): void {
+    private fireAfterEvent(taskId: string, eventType: ActionEventSource["type"], success: boolean): void {
         // Track execution completion
         track("execution_completed", { eventType, success })
 
