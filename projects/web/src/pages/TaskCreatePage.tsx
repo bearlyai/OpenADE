@@ -17,7 +17,7 @@ import {
     X,
 } from "lucide-react"
 import { observer } from "mobx-react"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { ModelPicker } from "../components/ModelPicker"
 import { SmartEditor, type SmartEditorRef } from "../components/SmartEditor"
 import { TaskMcpSelector } from "../components/mcp/TaskMcpSelector"
@@ -27,6 +27,7 @@ import { usePortalContainer } from "../hooks/usePortalContainer"
 import { useCodeNavigate } from "../routing"
 import { useCodeStore } from "../store/context"
 import type { CreationPhase, TaskCreation } from "../store/managers/TaskCreationManager"
+import { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager"
 import type { Repo } from "../types"
 import { processImageBlob } from "../utils/imageAttachment"
 
@@ -146,6 +147,9 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
 
     // Get SmartEditorManager for task creation
     const editorManager = codeStore.smartEditors.getManager("task-create", workspaceId)
+
+    // SDK capabilities for slash command autocomplete
+    const sdkCapabilities = useMemo(() => new SdkCapabilitiesManager(), [])
 
     // Track if git info has been loaded
     const [gitInfoLoaded, setGitInfoLoaded] = useState(false)
@@ -285,6 +289,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                     manager={editorManager}
                     fileMentionsDir={repo?.path ?? null}
                     slashCommandsDir={repo?.path ?? null}
+                    sdkCapabilities={sdkCapabilities}
                     placeholder="Describe your task... Use @ to reference files, / for commands"
                     className="h-full text-base border-0 bg-transparent [&>div]:h-full [&>div]:border-0 [&>div]:border-l-2 [&>div]:border-l-transparent [&>div:focus-within]:border-l-primary [&>div]:transition-colors"
                     editorClassName="h-full"
