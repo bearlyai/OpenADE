@@ -57,8 +57,6 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
     const rawTask = codeStore.tasks.getTask(taskId)
     const events = rawTask?.events ?? []
 
-    const repo = codeStore.repos.getRepo(workspaceId)
-
     // Get SmartEditorManager for this task
     const editorManager = codeStore.smartEditors.getManager(`task-${taskId}`, workspaceId)
 
@@ -102,13 +100,15 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
         return () => clearInterval(interval)
     }, [taskModel, taskModel.isWorking])
 
-    // Initialize file browser and content search when repo path is available
+    // Initialize file browser and content search with the task's working directory
+    // For worktree tasks this is the worktree dir, for head tasks it's repo.path
+    const taskWorkingDir = taskModel.environment?.taskWorkingDir
     useEffect(() => {
-        if (repo?.path) {
-            codeStore.fileBrowser.setRepoPath(repo.path)
-            codeStore.contentSearch.setRepoPath(repo.path)
+        if (taskWorkingDir) {
+            codeStore.fileBrowser.setWorkingDir(taskWorkingDir)
+            codeStore.contentSearch.setWorkingDir(taskWorkingDir)
         }
-    }, [repo?.path])
+    }, [taskWorkingDir])
 
     const handleSetupComplete = useCallback(() => {
         taskModel.refreshGitState()
@@ -131,8 +131,8 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
                 editorManager={editorManager}
                 tray={tray}
                 gitStatus={taskModel.gitStatus}
-                fileMentionsDir={repo?.path ?? null}
-                slashCommandsDir={repo?.path ?? null}
+                fileMentionsDir={taskWorkingDir ?? null}
+                slashCommandsDir={taskWorkingDir ?? null}
                 unsubmittedComments={codeStore.comments.getUnsubmittedComments(taskId)}
                 selectedModel={codeStore.model}
                 onModelChange={(m) => codeStore.setModel(m)}

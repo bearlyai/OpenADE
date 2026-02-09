@@ -163,7 +163,7 @@ export const SearchTray = observer(function SearchTray({ taskId, onEscapeClose }
 
     // Create comment handlers for the selected file
     const selectedMatch = contentSearch.contentResults[contentSearch.selectedIndex] ?? null
-    const selectedFile = selectedMatch ? `${contentSearch.repoPath}/${selectedMatch.file}` : null
+    const selectedFile = selectedMatch ? `${contentSearch.workingDir}/${selectedMatch.file}` : null
 
     const commentHandlers: CommentHandlers | null = useMemo(() => {
         if (!selectedFile) return null

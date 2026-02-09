@@ -25,7 +25,7 @@ export interface OpenTab {
 
 export class FileBrowserManager {
     // Navigation state
-    repoPath = ""
+    workingDir = ""
 
     // Tree state - expanded directories and their cached contents
     expandedPaths: Set<string> = new Set()
@@ -61,9 +61,9 @@ export class FileBrowserManager {
         makeAutoObservable(this)
     }
 
-    setRepoPath(path: string): void {
-        if (this.repoPath !== path) {
-            this.repoPath = path
+    setWorkingDir(path: string): void {
+        if (this.workingDir !== path) {
+            this.workingDir = path
             this.expandedPaths.clear()
             this.directoryContents.clear()
             this.loadingPaths.clear()
@@ -135,20 +135,20 @@ export class FileBrowserManager {
     collapseAll(): void {
         // Keep only the root expanded
         this.expandedPaths.clear()
-        if (this.repoPath) {
-            this.expandedPaths.add(this.repoPath)
+        if (this.workingDir) {
+            this.expandedPaths.add(this.workingDir)
         }
     }
 
     expandPathToFile(filePath: string): void {
-        if (!this.repoPath) return
+        if (!this.workingDir) return
 
         // Get all parent directories from repo root to the file
-        const relativePath = getRelativePath(this.repoPath, filePath)
+        const relativePath = getRelativePath(this.workingDir, filePath)
         const parts = splitPath(relativePath)
 
         // Expand each parent directory (excluding the file itself)
-        let currentPath = this.repoPath
+        let currentPath = this.workingDir
         this.expandedPaths.add(currentPath)
         const sep = getPathSeparator()
         for (let i = 0; i < parts.length - 1; i++) {
@@ -181,7 +181,7 @@ export class FileBrowserManager {
             })
             try {
                 const result = await filesApi.fuzzySearch({
-                    dir: this.repoPath,
+                    dir: this.workingDir,
                     query,
                     matchDirs: false,
                     limit: 50,
@@ -323,7 +323,7 @@ export class FileBrowserManager {
     }
 
     get flattenedTree(): TreeNode[] {
-        if (!this.repoPath) return []
+        if (!this.workingDir) return []
 
         const result: TreeNode[] = []
 
@@ -351,7 +351,7 @@ export class FileBrowserManager {
         }
 
         // Start from root
-        traverse(this.repoPath, 0)
+        traverse(this.workingDir, 0)
 
         return result
     }
@@ -360,7 +360,7 @@ export class FileBrowserManager {
         const sep = getPathSeparator()
         return this.searchResults.map((relativePath) => ({
             name: relativePath,
-            fullPath: `${this.repoPath}${sep}${relativePath}`,
+            fullPath: `${this.workingDir}${sep}${relativePath}`,
         }))
     }
 

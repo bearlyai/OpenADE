@@ -24,8 +24,8 @@ export class ContentSearchManager {
     // Selection state for keyboard navigation
     selectedIndex = 0
 
-    // Search directory (repo path)
-    repoPath = ""
+    // Search directory (task working directory)
+    workingDir = ""
 
     // File preview state (independent of FileBrowserManager)
     previewPath: string | null = null
@@ -39,10 +39,10 @@ export class ContentSearchManager {
         makeAutoObservable(this)
     }
 
-    setRepoPath(path: string): void {
-        if (this.repoPath !== path) {
-            this.repoPath = path
-            // Reset search state when repo changes
+    setWorkingDir(path: string): void {
+        if (this.workingDir !== path) {
+            this.workingDir = path
+            // Reset search state when directory changes
             this.query = ""
             this.contentResults = []
             this.selectedIndex = 0
@@ -73,7 +73,7 @@ export class ContentSearchManager {
         }
 
         this.searchDebounceTimer = setTimeout(async () => {
-            if (!this.repoPath) {
+            if (!this.workingDir) {
                 runInAction(() => {
                     this.error = "No repository path set"
                 })
@@ -87,7 +87,7 @@ export class ContentSearchManager {
 
             try {
                 const result = await filesApi.contentSearch({
-                    dir: this.repoPath,
+                    dir: this.workingDir,
                     query: query.trim(),
                     limit: CONTENT_RESULTS_LIMIT,
                     caseSensitive: false,
@@ -170,7 +170,7 @@ export class ContentSearchManager {
      * Load file preview for a content match
      */
     async loadPreviewForMatch(match: ContentSearchMatch): Promise<void> {
-        const absolutePath = `${this.repoPath}/${match.file}`
+        const absolutePath = `${this.workingDir}/${match.file}`
 
         // Skip if already loading this file
         if (this.previewPath === absolutePath && this.previewLoading) {

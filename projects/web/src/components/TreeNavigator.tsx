@@ -115,7 +115,7 @@ export const TreeNavigator = observer(function TreeNavigator({ className, onEsca
             const items = isSearching ? searchItems : tree
 
             const currentIndex = isSearching
-                ? searchItems.findIndex((item) => `${fileBrowser.repoPath}/${item.name}` === fileBrowser.selectedPath)
+                ? searchItems.findIndex((item) => `${fileBrowser.workingDir}/${item.name}` === fileBrowser.selectedPath)
                 : tree.findIndex((node) => node.path === fileBrowser.selectedPath)
 
             switch (e.key) {
