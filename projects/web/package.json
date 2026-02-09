@@ -57,7 +57,7 @@
     "zod-to-json-schema": "^3.22.5"
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.32",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.37",
     "@biomejs/biome": "^1.9.4",
     "@types/diff": "^5.0.2",
     "@types/jstoxml": "^5.0.0",
