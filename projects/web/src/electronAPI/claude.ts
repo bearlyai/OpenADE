@@ -457,7 +457,10 @@ class ClaudeQueryManagerImpl {
         // Default options - caller overrides take precedence
         const defaultAllowedTools = ["Read", "Edit", "Glob", "Bash", "Grep", "WebSearch", "WebFetch"]
         const defaultDisallowedTools = ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"]
-        const readOnlyDisallowedTools = ["Edit", "Write", "NotebookEdit", "Bash"]
+        // Note: Bash is intentionally allowed in read-only modes (plan/ask/revise) so the model can run
+        // read-only commands like git log, git diff, ls, etc. The system prompt provides soft enforcement
+        // against state-changing commands.
+        const readOnlyDisallowedTools = ["Edit", "Write", "NotebookEdit"]
 
         // Build systemPrompt option if appendSystemPrompt is provided
         const systemPromptOption = options.appendSystemPrompt
