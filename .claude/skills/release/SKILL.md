@@ -21,11 +21,22 @@ git diff <latest-tag>..HEAD --stat
 
 Read the actual diffs for key files if the summary isn't clear enough to write good release notes.
 
-## 3. Suggest a version number
+## 3. Run checks
+
+Before proceeding, run typechecks and tests in both projects. Run these commands in parallel:
+
+```
+cd projects/electron && npm run typecheck && npm run test
+cd projects/web && npm run typecheck && npm run test
+```
+
+If any check fails, stop and report the failures to the user. Do NOT continue with the release until all checks pass.
+
+## 4. Suggest a version number
 
 The project follows semver. Most releases bump the **minor** version (e.g., `0.51.0` → `0.52.0`). Suggest a patch bump only for pure bugfix releases.
 
-## 4. Draft the release notes entry
+## 5. Draft the release notes entry
 
 Read `projects/web/src/versions.ts` to see the existing format. Draft a new entry to prepend to the `RELEASE_NOTES` array:
 
@@ -33,7 +44,7 @@ Read `projects/web/src/versions.ts` to see the existing format. Draft a new entr
 - **date**: Today's date in `YYYY-MM-DD` format
 - **highlights**: 3-5 bullet points covering the most user-visible changes. Write from the user's perspective — what they can now do, not internal implementation details. Keep each bullet to one sentence.
 
-## 5. Present to the user for approval
+## 6. Present to the user for approval
 
 Show the user:
 - The suggested version number
@@ -72,7 +83,7 @@ Provide a ready-to-copy markdown block the user can paste directly into the GitH
 
 Keep the tone concise and user-facing. Use bold for feature names and keep descriptions to one sentence each.
 
-## 6. Apply changes
+## 7. Apply changes
 
 Only after the user approves:
 - Add the new entry to the top of the `RELEASE_NOTES` array in `projects/web/src/versions.ts`
