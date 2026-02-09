@@ -320,21 +320,18 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
                                     onCancel={() => handleCancelCreation(creation.id)}
                                 />
                             ))}
-                            {sortedPreviews.map((preview) => {
-                                const taskModel = codeStore.tasks.getTaskModel(preview.id)
-                                return (
+                            {sortedPreviews.map((preview) => (
                                     <TaskItem
                                         key={preview.id}
                                         preview={preview}
                                         isActive={taskId === preview.id}
-                                        isUnread={taskModel?.isUnread ?? false}
+                                        isUnread={!preview.closed && !!preview.lastEventAt && (!preview.lastViewedAt || preview.lastEventAt > preview.lastViewedAt)}
                                         inProgressEvent={getInProgressEventForTask(codeStore, preview.id)}
                                         onSelect={() => handleSelectTask(preview.id)}
                                         onDelete={() => handleDeleteTask(preview.id)}
                                         onToggleClosed={() => handleToggleClosed(preview.id, preview.closed ?? false)}
                                     />
-                                )
-                            })}
+                            ))}
                         </>
                     )}
                     <div className="h-[50vh] flex-shrink-0" />

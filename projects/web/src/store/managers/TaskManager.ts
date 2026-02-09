@@ -75,7 +75,6 @@ export class TaskManager {
                 sessionIds: {},
                 createdAt: "",
                 updatedAt: "",
-                lastEventAt: preview.lastEvent?.at,
                 closed: preview.closed,
             }
         })

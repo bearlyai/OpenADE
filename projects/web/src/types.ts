@@ -177,8 +177,6 @@ export interface Task {
     sessionIds: Record<string, string>
     createdAt: string
     updatedAt: string
-    lastViewedAt?: string
-    lastEventAt?: string
     closed?: boolean
     cancelledPlanEventId?: string // ID of plan user explicitly cancelled (exits plan mode)
     enabledMcpServerIds?: string[] // IDs of MCP servers enabled for this task

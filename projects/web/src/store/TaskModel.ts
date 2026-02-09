@@ -266,13 +266,6 @@ export class TaskModel {
         return this.store.isTaskWorking(this.taskId)
     }
 
-    get isUnread(): boolean {
-        const task = this.task
-        if (!task?.lastEventAt) return false
-        if (!task.lastViewedAt) return true
-        return task.lastEventAt > task.lastViewedAt
-    }
-
     get stats(): { totalCostUsd: number; durationMs: number; inputTokens: number; outputTokens: number } {
         const events = this.task?.events ?? []
         const usage = computeTaskUsage(events)

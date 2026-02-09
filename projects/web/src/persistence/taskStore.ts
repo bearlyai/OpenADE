@@ -92,8 +92,6 @@ export function createTaskStore(doc: Y.Doc, initialTask?: Task): TaskStore {
             updatedAt: initialTask?.updatedAt ?? new Date().toISOString(),
         }
         // Only add optional fields if they have values (YJS can't serialize undefined)
-        if (initialTask?.lastViewedAt) base.lastViewedAt = initialTask.lastViewedAt
-        if (initialTask?.lastEventAt) base.lastEventAt = initialTask.lastEventAt
         if (initialTask?.closed !== undefined) base.closed = initialTask.closed
         if (initialTask?.cancelledPlanEventId) base.cancelledPlanEventId = initialTask.cancelledPlanEventId
         return base
@@ -191,8 +189,6 @@ export function taskFromStore(store: TaskStore): Task {
         createdBy: meta.createdBy,
         createdAt: meta.createdAt,
         updatedAt: meta.updatedAt,
-        lastViewedAt: meta.lastViewedAt,
-        lastEventAt: meta.lastEventAt,
         closed: meta.closed,
         cancelledPlanEventId: meta.cancelledPlanEventId,
         enabledMcpServerIds: meta.enabledMcpServerIds,

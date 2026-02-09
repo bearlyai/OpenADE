@@ -89,7 +89,8 @@ const RepoItem = ({
             tabIndex={0}
             className={cx(
                 "group btn flex items-center font-normal gap-2 p-1 px-3 hover:bg-base-200 w-full cursor-pointer text-muted",
-                isActive && "font-medium bg-base-300 text-base-content"
+                isActive && "font-medium bg-base-300 text-base-content",
+                unreadCount > 0 && "border-l-2 border-l-primary"
             )}
             onClick={onSelect}
             onKeyDown={(e) => {
@@ -100,14 +101,12 @@ const RepoItem = ({
             }}
             title={repo.path}
         >
-            <FolderOpen className="w-4 h-4 flex-shrink-0" />
-            <span className="truncate min-w-0 flex-1 select-none">{repo.name}</span>
-            {isRunning && <Loader2 className="w-3 h-3 animate-spin flex-shrink-0 text-muted" />}
-            {unreadCount > 0 && (
-                <span className="text-[10px] font-medium bg-primary text-primary-content w-4 h-4 flex items-center justify-center flex-shrink-0">
-                    {unreadCount}
-                </span>
+            {isRunning ? (
+                <Loader2 className="w-4 h-4 animate-spin flex-shrink-0 text-muted" />
+            ) : (
+                <FolderOpen className="w-4 h-4 flex-shrink-0" />
             )}
+            <span className="truncate min-w-0 flex-1 select-none">{repo.name}</span>
             <RepoMenuButton repo={repo} onSettings={onSettings} onDelete={onDelete} />
         </div>
     )
