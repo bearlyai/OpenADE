@@ -5,6 +5,7 @@
  * Provides typesafe navigation for code-specific routes.
  */
 
+import { useMemo } from "react"
 import { useNavigate as rrUseNavigate, useLocation, useParams } from "react-router"
 
 type RouteWithoutParams = {
@@ -68,39 +69,43 @@ export interface CodeNavigationMethods {
     path<K extends CodeRoutesWithParams>(routeName: K, params: ExtractCodeRouteParams<K>): string
 }
 
-export const useCodeNavigate = () => {
+export type CodeNavigator = CodeNavigationMethods & {
+    goPath: (path: string) => void
+    params: ReturnType<typeof useParams>
+    location: ReturnType<typeof useLocation>
+}
+
+export const useCodeNavigate = (): CodeNavigator => {
     const navigate = rrUseNavigate()
     const location = useLocation()
     const params = useParams()
 
-    const navigationMethods: CodeNavigationMethods = {
-        go: (routeName: keyof typeof codeRoutes, params?: Record<string, string>) => {
-            const route = codeRoutes[routeName]
-            if (params) {
-                navigate((route as RouteWithParams<Record<string, string>>).makePath(params))
-            } else {
-                navigate((route as RouteWithoutParams).makePath())
-            }
-        },
+    return useMemo(() => {
+        const navigationMethods: CodeNavigationMethods = {
+            go: (routeName: keyof typeof codeRoutes, params?: Record<string, string>) => {
+                const route = codeRoutes[routeName]
+                if (params) {
+                    navigate((route as RouteWithParams<Record<string, string>>).makePath(params))
+                } else {
+                    navigate((route as RouteWithoutParams).makePath())
+                }
+            },
 
-        path: (routeName: keyof typeof codeRoutes, params?: Record<string, string>) => {
-            const route = codeRoutes[routeName]
-            if (params) {
-                return (route as RouteWithParams<Record<string, string>>).makePath(params)
-            } else {
-                return (route as RouteWithoutParams).makePath()
-            }
-        },
-    }
+            path: (routeName: keyof typeof codeRoutes, params?: Record<string, string>) => {
+                const route = codeRoutes[routeName]
+                if (params) {
+                    return (route as RouteWithParams<Record<string, string>>).makePath(params)
+                } else {
+                    return (route as RouteWithoutParams).makePath()
+                }
+            },
+        }
 
-    const goPath = (path: string) => {
-        navigate(path)
-    }
-
-    return {
-        ...navigationMethods,
-        goPath,
-        params,
-        location,
-    }
+        return {
+            ...navigationMethods,
+            goPath: (path: string) => navigate(path),
+            params,
+            location,
+        }
+    }, [navigate, params, location])
 }

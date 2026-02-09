@@ -8,7 +8,7 @@
 import NiceModal from "@ebay/nice-modal-react"
 import { StrictMode, useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
-import { BrowserRouter, Navigate, Route, Routes } from "react-router"
+import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router"
 import {
     CodeBaseRoute,
     CodeWorkspaceCreateRoute,
@@ -30,17 +30,26 @@ const getDefaultUser = () => ({
     email: "local@openade.dev",
 })
 
+// Lazy-bound router navigate — set by App once inside <BrowserRouter>
+let routerNavigate: ReturnType<typeof useNavigate> | null = null
+
 // Create store instance
 const storeConfig: CodeStoreConfig = {
     getCurrentUser: getDefaultUser,
     navigateToTask: (workspaceId: string, taskId: string) => {
-        window.location.href = codeRoutes.CodeWorkspaceTask.makePath({ workspaceId, taskId })
+        const path = codeRoutes.CodeWorkspaceTask.makePath({ workspaceId, taskId })
+        if (routerNavigate) {
+            routerNavigate(path)
+        } else {
+            window.location.href = path
+        }
     },
 }
 
 const codeStore = new CodeStore(storeConfig)
 
 function App() {
+    routerNavigate = useNavigate()
     const [initialized, setInitialized] = useState(false)
 
     useEffect(() => {

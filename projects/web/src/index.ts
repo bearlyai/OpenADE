@@ -19,7 +19,7 @@ export {
     CodeWorkspaceTaskRoute,
     CodeWorkspaceTaskCreatingRoute,
 } from "./Routes"
-export { codeRoutes, useCodeNavigate, type CodeNavigationMethods } from "./routing"
+export { codeRoutes, useCodeNavigate, type CodeNavigationMethods, type CodeNavigator } from "./routing"
 
 // Types
 export type { Task, Repo, User, ActionEvent, CodeEvent, Comment } from "./types"
