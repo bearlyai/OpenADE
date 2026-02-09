@@ -1,9 +1,10 @@
-import { ArrowRight, ChevronDown, Columns2, FileCode, FileImage, FileText, Minus, Pencil, Plus, RefreshCw, Rows2 } from "lucide-react"
+import { ArrowRight, Columns2, FileCode, FileImage, FileText, Minus, Pencil, Plus, RefreshCw, Rows2 } from "lucide-react"
 import { observer } from "mobx-react"
 import { useEffect, useMemo, useState } from "react"
 import { twMerge } from "tailwind-merge"
 import { type ChangedFileInfo, type GitStatusResponse, gitApi } from "../electronAPI/git"
 import { useCodeStore } from "../store/context"
+import { Select } from "./ui/Select"
 import { type AnnotationSide, type CommentHandlers, FileViewer, MultiFileDiffViewer } from "./FilesAndDiffs"
 import { getFileDir, getFileName } from "./utils/paths"
 
@@ -32,19 +33,22 @@ function ViewModeToggle({ value, onChange }: { value: ViewMode; onChange: (v: Vi
     )
 }
 
+const DIFF_SOURCE_ENTRIES = [
+    { id: "uncommitted" as DiffSource, content: "Uncommitted" },
+    { id: "from-base" as DiffSource, content: "From base" },
+]
+
 function DiffSourceSelect({ value, onChange }: { value: DiffSource; onChange: (v: DiffSource) => void }) {
     return (
-        <div className="relative">
-            <select
-                value={value}
-                onChange={(e) => onChange(e.target.value as DiffSource)}
-                className="appearance-none bg-base-100 border border-border text-xs px-2 py-1.5 pr-6 rounded cursor-pointer hover:bg-base-200 transition-colors"
-            >
-                <option value="uncommitted">Uncommitted</option>
-                <option value="from-base">From base</option>
-            </select>
-            <ChevronDown size={12} className="absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none text-muted" />
-        </div>
+        <Select
+            selectedId={value}
+            entries={DIFF_SOURCE_ENTRIES}
+            onSelect={(entry) => onChange(entry.id)}
+            className={{
+                trigger: "h-8 px-2 text-xs border border-border bg-base-100 hover:bg-base-200 transition-colors",
+                value: "text-xs",
+            }}
+        />
     )
 }
 
