@@ -74,15 +74,15 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         label: "Files",
         icon: FolderOpen,
         shortcut: { key: "mod+p", display: "⌘P" },
-        onOpen: (tray) => tray.store.fileBrowser.refreshTree(),
-        renderContent: (tray) => <FilesTrayContent taskId={tray.taskId} onClose={() => tray.close()} />,
+        onOpen: (tray) => tray.taskModel.fileBrowser.refreshTree(),
+        renderContent: (tray) => <FilesTrayContent fileBrowser={tray.taskModel.fileBrowser} taskId={tray.taskId} onClose={() => tray.close()} />,
     },
     {
         id: "search",
         label: "Search",
         icon: Search,
         shortcut: { key: "mod+shift+f", display: "⌘⇧F" },
-        renderContent: (tray) => <SearchTray taskId={tray.taskId} onEscapeClose={() => tray.close()} />,
+        renderContent: (tray) => <SearchTray contentSearch={tray.taskModel.contentSearch} taskId={tray.taskId} onEscapeClose={() => tray.close()} />,
     },
     {
         id: "terminal",

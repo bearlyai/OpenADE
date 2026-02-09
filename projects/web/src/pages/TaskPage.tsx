@@ -100,15 +100,15 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
         return () => clearInterval(interval)
     }, [taskModel, taskModel.isWorking])
 
-    // Initialize file browser and content search with the task's working directory
-    // For worktree tasks this is the worktree dir, for head tasks it's repo.path
+    // Update file browser and content search when the task's working directory becomes available
+    // (may load late for worktree tasks during environment setup)
     const taskWorkingDir = taskModel.environment?.taskWorkingDir
     useEffect(() => {
         if (taskWorkingDir) {
-            codeStore.fileBrowser.setWorkingDir(taskWorkingDir)
-            codeStore.contentSearch.setWorkingDir(taskWorkingDir)
+            taskModel.fileBrowser.setWorkingDir(taskWorkingDir)
+            taskModel.contentSearch.setWorkingDir(taskWorkingDir)
         }
-    }, [taskWorkingDir])
+    }, [taskWorkingDir, taskModel])
 
     const handleSetupComplete = useCallback(() => {
         taskModel.refreshGitState()
@@ -133,9 +133,10 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
                 gitStatus={taskModel.gitStatus}
                 fileMentionsDir={taskWorkingDir ?? null}
                 slashCommandsDir={taskWorkingDir ?? null}
+                sdkCapabilities={taskModel.sdkCapabilities}
                 unsubmittedComments={codeStore.comments.getUnsubmittedComments(taskId)}
-                selectedModel={codeStore.model}
-                onModelChange={(m) => codeStore.setModel(m)}
+                selectedModel={taskModel.model}
+                onModelChange={(m) => taskModel.setModel(m)}
                 hideTray={codeStore.personalSettingsStore?.settings.current.devHideTray}
             />
         </div>

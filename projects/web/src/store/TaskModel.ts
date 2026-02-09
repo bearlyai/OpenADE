@@ -6,6 +6,7 @@
  */
 
 import { makeAutoObservable, runInAction } from "mobx"
+import { type ClaudeModelId, DEFAULT_MODEL } from "../constants"
 import { extractSDKMessages } from "../electronAPI/claudeEventTypes"
 import type { GitStatusResponse } from "../electronAPI/git"
 import { computeTaskUsage } from "../persistence/taskStatsUtils"
@@ -13,18 +14,25 @@ import type { ActionEvent, CodeEvent, IsolationStrategy, Task, TaskDeviceEnviron
 import { getDeviceId } from "../utils/deviceId"
 import { ActionEventModel, type EventModel, SetupEnvironmentEventModel, SnapshotEventModel } from "./EventModel"
 import { TaskEnvironment } from "./TaskEnvironment"
+import { ContentSearchManager } from "./managers/ContentSearchManager"
+import { FileBrowserManager } from "./managers/FileBrowserManager"
 import { InputManager } from "./managers/InputManager"
+import { SdkCapabilitiesManager } from "./managers/SdkCapabilitiesManager"
 import { TrayManager } from "./managers/TrayManager"
 import type { CodeStore } from "./store"
 
 export class TaskModel {
     gitStatus: GitStatusResponse | null = null
+    model: ClaudeModelId = DEFAULT_MODEL
     private gitStateLoading = false
     private _environmentCache: TaskEnvironment | null = null
     private _environmentDeviceId: string | null = null
     private _environmentLoading = false
     private _inputManager: InputManager | null = null
     private _trayManager: TrayManager | null = null
+    private _fileBrowser: FileBrowserManager | null = null
+    private _contentSearch: ContentSearchManager | null = null
+    private _sdkCapabilities: SdkCapabilitiesManager | null = null
     private disposers: Array<() => void> = []
 
     constructor(
@@ -72,6 +80,43 @@ export class TaskModel {
             this._trayManager = new TrayManager(this.store, this)
         }
         return this._trayManager
+    }
+
+    // === File browser ===
+
+    get fileBrowser(): FileBrowserManager {
+        if (!this._fileBrowser) {
+            this._fileBrowser = new FileBrowserManager()
+            const dir = this.environment?.taskWorkingDir
+            if (dir) this._fileBrowser.setWorkingDir(dir)
+        }
+        return this._fileBrowser
+    }
+
+    // === Content search ===
+
+    get contentSearch(): ContentSearchManager {
+        if (!this._contentSearch) {
+            this._contentSearch = new ContentSearchManager()
+            const dir = this.environment?.taskWorkingDir
+            if (dir) this._contentSearch.setWorkingDir(dir)
+        }
+        return this._contentSearch
+    }
+
+    // === SDK capabilities ===
+
+    get sdkCapabilities(): SdkCapabilitiesManager {
+        if (!this._sdkCapabilities) {
+            this._sdkCapabilities = new SdkCapabilitiesManager()
+        }
+        return this._sdkCapabilities
+    }
+
+    // === Model ===
+
+    setModel(modelId: ClaudeModelId): void {
+        this.model = modelId
     }
 
     private get task(): Task | undefined {

@@ -6,6 +6,7 @@ import { Z_INDEX } from "../constants"
 import type { ClaudeModelId } from "../constants"
 import type { GitStatusResponse } from "../electronAPI/git"
 import type { Command, InputManager } from "../store/managers/InputManager"
+import type { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager"
 import type { SmartEditorManager } from "../store/managers/SmartEditorManager"
 import type { TrayManager } from "../store/managers/TrayManager"
 import type { Comment } from "../types"
@@ -79,6 +80,7 @@ export const InputBar = observer(function InputBar({
     gitStatus,
     fileMentionsDir,
     slashCommandsDir,
+    sdkCapabilities,
     unsubmittedComments = [],
     selectedModel,
     onModelChange,
@@ -92,6 +94,8 @@ export const InputBar = observer(function InputBar({
     fileMentionsDir: string | null
     /** Directory for /slash command autocomplete, null to disable */
     slashCommandsDir: string | null
+    /** SDK capabilities manager for slash command discovery */
+    sdkCapabilities?: SdkCapabilitiesManager
     unsubmittedComments?: Comment[]
     selectedModel?: ClaudeModelId
     onModelChange?: (model: ClaudeModelId) => void
@@ -143,6 +147,7 @@ export const InputBar = observer(function InputBar({
                     manager={editorManager}
                     fileMentionsDir={fileMentionsDir}
                     slashCommandsDir={slashCommandsDir}
+                    sdkCapabilities={sdkCapabilities}
                     placeholder={input.isDisabled ? "Task is closed. Click Reopen to continue." : "What would you like to do?"}
                     className={cx(
                         "min-h-[58px] max-h-[150px] overflow-y-auto text-sm leading-[20px] border-x-0 focus-within:border-border",

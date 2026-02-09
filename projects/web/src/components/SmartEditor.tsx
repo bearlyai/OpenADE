@@ -19,8 +19,7 @@ import { twMerge } from "tailwind-merge"
 import type { TreeMatch } from "../electronAPI/files"
 import { fuzzySearch, isFilesApiAvailable } from "../electronAPI/files"
 import { usePortalContainer } from "../hooks/usePortalContainer"
-import { useCodeStore } from "../store/context"
-import type { SlashCommandEntry } from "../store/managers/SdkCapabilitiesManager"
+import type { SdkCapabilitiesManager, SlashCommandEntry } from "../store/managers/SdkCapabilitiesManager"
 import type { SmartEditorManager } from "../store/managers/SmartEditorManager"
 import { getFileName } from "./utils/paths"
 
@@ -36,6 +35,8 @@ interface SmartEditorProps {
     fileMentionsDir: string | null
     /** Directory for /slash command autocomplete, null to disable */
     slashCommandsDir: string | null
+    /** SDK capabilities manager for slash command discovery */
+    sdkCapabilities?: SdkCapabilitiesManager
 }
 
 export interface SmartEditorRef {
@@ -240,9 +241,8 @@ interface SlashSuggestionPopupState {
 
 export const SmartEditor = observer(
     forwardRef<SmartEditorRef, SmartEditorProps>(
-        ({ manager, placeholder, disabled, className, editorClassName, onKeyDown, fileMentionsDir, slashCommandsDir }, ref) => {
+        ({ manager, placeholder, disabled, className, editorClassName, onKeyDown, fileMentionsDir, slashCommandsDir, sdkCapabilities }, ref) => {
             const portalContainer = usePortalContainer()
-            const codeStore = useCodeStore()
 
             // --- File mention suggestion state (@ trigger) ---
             const [fileSuggestion, setFileSuggestion] = useState<FileSuggestionPopupState>({
@@ -267,10 +267,10 @@ export const SmartEditor = observer(
 
             // Load SDK capabilities when slashCommandsDir is provided
             useEffect(() => {
-                if (slashCommandsDir) {
-                    codeStore.sdkCapabilities.loadCapabilities(slashCommandsDir)
+                if (slashCommandsDir && sdkCapabilities) {
+                    sdkCapabilities.loadCapabilities(slashCommandsDir)
                 }
-            }, [slashCommandsDir, codeStore.sdkCapabilities])
+            }, [slashCommandsDir, sdkCapabilities])
 
             // Warm up file search cache when fileMentionsDir is provided
             useEffect(() => {
@@ -279,7 +279,7 @@ export const SmartEditor = observer(
                 }
             }, [fileMentionsDir])
 
-            const slashCommands = slashEnabled ? codeStore.sdkCapabilities.allCommands : []
+            const slashCommands = slashEnabled && sdkCapabilities ? sdkCapabilities.allCommands : []
 
             // --- File mention floating ---
             const { refs: fileRefs, floatingStyles: fileFloatingStyles } = useFloating({

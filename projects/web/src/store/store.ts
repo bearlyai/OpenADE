@@ -23,16 +23,13 @@ import { type TaskStore, syncTaskPreviewFromStore } from "../persistence/taskSto
 import type { User } from "../types"
 
 import { CommentManager } from "./managers/CommentManager"
-import { ContentSearchManager } from "./managers/ContentSearchManager"
 import { EventManager } from "./managers/EventManager"
 import { ExecutionManager } from "./managers/ExecutionManager"
-import { FileBrowserManager } from "./managers/FileBrowserManager"
 import { McpServerManager } from "./managers/McpServerManager"
 import { NotificationManager } from "./managers/NotificationManager"
 import { QueryManager } from "./managers/QueryManager"
 import { RepoManager } from "./managers/RepoManager"
 import { RepoProcessesManager } from "./managers/RepoProcessesManager"
-import { SdkCapabilitiesManager } from "./managers/SdkCapabilitiesManager"
 import { SmartEditorManagerStore } from "./managers/SmartEditorManager"
 import { type CreationPhase, type TaskCreation, TaskCreationManager, type TaskCreationOptions } from "./managers/TaskCreationManager"
 import { TaskManager } from "./managers/TaskManager"
@@ -49,8 +46,8 @@ export interface CodeStoreConfig {
 
 export class CodeStore {
     readonly config: CodeStoreConfig
-    // Model configuration
-    model: ClaudeModelId = DEFAULT_MODEL
+    // Default model for new tasks
+    defaultModel: ClaudeModelId = DEFAULT_MODEL
 
     // Cross-cutting state (used by multiple managers)
     workingTaskIds: Set<string> = new Set()
@@ -80,12 +77,9 @@ export class CodeStore {
     readonly creation: TaskCreationManager
     readonly notifications: NotificationManager
     readonly comments: CommentManager
-    readonly fileBrowser: FileBrowserManager
-    readonly contentSearch: ContentSearchManager
     readonly repoProcesses: RepoProcessesManager
     readonly mcpServers: McpServerManager
     readonly smartEditors: SmartEditorManagerStore
-    readonly sdkCapabilities: SdkCapabilitiesManager
 
     constructor(config: CodeStoreConfig) {
         this.config = config
@@ -100,12 +94,9 @@ export class CodeStore {
         this.creation = new TaskCreationManager(this)
         this.notifications = new NotificationManager(this)
         this.comments = new CommentManager(this)
-        this.fileBrowser = new FileBrowserManager()
-        this.contentSearch = new ContentSearchManager()
         this.repoProcesses = new RepoProcessesManager()
         this.mcpServers = new McpServerManager(this)
         this.smartEditors = new SmartEditorManagerStore()
-        this.sdkCapabilities = new SdkCapabilitiesManager()
 
         makeAutoObservable(this, {
             workingTaskIds: true,
@@ -123,12 +114,9 @@ export class CodeStore {
             creation: false,
             notifications: false,
             comments: false,
-            fileBrowser: false,
-            contentSearch: false,
             repoProcesses: false,
             mcpServers: false,
             smartEditors: false,
-            sdkCapabilities: false,
         })
     }
 
@@ -404,7 +392,7 @@ export class CodeStore {
 
     // ==================== Model Configuration ====================
 
-    setModel(modelId: ClaudeModelId): void {
-        this.model = modelId
+    setDefaultModel(modelId: ClaudeModelId): void {
+        this.defaultModel = modelId
     }
 }

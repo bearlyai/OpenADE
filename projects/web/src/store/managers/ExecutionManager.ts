@@ -140,7 +140,7 @@ export class ExecutionManager {
                 executionId,
                 source,
                 includesCommentIds: consumedCommentIds,
-                modelId: this.store.model,
+                modelId: taskModel.model,
                 gitRefsBefore,
             })
             if (!eventResult) {
@@ -250,12 +250,13 @@ export class ExecutionManager {
         const manager = getClaudeQueryManager()
 
         console.debug("[ExecutionManager] runExecutionLoop: calling manager.startExecution")
+        const taskModel = this.store.tasks.getTaskModel(ctx.taskId)
         const query = await manager.startExecution(
             ctx.prompt,
             {
                 cwd: ctx.cwd,
                 additionalDirectories: ctx.additionalDirectories,
-                model: this.store.model,
+                model: taskModel?.model ?? this.store.defaultModel,
                 resume: ctx.parentSessionId,
                 forkSession: !!ctx.parentSessionId,
                 readOnly: ctx.readOnly,
@@ -300,7 +301,7 @@ export class ExecutionManager {
 
             // Update SDK capabilities from system:init message
             if (msg.type === "system" && "subtype" in msg && (msg as Record<string, unknown>).subtype === "init") {
-                this.store.sdkCapabilities.updateFromInitMessage(msg as Record<string, unknown>)
+                taskModel?.sdkCapabilities.updateFromInitMessage(msg as Record<string, unknown>)
             }
 
             if (!sessionIdSaved && query.sessionId) {

@@ -2,7 +2,7 @@ import { AlertTriangle } from "lucide-react"
 import { observer } from "mobx-react"
 import { useMemo } from "react"
 import { twMerge } from "tailwind-merge"
-import { useCodeStore } from "../store/context"
+import type { FileBrowserManager } from "../store/managers/FileBrowserManager"
 import { type AnnotationSide, type CommentHandlers, FileViewer } from "./FilesAndDiffs"
 
 function formatFileSize(bytes: number): string {
@@ -12,13 +12,12 @@ function formatFileSize(bytes: number): string {
 }
 
 interface FileContentViewerProps {
+    fileBrowser: FileBrowserManager
     taskId: string
     className?: string
 }
 
-export const FileContentViewer = observer(function FileContentViewer({ taskId, className }: FileContentViewerProps) {
-    const codeStore = useCodeStore()
-    const fileBrowser = codeStore.fileBrowser
+export const FileContentViewer = observer(function FileContentViewer({ fileBrowser, taskId, className }: FileContentViewerProps) {
     const { viewingFile, viewingFileData, fileLoading, fileError } = fileBrowser
 
     // Create comment handlers for the current file

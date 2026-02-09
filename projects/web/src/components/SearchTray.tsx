@@ -3,7 +3,7 @@ import { observer } from "mobx-react"
 import { useCallback, useEffect, useMemo, useRef } from "react"
 import { twMerge } from "tailwind-merge"
 import type { ContentSearchMatch } from "../electronAPI/files"
-import { useCodeStore } from "../store/context"
+import type { ContentSearchManager } from "../store/managers/ContentSearchManager"
 import { type AnnotationSide, type CommentHandlers, FileViewer } from "./FilesAndDiffs"
 import { getDisambiguatedPaths } from "./utils/paths"
 
@@ -96,13 +96,12 @@ function ContentResultItem({
 }
 
 interface SearchTrayProps {
+    contentSearch: ContentSearchManager
     taskId: string
     onEscapeClose?: () => void
 }
 
-export const SearchTray = observer(function SearchTray({ taskId, onEscapeClose }: SearchTrayProps) {
-    const codeStore = useCodeStore()
-    const contentSearch = codeStore.contentSearch
+export const SearchTray = observer(function SearchTray({ contentSearch, taskId, onEscapeClose }: SearchTrayProps) {
     const searchInputRef = useRef<HTMLInputElement>(null)
 
     // Focus search on mount

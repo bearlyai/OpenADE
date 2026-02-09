@@ -1,7 +1,7 @@
 import { FileCode, X } from "lucide-react"
 import { observer } from "mobx-react"
 import { twMerge } from "tailwind-merge"
-import { useCodeStore } from "../store/context"
+import type { FileBrowserManager } from "../store/managers/FileBrowserManager"
 
 interface FileTabProps {
     path: string
@@ -42,12 +42,11 @@ function FileTab({ name, active, onSelect, onClose }: FileTabProps) {
 }
 
 interface FileTabsProps {
+    fileBrowser: FileBrowserManager
     className?: string
 }
 
-export const FileTabs = observer(function FileTabs({ className }: FileTabsProps) {
-    const codeStore = useCodeStore()
-    const fileBrowser = codeStore.fileBrowser
+export const FileTabs = observer(function FileTabs({ fileBrowser, className }: FileTabsProps) {
     const { openTabs, activeFile } = fileBrowser
 
     if (openTabs.length === 0) {

@@ -2,8 +2,7 @@ import { ChevronDown, ChevronRight, ChevronsDownUp, FileCode, Folder, Loader2, R
 import { observer } from "mobx-react"
 import { useCallback, useEffect, useRef } from "react"
 import { twMerge } from "tailwind-merge"
-import { useCodeStore } from "../store/context"
-import type { TreeNode } from "../store/managers/FileBrowserManager"
+import type { FileBrowserManager, TreeNode } from "../store/managers/FileBrowserManager"
 
 interface TreeItemProps {
     node: TreeNode
@@ -89,13 +88,12 @@ function SearchResultItem({ fullPath, selected, onSelect, onOpen }: SearchResult
 }
 
 interface TreeNavigatorProps {
+    fileBrowser: FileBrowserManager
     className?: string
     onEscapeClose?: () => void
 }
 
-export const TreeNavigator = observer(function TreeNavigator({ className, onEscapeClose }: TreeNavigatorProps) {
-    const codeStore = useCodeStore()
-    const fileBrowser = codeStore.fileBrowser
+export const TreeNavigator = observer(function TreeNavigator({ fileBrowser, className, onEscapeClose }: TreeNavigatorProps) {
     const searchInputRef = useRef<HTMLInputElement>(null)
     const listRef = useRef<HTMLDivElement>(null)
 

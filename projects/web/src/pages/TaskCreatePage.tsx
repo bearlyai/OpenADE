@@ -324,7 +324,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
 
                     {/* Model picker */}
                     <div className="flex items-center border-l border-border pl-4">
-                        <ModelPicker value={codeStore.model} onChange={(m) => codeStore.setModel(m)} />
+                        <ModelPicker value={codeStore.defaultModel} onChange={(m) => codeStore.setDefaultModel(m)} />
                     </div>
 
                     {/* Center section: Worktree toggle + branch selector */}
