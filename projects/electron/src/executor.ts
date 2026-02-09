@@ -124,14 +124,18 @@ const startExecutor = () => {
 
     manageWindowsAutoHide(mbExecutor)
 
+    let isHandlingFailedLoad = false
+
     const loadSite = () => {
+        isHandlingFailedLoad = false
         mbExecutor.loadURL(executorUrl)
     }
 
     mbExecutor.webContents.on("did-fail-load", (_, errorCode: number, errorDescription: string, validatedURL: string, isMainFrame: boolean) => {
-        if (!isMainFrame) {
-            return
-        }
+        if (!isMainFrame) return
+        if (isHandlingFailedLoad) return
+
+        isHandlingFailedLoad = true
         const msg = `Got a did-fail-load on the main frame. Err code: ${errorCode} with description: ${errorDescription} and url: ${validatedURL}`
         logger.error(msg)
 
