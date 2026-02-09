@@ -60,9 +60,16 @@ command = "npm run typecheck"
 \`\`\`
 `.trim()
 
-/**
- * Generate a task description for creating a procs.toml in a specific directory
- */
+export function getProcsUpdatePrompt(changeDescription: string): string {
+    return `Update the procs.toml file(s) in this project based on the following request:
+
+${changeDescription}
+
+${PROCS_SPEC}
+
+Read the existing procs.toml file(s), apply the requested changes, and write the updated file(s). Keep changes minimal and preserve existing processes that aren't affected by the request.`
+}
+
 export function getProcsCreationPrompt(targetDir: string): string {
     const dirDisplay = targetDir === "." ? "the project root" : `"${targetDir}"`
 

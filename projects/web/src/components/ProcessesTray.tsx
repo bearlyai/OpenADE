@@ -1,14 +1,30 @@
 import cx from "classnames"
-import { AlertTriangle, CheckCircle, ExternalLink, FileText, Folder, FolderOpen, Play, Plus, RefreshCw, RotateCcw, Server, Square, Wrench } from "lucide-react"
+import {
+    AlertTriangle,
+    CheckCircle,
+    ExternalLink,
+    FileText,
+    Folder,
+    FolderOpen,
+    Pencil,
+    Play,
+    Plus,
+    RefreshCw,
+    RotateCcw,
+    Server,
+    Square,
+    Wrench,
+} from "lucide-react"
 import { observer } from "mobx-react"
 import { useCallback, useEffect, useState } from "react"
 import { type ProcessDef, type ProcessType, type ProcsConfig, type ReadProcsResult, type RunContext, readProcs } from "../electronAPI/procs"
 import { openUrlInNativeBrowser, selectDirectory } from "../electronAPI/shell"
-import { getProcsCreationPrompt } from "../prompts/procsSpec"
+import { getProcsCreationPrompt, getProcsUpdatePrompt } from "../prompts/procsSpec"
 import { useCodeNavigate } from "../routing"
 import { useCodeStore } from "../store/context"
 import type { ProcessInstance, ProcessStatus } from "../store/managers/RepoProcessesManager"
 import { ProcessOutput } from "./ProcessOutput"
+import { type MenuItem, Menu } from "./ui/Menu"
 
 interface ProcessesTrayProps {
     /** Path to search for procs.toml (repo root or worktree root) */
@@ -47,9 +63,9 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
     const [loading, setLoading] = useState(true)
     const [refreshing, setRefreshing] = useState(false)
 
-    // Create procs.toml state
-    const [showCreateForm, setShowCreateForm] = useState(false)
+    const [formMode, setFormMode] = useState<"create" | "update" | null>(null)
     const [subdirPath, setSubdirPath] = useState("")
+    const [updateDescription, setUpdateDescription] = useState("")
 
     // Load procs.toml files
     const loadProcs = useCallback(
@@ -85,21 +101,33 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
     }, [loadProcs])
 
     const handleCreateProcs = useCallback(() => {
-        // Use subdirectory if provided, otherwise root
         const targetDir = subdirPath.trim() || "."
         const prompt = getProcsCreationPrompt(targetDir)
-
-        // Create task immediately in plan mode
         const creationId = codeStore.creation.newTask({
             repoId: workspaceId,
             description: prompt,
             mode: "plan",
             isolationStrategy: { type: "head" },
         })
-
-        // Navigate to creation page
         navigate.go("CodeWorkspaceTaskCreating", { workspaceId, creationId })
+        setFormMode(null)
+        setSubdirPath("")
     }, [subdirPath, workspaceId, navigate])
+
+    const handleUpdateProcs = useCallback(() => {
+        const desc = updateDescription.trim()
+        if (!desc) return
+        const prompt = getProcsUpdatePrompt(desc)
+        const creationId = codeStore.creation.newTask({
+            repoId: workspaceId,
+            description: prompt,
+            mode: "plan",
+            isolationStrategy: { type: "head" },
+        })
+        navigate.go("CodeWorkspaceTaskCreating", { workspaceId, creationId })
+        setFormMode(null)
+        setUpdateDescription("")
+    }, [updateDescription, workspaceId, navigate])
 
     const handleBrowse = useCallback(async () => {
         const selected = await selectDirectory(searchPath)
@@ -107,6 +135,29 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
             setSubdirPath(selected)
         }
     }, [searchPath])
+
+    const editMenuItems: MenuItem[] = [
+        {
+            id: "create",
+            label: (
+                <div className="flex items-center gap-2">
+                    <Plus size={14} />
+                    <span>Create procs.toml</span>
+                </div>
+            ),
+            onSelect: () => setFormMode("create"),
+        },
+        {
+            id: "update",
+            label: (
+                <div className="flex items-center gap-2">
+                    <Pencil size={14} />
+                    <span>Update procs.toml</span>
+                </div>
+            ),
+            onSelect: () => setFormMode("update"),
+        },
+    ]
 
     const selectedProcessId = repoProcesses.expandedProcessId
     const selectedProcess = selectedProcessId ? repoProcesses.getProcess(selectedProcessId) : null
@@ -145,64 +196,43 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                 <FileText size={32} className="text-muted mb-3" />
                 <div className="text-muted mb-3">No processes configured</div>
 
-                {!showCreateForm ? (
-                    <button
-                        type="button"
-                        onClick={() => setShowCreateForm(true)}
-                        className="btn flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-content text-sm hover:bg-primary/90 transition-colors"
-                    >
-                        <Plus size={14} />
-                        Create procs.toml
-                    </button>
+                {formMode === null ? (
+                    <Menu
+                        trigger={
+                            <button
+                                type="button"
+                                className="btn flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-content text-sm hover:bg-primary/90 transition-colors"
+                            >
+                                <Pencil size={14} />
+                                Edit
+                            </button>
+                        }
+                        sections={[{ items: editMenuItems }]}
+                        side="bottom"
+                        align="center"
+                        className={{ trigger: "!h-auto !border-0 !bg-transparent hover:!bg-transparent active:!bg-transparent" }}
+                    />
+                ) : formMode === "create" ? (
+                    <CreateProcsForm
+                        subdirPath={subdirPath}
+                        onSubdirChange={setSubdirPath}
+                        onBrowse={handleBrowse}
+                        onCreate={handleCreateProcs}
+                        onCancel={() => {
+                            setFormMode(null)
+                            setSubdirPath("")
+                        }}
+                    />
                 ) : (
-                    <div className="w-full max-w-xs">
-                        <div className="text-xs text-muted mb-2 text-left">Subdirectory (optional):</div>
-                        <div className="flex gap-2">
-                            <input
-                                type="text"
-                                value={subdirPath}
-                                onChange={(e) => setSubdirPath(e.target.value)}
-                                placeholder="e.g., packages/api (leave empty for root)"
-                                className="flex-1 px-3 py-2 text-sm bg-input text-base-content border border-border focus:outline-none focus:border-primary transition-all placeholder:text-muted/50"
-                                onKeyDown={(e) => {
-                                    if (e.key === "Enter") {
-                                        handleCreateProcs()
-                                    } else if (e.key === "Escape") {
-                                        setShowCreateForm(false)
-                                        setSubdirPath("")
-                                    }
-                                }}
-                                autoFocus
-                            />
-                            <button
-                                type="button"
-                                onClick={handleBrowse}
-                                className="btn px-3 py-2 bg-base-200 text-base-content border border-border hover:bg-base-300 transition-colors flex items-center gap-1.5"
-                            >
-                                <FolderOpen size={14} />
-                            </button>
-                        </div>
-                        <div className="flex items-center gap-2 mt-3">
-                            <button
-                                type="button"
-                                onClick={handleCreateProcs}
-                                className="btn flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-primary text-primary-content text-sm hover:bg-primary/90 transition-colors"
-                            >
-                                <Plus size={14} />
-                                Create
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setShowCreateForm(false)
-                                    setSubdirPath("")
-                                }}
-                                className="btn px-3 py-1.5 text-sm text-muted hover:text-base-content transition-colors"
-                            >
-                                Cancel
-                            </button>
-                        </div>
-                    </div>
+                    <UpdateProcsForm
+                        description={updateDescription}
+                        onDescriptionChange={setUpdateDescription}
+                        onUpdate={handleUpdateProcs}
+                        onCancel={() => {
+                            setFormMode(null)
+                            setUpdateDescription("")
+                        }}
+                    />
                 )}
             </div>
         )
@@ -212,19 +242,64 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
         <div className="flex h-full">
             {/* Left sidebar - Process list */}
             <div className="w-72 flex-shrink-0 flex flex-col border-r border-border">
-                {/* Header with refresh */}
+                {/* Header with edit + refresh */}
                 <div className="flex-shrink-0 flex items-center justify-between px-3 py-2 border-b border-border bg-base-200/50">
                     <span className="text-sm font-medium text-base-content">Processes</span>
-                    <button
-                        type="button"
-                        onClick={handleRefresh}
-                        disabled={refreshing}
-                        className={cx("btn p-1.5 text-muted hover:text-base-content hover:bg-base-300 transition-colors", refreshing && "animate-spin")}
-                        title="Refresh"
-                    >
-                        <RefreshCw size={14} />
-                    </button>
+                    <div className="flex items-center gap-1">
+                        <Menu
+                            trigger={
+                                <button type="button" className="btn p-1.5 text-muted hover:text-base-content hover:bg-base-300 transition-colors" title="Edit">
+                                    <Pencil size={14} />
+                                </button>
+                            }
+                            sections={[{ items: editMenuItems }]}
+                            side="bottom"
+                            align="end"
+                            className={{
+                                trigger:
+                                    "!h-auto !p-0 !border-0 !bg-transparent hover:!bg-transparent active:!bg-transparent data-[popup-open]:!bg-transparent",
+                            }}
+                        />
+                        <button
+                            type="button"
+                            onClick={handleRefresh}
+                            disabled={refreshing}
+                            className={cx("btn p-1.5 text-muted hover:text-base-content hover:bg-base-300 transition-colors", refreshing && "animate-spin")}
+                            title="Refresh"
+                        >
+                            <RefreshCw size={14} />
+                        </button>
+                    </div>
                 </div>
+
+                {/* Inline create/update form */}
+                {formMode === "create" && (
+                    <div className="flex-shrink-0 p-3 border-b border-border bg-base-200/30">
+                        <CreateProcsForm
+                            subdirPath={subdirPath}
+                            onSubdirChange={setSubdirPath}
+                            onBrowse={handleBrowse}
+                            onCreate={handleCreateProcs}
+                            onCancel={() => {
+                                setFormMode(null)
+                                setSubdirPath("")
+                            }}
+                        />
+                    </div>
+                )}
+                {formMode === "update" && (
+                    <div className="flex-shrink-0 p-3 border-b border-border bg-base-200/30">
+                        <UpdateProcsForm
+                            description={updateDescription}
+                            onDescriptionChange={setUpdateDescription}
+                            onUpdate={handleUpdateProcs}
+                            onCancel={() => {
+                                setFormMode(null)
+                                setUpdateDescription("")
+                            }}
+                        />
+                    </div>
+                )}
 
                 {/* Errors banner */}
                 {hasErrors && (
@@ -364,6 +439,111 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
         </div>
     )
 })
+
+// ==================== CreateProcsForm ====================
+
+function CreateProcsForm({
+    subdirPath,
+    onSubdirChange,
+    onBrowse,
+    onCreate,
+    onCancel,
+}: {
+    subdirPath: string
+    onSubdirChange: (v: string) => void
+    onBrowse: () => void
+    onCreate: () => void
+    onCancel: () => void
+}) {
+    return (
+        <div className="w-full max-w-xs">
+            <div className="text-xs text-muted mb-2 text-left">Subdirectory (optional):</div>
+            <div className="flex gap-2">
+                <input
+                    type="text"
+                    value={subdirPath}
+                    onChange={(e) => onSubdirChange(e.target.value)}
+                    placeholder="e.g., packages/api (leave empty for root)"
+                    className="flex-1 px-3 py-2 text-sm bg-input text-base-content border border-border focus:outline-none focus:border-primary transition-all placeholder:text-muted/50"
+                    onKeyDown={(e) => {
+                        if (e.key === "Enter") onCreate()
+                        else if (e.key === "Escape") onCancel()
+                    }}
+                    autoFocus
+                />
+                <button
+                    type="button"
+                    onClick={onBrowse}
+                    className="btn px-3 py-2 bg-base-200 text-base-content border border-border hover:bg-base-300 transition-colors flex items-center gap-1.5"
+                >
+                    <FolderOpen size={14} />
+                </button>
+            </div>
+            <div className="flex items-center gap-2 mt-3">
+                <button
+                    type="button"
+                    onClick={onCreate}
+                    className="btn flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-primary text-primary-content text-sm hover:bg-primary/90 transition-colors"
+                >
+                    <Plus size={14} />
+                    Create
+                </button>
+                <button type="button" onClick={onCancel} className="btn px-3 py-1.5 text-sm text-muted hover:text-base-content transition-colors">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    )
+}
+
+// ==================== UpdateProcsForm ====================
+
+function UpdateProcsForm({
+    description,
+    onDescriptionChange,
+    onUpdate,
+    onCancel,
+}: {
+    description: string
+    onDescriptionChange: (v: string) => void
+    onUpdate: () => void
+    onCancel: () => void
+}) {
+    return (
+        <div className="w-full max-w-xs">
+            <div className="text-xs text-muted mb-2 text-left">Describe the change:</div>
+            <input
+                type="text"
+                value={description}
+                onChange={(e) => onDescriptionChange(e.target.value)}
+                placeholder="e.g., Add a lint check process"
+                className="w-full px-3 py-2 text-sm bg-input text-base-content border border-border focus:outline-none focus:border-primary transition-all placeholder:text-muted/50"
+                onKeyDown={(e) => {
+                    if (e.key === "Enter") onUpdate()
+                    else if (e.key === "Escape") onCancel()
+                }}
+                autoFocus
+            />
+            <div className="flex items-center gap-2 mt-3">
+                <button
+                    type="button"
+                    onClick={onUpdate}
+                    disabled={!description.trim()}
+                    className={cx(
+                        "btn flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm transition-colors",
+                        description.trim() ? "bg-primary text-primary-content hover:bg-primary/90" : "bg-primary/50 text-primary-content/50 cursor-not-allowed"
+                    )}
+                >
+                    <Pencil size={14} />
+                    Update
+                </button>
+                <button type="button" onClick={onCancel} className="btn px-3 py-1.5 text-sm text-muted hover:text-base-content transition-colors">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    )
+}
 
 // ==================== ProcessRowView ====================
 
