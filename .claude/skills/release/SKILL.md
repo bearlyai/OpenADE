@@ -44,22 +44,29 @@ Read `projects/web/src/versions.ts` to see the existing format. Draft a new entr
 - **date**: Today's date in `YYYY-MM-DD` format
 - **highlights**: 3-5 bullet points covering the most user-visible changes. Write from the user's perspective — what they can now do, not internal implementation details. Keep each bullet to one sentence.
 
-## 6. Present to the user for approval
+## 6. Present to the user for approval and apply
 
 Show the user:
 - The suggested version number
 - The drafted `RELEASE_NOTES` entry (formatted as it would appear in `versions.ts`)
 - A short summary of the commits that informed the highlights
-- The GitHub release notes (see below)
 
 Ask the user:
 1. Whether the version number is correct
 2. Whether to add, edit, or remove any highlights
 3. Whether to proceed
 
-### GitHub Release Notes
+Once the user approves:
+- Add the new entry to the top of the `RELEASE_NOTES` array in `projects/web/src/versions.ts`
+- Create a commit with the message `release: v<version>`
+- Create a git tag `v<version>`
+- Push the commit and tag (`git push && git push --tags`)
 
-Provide a ready-to-copy markdown block the user can paste directly into the GitHub release. Use this format:
+Do all of this in one step — do NOT ask the user to confirm the push separately.
+
+## 7. Provide GitHub release notes
+
+After the push succeeds, provide a ready-to-copy markdown block the user can paste directly into the GitHub release. Use this format:
 
 ```markdown
 ## <Title> — v<version>
@@ -83,10 +90,4 @@ Provide a ready-to-copy markdown block the user can paste directly into the GitH
 
 Keep the tone concise and user-facing. Use bold for feature names and keep descriptions to one sentence each.
 
-## 7. Apply changes
-
-Only after the user approves:
-- Add the new entry to the top of the `RELEASE_NOTES` array in `projects/web/src/versions.ts`
-- Create a commit with the message `release: v<version>`
-- Create a git tag `v<version>`
-- Do NOT push. Ask the user if they'd like to push the commit and tag.
+Remind the user to create the GitHub release and paste in the notes.
