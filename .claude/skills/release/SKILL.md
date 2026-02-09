@@ -39,11 +39,38 @@ Show the user:
 - The suggested version number
 - The drafted `RELEASE_NOTES` entry (formatted as it would appear in `versions.ts`)
 - A short summary of the commits that informed the highlights
+- The GitHub release notes (see below)
 
 Ask the user:
 1. Whether the version number is correct
 2. Whether to add, edit, or remove any highlights
 3. Whether to proceed
+
+### GitHub Release Notes
+
+Provide a ready-to-copy markdown block the user can paste directly into the GitHub release. Use this format:
+
+```markdown
+## <Title> — v<version>
+
+<One-sentence summary of what this release brings.>
+
+### Highlights
+
+- **<Feature/change name>** — Short description of what the user can now do.
+- **<Feature/change name>** — Short description of what the user can now do.
+- ...
+
+### Other Changes
+
+- Bullet list of smaller fixes, improvements, or internal changes worth noting.
+
+---
+
+**Full Changelog**: `v<previous-version>...v<version>`
+```
+
+Keep the tone concise and user-facing. Use bold for feature names and keep descriptions to one sentence each.
 
 ## 6. Apply changes
 
