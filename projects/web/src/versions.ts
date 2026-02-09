@@ -8,6 +8,18 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.52.0",
+        title: "Image Input & Workspace Overhaul",
+        date: "2026-02-09",
+        highlights: [
+            "Paste, drag-and-drop, or pick images to attach to any message",
+            "New 3-way workspace creation: open an existing directory, create a new one, or start from a prototype",
+            "File browser, content search, and model selection are now scoped per task",
+            "Edit menu in process tray for creating and updating procs.toml directly",
+            "Unread and running indicators on workspace sidebar items with last-viewed-page memory",
+        ],
+    },
+    {
         version: "0.51.0",
         title: "MCP Connectors & Improved Terminal",
         date: "2026-02-05",
