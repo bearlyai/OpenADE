@@ -68,6 +68,29 @@ function setupScrollReveal() {
   reveals.forEach((el) => observer.observe(el))
 }
 
+// ─── Mobile Nav Toggle ───
+function setupMobileNav() {
+  const hamburger = document.getElementById("nav-hamburger")
+  const navRight = document.getElementById("nav-right")
+  if (!hamburger || !navRight) return
+
+  hamburger.addEventListener("click", () => {
+    const isOpen = navRight.classList.toggle("open")
+    hamburger.classList.toggle("open", isOpen)
+    hamburger.setAttribute("aria-expanded", String(isOpen))
+  })
+
+  // Close menu when a nav link is tapped (smooth scroll links)
+  navRight.querySelectorAll(".nav-link").forEach((link) => {
+    link.addEventListener("click", () => {
+      navRight.classList.remove("open")
+      hamburger.classList.remove("open")
+      hamburger.setAttribute("aria-expanded", "false")
+    })
+  })
+}
+
 // ─── Init ───
 setupDownloadLinks()
 setupScrollReveal()
+setupMobileNav()
