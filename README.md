@@ -37,9 +37,9 @@
 ## Download
 
 <p align="center">
-  <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.51.0/OpenADE-0.51.0-universal.dmg"><img src="https://img.shields.io/badge/macOS-Universal-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS"></a>
-  <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.51.0/OpenADE-0.51.0-arm64.AppImage"><img src="https://img.shields.io/badge/Linux-arm64-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux"></a>
-  <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.51.0/OpenADE-Setup-0.51.0.exe"><img src="https://img.shields.io/badge/Windows-x64-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows"></a>
+  <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.52.0/OpenADE-0.52.0-universal.dmg"><img src="https://img.shields.io/badge/macOS-Universal-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS"></a>
+  <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.52.0/OpenADE-0.52.0-arm64.AppImage"><img src="https://img.shields.io/badge/Linux-arm64-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux"></a>
+  <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.52.0/OpenADE-Setup-0.52.0.exe"><img src="https://img.shields.io/badge/Windows-x64-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows"></a>
 </p>
 
 <p align="center">
@@ -133,9 +133,9 @@ Let them cook. 🧑‍🍳
 
 | Platform | Download |
 |----------|----------|
-| macOS (Universal) | [OpenADE-0.51.0-universal.dmg](https://github.com/bearlyai/OpenADE/releases/download/v0.51.0/OpenADE-0.51.0-universal.dmg) |
-| Linux (arm64) | [OpenADE-0.51.0-arm64.AppImage](https://github.com/bearlyai/OpenADE/releases/download/v0.51.0/OpenADE-0.51.0-arm64.AppImage) |
-| Windows | [OpenADE-Setup-0.51.0.exe](https://github.com/bearlyai/OpenADE/releases/download/v0.51.0/OpenADE-Setup-0.51.0.exe) |
+| macOS (Universal) | [OpenADE-0.52.0-universal.dmg](https://github.com/bearlyai/OpenADE/releases/download/v0.52.0/OpenADE-0.52.0-universal.dmg) |
+| Linux (arm64) | [OpenADE-0.52.0-arm64.AppImage](https://github.com/bearlyai/OpenADE/releases/download/v0.52.0/OpenADE-0.52.0-arm64.AppImage) |
+| Windows | [OpenADE-Setup-0.52.0.exe](https://github.com/bearlyai/OpenADE/releases/download/v0.52.0/OpenADE-Setup-0.52.0.exe) |
 
 [View all releases →](https://github.com/bearlyai/OpenADE/releases)
 
