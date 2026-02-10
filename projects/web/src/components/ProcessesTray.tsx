@@ -241,15 +241,15 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
     return (
         <div className="flex h-full">
             {/* Left sidebar - Process list */}
-            <div className="w-72 flex-shrink-0 flex flex-col border-r border-border">
+            <div className="w-56 flex-shrink-0 flex flex-col border-r border-border">
                 {/* Header with edit + refresh */}
-                <div className="flex-shrink-0 flex items-center justify-between px-3 py-2 border-b border-border bg-base-200/50">
-                    <span className="text-sm font-medium text-base-content">Processes</span>
-                    <div className="flex items-center gap-1">
+                <div className="flex-shrink-0 flex items-center justify-between px-2 py-1 border-b border-border bg-base-200/50">
+                    <span className="text-xs font-medium text-muted uppercase tracking-wider">Processes</span>
+                    <div className="flex items-center">
                         <Menu
                             trigger={
-                                <button type="button" className="btn p-1.5 text-muted hover:text-base-content hover:bg-base-300 transition-colors" title="Edit">
-                                    <Pencil size={14} />
+                                <button type="button" className="btn p-1 text-muted hover:text-base-content transition-colors" title="Edit">
+                                    <Pencil size={12} />
                                 </button>
                             }
                             sections={[{ items: editMenuItems }]}
@@ -264,17 +264,17 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                             type="button"
                             onClick={handleRefresh}
                             disabled={refreshing}
-                            className={cx("btn p-1.5 text-muted hover:text-base-content hover:bg-base-300 transition-colors", refreshing && "animate-spin")}
+                            className={cx("btn p-1 text-muted hover:text-base-content transition-colors", refreshing && "animate-spin")}
                             title="Refresh"
                         >
-                            <RefreshCw size={14} />
+                            <RefreshCw size={12} />
                         </button>
                     </div>
                 </div>
 
                 {/* Inline create/update form */}
                 {formMode === "create" && (
-                    <div className="flex-shrink-0 p-3 border-b border-border bg-base-200/30">
+                    <div className="flex-shrink-0 p-2 border-b border-border bg-base-200/30">
                         <CreateProcsForm
                             subdirPath={subdirPath}
                             onSubdirChange={setSubdirPath}
@@ -288,7 +288,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                     </div>
                 )}
                 {formMode === "update" && (
-                    <div className="flex-shrink-0 p-3 border-b border-border bg-base-200/30">
+                    <div className="flex-shrink-0 p-2 border-b border-border bg-base-200/30">
                         <UpdateProcsForm
                             description={updateDescription}
                             onDescriptionChange={setUpdateDescription}
@@ -303,16 +303,16 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
 
                 {/* Errors banner */}
                 {hasErrors && (
-                    <div className="flex-shrink-0 p-3 bg-error/10 border-b border-error/20">
-                        <div className="flex items-center gap-2 text-error text-sm font-medium">
-                            <AlertTriangle size={16} />
+                    <div className="flex-shrink-0 px-2 py-1.5 bg-error/10 border-b border-error/20">
+                        <div className="flex items-center gap-1.5 text-error text-xs font-medium">
+                            <AlertTriangle size={12} />
                             <span>
                                 {procsResult.errors.length} config error{procsResult.errors.length > 1 ? "s" : ""}
                             </span>
                         </div>
-                        <div className="mt-2 space-y-1">
+                        <div className="mt-1 space-y-0.5">
                             {procsResult.errors.map((err, i) => (
-                                <div key={i} className="text-sm text-error/80 font-mono">
+                                <div key={i} className="text-[10px] text-error/80 font-mono truncate">
                                     {err.relativePath}: {err.error}
                                 </div>
                             ))}
@@ -388,28 +388,28 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
         <div>
             {/* Config header - only show if multiple configs */}
             {configDir !== "." && (
-                <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-base-200/50">
-                    <Folder size={14} className="text-muted" />
-                    <span className="flex-1 text-sm text-base-content font-mono truncate">{configDir}</span>
-                    <div className="flex items-center gap-1">
+                <div className="group/header flex items-center gap-1.5 px-2 py-1 border-b border-border bg-base-200/50">
+                    <Folder size={12} className="text-muted flex-shrink-0" />
+                    <span className="flex-1 text-xs text-muted font-mono truncate">{configDir}</span>
+                    <div className="flex items-center opacity-0 group-hover/header:opacity-100 transition-opacity">
                         {stoppedDaemons.length > 0 && (
                             <button
                                 type="button"
                                 onClick={handleStartAllDaemons}
-                                className="btn p-1.5 text-muted hover:text-success hover:bg-success/10 transition-colors"
+                                className="btn p-0.5 text-muted hover:text-success transition-colors"
                                 title="Start all daemons"
                             >
-                                <Play size={14} />
+                                <Play size={12} />
                             </button>
                         )}
                         {runningDaemons.length > 0 && (
                             <button
                                 type="button"
                                 onClick={handleStopAllDaemons}
-                                className="btn p-1.5 text-muted hover:text-error hover:bg-error/10 transition-colors"
+                                className="btn p-0.5 text-muted hover:text-error transition-colors"
                                 title="Stop all daemons"
                             >
-                                <Square size={14} />
+                                <Square size={12} />
                             </button>
                         )}
                     </div>
@@ -587,43 +587,38 @@ const ProcessRowView = observer(function ProcessRowView({ process, instance, con
     return (
         <div
             className={cx(
-                "flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors",
-                isSelected ? "bg-primary/10 border-l-3 border-l-primary" : "hover:bg-base-200 border-l-3 border-l-transparent"
+                "group flex items-center gap-2 px-2 py-1 cursor-pointer transition-colors",
+                isSelected ? "bg-primary/10 border-l-2 border-l-primary" : "hover:bg-base-200 border-l-2 border-l-transparent"
             )}
             onClick={handleSelect}
         >
-            <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                    <div className={cx("w-2.5 h-2.5 rounded-full flex-shrink-0", STATUS_STYLES[status])} />
-                    {showTypeIcon && <TypeIcon size={14} className="text-muted flex-shrink-0" />}
-                    <span className="text-sm text-base-content truncate font-medium">{process.name}</span>
-                </div>
-                <div className="text-xs text-muted truncate font-mono">{process.command}</div>
-            </div>
-            <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                {instance?.exitCode !== undefined && instance.exitCode !== null && status !== "running" && (
-                    <span className={cx("text-xs font-mono px-1.5 py-0.5", instance.exitCode === 0 ? "text-success bg-success/10" : "text-error bg-error/10")}>
-                        exit {instance.exitCode}
-                    </span>
-                )}
+            <div className={cx("w-1.5 h-1.5 rounded-full flex-shrink-0", STATUS_STYLES[status])} />
+            {showTypeIcon && <TypeIcon size={12} className="text-muted flex-shrink-0" />}
+            <span className="text-xs text-base-content truncate flex-1 min-w-0">{process.name}</span>
+            {instance?.exitCode !== undefined && instance.exitCode !== null && status !== "running" && (
+                <span className={cx("text-[10px] font-mono flex-shrink-0", instance.exitCode === 0 ? "text-success" : "text-error")}>
+                    {instance.exitCode}
+                </span>
+            )}
+            <div className="flex items-center flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
                 {process.url && (
                     <button
                         type="button"
                         onClick={() => openUrlInNativeBrowser(process.url!)}
-                        className="btn p-1.5 text-muted hover:text-base-content hover:bg-base-300 transition-colors"
+                        className="btn p-0.5 text-muted hover:text-base-content transition-colors"
                         title={`Open ${process.url}`}
                     >
-                        <ExternalLink size={14} />
+                        <ExternalLink size={12} />
                     </button>
                 )}
                 {canStart ? (
                     <button
                         type="button"
                         onClick={handleStart}
-                        className="btn p-1.5 text-success/70 hover:text-success hover:bg-success/10 transition-colors"
+                        className="btn p-0.5 text-success/70 hover:text-success transition-colors"
                         title="Start"
                     >
-                        <Play size={14} />
+                        <Play size={12} />
                     </button>
                 ) : (
                     <button
@@ -631,12 +626,12 @@ const ProcessRowView = observer(function ProcessRowView({ process, instance, con
                         onClick={handleStop}
                         disabled={isStarting}
                         className={cx(
-                            "btn p-1.5 transition-colors",
-                            isStarting ? "text-muted cursor-not-allowed" : "text-error/70 hover:text-error hover:bg-error/10"
+                            "btn p-0.5 transition-colors",
+                            isStarting ? "text-muted cursor-not-allowed" : "text-error/70 hover:text-error"
                         )}
                         title="Stop"
                     >
-                        <Square size={14} />
+                        <Square size={12} />
                     </button>
                 )}
                 <button
@@ -644,12 +639,12 @@ const ProcessRowView = observer(function ProcessRowView({ process, instance, con
                     onClick={handleRestart}
                     disabled={isStarting}
                     className={cx(
-                        "btn p-1.5 transition-colors",
-                        isStarting ? "text-muted cursor-not-allowed" : "text-muted hover:text-base-content hover:bg-base-300"
+                        "btn p-0.5 transition-colors",
+                        isStarting ? "text-muted cursor-not-allowed" : "text-muted hover:text-base-content"
                     )}
                     title="Restart"
                 >
-                    <RotateCcw size={14} />
+                    <RotateCcw size={12} />
                 </button>
             </div>
         </div>
