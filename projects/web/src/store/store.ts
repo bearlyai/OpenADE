@@ -48,6 +48,8 @@ export class CodeStore {
     private envVarsReactionDisposer: (() => void) | null = null
     private telemetryReactionDisposer: (() => void) | null = null
     private pingIntervalId: ReturnType<typeof setInterval> | null = null
+    private focusHandler: (() => void) | null = null
+    private blurHandler: (() => void) | null = null
     storeInitialized = false
     storeInitializing = false
     private storeInitPromise: Promise<void> | null = null
@@ -199,10 +201,24 @@ export class CodeStore {
             }
         )
 
-        const PING_INTERVAL_MS = 10 * 60 * 1000
+        const PING_INTERVAL_MS = 12 * 60 * 60 * 1000
         this.pingIntervalId = setInterval(() => {
-            track("ping", { focused: document.hasFocus() })
+            track("ping")
         }, PING_INTERVAL_MS)
+
+        // Track when the user returns to the app after being away for >30s
+        const FOCUS_DEBOUNCE_MS = 30 * 1000
+        let lastBlurTime = 0
+        this.blurHandler = () => {
+            lastBlurTime = Date.now()
+        }
+        this.focusHandler = () => {
+            if (lastBlurTime > 0 && Date.now() - lastBlurTime > FOCUS_DEBOUNCE_MS) {
+                track("app_focused")
+            }
+        }
+        window.addEventListener("blur", this.blurHandler)
+        window.addEventListener("focus", this.focusHandler)
     }
 
     async getTaskStore(repoId: string, taskId: string): Promise<TaskStore> {
@@ -286,6 +302,15 @@ export class CodeStore {
         if (this.pingIntervalId) {
             clearInterval(this.pingIntervalId)
             this.pingIntervalId = null
+        }
+
+        if (this.blurHandler) {
+            window.removeEventListener("blur", this.blurHandler)
+            this.blurHandler = null
+        }
+        if (this.focusHandler) {
+            window.removeEventListener("focus", this.focusHandler)
+            this.focusHandler = null
         }
 
         this.mcpServers.dispose()
