@@ -23,6 +23,8 @@ export const analytics: AnalyticsProvider = new AnalyticsProviderImpl()
  * - "mcp_server_added" - MCP server added
  * - "mcp_server_removed" - MCP server removed
  * - "settings_changed" - Setting changed
+ * - "telemetry_disabled" - User opted out of telemetry
+ * - "telemetry_enabled" - User opted back into telemetry
  */
 export function track(event: string, properties?: Record<string, unknown>): void {
     analytics.track(event, properties)

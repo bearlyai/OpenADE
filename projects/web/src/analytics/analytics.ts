@@ -30,10 +30,6 @@ export class AnalyticsProviderImpl implements AnalyticsProvider {
             deviceId,
             // Disable automatic tracking - we'll track events explicitly
             autocapture: false,
-            // Don't track IP for privacy
-            trackingOptions: {
-                ipAddress: false,
-            },
         })
 
         this.initialized = true

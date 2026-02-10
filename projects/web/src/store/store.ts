@@ -192,6 +192,8 @@ export class CodeStore {
         this.telemetryReactionDisposer = reaction(
             () => this.personalSettingsStore?.settings.get()?.telemetryDisabled,
             (disabled) => {
+                // Track before toggling so the event is sent while analytics is still active
+                track(disabled ? "telemetry_disabled" : "telemetry_enabled")
                 analytics.setEnabled(!disabled)
                 setTelemetryDisabled(disabled ?? false)
             }

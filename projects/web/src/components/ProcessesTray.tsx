@@ -596,9 +596,7 @@ const ProcessRowView = observer(function ProcessRowView({ process, instance, con
             {showTypeIcon && <TypeIcon size={12} className="text-muted flex-shrink-0" />}
             <span className="text-xs text-base-content truncate flex-1 min-w-0">{process.name}</span>
             {instance?.exitCode !== undefined && instance.exitCode !== null && status !== "running" && (
-                <span className={cx("text-[10px] font-mono flex-shrink-0", instance.exitCode === 0 ? "text-success" : "text-error")}>
-                    {instance.exitCode}
-                </span>
+                <span className={cx("text-[10px] font-mono flex-shrink-0", instance.exitCode === 0 ? "text-success" : "text-error")}>{instance.exitCode}</span>
             )}
             <div className="flex items-center flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
                 {process.url && (
@@ -612,12 +610,7 @@ const ProcessRowView = observer(function ProcessRowView({ process, instance, con
                     </button>
                 )}
                 {canStart ? (
-                    <button
-                        type="button"
-                        onClick={handleStart}
-                        className="btn p-1 text-success/70 hover:text-success transition-colors"
-                        title="Start"
-                    >
+                    <button type="button" onClick={handleStart} className="btn p-1 text-success/70 hover:text-success transition-colors" title="Start">
                         <Play size={12} />
                     </button>
                 ) : (
@@ -625,10 +618,7 @@ const ProcessRowView = observer(function ProcessRowView({ process, instance, con
                         type="button"
                         onClick={handleStop}
                         disabled={isStarting}
-                        className={cx(
-                            "btn p-1 transition-colors",
-                            isStarting ? "text-muted cursor-not-allowed" : "text-error/70 hover:text-error"
-                        )}
+                        className={cx("btn p-1 transition-colors", isStarting ? "text-muted cursor-not-allowed" : "text-error/70 hover:text-error")}
                         title="Stop"
                     >
                         <Square size={12} />
@@ -638,10 +628,7 @@ const ProcessRowView = observer(function ProcessRowView({ process, instance, con
                     type="button"
                     onClick={handleRestart}
                     disabled={isStarting}
-                    className={cx(
-                        "btn p-1 transition-colors",
-                        isStarting ? "text-muted cursor-not-allowed" : "text-muted hover:text-base-content"
-                    )}
+                    className={cx("btn p-1 transition-colors", isStarting ? "text-muted cursor-not-allowed" : "text-muted hover:text-base-content")}
                     title="Restart"
                 >
                     <RotateCcw size={12} />
