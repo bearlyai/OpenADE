@@ -59,6 +59,16 @@ Ask the user:
 Once the user approves:
 - Add the new entry to the top of the `RELEASE_NOTES` array in `projects/web/src/versions.ts`
 - Update the `version` field in `projects/electron/package.json` to the new version number (e.g., `"version": "0.53.0"`). This is what Electron's "About" dialog displays.
+- Update all version-bearing links to the repo across the codebase. Search broadly with:
+  ```
+  rg -i 'https://github.com/bearlyai/openade' .
+  ```
+  Review all results and update any that contain the previous version number. This includes but is not limited to:
+  - Tag references: `v<previous-version>` → `v<new-version>` in `/releases/download/` paths
+  - Filename references: `OpenADE-<previous-version>` → `OpenADE-<new-version>` (covers `.dmg`, `.AppImage`, `.exe` filenames)
+  - Any other URLs under the repo that embed a version string
+
+  Verify the replacements look correct before proceeding — only update version strings within repo URLs and their associated filenames, not unrelated content.
 - Create a commit with the message `release: v<version>`
 - Create a git tag `v<version>`
 - Push the commit and tag (`git push && git push --tags`)
