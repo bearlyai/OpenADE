@@ -69,7 +69,7 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
         <CollapsibleEvent
             icon={icon}
             label={useLabel}
-            query={isPlan ? event.userInput : hasCustomLabel ? undefined : event.userInput}
+            query={event.userInput}
             event={event}
             expanded={expanded}
             onToggle={onToggle}
