@@ -112,8 +112,7 @@ export const SettingsModal = NiceModal.create(
                 <div
                     className="bg-base-100 shadow-2xl w-full max-w-3xl flex flex-col border border-border"
                     style={{
-                        maxHeight: "min(600px, 70vh)",
-                        minHeight: "300px",
+                        height: "min(600px, 70vh)",
                     }}
                 >
                     {/* Header */}
