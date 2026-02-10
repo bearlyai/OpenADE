@@ -25,28 +25,52 @@ const notifyFeOnUpdateAvailable = () => {
     }
 }
 
+const notifyFeOnUpdateError = () => {
+    const executorWindow = currentExecutor().window
+    if (!executorWindow) {
+        return
+    }
+    try {
+        executorWindow.webContents.send("app:update-error")
+    } catch (e) {
+        logger.warn("Error notifying FE of update error", e)
+    }
+}
+
 function checkForUpdatesAndNotify() {
     if (!autoUpdater.isUpdaterActive()) {
         return Promise.resolve(null)
     }
-    return autoUpdater.checkForUpdates().then((it) => {
-        if (!it) {
-            return
-        }
-        const downloadPromise = it.downloadPromise
-        if (downloadPromise == null) {
-            // @ts-ignore
-            const debug = autoUpdater._logger.debug
-            if (debug != null) {
-                debug("checkForUpdatesAndNotify called, downloadPromise is null")
+    return autoUpdater
+        .checkForUpdates()
+        .then((it) => {
+            if (!it) {
+                return
             }
+            const downloadPromise = it.downloadPromise
+            if (downloadPromise == null) {
+                // @ts-ignore
+                const debug = autoUpdater._logger.debug
+                if (debug != null) {
+                    debug("checkForUpdatesAndNotify called, downloadPromise is null")
+                }
+                return it
+            }
+            downloadPromise
+                .then(() => {
+                    notifyFeOnUpdateAvailable()
+                })
+                .catch((e: unknown) => {
+                    logger.warn("Auto-update download failed", e)
+                    notifyFeOnUpdateError()
+                })
             return it
-        }
-        downloadPromise.then(() => {
-            notifyFeOnUpdateAvailable()
         })
-        return it
-    })
+        .catch((e: unknown) => {
+            logger.warn("Auto-update check failed", e)
+            notifyFeOnUpdateError()
+            return null
+        })
 }
 
 export const load = () => {
@@ -66,6 +90,10 @@ export const load = () => {
                     }, 5000)
                 }
             })
+        })
+
+        ipcMain.handle("retry-update-check", () => {
+            return checkForUpdatesAndNotify()
         })
 
         ipcMain.handle("apply-update", () => {

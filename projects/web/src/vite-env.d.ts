@@ -10,6 +10,8 @@ interface OpenADEAPI {
         forceEnableDevTools: () => Promise<void>
         isWindowedWithFrame: () => Promise<boolean>
         onUpdateAvailable: (cb: () => void) => () => void
+        onUpdateError: (cb: () => void) => () => void
+        retryUpdateCheck: () => Promise<void>
     }
     window: {
         isPinned: () => Promise<boolean>

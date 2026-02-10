@@ -29,6 +29,9 @@ const openadeAPI = {
         isWindowedWithFrame: () => ipcRenderer.invoke("is-windowed-with-frame"),
         onUpdateAvailable: (cb: () => void) =>
             createListener("app:update-available", cb as (...args: unknown[]) => void),
+        onUpdateError: (cb: () => void) =>
+            createListener("app:update-error", cb as (...args: unknown[]) => void),
+        retryUpdateCheck: () => ipcRenderer.invoke("retry-update-check"),
     },
 
     // ========================================================================

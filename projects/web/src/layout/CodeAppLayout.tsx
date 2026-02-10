@@ -2,12 +2,12 @@ import NiceModal from "@ebay/nice-modal-react"
 import { observer } from "mobx-react"
 import { type ReactNode, useCallback, useEffect, useState } from "react"
 import { twMerge } from "tailwind-merge"
-import { UpdateBanner } from "../components/UpdateBanner"
+import { UpdateBanner, UpdateErrorBanner } from "../components/UpdateBanner"
 import { ReleaseNotification } from "../components/notifications/ReleaseNotification"
 import { CodeSidebar } from "../components/sidebar/Sidebar"
 import { codeSidebarManager } from "../components/sidebar/sidebarManager"
 import SidebarIcon from "../components/sidebar/static/sidebar.svg?react"
-import { onUpdateAvailable } from "../electronAPI/app"
+import { onUpdateAvailable, onUpdateError } from "../electronAPI/app"
 import { hasElectronIpc } from "../electronAPI/capabilities"
 import { type FrameColors, windowFrameEnabled, windowFrameSetColors } from "../electronAPI/windowFrame"
 import { PortalContainerProvider } from "../hooks/usePortalContainer"
@@ -87,6 +87,7 @@ const ElectronFrame = observer((props: { children: ReactNode; resolvedTheme: "li
     const frameHeight = "44px"
     const [frameEnabled, setFrameEnabled] = useState(true)
     const [updateReady, setUpdateReady] = useState(false)
+    const [updateError, setUpdateError] = useState(false)
 
     const updateElectronFrameColorsFromTheme = useCallback(async () => {
         const isDark = resolvedTheme === "dark"
@@ -114,6 +115,15 @@ const ElectronFrame = observer((props: { children: ReactNode; resolvedTheme: "li
     useEffect(() => {
         const unsubscribe = onUpdateAvailable(() => {
             setUpdateReady(true)
+            setUpdateError(false)
+        })
+        return unsubscribe
+    }, [])
+
+    // Subscribe to update error events from Electron
+    useEffect(() => {
+        const unsubscribe = onUpdateError(() => {
+            setUpdateError(true)
         })
         return unsubscribe
     }, [])
@@ -131,7 +141,7 @@ const ElectronFrame = observer((props: { children: ReactNode; resolvedTheme: "li
                     flexShrink: 0,
                 }}
             >
-                {updateReady ? <UpdateBanner /> : center}
+                {updateReady ? <UpdateBanner /> : updateError ? <UpdateErrorBanner /> : center}
             </div>
             <div className="flex flex-col" style={{ height: `calc(100% - ${frameHeight})`, overflow: "hidden" }}>
                 {children}

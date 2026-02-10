@@ -6,7 +6,7 @@
  */
 
 import { observer } from "mobx-react"
-import { applyUpdate } from "../electronAPI/app"
+import { applyUpdate, retryUpdateCheck } from "../electronAPI/app"
 
 export const UpdateBanner = observer(() => {
     const handleRestart = async () => {
@@ -23,6 +23,25 @@ export const UpdateBanner = observer(() => {
             <span>An update is ready</span>
             <span className="opacity-50">·</span>
             <span className="opacity-80">Restart</span>
+        </button>
+    )
+})
+
+export const UpdateErrorBanner = observer(() => {
+    const handleRetry = async () => {
+        await retryUpdateCheck()
+    }
+
+    return (
+        <button
+            type="button"
+            onClick={handleRetry}
+            className="btn flex items-center gap-1.5 text-xs bg-error text-error-content rounded-full px-3 py-1 select-none hover:bg-error/90 transition-colors cursor-pointer"
+            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+        >
+            <span>Update failed</span>
+            <span className="opacity-50">·</span>
+            <span className="opacity-80">Retry</span>
         </button>
     )
 })

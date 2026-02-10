@@ -10,7 +10,17 @@ export function onUpdateAvailable(callback: () => void): () => void {
     return window.openadeAPI.app.onUpdateAvailable(callback)
 }
 
+export function onUpdateError(callback: () => void): () => void {
+    if (!window.openadeAPI) return () => {}
+    return window.openadeAPI.app.onUpdateError(callback)
+}
+
 export async function applyUpdate(): Promise<void> {
     if (!window.openadeAPI) return
     await window.openadeAPI.app.applyUpdate()
+}
+
+export async function retryUpdateCheck(): Promise<void> {
+    if (!window.openadeAPI) return
+    await window.openadeAPI.app.retryUpdateCheck()
 }
