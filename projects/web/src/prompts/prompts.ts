@@ -208,23 +208,24 @@ const COMMIT_PROMPT = `Review the current git working tree and create a commit f
 
 This is a one-time commit request. Do not continue committing after this unless explicitly asked.`
 
-function buildPushPrompt(hasGhCli: boolean): string {
+function buildPushPrompt(hasGhCli: boolean, branch: string): string {
     const ghSection = hasGhCli
         ? `After pushing, check for an existing pull request:
 - Run \`gh pr view --json url,number\` to check if a PR already exists for this branch
 - If a PR exists, output its URL
-- If no PR exists and this is not the repository's default branch, create one:
+- If no PR exists and this is NOT a main/master/default branch, create one:
   1. Review the commit log for this branch (e.g. \`git log --oneline main..HEAD\`) to understand the full scope of changes
   2. Write a concise, descriptive PR title that summarizes the overall change (not just the last commit)
   3. Write a well-structured PR body in markdown with: a summary section describing what changed and why, and a bulleted list of the key changes derived from the commit history
   4. Run \`gh pr create --title "<title>" --body "<body>"\`
-  5. Output the created PR URL`
+  5. Output the created PR URL
+- Do NOT create a PR if the current branch is main, master, or the repository's default branch`
         : `After pushing, check the output for any pull request URL provided by the remote and output it if present.`
 
-    return `Push the current branch to the remote.
+    return `Push the current branch (${branch}) to the remote.
 
 - Run \`git push\` to push all commits
-- If push fails because there is no upstream, run \`git push --set-upstream origin <current-branch>\`
+- If push fails because there is no upstream, run \`git push --set-upstream origin ${branch}\`
 - If push fails for any other reason, explain the error clearly and stop
 
 ${ghSection}

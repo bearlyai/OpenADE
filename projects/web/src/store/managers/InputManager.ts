@@ -300,9 +300,10 @@ export class InputManager {
                 enabled: !this.hasFeedback,
                 action: async () => {
                     const hasGhCli = this.taskModel?.hasGhCli ?? false
+                    const branch = this.taskModel?.gitStatus?.branch ?? "HEAD"
                     await this.store.execution.executeAction({
                         taskId: this.taskId,
-                        input: { userInput: ACTION_PROMPTS.push(hasGhCli), images: [] },
+                        input: { userInput: ACTION_PROMPTS.push(hasGhCli, branch), images: [] },
                         label: "Push",
                         includeComments: false,
                     })
