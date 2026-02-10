@@ -6,6 +6,7 @@ export function getRenderMode(group: MergedGroup, ctx: DisplayContext): RenderMo
 
     return exhaustive.tag(group, "type", {
         text: () => (isPlanMode && !ctx.isLastTextGroup ? "pill" : "inline"),
+        thinking: () => "row",
         tool: () => "pill",
         edit: () => (isPlanMode ? "pill" : "row"),
         write: () => (isPlanMode ? "pill" : "row"),

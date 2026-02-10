@@ -143,7 +143,13 @@ export interface TodoWriteGroup {
     messageIndices: [number, number | undefined]
 }
 
-export type MessageGroup = TextGroup | ToolGroup | EditGroup | WriteGroup | BashGroup | SystemGroup | ResultGroup | StderrGroup | TodoWriteGroup
+export interface ThinkingGroup {
+    type: "thinking"
+    text: string
+    messageIndex: number
+}
+
+export type MessageGroup = TextGroup | ThinkingGroup | ToolGroup | EditGroup | WriteGroup | BashGroup | SystemGroup | ResultGroup | StderrGroup | TodoWriteGroup
 
 /** Extract text content from assistant message */
 function getAssistantText(msg: SDKMessage): string | null {
@@ -154,6 +160,19 @@ function getAssistantText(msg: SDKMessage): string | null {
     const text = content
         .filter((block) => block.type === "text")
         .map((block) => block.text || "")
+        .join("")
+    return text.trim() || null
+}
+
+/** Extract thinking content from assistant message */
+function getThinkingText(msg: SDKMessage): string | null {
+    if (msg.type !== "assistant") return null
+    const message = msg as { message?: { content?: unknown } }
+    if (!message.message?.content || !Array.isArray(message.message.content)) return null
+    const content = message.message.content as Array<{ type: string; thinking?: string }>
+    const text = content
+        .filter((block) => block.type === "thinking")
+        .map((block) => block.thinking || "")
         .join("")
     return text.trim() || null
 }
@@ -301,8 +320,18 @@ function groupMessages(messages: SDKMessage[]): MessageGroup[] {
 
         // Handle assistant messages
         if (msg.type === "assistant") {
+            const thinking = getThinkingText(msg)
             const text = getAssistantText(msg)
             const toolUse = getToolUse(msg)
+
+            // If has thinking, create thinking group (before text)
+            if (thinking) {
+                groups.push({
+                    type: "thinking",
+                    text: thinking,
+                    messageIndex: i,
+                })
+            }
 
             // If has text, create text group
             if (text) {

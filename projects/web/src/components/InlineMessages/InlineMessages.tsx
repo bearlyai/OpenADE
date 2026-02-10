@@ -32,6 +32,7 @@ function getGroupId(group: MergedGroup, index: number): string {
         case "todoWrite":
             return `${group.type}-${group.toolUseId}`
         case "text":
+        case "thinking":
         case "system":
         case "result":
             return `${group.type}-${group.messageIndex}`

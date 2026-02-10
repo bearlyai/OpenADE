@@ -282,6 +282,7 @@ export class ExecutionManager {
                 cwd: ctx.cwd,
                 additionalDirectories: ctx.additionalDirectories,
                 model: selectedModel,
+                maxThinkingTokens: 10000,
                 resume: ctx.parentSessionId,
                 forkSession: !!ctx.parentSessionId,
                 readOnly: ctx.readOnly,
