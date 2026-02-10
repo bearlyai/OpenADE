@@ -128,7 +128,9 @@ export const InputBar = observer(function InputBar({
                         {gitStatus?.branch && (
                             <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-mono text-muted ml-auto shrink-0">
                                 <GitBranch size={12} />
-                                <span className="max-w-[120px] truncate" title={displayBranch}>{displayBranch}</span>
+                                <span className="max-w-[120px] truncate" title={displayBranch}>
+                                    {displayBranch}
+                                </span>
                                 {pullRequest && (
                                     <button
                                         type="button"

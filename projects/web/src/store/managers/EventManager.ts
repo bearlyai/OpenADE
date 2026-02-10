@@ -19,10 +19,7 @@ import { ulid } from "../../utils/ulid"
 import type { CodeStore } from "../store"
 
 // PR URL patterns for GitHub and GitLab
-const PR_URL_PATTERNS = [
-    /https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/,
-    /https:\/\/gitlab\.com\/[^/]+\/[^/]+\/-\/merge_requests\/\d+/,
-]
+const PR_URL_PATTERNS = [/https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/, /https:\/\/gitlab\.com\/[^/]+\/[^/]+\/-\/merge_requests\/\d+/]
 
 /** Extract a PR URL from LLM execution output */
 function extractPrUrl(events: ClaudeStreamEvent[]): string | null {
@@ -47,11 +44,11 @@ function extractPrUrl(events: ClaudeStreamEvent[]): string | null {
 function parsePrUrl(url: string): { url: string; number?: number; provider: "github" | "gitlab" | "other" } {
     if (url.includes("github.com")) {
         const match = url.match(/\/pull\/(\d+)/)
-        return { url, number: match ? parseInt(match[1], 10) : undefined, provider: "github" }
+        return { url, number: match ? Number.parseInt(match[1], 10) : undefined, provider: "github" }
     }
     if (url.includes("gitlab.com")) {
         const match = url.match(/\/merge_requests\/(\d+)/)
-        return { url, number: match ? parseInt(match[1], 10) : undefined, provider: "gitlab" }
+        return { url, number: match ? Number.parseInt(match[1], 10) : undefined, provider: "gitlab" }
     }
     return { url, provider: "other" }
 }

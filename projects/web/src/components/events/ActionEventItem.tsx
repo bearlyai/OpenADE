@@ -26,10 +26,8 @@ function getEventIcon(sourceType: ActionEvent["source"]["type"], userLabel?: str
         case "ask":
             return { icon: <HelpCircle size="1em" className="flex-shrink-0 text-info" />, label: "Ask" }
         default:
-            if (userLabel === "Commit")
-                return { icon: <GitCommit size="1em" className="flex-shrink-0 text-muted" />, label: "Commit" }
-            if (userLabel === "Push")
-                return { icon: <ArrowUpFromLine size="1em" className="flex-shrink-0 text-muted" />, label: "Push" }
+            if (userLabel === "Commit") return { icon: <GitCommit size="1em" className="flex-shrink-0 text-muted" />, label: "Commit" }
+            if (userLabel === "Push") return { icon: <ArrowUpFromLine size="1em" className="flex-shrink-0 text-muted" />, label: "Push" }
             return { icon: <Play size="1em" className="flex-shrink-0 text-success" />, label: "Do" }
     }
 }
@@ -66,14 +64,7 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
     const hasDefunctSessionError = codeStore.events.hasDefunctSessionError(event)
 
     return (
-        <CollapsibleEvent
-            icon={icon}
-            label={useLabel}
-            query={event.userInput}
-            event={event}
-            expanded={expanded}
-            onToggle={onToggle}
-        >
+        <CollapsibleEvent icon={icon} label={useLabel} query={event.userInput} event={event} expanded={expanded} onToggle={onToggle}>
             {event.images && event.images.length > 0 && (
                 <div className="px-3">
                     <ImageAttachments images={event.images} />

@@ -220,7 +220,7 @@ function buildPushPrompt(hasGhCli: boolean, branch: string): string {
   4. Run \`gh pr create --title "<title>" --body "<body>"\`
   5. Output the created PR URL
 - Do NOT create a PR if the current branch is main, master, or the repository's default branch`
-        : `After pushing, check the output for any pull request URL provided by the remote and output it if present.`
+        : "After pushing, check the output for any pull request URL provided by the remote and output it if present."
 
     return `Push the current branch (${branch}) to the remote.
 
