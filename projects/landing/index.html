@@ -143,13 +143,12 @@
 
         /* ─── Hero ─── */
         .hero {
-            min-height: 100vh;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             text-align: center;
-            padding: 7rem 2rem 4rem;
+            padding: 8rem 2rem 4rem;
             position: relative;
         }
 
@@ -170,33 +169,6 @@
         .hero > * {
             position: relative;
             z-index: 1;
-        }
-
-        .hero-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.35rem 0.9rem;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            background: rgba(255, 255, 255, 0.03);
-            font-size: 0.8rem;
-            font-weight: 500;
-            color: var(--gray-300);
-            margin-bottom: 2rem;
-            letter-spacing: 0.02em;
-        }
-
-        .hero-badge-dot {
-            width: 6px;
-            height: 6px;
-            background: var(--green);
-            border-radius: 50%;
-            animation: pulse-dot 2s ease-in-out infinite;
-        }
-
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
         }
 
         .hero h1 {
@@ -305,6 +277,53 @@
             gap: 0.35rem;
         }
 
+        /* ─── Dictionary card ─── */
+        .dict-card {
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.02);
+            padding: 0.6rem 1.2rem;
+            margin-bottom: 2rem;
+            display: inline-flex;
+            flex-direction: column;
+            gap: 0.2rem;
+        }
+
+        .dict-top {
+            display: flex;
+            align-items: baseline;
+            gap: 0.6rem;
+        }
+
+        .dict-word {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--white);
+            letter-spacing: -0.02em;
+        }
+
+        .dict-phonetic {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            color: var(--gray-500);
+        }
+
+        .dict-pos {
+            font-size: 0.7rem;
+            font-style: italic;
+            color: var(--gray-500);
+        }
+
+        .dict-def {
+            font-size: 0.82rem;
+            color: var(--gray-300);
+            line-height: 1.4;
+        }
+
+        .dict-def strong {
+            color: var(--orange);
+            font-weight: 600;
+        }
+
         /* ─── Screenshot ─── */
         .screenshot-section {
             padding: 0 2rem 6rem;
@@ -312,53 +331,15 @@
             justify-content: center;
         }
 
-        .screenshot-frame {
-            position: relative;
+        .screenshot-img-wrap {
             max-width: 1100px;
             width: 100%;
-            border: 1px solid rgba(255, 255, 255, 0.06);
-            background: var(--gray-800);
-            overflow: hidden;
         }
 
-        .screenshot-bar {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.75rem 1rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-        }
-
-        .screenshot-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: var(--gray-600);
-        }
-
-        .screenshot-placeholder {
+        .screenshot-img {
             width: 100%;
-            aspect-ratio: 16 / 9;
-            background: linear-gradient(135deg, var(--gray-900) 0%, var(--gray-800) 50%, var(--gray-900) 100%);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--gray-500);
-            font-size: 0.9rem;
-            font-weight: 500;
-        }
-
-        .screenshot-placeholder-inner {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 0.75rem;
-        }
-
-        .screenshot-placeholder-inner svg {
-            width: 48px;
-            height: 48px;
-            stroke: var(--gray-600);
+            height: auto;
+            display: block;
         }
 
         /* ─── Powered by ─── */
@@ -692,7 +673,7 @@
             }
 
             .hero {
-                padding: 6rem 1.5rem 3rem;
+                padding: 4.5rem 1.5rem 2rem;
             }
 
             .powered-by-grid {
@@ -742,7 +723,6 @@
     <!-- Nav -->
     <nav>
         <div class="nav-left">
-            <img src="/logo.png" alt="OpenADE" class="nav-logo">
             <span class="nav-wordmark">OpenADE</span>
         </div>
         <div class="nav-right">
@@ -758,17 +738,21 @@
 
     <!-- Hero -->
     <section class="hero">
-        <div class="hero-badge animate-in delay-1">
-            <span class="hero-badge-dot"></span>
-            Open Source &middot; MIT License
+        <div class="dict-card animate-in delay-1">
+            <div class="dict-top">
+                <span class="dict-word">OpenADE</span>
+                <span class="dict-phonetic">/oh-pən-ayd/</span>
+                <span class="dict-pos">noun</span>
+            </div>
+            <div class="dict-def">Open-source <strong>A</strong>gentic <strong>D</strong>evelopment <strong>E</strong>nvironment.</div>
         </div>
 
         <h1 class="animate-in delay-2">
-            Stop babysitting<br>your <span>AI agents</span>
+            Move fast.<br>Break <span>nothing.</span>
         </h1>
 
         <p class="hero-sub animate-in delay-3">
-            Plan it. Revise it. Ship it. OpenADE turns agent-assisted coding from a gamble into a workflow. Free, local, yours.
+            Plan it. Revise it. Ship it. OpenADE turns agent-assisted coding from a gamble into a workflow. Open source. No login. No cloud. Yours.
         </p>
 
         <div class="hero-ctas animate-in delay-4">
@@ -840,18 +824,8 @@
 
     <!-- Screenshot -->
     <section class="screenshot-section">
-        <div class="screenshot-frame reveal">
-            <div class="screenshot-bar">
-                <span class="screenshot-dot"></span>
-                <span class="screenshot-dot"></span>
-                <span class="screenshot-dot"></span>
-            </div>
-            <div class="screenshot-placeholder">
-                <div class="screenshot-placeholder-inner">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="0"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-                    App screenshot — 1280×720 recommended
-                </div>
-            </div>
+        <div class="screenshot-img-wrap reveal">
+            <img src="./app.png" alt="OpenADE application screenshot" class="screenshot-img">
         </div>
     </section>
 
@@ -936,18 +910,9 @@
 
     <!-- Second screenshot -->
     <section class="screenshot-section-2">
-        <div class="screenshot-frame reveal">
-            <div class="screenshot-bar">
-                <span class="screenshot-dot"></span>
-                <span class="screenshot-dot"></span>
-                <span class="screenshot-dot"></span>
-            </div>
-            <div class="screenshot-placeholder">
-                <div class="screenshot-placeholder-inner">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="0"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-                    Themes screenshot — 1280×720 recommended
-                </div>
-            </div>
+        <div class="screenshot-img-wrap reveal">
+            <img src="" alt="OpenADE themes screenshot" class="screenshot-img" style="display:none;">
+            <!-- Replace src and remove style="display:none;" when themes screenshot is ready -->
         </div>
     </section>
 
