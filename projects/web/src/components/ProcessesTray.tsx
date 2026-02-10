@@ -241,9 +241,9 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
     return (
         <div className="flex h-full">
             {/* Left sidebar - Process list */}
-            <div className="w-56 flex-shrink-0 flex flex-col border-r border-border">
+            <div className="w-60 flex-shrink-0 flex flex-col border-r border-border">
                 {/* Header with edit + refresh */}
-                <div className="flex-shrink-0 flex items-center justify-between px-2 py-1 border-b border-border bg-base-200/50">
+                <div className="flex-shrink-0 flex items-center justify-between px-2.5 py-1.5 border-b border-border bg-base-200/50">
                     <span className="text-xs font-medium text-muted uppercase tracking-wider">Processes</span>
                     <div className="flex items-center">
                         <Menu
@@ -303,7 +303,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
 
                 {/* Errors banner */}
                 {hasErrors && (
-                    <div className="flex-shrink-0 px-2 py-1.5 bg-error/10 border-b border-error/20">
+                    <div className="flex-shrink-0 px-2.5 py-2 bg-error/10 border-b border-error/20">
                         <div className="flex items-center gap-1.5 text-error text-xs font-medium">
                             <AlertTriangle size={12} />
                             <span>
@@ -388,7 +388,7 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
         <div>
             {/* Config header - only show if multiple configs */}
             {configDir !== "." && (
-                <div className="group/header flex items-center gap-1.5 px-2 py-1 border-b border-border bg-base-200/50">
+                <div className="group/header flex items-center gap-2 px-2.5 py-1.5 border-b border-border bg-base-200/50">
                     <Folder size={12} className="text-muted flex-shrink-0" />
                     <span className="flex-1 text-xs text-muted font-mono truncate">{configDir}</span>
                     <div className="flex items-center opacity-0 group-hover/header:opacity-100 transition-opacity">
@@ -396,7 +396,7 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
                             <button
                                 type="button"
                                 onClick={handleStartAllDaemons}
-                                className="btn p-0.5 text-muted hover:text-success transition-colors"
+                                className="btn p-1 text-muted hover:text-success transition-colors"
                                 title="Start all daemons"
                             >
                                 <Play size={12} />
@@ -406,7 +406,7 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
                             <button
                                 type="button"
                                 onClick={handleStopAllDaemons}
-                                className="btn p-0.5 text-muted hover:text-error transition-colors"
+                                className="btn p-1 text-muted hover:text-error transition-colors"
                                 title="Stop all daemons"
                             >
                                 <Square size={12} />
@@ -587,12 +587,12 @@ const ProcessRowView = observer(function ProcessRowView({ process, instance, con
     return (
         <div
             className={cx(
-                "group flex items-center gap-2 px-2 py-1 cursor-pointer transition-colors",
+                "group flex items-center gap-2.5 px-2.5 py-1.5 cursor-pointer transition-colors",
                 isSelected ? "bg-primary/10 border-l-2 border-l-primary" : "hover:bg-base-200 border-l-2 border-l-transparent"
             )}
             onClick={handleSelect}
         >
-            <div className={cx("w-1.5 h-1.5 rounded-full flex-shrink-0", STATUS_STYLES[status])} />
+            <div className={cx("w-2 h-2 rounded-full flex-shrink-0", STATUS_STYLES[status])} />
             {showTypeIcon && <TypeIcon size={12} className="text-muted flex-shrink-0" />}
             <span className="text-xs text-base-content truncate flex-1 min-w-0">{process.name}</span>
             {instance?.exitCode !== undefined && instance.exitCode !== null && status !== "running" && (
@@ -605,7 +605,7 @@ const ProcessRowView = observer(function ProcessRowView({ process, instance, con
                     <button
                         type="button"
                         onClick={() => openUrlInNativeBrowser(process.url!)}
-                        className="btn p-0.5 text-muted hover:text-base-content transition-colors"
+                        className="btn p-1 text-muted hover:text-base-content transition-colors"
                         title={`Open ${process.url}`}
                     >
                         <ExternalLink size={12} />
@@ -615,7 +615,7 @@ const ProcessRowView = observer(function ProcessRowView({ process, instance, con
                     <button
                         type="button"
                         onClick={handleStart}
-                        className="btn p-0.5 text-success/70 hover:text-success transition-colors"
+                        className="btn p-1 text-success/70 hover:text-success transition-colors"
                         title="Start"
                     >
                         <Play size={12} />
@@ -626,7 +626,7 @@ const ProcessRowView = observer(function ProcessRowView({ process, instance, con
                         onClick={handleStop}
                         disabled={isStarting}
                         className={cx(
-                            "btn p-0.5 transition-colors",
+                            "btn p-1 transition-colors",
                             isStarting ? "text-muted cursor-not-allowed" : "text-error/70 hover:text-error"
                         )}
                         title="Stop"
@@ -639,7 +639,7 @@ const ProcessRowView = observer(function ProcessRowView({ process, instance, con
                     onClick={handleRestart}
                     disabled={isStarting}
                     className={cx(
-                        "btn p-0.5 transition-colors",
+                        "btn p-1 transition-colors",
                         isStarting ? "text-muted cursor-not-allowed" : "text-muted hover:text-base-content"
                     )}
                     title="Restart"
