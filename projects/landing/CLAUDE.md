@@ -1,6 +1,6 @@
 # Landing Page — projects/landing
 
-Marketing site for [openade.com](https://openade.com). Single-page, static, deployed to Cloudflare Pages.
+Marketing site for [openade.ai](https://openade.ai). Single-page, static, deployed to Cloudflare Pages.
 
 ## Stack
 
@@ -104,6 +104,6 @@ The hero CTA and download section automatically detect the visitor's OS and:
 
 ## SEO
 
-Meta tags are in `index.html` `<head>`. The OG image is referenced as `https://openade.com/og.png`. When updating the OG image, make sure to keep the same filename so social media caches refresh naturally.
+Meta tags are in `index.html` `<head>`. The OG image is referenced as `https://openade.ai/og.png`. When updating the OG image, make sure to keep the same filename so social media caches refresh naturally.
 
 Key meta tags: `title`, `description`, `canonical`, `og:*`, `twitter:*`, `theme-color`.

@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <a href="https://openade.com">Website</a> •
+  <a href="https://openade.ai">Website</a> •
   <a href="#features">Features</a> •
   <a href="#why-openade">Why OpenADE</a> •
   <a href="#download">Download</a> •
