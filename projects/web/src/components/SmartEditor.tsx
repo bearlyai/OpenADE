@@ -687,7 +687,7 @@ export const SmartEditor = observer(
                         },
                     },
                 },
-                [extensions]
+                [extensions, manager]
             )
 
             useEffect(() => {

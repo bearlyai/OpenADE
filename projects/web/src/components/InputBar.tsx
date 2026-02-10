@@ -147,6 +147,7 @@ export const InputBar = observer(function InputBar({
                 {/* Text input area with image attach overlay */}
                 <div className="relative">
                     <SmartEditor
+                        key={`${editorManager.workspaceId}:${editorManager.id}`}
                         ref={editorRef}
                         manager={editorManager}
                         fileMentionsDir={fileMentionsDir}

@@ -302,6 +302,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
             {/* biome-ignore lint/a11y/useKeyWithClickEvents: clicking anywhere focuses editor */}
             <div className="flex-1 min-h-0 overflow-y-auto p-6 cursor-text" onClick={handleEditorAreaClick}>
                 <SmartEditor
+                    key={`${editorManager.workspaceId}:${editorManager.id}`}
                     ref={editorRef}
                     manager={editorManager}
                     fileMentionsDir={repo?.path ?? null}
