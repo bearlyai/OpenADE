@@ -1,6 +1,6 @@
 {
   "name": "OpenADE",
-  "version": "0.52.0",
+  "version": "0.53.0",
   "scripts": {
     "postinstall": "electron-rebuild -f -w node-pty",
     "clean": "rm -rf ./dist",

@@ -42,8 +42,6 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
     const isPlan = isPlanOrRevise(event)
     const { icon, label } = getEventIcon(event.source.type, event.source.userLabel)
 
-    const hasCustomLabel = event.source.type !== "do"
-
     const sessionInfo: SessionInfo | undefined = useMemo(() => {
         if (!event.execution.sessionId) return undefined
         return {
@@ -101,10 +99,7 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
                     <AlertTriangle size={14} className="flex-shrink-0" />
                     <span>
                         Improve and automate your PR creation process by{" "}
-                        <button
-                            className="btn underline hover:opacity-80"
-                            onClick={() => openUrlInNativeBrowser("https://cli.github.com/")}
-                        >
+                        <button type="button" className="btn underline hover:opacity-80" onClick={() => openUrlInNativeBrowser("https://cli.github.com/")}>
                             installing the GitHub CLI
                         </button>
                         .

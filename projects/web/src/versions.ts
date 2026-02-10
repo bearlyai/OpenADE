@@ -8,6 +8,18 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.53.0",
+        title: "Push to PR & Extended Thinking",
+        date: "2026-02-10",
+        highlights: [
+            "New Push command that automatically creates pull requests with LLM-generated titles and descriptions",
+            "Claude's extended thinking blocks now render inline so you can follow the reasoning process",
+            "SDK tool calls and results are visually nested under their parent action for cleaner conversation flow",
+            "Processes tray redesigned with compact single-line rows and hover-reveal actions",
+            "Auto-update failures now show an error banner with a one-click retry option",
+        ],
+    },
+    {
         version: "0.52.0",
         title: "Image Input & Workspace Overhaul",
         date: "2026-02-09",
