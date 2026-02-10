@@ -17,15 +17,6 @@ import { SmartEditor, type SmartEditorRef } from "./SmartEditor"
 import { CommentsSection } from "./events/CommentsSection"
 import { TrayButtons, TraySlideOut, getTrayConfig } from "./tray"
 
-function truncateMiddle(str: string, maxLen: number): string {
-    if (str.length <= maxLen) return str
-    const ellipsis = "…"
-    const charsToShow = maxLen - ellipsis.length
-    const frontChars = Math.ceil(charsToShow / 2)
-    const backChars = Math.floor(charsToShow / 2)
-    return str.slice(0, frontChars) + ellipsis + str.slice(-backChars)
-}
-
 // Button variant styles
 const BUTTON_BASE = "btn flex items-center justify-center gap-2 px-4 h-9 text-sm font-medium transition-all duration-100 whitespace-nowrap"
 
@@ -115,6 +106,9 @@ export const InputBar = observer(function InputBar({
     const hasComments = unsubmittedComments.length > 0
     const hasPendingImages = editorManager.pendingImages.length > 0
 
+    // Strip "openade/" worktree prefix from branch display
+    const displayBranch = gitStatus?.branch?.replace(/^openade\//, "")
+
     // Get tray content from config
     const trayConfig = tray.openTray ? getTrayConfig(tray.openTray) : null
     const trayContent = trayConfig?.renderContent(tray) ?? null
@@ -134,12 +128,12 @@ export const InputBar = observer(function InputBar({
                         {gitStatus?.branch && (
                             <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-mono text-muted ml-auto shrink-0">
                                 <GitBranch size={12} />
-                                <span className="whitespace-nowrap" title={gitStatus.branch}>{truncateMiddle(gitStatus.branch, 24)}</span>
+                                <span className="max-w-[120px] truncate" title={displayBranch}>{displayBranch}</span>
                                 {pullRequest && (
                                     <button
                                         type="button"
                                         onClick={() => openUrlInNativeBrowser(pullRequest.url)}
-                                        className="btn flex items-center gap-1 shrink-0 whitespace-nowrap text-primary hover:text-primary/80 transition-colors cursor-pointer"
+                                        className="btn flex items-center gap-1 ml-1 shrink-0 whitespace-nowrap text-primary hover:text-primary/80 transition-colors cursor-pointer"
                                         title={pullRequest.url}
                                     >
                                         <ExternalLink size={11} />

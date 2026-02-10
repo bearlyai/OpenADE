@@ -38,7 +38,7 @@ export const TrayButtons = observer(function TrayButtons({ tray }: TrayButtonsPr
                         )}
                     >
                         <Icon size={12} />
-                        {config.label}
+                        <span className="hidden sm:inline">{config.label}</span>
                         {badge !== null && badge !== undefined && <TrayBadge>{badge}</TrayBadge>}
                     </button>
                 )
