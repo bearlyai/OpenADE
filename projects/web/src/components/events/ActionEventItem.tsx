@@ -1,6 +1,7 @@
-import { ArrowUpFromLine, FileText, GitCommit, HelpCircle, Play, RefreshCw } from "lucide-react"
+import { AlertTriangle, ArrowUpFromLine, FileText, GitCommit, HelpCircle, Play, RefreshCw } from "lucide-react"
 import { observer } from "mobx-react"
 import { useMemo } from "react"
+import { openUrlInNativeBrowser } from "../../electronAPI/shell"
 import { useCodeStore } from "../../store/context"
 import type { ActionEvent } from "../../types"
 import { InlineMessages, type SessionInfo, UserInputMessage } from "../InlineMessages"
@@ -63,6 +64,10 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
 
     const hasDefunctSessionError = codeStore.events.hasDefunctSessionError(event)
 
+    const isPushEvent = event.source.userLabel === "Push"
+    const hasGhCli = codeStore.tasks.getTaskModel(taskId)?.hasGhCli ?? true
+    const showGhCliBanner = isPushEvent && !hasGhCli && event.status === "completed"
+
     return (
         <CollapsibleEvent icon={icon} label={useLabel} query={event.userInput} event={event} expanded={expanded} onToggle={onToggle}>
             {event.images && event.images.length > 0 && (
@@ -88,6 +93,22 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
             {hasDefunctSessionError && (
                 <div className="px-3 py-2 bg-warning/10 border-t border-warning/20 text-sm text-warning">
                     Session expired. Your next action will automatically resume from an earlier point.
+                </div>
+            )}
+
+            {showGhCliBanner && (
+                <div className="px-3 py-2 bg-warning/10 border-t border-warning/20 text-sm text-warning flex items-center gap-2">
+                    <AlertTriangle size={14} className="flex-shrink-0" />
+                    <span>
+                        Improve and automate your PR creation process by{" "}
+                        <button
+                            className="btn underline hover:opacity-80"
+                            onClick={() => openUrlInNativeBrowser("https://cli.github.com/")}
+                        >
+                            installing the GitHub CLI
+                        </button>
+                        .
+                    </span>
                 </div>
             )}
         </CollapsibleEvent>
