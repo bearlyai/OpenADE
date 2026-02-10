@@ -18,6 +18,7 @@ export interface GitInfo {
     repoRoot: string
     relativePath: string
     mainBranch: string
+    hasGhCli: boolean
 }
 
 export class RepoManager {
@@ -120,6 +121,7 @@ export class RepoManager {
                       repoRoot: response.repoRoot,
                       relativePath: response.relativePath,
                       mainBranch: response.mainBranch,
+                      hasGhCli: response.hasGhCli,
                   }
                 : null
 
@@ -190,6 +192,7 @@ export class RepoManager {
             return {
                 branch: null,
                 headCommit: "",
+                ahead: null,
                 hasChanges: false,
                 staged: { files: [], patch: "", stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
                 unstaged: { files: [], patch: "", stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
@@ -201,6 +204,7 @@ export class RepoManager {
             return {
                 branch: null,
                 headCommit: "",
+                ahead: null,
                 hasChanges: false,
                 staged: { files: [], patch: "", stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
                 unstaged: { files: [], patch: "", stats: { filesChanged: 0, insertions: 0, deletions: 0 } },

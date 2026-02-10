@@ -83,6 +83,9 @@ interface GitStatusResponse {
     branch: string | null // Current branch name (null if detached HEAD)
     headCommit: string // Short SHA of HEAD commit
 
+    // Remote tracking
+    ahead: number | null // Commits ahead of upstream (null if no upstream)
+
     // Working tree status
     hasChanges: boolean
     staged: {
@@ -173,6 +176,7 @@ type IsGitDirectoryResponse =
           repoRoot: string
           relativePath: string
           mainBranch: string
+          hasGhCli: boolean
       }
     | {
           isGitDirectory: false
@@ -460,11 +464,21 @@ async function handleIsGitDirectory(params: IsGitDirectoryParams): Promise<IsGit
             }
         }
 
+        // Detect gh CLI availability (authenticated GitHub CLI)
+        let hasGhCli = false
+        try {
+            const ghResult = await execCommand("gh", ["auth", "status"], { timeout: 5000 })
+            hasGhCli = ghResult.success
+        } catch {
+            // gh not installed or not in PATH
+        }
+
         logger.info("[Git:isGitDirectory] Git directory found", JSON.stringify({
             directory: params.directory,
             repoRoot,
             relativePath: relativePath || "(root)",
             mainBranch,
+            hasGhCli,
             duration: Date.now() - startTime,
         }))
 
@@ -473,6 +487,7 @@ async function handleIsGitDirectory(params: IsGitDirectoryParams): Promise<IsGit
             repoRoot,
             relativePath,
             mainBranch,
+            hasGhCli,
         }
     } catch (error: any) {
         logger.info("[Git:isGitDirectory] Not a git directory", JSON.stringify({
@@ -904,6 +919,24 @@ async function handleGetGitStatus(params: GitStatusParams): Promise<GitStatusRes
         const headResult = await execGit(["rev-parse", "--short", "HEAD"], workingDir)
         const headCommit = headResult.success ? headResult.stdout.trim() : ""
 
+        // Get ahead count (commits ahead of upstream tracking branch)
+        // Falls back to comparing against origin's default branch when no upstream is set
+        // (e.g. new branch that has never been pushed)
+        let ahead: number | null = null
+        if (branch) {
+            const aheadResult = await execGit(["rev-list", "--count", "@{upstream}..HEAD"], workingDir)
+            if (aheadResult.success) {
+                ahead = parseInt(aheadResult.stdout.trim(), 10) || 0
+            } else {
+                // No upstream tracking branch — fall back to origin's default branch
+                const fallbackResult = await execGit(["rev-list", "--count", "origin/HEAD..HEAD"], workingDir)
+                if (fallbackResult.success) {
+                    ahead = parseInt(fallbackResult.stdout.trim(), 10) || 0
+                }
+                // If origin/HEAD also fails (no remote at all), ahead stays null
+            }
+        }
+
         // Get staged changes (diff --cached)
         const stagedDiffResult = await execGit(["diff", "--cached"], workingDir)
         const stagedPatchRaw = stagedDiffResult.success ? stagedDiffResult.stdout : ""
@@ -954,6 +987,7 @@ async function handleGetGitStatus(params: GitStatusParams): Promise<GitStatusRes
         return {
             branch,
             headCommit,
+            ahead,
             hasChanges,
             staged: {
                 files: stagedFiles,

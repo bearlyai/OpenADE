@@ -1,8 +1,9 @@
 import cx from "classnames"
-import { GitBranch, ImagePlus, X } from "lucide-react"
+import { ExternalLink, GitBranch, ImagePlus, X } from "lucide-react"
 import { observer } from "mobx-react"
 import { useRef } from "react"
 import { Z_INDEX } from "../constants"
+import { openUrlInNativeBrowser } from "../electronAPI/shell"
 import type { ClaudeModelId } from "../constants"
 import type { GitStatusResponse } from "../electronAPI/git"
 import type { Command, InputManager } from "../store/managers/InputManager"
@@ -79,6 +80,7 @@ export const InputBar = observer(function InputBar({
     editorManager,
     tray,
     gitStatus,
+    pullRequest,
     fileMentionsDir,
     slashCommandsDir,
     sdkCapabilities,
@@ -91,6 +93,8 @@ export const InputBar = observer(function InputBar({
     editorManager: SmartEditorManager
     tray: TrayManager
     gitStatus?: GitStatusResponse | null
+    /** Associated pull request info */
+    pullRequest?: { url: string; number?: number; provider: "github" | "gitlab" | "other" }
     /** Directory for @file mention autocomplete, null to disable */
     fileMentionsDir: string | null
     /** Directory for /slash command autocomplete, null to disable */
@@ -128,13 +132,24 @@ export const InputBar = observer(function InputBar({
                     <div className="flex items-center gap-1 p-1">
                         <TrayButtons tray={tray} />
                         {gitStatus?.branch && (
-                            <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-mono text-muted ml-auto">
+                            <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-mono text-muted ml-auto shrink-0">
                                 <GitBranch size={12} />
-                                <span title={gitStatus.branch}>{truncateMiddle(gitStatus.branch, 24)}</span>
+                                <span className="whitespace-nowrap" title={gitStatus.branch}>{truncateMiddle(gitStatus.branch, 24)}</span>
+                                {pullRequest && (
+                                    <button
+                                        type="button"
+                                        onClick={() => openUrlInNativeBrowser(pullRequest.url)}
+                                        className="btn flex items-center gap-1 shrink-0 whitespace-nowrap text-primary hover:text-primary/80 transition-colors cursor-pointer"
+                                        title={pullRequest.url}
+                                    >
+                                        <ExternalLink size={11} />
+                                        <span>PR{pullRequest.number ? ` #${pullRequest.number}` : ""}</span>
+                                    </button>
+                                )}
                             </div>
                         )}
                         {selectedModel && onModelChange && (
-                            <div className={cx(!gitStatus?.branch && "ml-auto")}>
+                            <div className={cx("shrink-0", !gitStatus?.branch && "ml-auto")}>
                                 <ModelPicker value={selectedModel} onChange={onModelChange} />
                             </div>
                         )}

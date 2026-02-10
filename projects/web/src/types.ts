@@ -201,4 +201,5 @@ export interface Task {
     closed?: boolean
     cancelledPlanEventId?: string // ID of plan user explicitly cancelled (exits plan mode)
     enabledMcpServerIds?: string[] // IDs of MCP servers enabled for this task
+    pullRequest?: { url: string; number?: number; provider: "github" | "gitlab" | "other" } // Associated PR
 }

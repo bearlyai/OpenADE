@@ -42,6 +42,12 @@ export interface TaskMetadata {
     cancelledPlanEventId?: string
     /** IDs of MCP servers enabled for this task */
     enabledMcpServerIds?: string[]
+    /** Associated pull request info (set after push) */
+    pullRequest?: {
+        url: string
+        number?: number
+        provider: "github" | "gitlab" | "other"
+    }
 }
 
 /**
@@ -192,6 +198,7 @@ export function taskFromStore(store: TaskStore): Task {
         closed: meta.closed,
         cancelledPlanEventId: meta.cancelledPlanEventId,
         enabledMcpServerIds: meta.enabledMcpServerIds,
+        pullRequest: meta.pullRequest,
         events: store.events.all(),
         comments: store.comments.all(),
         deviceEnvironments: store.deviceEnvironments.all(),

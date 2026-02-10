@@ -1,4 +1,4 @@
-import { FileText, HelpCircle, Play, RefreshCw } from "lucide-react"
+import { ArrowUpFromLine, FileText, GitCommit, HelpCircle, Play, RefreshCw } from "lucide-react"
 import { observer } from "mobx-react"
 import { useMemo } from "react"
 import { useCodeStore } from "../../store/context"
@@ -17,7 +17,7 @@ interface ActionEventItemProps extends BaseEventItemProps {
     readOnlyComments?: boolean
 }
 
-function getEventIcon(sourceType: ActionEvent["source"]["type"]) {
+function getEventIcon(sourceType: ActionEvent["source"]["type"], userLabel?: string) {
     switch (sourceType) {
         case "plan":
             return { icon: <FileText size="1em" className="flex-shrink-0 text-primary" />, label: "Plan" }
@@ -26,6 +26,10 @@ function getEventIcon(sourceType: ActionEvent["source"]["type"]) {
         case "ask":
             return { icon: <HelpCircle size="1em" className="flex-shrink-0 text-info" />, label: "Ask" }
         default:
+            if (userLabel === "Commit")
+                return { icon: <GitCommit size="1em" className="flex-shrink-0 text-muted" />, label: "Commit" }
+            if (userLabel === "Push")
+                return { icon: <ArrowUpFromLine size="1em" className="flex-shrink-0 text-muted" />, label: "Push" }
             return { icon: <Play size="1em" className="flex-shrink-0 text-success" />, label: "Do" }
     }
 }
@@ -37,7 +41,7 @@ function isPlanOrRevise(event: ActionEvent): boolean {
 export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: ActionEventItemProps) => {
     const codeStore = useCodeStore()
     const isPlan = isPlanOrRevise(event)
-    const { icon, label } = getEventIcon(event.source.type)
+    const { icon, label } = getEventIcon(event.source.type, event.source.userLabel)
 
     const hasCustomLabel = event.source.type !== "do"
 

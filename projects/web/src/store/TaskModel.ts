@@ -258,6 +258,18 @@ export class TaskModel {
         return this.gitStatus?.hasChanges ?? false
     }
 
+    get aheadCount(): number {
+        return this.gitStatus?.ahead ?? 0
+    }
+
+    get hasGhCli(): boolean {
+        return this.environment?.hasGhCli ?? false
+    }
+
+    get pullRequest(): { url: string; number?: number; provider: "github" | "gitlab" | "other" } | undefined {
+        return this.task?.pullRequest
+    }
+
     // === Event models ===
 
     get events(): EventModel[] {

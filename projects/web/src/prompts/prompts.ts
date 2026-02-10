@@ -208,10 +208,35 @@ const COMMIT_PROMPT = `Review the current git working tree and create a commit f
 
 This is a one-time commit request. Do not continue committing after this unless explicitly asked.`
 
+function buildPushPrompt(hasGhCli: boolean): string {
+    const ghSection = hasGhCli
+        ? `After pushing, check for an existing pull request:
+- Run \`gh pr view --json url,number\` to check if a PR already exists for this branch
+- If a PR exists, output its URL
+- If no PR exists and this is not the repository's default branch, create one:
+  1. Review the commit log for this branch (e.g. \`git log --oneline main..HEAD\`) to understand the full scope of changes
+  2. Write a concise, descriptive PR title that summarizes the overall change (not just the last commit)
+  3. Write a well-structured PR body in markdown with: a summary section describing what changed and why, and a bulleted list of the key changes derived from the commit history
+  4. Run \`gh pr create --title "<title>" --body "<body>"\`
+  5. Output the created PR URL`
+        : `After pushing, check the output for any pull request URL provided by the remote and output it if present.`
+
+    return `Push the current branch to the remote.
+
+- Run \`git push\` to push all commits
+- If push fails because there is no upstream, run \`git push --set-upstream origin <current-branch>\`
+- If push fails for any other reason, explain the error clearly and stop
+
+${ghSection}
+
+Do not make any code changes, commits, or other git operations beyond pushing and PR creation.`
+}
+
 export const ACTION_PROMPTS = {
     retry: RETRY_PROMPT,
     commit: COMMIT_PROMPT,
-} as const
+    push: buildPushPrompt,
+}
 
 // =============================================================================
 // Mode Reminders (prepended to user messages)

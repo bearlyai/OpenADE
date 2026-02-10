@@ -170,11 +170,16 @@ export class TaskEnvironment {
         })
     }
 
+    get hasGhCli(): boolean {
+        return this.gitInfo?.hasGhCli ?? false
+    }
+
     async getGitStatus(): Promise<GitStatusResponse> {
         if (!gitApi.isAvailable()) {
             return {
                 branch: null,
                 headCommit: "",
+                ahead: null,
                 hasChanges: false,
                 staged: { files: [], patch: "", stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
                 unstaged: { files: [], patch: "", stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
@@ -187,6 +192,7 @@ export class TaskEnvironment {
             return {
                 branch: null,
                 headCommit: "",
+                ahead: null,
                 hasChanges: false,
                 staged: { files: [], patch: "", stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
                 unstaged: { files: [], patch: "", stats: { filesChanged: 0, insertions: 0, deletions: 0 } },

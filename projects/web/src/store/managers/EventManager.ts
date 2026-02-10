@@ -11,11 +11,50 @@
 
 import { exhaustive } from "exhaustive"
 import type { ClaudeStreamEvent } from "../../electronAPI/claude"
+import { extractSDKMessages } from "../../electronAPI/claudeEventTypes"
 import { snapshotsApi } from "../../electronAPI/snapshots"
 import { syncTaskPreviewFromStore, taskFromStore } from "../../persistence"
 import type { ActionEvent, ActionEventSource, GitRefs, ImageAttachment, SnapshotEvent } from "../../types"
 import { ulid } from "../../utils/ulid"
 import type { CodeStore } from "../store"
+
+// PR URL patterns for GitHub and GitLab
+const PR_URL_PATTERNS = [
+    /https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/,
+    /https:\/\/gitlab\.com\/[^/]+\/[^/]+\/-\/merge_requests\/\d+/,
+]
+
+/** Extract a PR URL from LLM execution output */
+function extractPrUrl(events: ClaudeStreamEvent[]): string | null {
+    const sdkMessages = extractSDKMessages(events)
+    for (const msg of sdkMessages) {
+        if (msg.type !== "assistant") continue
+        const message = msg as { message?: { content?: unknown } }
+        if (!message.message?.content || !Array.isArray(message.message.content)) continue
+        const content = message.message.content as Array<{ type: string; text?: string }>
+        for (const block of content) {
+            if (block.type !== "text" || !block.text) continue
+            for (const pattern of PR_URL_PATTERNS) {
+                const match = block.text.match(pattern)
+                if (match) return match[0]
+            }
+        }
+    }
+    return null
+}
+
+/** Parse a PR URL into provider, number, and normalized URL */
+function parsePrUrl(url: string): { url: string; number?: number; provider: "github" | "gitlab" | "other" } {
+    if (url.includes("github.com")) {
+        const match = url.match(/\/pull\/(\d+)/)
+        return { url, number: match ? parseInt(match[1], 10) : undefined, provider: "github" }
+    }
+    if (url.includes("gitlab.com")) {
+        const match = url.match(/\/merge_requests\/(\d+)/)
+        return { url, number: match ? parseInt(match[1], 10) : undefined, provider: "gitlab" }
+    }
+    return { url, provider: "other" }
+}
 
 export class EventManager {
     constructor(private store: CodeStore) {}
@@ -215,6 +254,18 @@ export class EventManager {
             draft.completedAt = now
             draft.result = { success }
         })
+
+        // Extract PR URL from Push action output and save to task metadata
+        const event = taskStore.events.all().find((e) => e.id === eventId)
+        if (event?.type === "action" && event.source.userLabel === "Push" && success) {
+            const prUrl = extractPrUrl(event.execution.events)
+            if (prUrl) {
+                const prInfo = parsePrUrl(prUrl)
+                taskStore.meta.update((draft) => {
+                    draft.pullRequest = prInfo
+                })
+            }
+        }
 
         taskStore.meta.update((draft) => {
             draft.updatedAt = now

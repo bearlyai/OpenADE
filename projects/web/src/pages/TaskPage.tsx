@@ -185,6 +185,7 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
                 editorManager={editorManager}
                 tray={tray}
                 gitStatus={taskModel.gitStatus}
+                pullRequest={taskModel.pullRequest}
                 fileMentionsDir={taskWorkingDir ?? null}
                 slashCommandsDir={taskWorkingDir ?? null}
                 sdkCapabilities={taskModel.sdkCapabilities}

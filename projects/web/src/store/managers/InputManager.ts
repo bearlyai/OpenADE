@@ -10,7 +10,7 @@
  */
 
 import type { LucideIcon } from "lucide-react"
-import { CheckCircle, FileText, GitCommit, MessageCircleQuestion, Play, RefreshCcw, RefreshCw, RotateCcw, Square, X } from "lucide-react"
+import { ArrowUpFromLine, CheckCircle, FileText, GitCommit, MessageCircleQuestion, Play, RefreshCcw, RefreshCw, RotateCcw, Square, X } from "lucide-react"
 import { makeAutoObservable } from "mobx"
 import { track } from "../../analytics"
 import { ACTION_PROMPTS } from "../../prompts/prompts"
@@ -76,6 +76,10 @@ export class InputManager {
 
     private get hasGitWorkingChanges(): boolean {
         return this.taskModel?.hasWorkingChanges ?? false
+    }
+
+    private get hasUnpushedCommits(): boolean {
+        return (this.taskModel?.aheadCount ?? 0) > 0
     }
 
     private get lastActionEvent(): ActionEvent | undefined {
@@ -280,6 +284,26 @@ export class InputManager {
                         taskId: this.taskId,
                         input: { userInput: ACTION_PROMPTS.commit, images: [] },
                         label: "Commit",
+                        includeComments: false,
+                    })
+                },
+            },
+
+            // Push - push unpushed commits to remote (does NOT consume comments)
+            {
+                id: "push",
+                label: `Push ↑${this.taskModel?.aheadCount ?? 0}`,
+                icon: ArrowUpFromLine,
+                order: 101,
+                style: { variant: "neutral" },
+                show: this.hasUnpushedCommits && !this.hasGitWorkingChanges && !this.isWorking,
+                enabled: !this.hasFeedback,
+                action: async () => {
+                    const hasGhCli = this.taskModel?.hasGhCli ?? false
+                    await this.store.execution.executeAction({
+                        taskId: this.taskId,
+                        input: { userInput: ACTION_PROMPTS.push(hasGhCli), images: [] },
+                        label: "Push",
                         includeComments: false,
                     })
                 },

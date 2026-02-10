@@ -35,6 +35,7 @@ export type IsGitDirectoryResponse =
           repoRoot: string
           relativePath: string
           mainBranch: string
+          hasGhCli: boolean
       }
     | {
           isGitDirectory: false
@@ -94,6 +95,9 @@ export interface GitStatusResponse {
     // Git ref info
     branch: string | null // Current branch name (null if detached HEAD)
     headCommit: string // Short SHA of HEAD commit
+
+    // Remote tracking
+    ahead: number | null // Commits ahead of upstream (null if no upstream)
 
     // Working tree status
     hasChanges: boolean
