@@ -79,13 +79,15 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
             {includedComments.length > 0 && <CommentsSection comments={includedComments} variant="submitted" />}
 
             {event.execution.events.length > 0 && (
-                <InlineMessages
-                    events={event.execution.events}
-                    sourceType={event.source.type}
-                    sessionInfo={sessionInfo}
-                    taskId={taskId}
-                    actionEventId={event.id}
-                />
+                <div className="ml-3 border-l-2 border-primary/20">
+                    <InlineMessages
+                        events={event.execution.events}
+                        sourceType={event.source.type}
+                        sessionInfo={sessionInfo}
+                        taskId={taskId}
+                        actionEventId={event.id}
+                    />
+                </div>
             )}
 
             {hasDefunctSessionError && (
