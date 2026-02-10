@@ -19,6 +19,7 @@
 </p>
 
 <p align="center">
+  <a href="https://openade.com">Website</a> •
   <a href="#features">Features</a> •
   <a href="#why-openade">Why OpenADE</a> •
   <a href="#download">Download</a> •
@@ -77,7 +78,7 @@ First-class support for 15+ integrations out of the box: **Linear**, **Notion**,
 ### 🔒 100% Local & Offline
 Your code never leaves your machine. No cloud. No syncing to someone else's servers. Works without an internet connection.
 
-> **Telemetry**: Optional Amplitude/Sentry for high-level feature usage only. Easily disabled in settings.
+> **Telemetry**: Optional anonymous telemetry. Easily disabled in settings.
 
 ### ⌨️ Thoughtful UX
 - **Beautiful drafting input** with rich text and @ mentions
@@ -88,7 +89,7 @@ Your code never leaves your machine. No cloud. No syncing to someone else's serv
 Diff viewer, file browser, fast search, full terminal, and process manager—all without leaving the app.
 
 ### 💳 Uses Your Existing Claude Subscription
-No separate billing. No per-seat licensing. Just bring your Anthropic API key and go.
+No separate billing. No per-seat licensing. Works with your existing Claude Code subscription.
 
 > **Coming soon**: Codex support
 
