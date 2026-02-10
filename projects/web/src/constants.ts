@@ -214,6 +214,15 @@ export function getModelFullId(alias: ClaudeModelId): string {
     return CLAUDE_MODELS.find((m) => m.id === alias)!.fullId
 }
 
+/** Normalize a raw model ID to its display class name (e.g. "Opus", "Sonnet", "Haiku") */
+export function normalizeModelClass(modelId: string): string {
+    const lower = modelId.toLowerCase()
+    if (lower.includes("opus")) return "Opus"
+    if (lower.includes("sonnet")) return "Sonnet"
+    if (lower.includes("haiku")) return "Haiku"
+    return "Other"
+}
+
 /**
  * When true, sets ANTHROPIC_DEFAULT_*_MODEL and CLAUDE_CODE_SUBAGENT_MODEL env vars
  * to force all nested agents/subagents to use the same model as the selected one.

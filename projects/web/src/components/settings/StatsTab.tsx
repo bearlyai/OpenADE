@@ -3,6 +3,7 @@ import { observer } from "mobx-react"
 import { useEffect, useState } from "react"
 import type { RepoItem, TaskPreviewUsage } from "../../persistence/repoStore"
 import type { CodeStore } from "../../store/store"
+import { normalizeModelClass } from "../../constants"
 
 interface MonthStats {
     label: string
@@ -99,7 +100,8 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
             totalCost += u.totalCostUsd
             totalEvents += u.eventCount
             for (const [m, c] of Object.entries(u.costByModel)) {
-                totalByModel[m] = (totalByModel[m] ?? 0) + c
+                const cls = normalizeModelClass(m)
+                totalByModel[cls] = (totalByModel[cls] ?? 0) + c
             }
 
             const { label, sortKey } = formatMonthLabel(task.createdAt)
@@ -114,7 +116,8 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
             month.totalCostUsd += u.totalCostUsd
             month.eventCount += u.eventCount
             for (const [m, c] of Object.entries(u.costByModel)) {
-                month.costByModel[m] = (month.costByModel[m] ?? 0) + c
+                const cls = normalizeModelClass(m)
+                month.costByModel[cls] = (month.costByModel[cls] ?? 0) + c
             }
         }
     }
@@ -141,24 +144,29 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                 <StatCell label="Cost" value={formatCost(totalCost)} />
             </div>
 
-            {/* Token breakdown */}
-            {(totalIn > 0 || totalOut > 0) && (
-                <div className="flex gap-4 text-xs text-muted">
-                    <span>{formatTokens(totalIn)} in</span>
-                    <span>{formatTokens(totalOut)} out</span>
-                </div>
-            )}
-
-            {/* Model costs */}
-            {Object.keys(totalByModel).length > 0 && (
-                <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted">
+            {/* Model costs & token breakdown */}
+            {(Object.keys(totalByModel).length > 0 || totalIn > 0 || totalOut > 0) && (
+                <div className="flex flex-wrap gap-2 text-xs">
                     {Object.entries(totalByModel)
                         .sort((a, b) => b[1] - a[1])
                         .map(([model, cost]) => (
-                            <span key={model}>
-                                {model}: {formatCost(cost)}
-                            </span>
+                            <div key={model} className="bg-base-200 border border-border px-2.5 py-1 flex items-center gap-1.5">
+                                <span className="text-base-content font-medium">{model}</span>
+                                <span className="text-muted">{formatCost(cost)}</span>
+                            </div>
                         ))}
+                    {totalIn > 0 && (
+                        <div className="bg-base-200 border border-border px-2.5 py-1 flex items-center gap-1.5">
+                            <span className="text-base-content font-medium">{formatTokens(totalIn)}</span>
+                            <span className="text-muted">in</span>
+                        </div>
+                    )}
+                    {totalOut > 0 && (
+                        <div className="bg-base-200 border border-border px-2.5 py-1 flex items-center gap-1.5">
+                            <span className="text-base-content font-medium">{formatTokens(totalOut)}</span>
+                            <span className="text-muted">out</span>
+                        </div>
+                    )}
                 </div>
             )}
 
