@@ -1,0 +1,20 @@
+[[process]]
+name = "Install"
+type = "setup"
+command = "yarn install"
+
+[[process]]
+name = "Dev Server"
+type = "daemon"
+command = "yarn dev"
+url = "http://localhost:3000"
+
+[[process]]
+name = "Build"
+type = "task"
+command = "yarn build"
+
+[[process]]
+name = "Typecheck"
+type = "check"
+command = "yarn tsc --noEmit"

@@ -3,720 +3,65 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenADE — Agentic Development Environment</title>
-    <meta name="description" content="Plan, revise, execute. The agentic development environment for devs who don't ship slop. Free, local, open source.">
-    <meta property="og:title" content="OpenADE — Agentic Development Environment">
-    <meta property="og:description" content="Plan, revise, execute. The agentic development environment for devs who don't ship slop.">
-    <meta property="og:url" content="https://openade.com">
+    <title>OpenADE — Open Source AI Coding Agent for Claude Code</title>
+    <meta name="description" content="Open source agentic development environment powered by Claude Code. Plan, revise, and execute AI-assisted code changes with full control. Free, local, no login required.">
+    <link rel="canonical" href="https://openade.com/">
+    <meta name="theme-color" content="#000000">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="OpenADE — Move fast. Break nothing.">
+    <meta property="og:description" content="Open source agentic development environment powered by Claude Code. Plan, revise, and execute AI-assisted code changes with full control.">
+    <meta property="og:url" content="https://openade.com/">
     <meta property="og:type" content="website">
+    <meta property="og:image" content="https://openade.com/og.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="OpenADE — Move fast. Break nothing.">
+    <meta name="twitter:description" content="Open source agentic development environment powered by Claude Code. Free, local, no login required.">
+    <meta name="twitter:image" content="https://openade.com/og.png">
+
+    <meta property="og:site_name" content="OpenADE">
     <link rel="icon" type="image/png" href="/logo.png">
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://api.fontshare.com" crossorigin>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://api.fontshare.com/v2/css?f[]=clash-grotesk@200,300,400,500,600,700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
-    <style>
-        :root {
-            --black: #000000;
-            --white: #ffffff;
-            --gray-50: #f7f7f7;
-            --gray-100: #e8e8e8;
-            --gray-200: #d1d1d1;
-            --gray-300: #a0a0a0;
-            --gray-400: #6b6b6b;
-            --gray-500: #454545;
-            --gray-600: #2a2a2a;
-            --gray-700: #1a1a1a;
-            --gray-800: #111111;
-            --gray-900: #0a0a0a;
-            --orange: oklch(0.702 0.191 41.6);
-            --orange-glow: oklch(0.702 0.191 41.6 / 0.15);
-            --orange-dim: oklch(0.702 0.191 41.6 / 0.6);
-            --green: oklch(0.72 0.22 142);
-            --blue: oklch(0.62 0.19 250);
-        }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        html {
-            scroll-behavior: smooth;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-        }
-
-        body {
-            font-family: 'Clash Grotesk', system-ui, sans-serif;
-            background: var(--black);
-            color: var(--gray-200);
-            line-height: 1.6;
-            overflow-x: hidden;
-        }
-
-        ::selection {
-            background: var(--orange);
-            color: var(--black);
-        }
-
-        /* ─── Noise texture overlay ─── */
-        body::before {
-            content: '';
-            position: fixed;
-            inset: 0;
-            z-index: 9999;
-            pointer-events: none;
-            opacity: 0.025;
-            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-            background-repeat: repeat;
-            background-size: 256px 256px;
-        }
-
-        /* ─── Nav ─── */
-        nav {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            z-index: 100;
-            padding: 0 2rem;
-            height: 56px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            background: rgba(0, 0, 0, 0.8);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-        }
-
-        .nav-left {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-        }
-
-        .nav-logo {
-            width: 28px;
-            height: 28px;
-        }
-
-        .nav-wordmark {
-            font-weight: 600;
-            font-size: 1.05rem;
-            color: var(--white);
-            letter-spacing: -0.01em;
-        }
-
-        .nav-right {
-            display: flex;
-            align-items: center;
-            gap: 1.5rem;
-        }
-
-        .nav-link {
-            color: var(--gray-400);
-            text-decoration: none;
-            font-size: 0.85rem;
-            font-weight: 500;
-            transition: color 0.15s;
-        }
-
-        .nav-link:hover {
-            color: var(--white);
-        }
-
-        .nav-gh {
-            display: flex;
-            align-items: center;
-            gap: 0.4rem;
-        }
-
-        .nav-gh svg {
-            width: 18px;
-            height: 18px;
-            fill: currentColor;
-        }
-
-        /* ─── Hero ─── */
-        .hero {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            text-align: center;
-            padding: 8rem 2rem 4rem;
-            position: relative;
-        }
-
-        /* Subtle radial glow behind hero */
-        .hero::before {
-            content: '';
-            position: absolute;
-            top: 10%;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 800px;
-            height: 600px;
-            background: radial-gradient(ellipse, var(--orange-glow) 0%, transparent 70%);
-            pointer-events: none;
-            z-index: 0;
-        }
-
-        .hero > * {
-            position: relative;
-            z-index: 1;
-        }
-
-        .hero h1 {
-            font-size: clamp(3rem, 8vw, 6rem);
-            font-weight: 700;
-            color: var(--white);
-            line-height: 1.05;
-            letter-spacing: -0.035em;
-            max-width: 800px;
-            margin-bottom: 1.5rem;
-        }
-
-        .hero h1 span {
-            color: var(--orange);
-        }
-
-        .hero-sub {
-            font-size: clamp(1.05rem, 2vw, 1.25rem);
-            color: var(--gray-400);
-            max-width: 540px;
-            margin-bottom: 3rem;
-            line-height: 1.65;
-            font-weight: 400;
-        }
-
-        .hero-ctas {
-            display: flex;
-            gap: 0.75rem;
-            align-items: center;
-            flex-wrap: wrap;
-            justify-content: center;
-        }
-
-        /* ─── Buttons ─── */
-        .btn-primary {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.6rem;
-            padding: 0.8rem 1.8rem;
-            background: var(--orange);
-            color: var(--black);
-            font-family: inherit;
-            font-size: 0.95rem;
-            font-weight: 600;
-            text-decoration: none;
-            border: none;
-            cursor: pointer;
-            transition: all 0.15s;
-            letter-spacing: -0.01em;
-        }
-
-        .btn-primary:hover {
-            filter: brightness(1.1);
-            transform: translateY(-1px);
-        }
-
-        .btn-primary:active {
-            transform: translateY(0);
-        }
-
-        .btn-primary svg {
-            width: 18px;
-            height: 18px;
-        }
-
-        .btn-secondary {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.8rem 1.6rem;
-            background: transparent;
-            color: var(--gray-300);
-            font-family: inherit;
-            font-size: 0.95rem;
-            font-weight: 500;
-            text-decoration: none;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-
-        .btn-secondary:hover {
-            border-color: rgba(255, 255, 255, 0.2);
-            color: var(--white);
-            background: rgba(255, 255, 255, 0.03);
-        }
-
-        .btn-secondary svg {
-            width: 18px;
-            height: 18px;
-            fill: currentColor;
-        }
-
-        .hero-meta {
-            margin-top: 2rem;
-            display: flex;
-            gap: 1.5rem;
-            font-size: 0.78rem;
-            color: var(--gray-500);
-            font-weight: 400;
-        }
-
-        .hero-meta span {
-            display: flex;
-            align-items: center;
-            gap: 0.35rem;
-        }
-
-        /* ─── Dictionary card ─── */
-        .dict-card {
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            background: rgba(255, 255, 255, 0.02);
-            padding: 0.6rem 1.2rem;
-            margin-bottom: 2rem;
-            display: inline-flex;
-            flex-direction: column;
-            gap: 0.2rem;
-        }
-
-        .dict-top {
-            display: flex;
-            align-items: baseline;
-            gap: 0.6rem;
-        }
-
-        .dict-word {
-            font-size: 1rem;
-            font-weight: 700;
-            color: var(--white);
-            letter-spacing: -0.02em;
-        }
-
-        .dict-phonetic {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.7rem;
-            color: var(--gray-500);
-        }
-
-        .dict-pos {
-            font-size: 0.7rem;
-            font-style: italic;
-            color: var(--gray-500);
-        }
-
-        .dict-def {
-            font-size: 0.82rem;
-            color: var(--gray-300);
-            line-height: 1.4;
-        }
-
-        .dict-def strong {
-            color: var(--orange);
-            font-weight: 600;
-        }
-
-        /* ─── Screenshot ─── */
-        .screenshot-section {
-            padding: 0 2rem 6rem;
-            display: flex;
-            justify-content: center;
-        }
-
-        .screenshot-img-wrap {
-            max-width: 1100px;
-            width: 100%;
-        }
-
-        .screenshot-img {
-            width: 100%;
-            height: auto;
-            display: block;
-        }
-
-        /* ─── Powered by ─── */
-        .powered-by {
-            padding: 5rem 2rem 6rem;
-        }
-
-        .powered-by-inner {
-            max-width: 960px;
-            margin: 0 auto;
-        }
-
-        .powered-by-header {
-            margin-bottom: 3rem;
-        }
-
-        .powered-by-sub {
-            font-size: 1.05rem;
-            color: var(--gray-400);
-            line-height: 1.7;
-        }
-
-        .powered-by-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 1px;
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid rgba(255, 255, 255, 0.06);
-        }
-
-        .powered-by-item {
-            background: var(--black);
-            padding: 2rem;
-            display: flex;
-            gap: 1rem;
-            align-items: flex-start;
-        }
-
-        .powered-by-icon {
-            flex-shrink: 0;
-            color: var(--orange);
-            margin-top: 0.1rem;
-        }
-
-        .powered-by-title {
-            font-size: 0.95rem;
-            font-weight: 600;
-            color: var(--white);
-            margin-bottom: 0.4rem;
-            letter-spacing: -0.01em;
-        }
-
-        .powered-by-desc {
-            font-size: 0.85rem;
-            color: var(--gray-400);
-            line-height: 1.6;
-        }
-
-        /* ─── Workflow section ─── */
-        .workflow {
-            padding: 6rem 2rem;
-            max-width: 960px;
-            margin: 0 auto;
-        }
-
-        .section-label {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.75rem;
-            font-weight: 500;
-            color: var(--orange);
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            margin-bottom: 1rem;
-        }
-
-        .section-title {
-            font-size: clamp(1.8rem, 4vw, 2.6rem);
-            font-weight: 700;
-            color: var(--white);
-            letter-spacing: -0.03em;
-            line-height: 1.15;
-            margin-bottom: 1.25rem;
-        }
-
-        .section-desc {
-            font-size: 1.05rem;
-            color: var(--gray-400);
-            max-width: 600px;
-            line-height: 1.7;
-            margin-bottom: 3.5rem;
-        }
-
-        .workflow-steps {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 1px;
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid rgba(255, 255, 255, 0.06);
-        }
-
-        .workflow-step {
-            background: var(--black);
-            padding: 2rem;
-        }
-
-        .step-number {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.7rem;
-            color: var(--orange-dim);
-            margin-bottom: 1rem;
-            letter-spacing: 0.05em;
-        }
-
-        .step-title {
-            font-size: 1.2rem;
-            font-weight: 600;
-            color: var(--white);
-            margin-bottom: 0.65rem;
-            letter-spacing: -0.01em;
-        }
-
-        .step-desc {
-            font-size: 0.88rem;
-            color: var(--gray-400);
-            line-height: 1.6;
-        }
-
-        /* ─── Features ─── */
-        .features {
-            padding: 6rem 2rem;
-            max-width: 960px;
-            margin: 0 auto;
-        }
-
-        .features-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 1px;
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid rgba(255, 255, 255, 0.06);
-        }
-
-        .feature {
-            background: var(--black);
-            padding: 2rem;
-        }
-
-        .feature-icon {
-            font-size: 1.25rem;
-            margin-bottom: 0.85rem;
-        }
-
-        .feature-title {
-            font-size: 1rem;
-            font-weight: 600;
-            color: var(--white);
-            margin-bottom: 0.45rem;
-            letter-spacing: -0.01em;
-        }
-
-        .feature-desc {
-            font-size: 0.85rem;
-            color: var(--gray-400);
-            line-height: 1.6;
-        }
-
-        /* ─── Second screenshot ─── */
-        .screenshot-section-2 {
-            padding: 4rem 2rem 6rem;
-            display: flex;
-            justify-content: center;
-        }
-
-        /* ─── Download ─── */
-        .download {
-            padding: 6rem 2rem;
-            text-align: center;
-            position: relative;
-        }
-
-        .download::before {
-            content: '';
-            position: absolute;
-            bottom: 20%;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 600px;
-            height: 400px;
-            background: radial-gradient(ellipse, var(--orange-glow) 0%, transparent 70%);
-            pointer-events: none;
-        }
-
-        .download > * {
-            position: relative;
-            z-index: 1;
-        }
-
-        .download-title {
-            font-size: clamp(1.8rem, 4vw, 2.6rem);
-            font-weight: 700;
-            color: var(--white);
-            letter-spacing: -0.03em;
-            margin-bottom: 0.75rem;
-        }
-
-        .download-sub {
-            font-size: 1rem;
-            color: var(--gray-400);
-            margin-bottom: 2.5rem;
-        }
-
-        .download-buttons {
-            display: flex;
-            gap: 0.75rem;
-            justify-content: center;
-            flex-wrap: wrap;
-            margin-bottom: 2rem;
-        }
-
-        .dl-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.6rem;
-            padding: 0.75rem 1.5rem;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            background: rgba(255, 255, 255, 0.03);
-            color: var(--gray-200);
-            font-family: inherit;
-            font-size: 0.9rem;
-            font-weight: 500;
-            text-decoration: none;
-            transition: all 0.15s;
-        }
-
-        .dl-btn:hover {
-            border-color: rgba(255, 255, 255, 0.2);
-            background: rgba(255, 255, 255, 0.06);
-            color: var(--white);
-        }
-
-        .dl-btn.recommended {
-            border-color: var(--orange);
-            background: rgba(255, 165, 0, 0.06);
-            color: var(--white);
-        }
-
-        .dl-btn.recommended:hover {
-            background: rgba(255, 165, 0, 0.1);
-        }
-
-        .dl-btn svg {
-            width: 18px;
-            height: 18px;
-        }
-
-
-        /* ─── Footer ─── */
-        footer {
-            padding: 3rem 2rem;
-            border-top: 1px solid rgba(255, 255, 255, 0.06);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            max-width: 1100px;
-            margin: 0 auto;
-            flex-wrap: wrap;
-            gap: 1rem;
-        }
-
-        .footer-left {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            font-size: 0.8rem;
-            color: var(--gray-500);
-        }
-
-        .footer-left a {
-            color: var(--gray-400);
-            text-decoration: none;
-            transition: color 0.15s;
-        }
-
-        .footer-left a:hover {
-            color: var(--orange);
-        }
-
-        .footer-right {
-            display: flex;
-            gap: 1.25rem;
-        }
-
-        .footer-link {
-            color: var(--gray-500);
-            text-decoration: none;
-            font-size: 0.8rem;
-            transition: color 0.15s;
-        }
-
-        .footer-link:hover {
-            color: var(--gray-300);
-        }
-
-        /* ─── Animations ─── */
-        @keyframes fade-up {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .animate-in {
-            animation: fade-up 0.6s ease-out forwards;
-            opacity: 0;
-        }
-
-        .delay-1 { animation-delay: 0.1s; }
-        .delay-2 { animation-delay: 0.2s; }
-        .delay-3 { animation-delay: 0.3s; }
-        .delay-4 { animation-delay: 0.4s; }
-        .delay-5 { animation-delay: 0.5s; }
-
-        /* ─── Responsive ─── */
-        @media (max-width: 768px) {
-            nav {
-                padding: 0 1.25rem;
-            }
-
-            .hero {
-                padding: 4.5rem 1.5rem 2rem;
-            }
-
-            .powered-by-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .workflow-steps {
-                grid-template-columns: 1fr;
-            }
-
-            .features-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .hero-meta {
-                flex-direction: column;
-                gap: 0.5rem;
-                align-items: center;
-            }
-
-            .download-buttons {
-                flex-direction: column;
-                align-items: center;
-            }
-
-            footer {
-                flex-direction: column;
-                text-align: center;
-            }
-        }
-
-        /* ─── Scroll reveal ─── */
-        .reveal {
-            opacity: 0;
-            transform: translateY(30px);
-            transition: opacity 0.7s ease, transform 0.7s ease;
-        }
-
-        .reveal.visible {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    </style>
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "OpenADE",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "macOS, Linux, Windows",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "description": "Open source agentic development environment powered by Claude Code. Plan, revise, and execute AI-assisted code changes with full control.",
+      "url": "https://openade.com",
+      "downloadUrl": "https://github.com/bearlyai/OpenADE/releases",
+      "license": "https://opensource.org/licenses/MIT",
+      "author": {
+        "@type": "Organization",
+        "name": "Bearly AI",
+        "url": "https://bearly.ai"
+      },
+      "sourceOrganization": {
+        "@type": "Organization",
+        "name": "Bearly AI",
+        "url": "https://bearly.ai"
+      }
+    }
+    </script>
 </head>
 <body>
 
@@ -730,7 +75,7 @@
             <a href="#download" class="nav-link">Download</a>
             <a href="https://discord.gg/EE8PHSpryH" class="nav-link" target="_blank" rel="noopener">Discord</a>
             <a href="https://github.com/bearlyai/OpenADE" class="nav-link nav-gh" target="_blank" rel="noopener">
-                <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
                 GitHub
             </a>
         </div>
@@ -761,7 +106,7 @@
                 <span id="hero-download-text">Download for Free</span>
             </a>
             <a href="https://github.com/bearlyai/OpenADE" class="btn-secondary" target="_blank" rel="noopener">
-                <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
                 Star on GitHub
             </a>
         </div>
@@ -783,7 +128,7 @@
     </section>
 
     <!-- Powered by -->
-    <section class="powered-by reveal">
+    <section class="powered-by reveal" aria-label="Powered by Claude Code">
         <div class="powered-by-inner">
             <div class="powered-by-header">
                 <div class="section-label">Under the hood</div>
@@ -825,12 +170,12 @@
     <!-- Screenshot -->
     <section class="screenshot-section">
         <div class="screenshot-img-wrap reveal">
-            <img src="./app.png" alt="OpenADE application screenshot" class="screenshot-img">
+            <img src="/app.png" alt="OpenADE application screenshot" class="screenshot-img">
         </div>
     </section>
 
     <!-- Workflow -->
-    <section class="workflow reveal" id="workflow">
+    <section class="workflow reveal" id="workflow" aria-label="How OpenADE works">
         <div class="section-label">How it works</div>
         <h2 class="section-title">Plan → Revise → Execute</h2>
         <p class="section-desc">
@@ -857,7 +202,7 @@
     </section>
 
     <!-- Features -->
-    <section class="features reveal" id="features">
+    <section class="features reveal" id="features" aria-label="OpenADE features">
         <div class="section-label">Built for devs</div>
         <h2 class="section-title">Everything you need. Nothing you don't.</h2>
         <p class="section-desc">
@@ -917,18 +262,18 @@
     </section>
 
     <!-- Download -->
-    <section class="download reveal" id="download">
+    <section class="download reveal" id="download" aria-label="Download OpenADE">
         <div class="section-label">Get started</div>
         <h2 class="download-title">Download OpenADE</h2>
         <p class="download-sub">Free and open source. Always.</p>
 
         <div class="download-buttons">
             <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.52.0/OpenADE-0.52.0-universal.dmg" class="dl-btn" id="dl-mac">
-                <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+                <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/></svg>
                 macOS
             </a>
             <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.52.0/OpenADE-0.52.0-arm64.AppImage" class="dl-btn" id="dl-linux">
-                <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12.504 0c-.155 0-.311.015-.466.045a3.581 3.581 0 00-.634.177 3.462 3.462 0 00-.577.287 3.29 3.29 0 00-.494.378c-.163.15-.31.32-.44.504-.131.186-.243.39-.334.607a3.537 3.537 0 00-.213.644 3.643 3.643 0 00-.09.67c0 .108.004.215.012.321.008.107.022.213.042.317l.016.075c.009.04.019.08.03.12.011.038.023.077.037.114l.045.114c.017.038.035.076.054.113l.063.111.073.108.082.104c.03.035.061.069.093.102l.102.094c.036.032.073.063.111.092.039.03.078.058.118.085l.124.073.129.06.133.048.136.036.138.024.138.012c.047 0 .093-.002.14-.006l.136-.018.133-.03.128-.042c.042-.015.083-.032.124-.051l.117-.064.112-.076c.036-.027.072-.056.106-.087l.1-.096.093-.105.085-.113.076-.12.067-.126c.021-.043.04-.087.058-.131l.046-.135.035-.137.024-.137c.008-.047.014-.094.018-.14l.006-.14a3.61 3.61 0 00-.088-.672 3.535 3.535 0 00-.214-.645 3.382 3.382 0 00-.335-.606 3.284 3.284 0 00-.44-.504 3.303 3.303 0 00-.494-.378 3.455 3.455 0 00-.577-.287 3.585 3.585 0 00-.634-.177A3.574 3.574 0 0012.504 0zm3.39 7.862c-.072.04-.148.074-.228.1l-.244.072a7.06 7.06 0 01-.495.1 8.35 8.35 0 01-.548.067 10.3 10.3 0 01-.604.033L12.5 8.25l-.775-.017a10.3 10.3 0 01-.604-.033 8.35 8.35 0 01-.548-.067 7.06 7.06 0 01-.495-.1l-.244-.072a2.2 2.2 0 01-.228-.1L7.5 17.25h9l-1.606-9.388zM6 18.75L5.25 24h13.5L18 18.75H6z"/></svg>
+                <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12.504 0c-.155 0-.315.008-.48.021-4.226.333-3.105 4.807-3.17 6.298-.076 1.092-.3 1.953-1.05 3.02-.885 1.051-2.127 2.75-2.716 4.521-.278.832-.41 1.684-.287 2.489a.424.424 0 00-.11.135c-.26.268-.45.6-.663.839-.199.199-.485.267-.797.4-.313.136-.658.269-.864.68-.09.189-.136.394-.132.602 0 .199.027.4.055.536.058.399.116.728.04.97-.249.68-.28 1.145-.106 1.484.174.334.535.47.94.601.81.2 1.91.135 2.774.6.926.466 1.866.67 2.616.47.526-.116.97-.464 1.208-.946.587-.003 1.23-.269 2.26-.334.699-.058 1.574.267 2.577.2.025.134.063.198.114.333l.003.003c.391.778 1.113 1.132 1.884 1.071.771-.06 1.592-.536 2.257-1.306.631-.765 1.683-1.084 2.378-1.503.348-.199.629-.469.649-.853.023-.4-.2-.811-.714-1.376v-.097l-.003-.003c-.17-.2-.25-.535-.338-.926-.085-.401-.182-.786-.492-1.046h-.003c-.059-.054-.123-.067-.188-.135a.357.357 0 00-.19-.064c.431-1.278.264-2.55-.173-3.694-.533-1.41-1.465-2.638-2.175-3.483-.796-1.005-1.576-1.957-1.56-3.368.026-2.152.236-6.133-3.544-6.139zm.529 3.405h.013c.213 0 .396.062.584.198.19.135.33.332.438.533.105.259.158.459.166.724 0-.02.006-.04.006-.06v.105a.086.086 0 01-.004-.021l-.004-.024a1.807 1.807 0 01-.15.706.953.953 0 01-.213.335.71.71 0 00-.088-.042c-.104-.045-.198-.064-.284-.133a1.312 1.312 0 00-.22-.066c.05-.06.146-.133.183-.198.053-.128.082-.264.088-.402v-.02a1.21 1.21 0 00-.061-.4c-.045-.134-.101-.2-.183-.333-.084-.066-.167-.132-.267-.132h-.016c-.093 0-.176.03-.262.132a.8.8 0 00-.205.334 1.18 1.18 0 00-.09.4v.019c.002.089.008.179.02.267-.193-.067-.438-.135-.607-.202a1.635 1.635 0 01-.018-.2v-.02a1.772 1.772 0 01.15-.768c.082-.22.232-.406.43-.533a.985.985 0 01.594-.2zm-2.962.059h.036c.142 0 .27.048.399.135.146.129.264.288.344.465.09.199.14.4.153.667v.004c.007.134.006.2-.002.266v.08c-.03.007-.056.018-.083.024-.152.055-.274.135-.393.2.012-.09.013-.18.003-.267v-.015c-.012-.133-.04-.2-.082-.333a.613.613 0 00-.166-.267.248.248 0 00-.183-.064h-.021c-.071.006-.13.04-.186.132a.552.552 0 00-.12.27.944.944 0 00-.023.33v.015c.012.135.037.2.08.334.046.134.098.2.166.268.01.009.02.018.034.024-.07.057-.117.07-.176.136a.304.304 0 01-.131.068 2.62 2.62 0 01-.275-.402 1.772 1.772 0 01-.155-.667 1.759 1.759 0 01.08-.668 1.43 1.43 0 01.283-.535c.128-.133.26-.2.418-.2zm1.37 1.706c.332 0 .733.065 1.216.399.293.2.523.269 1.052.468h.003c.255.136.405.266.478.399v-.131a.571.571 0 01.016.47c-.123.31-.516.643-1.063.842v.002c-.268.135-.501.333-.775.465-.276.135-.588.292-1.012.267a1.139 1.139 0 01-.448-.067 3.566 3.566 0 01-.322-.198c-.195-.135-.363-.332-.612-.465v-.005h-.005c-.4-.246-.616-.512-.686-.71-.07-.268-.005-.47.193-.6.224-.135.38-.271.483-.336.104-.074.143-.102.176-.131h.002v-.003c.169-.202.436-.47.839-.601.139-.036.294-.065.466-.065zm2.8 2.142c.358 1.417 1.196 3.475 1.735 4.473.286.534.855 1.659 1.102 3.024.156-.005.33.018.513.064.646-1.671-.546-3.467-1.089-3.966-.22-.2-.232-.335-.123-.335.59.534 1.365 1.572 1.646 2.757.13.535.16 1.104.021 1.67.067.028.135.06.205.067 1.032.534 1.413.938 1.23 1.537v-.043c-.06-.003-.12 0-.18 0h-.016c.151-.467-.182-.825-1.065-1.224-.915-.4-1.646-.336-1.77.465-.008.043-.013.066-.018.135-.068.023-.139.053-.209.064-.43.268-.662.669-.793 1.187-.13.533-.17 1.156-.205 1.869v.003c-.02.334-.17.838-.319 1.35-1.5 1.072-3.58 1.538-5.348.334a2.645 2.645 0 00-.402-.533 1.45 1.45 0 00-.275-.333c.182 0 .338-.03.465-.067a.615.615 0 00.314-.334c.108-.267 0-.697-.345-1.163-.345-.467-.931-.995-1.788-1.521-.63-.4-.986-.87-1.15-1.396-.165-.534-.143-1.085-.015-1.645.245-1.07.873-2.11 1.274-2.763.107-.065.037.135-.408.974-.396.751-1.14 2.497-.122 3.854a8.123 8.123 0 01.647-2.876c.564-1.278 1.743-3.504 1.836-5.268.048.036.217.135.289.202.218.133.38.333.59.465.21.201.477.335.876.335.039.003.075.006.11.006.412 0 .73-.134.997-.268.29-.134.52-.334.74-.4h.005c.467-.135.835-.402 1.044-.7zm2.185 8.958c.037.6.343 1.245.882 1.377.588.134 1.434-.333 1.791-.765l.211-.01c.315-.007.577.01.847.268l.003.003c.208.199.305.53.391.876.085.4.154.78.409 1.066.486.527.645.906.636 1.14l.003-.007v.018l-.003-.012c-.015.262-.185.396-.498.595-.63.401-1.746.712-2.457 1.57-.618.737-1.37 1.14-2.036 1.191-.664.053-1.237-.2-1.574-.898l-.005-.003c-.21-.4-.12-1.025.056-1.69.176-.668.428-1.344.463-1.897.037-.714.076-1.335.195-1.814.12-.465.308-.797.641-.984l.045-.022zm-10.814.049h.01c.053 0 .105.005.157.014.376.055.706.333 1.023.752l.91 1.664.003.003c.243.533.754 1.064 1.189 1.637.434.598.77 1.131.729 1.57v.006c-.057.744-.48 1.148-1.125 1.294-.645.135-1.52.002-2.395-.464-.968-.536-2.118-.469-2.857-.602-.369-.066-.61-.2-.723-.4-.11-.2-.113-.602.123-1.23v-.004l.002-.003c.117-.334.03-.752-.027-1.118-.055-.401-.083-.71.043-.94.16-.334.396-.4.69-.533.294-.135.64-.202.915-.47h.002v-.002c.256-.268.445-.601.668-.838.19-.201.38-.336.663-.336zm7.159-9.074c-.435.201-.945.535-1.488.535-.542 0-.97-.267-1.28-.466-.154-.134-.28-.268-.373-.335-.164-.134-.144-.333-.074-.333.109.016.129.134.199.2.096.066.215.2.36.333.292.2.68.467 1.167.467.485 0 1.053-.267 1.398-.466.195-.135.445-.334.648-.467.156-.136.149-.267.279-.267.128.016.034.134-.147.332a8.097 8.097 0 01-.69.468zm-1.082-1.583V5.64c-.006-.02.013-.042.029-.05.074-.043.18-.027.26.004.063 0 .16.067.15.135-.006.049-.085.066-.135.066-.055 0-.092-.043-.141-.068-.052-.018-.146-.008-.163-.065zm-.551 0c-.02.058-.113.049-.166.066-.047.025-.086.068-.14.068-.05 0-.13-.02-.136-.068-.01-.066.088-.133.15-.133.08-.031.184-.047.259-.005.019.009.036.03.03.05v.02h.003z"/></svg>
                 Linux
             </a>
             <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.52.0/OpenADE-Setup-0.52.0.exe" class="dl-btn" id="dl-windows">
@@ -954,66 +299,7 @@
         </div>
     </footer>
 
-    <script>
-        // ─── OS Detection & Download CTA ───
-        (function() {
-            const ua = navigator.userAgent.toLowerCase();
-            const platform = navigator.platform?.toLowerCase() || '';
-            let os = 'unknown';
-
-            if (ua.includes('mac') || platform.includes('mac')) {
-                os = 'mac';
-            } else if (ua.includes('win') || platform.includes('win')) {
-                os = 'windows';
-            } else if (ua.includes('linux') || platform.includes('linux')) {
-                os = 'linux';
-            }
-
-            const links = {
-                mac: 'https://github.com/bearlyai/OpenADE/releases/download/v0.52.0/OpenADE-0.52.0-universal.dmg',
-                linux: 'https://github.com/bearlyai/OpenADE/releases/download/v0.52.0/OpenADE-0.52.0-arm64.AppImage',
-                windows: 'https://github.com/bearlyai/OpenADE/releases/download/v0.52.0/OpenADE-Setup-0.52.0.exe',
-            };
-
-            const labels = {
-                mac: 'Download for macOS',
-                linux: 'Download for Linux',
-                windows: 'Download for Windows',
-            };
-
-            // Update hero CTA
-            const heroBtn = document.getElementById('hero-download-btn');
-            const heroText = document.getElementById('hero-download-text');
-            if (os !== 'unknown' && links[os]) {
-                heroBtn.href = links[os];
-                heroText.textContent = labels[os];
-            }
-
-            // Highlight recommended download button with orange border
-            const recMap = { mac: 'dl-mac', linux: 'dl-linux', windows: 'dl-windows' };
-            if (os !== 'unknown' && recMap[os]) {
-                const btn = document.getElementById(recMap[os]);
-                if (btn) btn.classList.add('recommended');
-            }
-        })();
-
-        // ─── Scroll Reveal ───
-        (function() {
-            const reveals = document.querySelectorAll('.reveal');
-            const observer = new IntersectionObserver(function(entries) {
-                entries.forEach(function(entry) {
-                    if (entry.isIntersecting) {
-                        entry.target.classList.add('visible');
-                        observer.unobserve(entry.target);
-                    }
-                });
-            }, { threshold: 0.1 });
-
-            reveals.forEach(function(el) {
-                observer.observe(el);
-            });
-        })();
-    </script>
+    <script type="module" src="/src/main.ts"></script>
 
 </body>
 </html>
