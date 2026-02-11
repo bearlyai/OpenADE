@@ -9,7 +9,7 @@ import tailwindcss from "@tailwindcss/vite"
 export default defineConfig({
     base: "./", // Relative paths for file:// compatibility in Electron
     server: {
-        port: 1234,
+        port: 7000,
         hmr: false,
     },
     build: {

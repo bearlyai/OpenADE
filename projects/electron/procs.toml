@@ -9,6 +9,11 @@ type = "daemon"
 command = "modd"
 
 [[process]]
+name = "Electron Dev Server"
+type = "daemon"
+command = "npm run start"
+
+[[process]]
 name = "Build"
 type = "task"
 command = "npm run build"
