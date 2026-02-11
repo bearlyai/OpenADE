@@ -111,10 +111,6 @@ Track your throughput. See what's working. Optimize your flow.
 ### 🎨 Fully Themeable
 Dark, light, synthwave, or roll your own. Make it yours.
 
-<p align="center">
-  <img src=".github/themes.png" alt="OpenADE Themes" width="600" />
-</p>
-
 ### 🛠️ Make It Your Own
 Clean architecture. TypeScript throughout. MobX state management. Built to be extended.
 
