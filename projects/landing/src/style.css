@@ -611,6 +611,140 @@ nav {
     height: 18px;
 }
 
+/* ─── Windows experimental section ─── */
+.download-windows-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.6rem;
+    margin-top: 0.5rem;
+}
+
+.dl-btn-experimental {
+    border-style: dashed;
+    border-color: rgba(255, 255, 255, 0.08);
+    color: var(--gray-400);
+}
+
+.dl-btn-experimental:hover {
+    border-color: rgba(255, 255, 255, 0.15);
+    color: var(--gray-200);
+}
+
+.dl-btn-experimental.recommended {
+    border-style: dashed;
+    border-color: var(--orange-dim);
+    background: rgba(255, 165, 0, 0.03);
+    color: var(--gray-200);
+}
+
+.dl-btn-experimental.recommended:hover {
+    background: rgba(255, 165, 0, 0.06);
+}
+
+.experimental-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 0.15rem 0.45rem;
+    border: 1px solid rgba(255, 165, 0, 0.3);
+    color: var(--orange-dim);
+    line-height: 1;
+}
+
+.download-experimental-note {
+    font-size: 0.78rem;
+    color: var(--gray-500);
+    max-width: 360px;
+    text-align: center;
+    line-height: 1.5;
+}
+
+.download-experimental-note a {
+    color: var(--gray-400);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    transition: color 0.15s;
+}
+
+.download-experimental-note a:hover {
+    color: var(--white);
+}
+
+/* ─── Windows warning dialog ─── */
+.windows-dialog {
+    background: var(--gray-800);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--gray-200);
+    padding: 0;
+    max-width: 460px;
+    width: calc(100% - 2rem);
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    margin: 0;
+}
+
+.windows-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+
+.windows-dialog-inner {
+    padding: 2rem;
+}
+
+.windows-dialog-title {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--white);
+    margin-bottom: 1rem;
+    letter-spacing: -0.01em;
+}
+
+.windows-dialog-text {
+    font-size: 0.88rem;
+    color: var(--gray-400);
+    line-height: 1.6;
+    margin-bottom: 0.75rem;
+}
+
+.windows-dialog-text:last-of-type {
+    margin-bottom: 1.5rem;
+}
+
+.windows-dialog-text a {
+    color: var(--orange-dim);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    transition: color 0.15s;
+}
+
+.windows-dialog-text a:hover {
+    color: var(--orange);
+}
+
+.windows-dialog-actions {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.windows-dialog-actions .btn-primary {
+    flex: 1;
+    justify-content: center;
+    font-size: 0.88rem;
+    padding: 0.7rem 1.2rem;
+}
+
+.windows-dialog-actions .btn-secondary {
+    font-size: 0.88rem;
+    padding: 0.7rem 1.2rem;
+}
+
 /* ─── Footer ─── */
 footer {
     padding: 3rem 2rem;
@@ -818,6 +952,20 @@ footer {
     .dl-btn {
         justify-content: center;
         padding: 0.85rem 1.5rem;
+    }
+
+    .download-windows-section {
+        width: 100%;
+    }
+
+    .dl-btn-experimental {
+        width: 100%;
+        justify-content: center;
+        padding: 0.85rem 1.5rem;
+    }
+
+    .windows-dialog-actions {
+        flex-direction: column;
     }
 
     /* ── Footer ── */

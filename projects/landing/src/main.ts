@@ -34,7 +34,12 @@ function setupDownloadLinks() {
   ) as HTMLAnchorElement | null
   const heroText = document.getElementById("hero-download-text")
   if (os !== "unknown" && links[os]) {
-    if (heroBtn) heroBtn.href = links[os]
+    // On Windows, keep hero scrolling to download section so user sees the experimental note
+    if (os === "windows") {
+      if (heroBtn) heroBtn.href = "#download"
+    } else {
+      if (heroBtn) heroBtn.href = links[os]
+    }
     if (heroText) heroText.textContent = labels[os]
   }
 
@@ -48,6 +53,40 @@ function setupDownloadLinks() {
     const btn = document.getElementById(recMap[os])
     if (btn) btn.classList.add("recommended")
   }
+
+  // Windows: intercept download click and show warning dialog
+  setupWindowsWarningDialog()
+}
+
+function setupWindowsWarningDialog() {
+  const windowsBtn = document.getElementById("dl-windows")
+  const dialog = document.getElementById(
+    "windows-warning-dialog"
+  ) as HTMLDialogElement | null
+  const dialogDownload = document.getElementById("windows-dialog-download")
+  const dialogCancel = document.getElementById("windows-dialog-cancel")
+
+  if (!windowsBtn || !dialog) return
+
+  windowsBtn.addEventListener("click", (e) => {
+    e.preventDefault()
+    dialog.showModal()
+  })
+
+  dialogDownload?.addEventListener("click", () => {
+    dialog.close()
+  })
+
+  dialogCancel?.addEventListener("click", () => {
+    dialog.close()
+  })
+
+  // Close on backdrop click
+  dialog.addEventListener("click", (e) => {
+    if (e.target === dialog) {
+      dialog.close()
+    }
+  })
 }
 
 // ─── Scroll Reveal ───

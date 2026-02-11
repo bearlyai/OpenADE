@@ -105,6 +105,19 @@ export function DesktopRequiredPage() {
                                 <Monitor size="1.25rem" />
                                 Download for {getPlatformLabel(detectedPlatform)}
                             </button>
+                            {detectedPlatform === "windows" && (
+                                <p className="text-sm text-muted" style={{ maxWidth: "24rem" }}>
+                                    Windows support is experimental and largely untested — expect rough edges. For a smoother experience, try the Linux build via{" "}
+                                    <button
+                                        type="button"
+                                        onClick={() => openUrlInNativeBrowser("https://learn.microsoft.com/en-us/windows/wsl/")}
+                                        className="text-primary hover:underline"
+                                    >
+                                        WSL
+                                    </button>
+                                    .
+                                </p>
+                            )}
                             <p className="text-sm text-muted">
                                 Also available for{" "}
                                 {otherPlatforms.map((platform, index) => (

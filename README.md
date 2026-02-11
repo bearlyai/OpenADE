@@ -14,7 +14,7 @@
   <a href="https://github.com/bearlyai/OpenADE/releases"><img src="https://img.shields.io/github/v/release/bearlyai/OpenADE?style=flat-square&color=blue" alt="Release"></a>
   <a href="https://github.com/bearlyai/OpenADE/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"></a>
   <a href="https://discord.gg/EE8PHSpryH"><img src="https://img.shields.io/discord/1234567890?style=flat-square&logo=discord&logoColor=white&label=Discord&color=5865F2" alt="Discord"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows%20(experimental)-lightgrey?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/works-offline-orange?style=flat-square" alt="Works Offline">
 </p>
 
@@ -40,8 +40,22 @@
 <p align="center">
   <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.53.0/OpenADE-0.53.0-universal.dmg"><img src="https://img.shields.io/badge/macOS-Universal-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS"></a>
   <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.53.0/OpenADE-0.53.0-arm64.AppImage"><img src="https://img.shields.io/badge/Linux-arm64-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux"></a>
-  <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.53.0/OpenADE-Setup-0.53.0.exe"><img src="https://img.shields.io/badge/Windows-x64-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows"></a>
 </p>
+
+<details>
+<summary><strong>🪟 Windows (Experimental)</strong></summary>
+
+<br>
+
+Windows support is early and largely untested — you will likely hit rough edges. If you're patient and willing to report bugs, we'd love your help shaking things out:
+
+<p align="center">
+  <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.53.0/OpenADE-Setup-0.53.0.exe"><img src="https://img.shields.io/badge/Windows-x64_(Experimental)-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows"></a>
+</p>
+
+> **Tip:** For a more reliable experience on Windows, you can run the Linux build inside [WSL (Windows Subsystem for Linux)](https://learn.microsoft.com/en-us/windows/wsl/) instead.
+
+</details>
 
 <p align="center">
   <a href="https://github.com/bearlyai/OpenADE/releases">View all releases →</a>
@@ -132,7 +146,9 @@ Let them cook. 🧑‍🍳
 |----------|----------|
 | macOS (Universal) | [OpenADE-0.53.0-universal.dmg](https://github.com/bearlyai/OpenADE/releases/download/v0.53.0/OpenADE-0.53.0-universal.dmg) |
 | Linux (arm64) | [OpenADE-0.53.0-arm64.AppImage](https://github.com/bearlyai/OpenADE/releases/download/v0.53.0/OpenADE-0.53.0-arm64.AppImage) |
-| Windows | [OpenADE-Setup-0.53.0.exe](https://github.com/bearlyai/OpenADE/releases/download/v0.53.0/OpenADE-Setup-0.53.0.exe) |
+| Windows (Experimental) | [OpenADE-Setup-0.53.0.exe](https://github.com/bearlyai/OpenADE/releases/download/v0.53.0/OpenADE-Setup-0.53.0.exe) |
+
+> **Note:** The Windows build is experimental and largely untested — expect rough edges. For a smoother experience, try running the Linux build via [WSL](https://learn.microsoft.com/en-us/windows/wsl/).
 
 [View all releases →](https://github.com/bearlyai/OpenADE/releases)
 
