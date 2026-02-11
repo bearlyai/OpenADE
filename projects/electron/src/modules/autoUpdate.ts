@@ -12,6 +12,8 @@ autoUpdater.logger.transports.file.level = "debug"
 autoUpdater.logger.level = "debug"
 
 let pendingUpdate = false
+let lastSuccessfulCheckTime = Date.now()
+const STALE_UPDATE_THRESHOLD_MS = 48 * 60 * 60 * 1000 // 48 hours
 const notifyFeOnUpdateAvailable = () => {
     pendingUpdate = true
     const executorWindow = currentExecutor().window
@@ -44,6 +46,7 @@ function checkForUpdatesAndNotify() {
     return autoUpdater
         .checkForUpdates()
         .then((it) => {
+            lastSuccessfulCheckTime = Date.now()
             if (!it) {
                 return
             }
@@ -68,7 +71,9 @@ function checkForUpdatesAndNotify() {
         })
         .catch((e: unknown) => {
             logger.warn("Auto-update check failed", e)
-            notifyFeOnUpdateError()
+            if (Date.now() - lastSuccessfulCheckTime > STALE_UPDATE_THRESHOLD_MS) {
+                notifyFeOnUpdateError()
+            }
             return null
         })
 }

@@ -50,6 +50,7 @@ interface OpenADEAPI {
         isGitInstalled: () => Promise<unknown>
         isGitDir: (params: unknown) => Promise<unknown>
         isGitDirectory: (params: unknown) => Promise<unknown>
+        checkGhCli: () => Promise<unknown>
         getOrCreateWorkTree: (params: unknown) => Promise<unknown>
         workTreeDiffPatch: (params: unknown) => Promise<unknown>
         getMergeBase: (params: unknown) => Promise<unknown>

@@ -107,7 +107,8 @@ export function DesktopRequiredPage() {
                             </button>
                             {detectedPlatform === "windows" && (
                                 <p className="text-sm text-muted" style={{ maxWidth: "24rem" }}>
-                                    Windows support is experimental and largely untested — expect rough edges. For a smoother experience, try the Linux build via{" "}
+                                    Windows support is experimental and largely untested — expect rough edges. For a smoother experience, try the Linux build
+                                    via{" "}
                                     <button
                                         type="button"
                                         onClick={() => openUrlInNativeBrowser("https://learn.microsoft.com/en-us/windows/wsl/")}

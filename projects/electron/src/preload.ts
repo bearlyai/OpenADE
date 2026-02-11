@@ -98,6 +98,7 @@ const openadeAPI = {
         isGitInstalled: () => ipcRenderer.invoke("git:isGitInstalled"),
         isGitDir: (params: unknown) => ipcRenderer.invoke("git:isGitDir", params),
         isGitDirectory: (params: unknown) => ipcRenderer.invoke("git:isGitDirectory", params),
+        checkGhCli: () => ipcRenderer.invoke("git:checkGhCli"),
         getOrCreateWorkTree: (params: unknown) => ipcRenderer.invoke("git:getOrCreateWorkTree", params),
         workTreeDiffPatch: (params: unknown) => ipcRenderer.invoke("git:workTreeDiffPatch", params),
         getMergeBase: (params: unknown) => ipcRenderer.invoke("git:getMergeBase", params),

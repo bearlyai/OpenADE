@@ -42,6 +42,10 @@ export type IsGitDirectoryResponse =
           error?: string
       }
 
+export interface CheckGhCliResponse {
+    hasGhCli: boolean
+}
+
 interface GetOrCreateWorkTreeParams {
     repoDir: string
     id: string
@@ -291,6 +295,18 @@ export async function isGitDirectory(params: IsGitDirectoryParams): Promise<IsGi
 }
 
 /**
+ * Check if gh CLI is installed and authenticated (lightweight, no caching)
+ */
+export async function checkGhCli(): Promise<CheckGhCliResponse> {
+    if (!window.openadeAPI) {
+        console.warn("[GitAPI] Not running in Electron")
+        return { hasGhCli: false }
+    }
+
+    return (await window.openadeAPI.git.checkGhCli()) as CheckGhCliResponse
+}
+
+/**
  * Get or create a worktree for the given repository
  */
 async function getOrCreateWorkTree(params: GetOrCreateWorkTreeParams): Promise<GetOrCreateWorkTreeResponse> {
@@ -459,6 +475,7 @@ export const gitApi = {
     isGitInstalled,
     isGitDir,
     isGitDirectory,
+    checkGhCli,
     getOrCreateWorkTree,
     workTreeDiffPatch,
     getMergeBase,

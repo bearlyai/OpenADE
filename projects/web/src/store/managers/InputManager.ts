@@ -299,7 +299,15 @@ export class InputManager {
                 show: this.hasUnpushedCommits && !this.hasGitWorkingChanges && !this.isWorking,
                 enabled: !this.hasFeedback,
                 action: async () => {
-                    const hasGhCli = this.taskModel?.hasGhCli ?? false
+                    // Re-check gh CLI status before push to avoid stale cached value
+                    const repoId = this.taskModel?.repoId
+                    let hasGhCli = this.taskModel?.hasGhCli ?? false
+                    if (repoId && !hasGhCli) {
+                        hasGhCli = await this.store.repos.refreshGhCliStatus(repoId)
+                        if (hasGhCli) {
+                            this.taskModel?.invalidateEnvironmentCache()
+                        }
+                    }
                     const branch = this.taskModel?.gitStatus?.branch ?? "HEAD"
                     await this.store.execution.executeAction({
                         taskId: this.taskId,

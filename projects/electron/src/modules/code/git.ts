@@ -166,6 +166,10 @@ interface ListBranchesResponse {
     defaultBranch: string
 }
 
+interface CheckGhCliResponse {
+    hasGhCli: boolean
+}
+
 interface IsGitDirectoryParams {
     directory: string
 }
@@ -429,6 +433,26 @@ async function handleIsGitInstalled(): Promise<IsGitInstalledResponse> {
     gitInstalledCache = { installed: false }
     logger.warn("[Git:isGitInstalled] Git is not installed", JSON.stringify({ error: result.stderr, duration: Date.now() - startTime }))
     return gitInstalledCache
+}
+
+/**
+ * Check if gh CLI is installed and authenticated.
+ * Lightweight endpoint that only runs `gh auth status`.
+ */
+async function handleCheckGhCli(): Promise<CheckGhCliResponse> {
+    const startTime = Date.now()
+    logger.info("[Git:checkGhCli] Checking gh CLI availability")
+
+    let hasGhCli = false
+    try {
+        const ghResult = await execCommand("gh", ["auth", "status"], { timeout: 5000 })
+        hasGhCli = ghResult.success
+    } catch {
+        // gh not installed or not in PATH
+    }
+
+    logger.info("[Git:checkGhCli] Result", JSON.stringify({ hasGhCli, duration: Date.now() - startTime }))
+    return { hasGhCli }
 }
 
 /**
@@ -1778,6 +1802,11 @@ export const load = () => {
     ipcMain.handle("git:isGitDirectory", async (event, params: IsGitDirectoryParams) => {
         if (!checkAllowed(event)) throw new Error("not allowed")
         return handleIsGitDirectory(params)
+    })
+
+    ipcMain.handle("git:checkGhCli", async (event) => {
+        if (!checkAllowed(event)) throw new Error("not allowed")
+        return handleCheckGhCli()
     })
 
     ipcMain.handle("git:getOrCreateWorkTree", async (event, params: GetOrCreateWorkTreeParams) => {

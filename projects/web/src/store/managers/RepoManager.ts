@@ -144,6 +144,28 @@ export class RepoManager {
         this.gitInfoCache.delete(repoId)
     }
 
+    /**
+     * Re-check gh CLI availability and update the cached git info.
+     * Returns the fresh hasGhCli value.
+     */
+    async refreshGhCliStatus(repoId: string): Promise<boolean> {
+        try {
+            const result = await gitApi.checkGhCli()
+            const hasGhCli = result.hasGhCli
+
+            // Update the cached git info entry if it exists
+            const cached = this.gitInfoCache.get(repoId)
+            if (cached) {
+                cached.hasGhCli = hasGhCli
+            }
+
+            return hasGhCli
+        } catch (err) {
+            console.error(`[RepoManager] Failed to refresh gh CLI status for ${repoId}:`, err)
+            return false
+        }
+    }
+
     /** Check if a path is a git repo - returns true/false */
     async isGitRepo(directory: string): Promise<boolean> {
         try {
