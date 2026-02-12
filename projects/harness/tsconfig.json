@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "moduleResolution": "Bundler",
+    "esModuleInterop": true,
+    "lib": ["es2022"],
+    "target": "ES2022",
+    "module": "ESNext",
+    "strict": true,
+    "strictNullChecks": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"],
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "src/__tests__"]
+}

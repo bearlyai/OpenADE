@@ -1,0 +1,26 @@
+{
+  "name": "@openade/harness",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsgo --noEmit",
+    "test": "vitest run --exclude 'src/**/*.integration.test.ts'",
+    "test:watch": "vitest --exclude 'src/**/*.integration.test.ts'",
+    "test:integration": "vitest run 'src/**/*.integration.test.ts'",
+    "test:all": "vitest run"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@types/node": "^25.2.3",
+    "@typescript/native-preview": "^7.0.0-dev.20260212.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
+  },
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
