@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { buildCodexArgs } from "../../harnesses/codex/args.js"
+import { buildCodexArgs } from "./args.js"
 import type { HarnessQuery } from "../../types.js"
 
 function makeQuery(overrides: Partial<HarnessQuery> = {}): HarnessQuery {

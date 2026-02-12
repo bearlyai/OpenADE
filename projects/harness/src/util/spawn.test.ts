@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { spawnJsonl } from "../util/spawn.js"
+import { spawnJsonl } from "./spawn.js"
 import type { HarnessEvent } from "../types.js"
 
 async function collectEvents<M>(gen: AsyncGenerator<HarnessEvent<M>>): Promise<HarnessEvent<M>[]> {

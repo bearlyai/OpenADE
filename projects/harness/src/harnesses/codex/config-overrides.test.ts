@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { buildCodexMcpConfigOverrides } from "../../harnesses/codex/config-overrides.js"
+import { buildCodexMcpConfigOverrides } from "./config-overrides.js"
 import type { McpServerConfig } from "../../types.js"
 
 describe("buildCodexMcpConfigOverrides", () => {

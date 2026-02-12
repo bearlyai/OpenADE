@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest"
-import { detectShellEnvironment, clearShellEnvironmentCache } from "../util/env.js"
+import { detectShellEnvironment, clearShellEnvironmentCache } from "./env.js"
 
 describe("detectShellEnvironment", () => {
     afterEach(() => {

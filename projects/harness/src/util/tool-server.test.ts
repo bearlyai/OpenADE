@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest"
-import { startToolServer, type ToolServerHandle } from "../util/tool-server.js"
+import { startToolServer, type ToolServerHandle } from "./tool-server.js"
 import type { ClientToolDefinition } from "../types.js"
 
 // Track handles for cleanup

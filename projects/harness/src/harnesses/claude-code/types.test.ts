@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { parseClaudeEvent } from "../../harnesses/claude-code/types.js"
+import { parseClaudeEvent } from "./types.js"
 
 describe("parseClaudeEvent", () => {
     it("parses system:init event", () => {

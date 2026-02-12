@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { buildMcpConfigObject } from "../../harnesses/claude-code/mcp-config.js"
+import { buildMcpConfigObject } from "./mcp-config.js"
 import type { McpServerConfig } from "../../types.js"
 
 describe("buildMcpConfigObject", () => {

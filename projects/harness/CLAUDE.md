@@ -45,21 +45,29 @@ src/
 ├── index.ts                    # Public barrel export
 ├── util/
 │   ├── spawn.ts                # spawnJsonl() — spawn child, read JSONL stdout, yield events
+│   ├── spawn.test.ts
 │   ├── env.ts                  # detectShellEnvironment() — capture real shell PATH
+│   ├── env.test.ts
 │   ├── which.ts                # resolveExecutable() — find binaries on PATH
 │   └── tool-server.ts          # startToolServer() — local HTTP MCP server for client tools
+│   └── tool-server.test.ts
 ├── harnesses/
 │   ├── claude-code/
 │   │   ├── types.ts            # ClaudeEvent union (14 variants) + parseClaudeEvent()
+│   │   ├── types.test.ts
 │   │   ├── args.ts             # buildClaudeArgs() — HarnessQuery → CLI flags
+│   │   ├── args.test.ts
 │   │   ├── mcp-config.ts       # writeMcpConfigJson() — write --mcp-config temp file
+│   │   ├── mcp-config.test.ts
 │   │   └── index.ts            # ClaudeCodeHarness class
 │   └── codex/
 │       ├── types.ts            # CodexEvent union (7 variants) + parseCodexEvent()
+│       ├── types.test.ts
 │       ├── args.ts             # buildCodexArgs() — HarnessQuery → CLI flags
+│       ├── args.test.ts
 │       ├── config-overrides.ts # buildCodexMcpConfigOverrides() — -c flag generation
+│       ├── config-overrides.test.ts
 │       └── index.ts            # CodexHarness class
-└── __tests__/                  # 124 unit tests across 10 files
 ```
 
 ## Key Concepts
@@ -91,7 +99,7 @@ src/
 2. Create `src/harnesses/<name>/args.ts` — translate `HarnessQuery` → CLI flags
 3. Create `src/harnesses/<name>/index.ts` — implement `Harness<M>` interface
 4. Add to `src/index.ts` exports
-5. Write tests in `src/__tests__/<name>/`
+5. Write colocated tests as `<module>.test.ts` siblings
 
 ## MCP Config Injection
 
@@ -105,6 +113,7 @@ src/
 
 ## Testing Notes
 
+- Tests are colocated next to their source files as `<module>.test.ts` siblings
 - Unit tests mock no external binaries — they test arg building, event parsing, MCP config generation, registry logic, and the tool server (using the real MCP SDK client)
 - Integration tests (`*.integration.test.ts`) require real CLI binaries and auth — excluded from `yarn test`
 - The tool server tests are the most interesting — they start a real HTTP server and connect with an MCP client

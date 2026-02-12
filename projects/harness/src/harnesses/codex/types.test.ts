@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { parseCodexEvent } from "../../harnesses/codex/types.js"
+import { parseCodexEvent } from "./types.js"
 
 describe("parseCodexEvent", () => {
     it("parses thread.started event", () => {

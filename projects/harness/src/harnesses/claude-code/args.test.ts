@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { buildClaudeArgs } from "../../harnesses/claude-code/args.js"
+import { buildClaudeArgs } from "./args.js"
 import type { HarnessQuery } from "../../types.js"
 
 function makeQuery(overrides: Partial<HarnessQuery> = {}): HarnessQuery {
