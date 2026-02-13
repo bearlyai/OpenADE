@@ -22,7 +22,7 @@ export interface GitRefs {
 }
 
 export interface Execution {
-    harnessId: HarnessId     // "claude-code" | "codex" | ...
+    harnessId: HarnessId // "claude-code" | "codex" | ...
     executionId: string
     sessionId?: string
     parentSessionId?: string

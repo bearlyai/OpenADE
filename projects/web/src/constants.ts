@@ -217,14 +217,14 @@ export type ClaudeModelId = (typeof CLAUDE_MODELS)[number]["id"]
 import type { HarnessId } from "./electronAPI/harnessEventTypes"
 
 export interface ModelEntry {
-    id: string       // alias used in the picker (e.g. "opus", "o3")
-    fullId: string   // wire model ID sent to the CLI
-    label: string    // display label
+    id: string // alias used in the picker (e.g. "opus", "o3")
+    fullId: string // wire model ID sent to the CLI
+    label: string // display label
 }
 
 export interface HarnessModelConfig {
     models: ModelEntry[]
-    defaultModel: string  // alias ID
+    defaultModel: string // alias ID
 }
 
 /**
@@ -241,9 +241,7 @@ export const MODEL_REGISTRY: Record<HarnessId, HarnessModelConfig> = {
         defaultModel: "opus",
     },
     codex: {
-        models: [
-            { id: "gpt-5.3-codex-xhigh", fullId: "gpt-5.3-codex-xhigh", label: "GPT-5.3 Codex xHigh" },
-        ],
+        models: [{ id: "gpt-5.3-codex-xhigh", fullId: "gpt-5.3-codex-xhigh", label: "GPT-5.3 Codex xHigh" }],
         defaultModel: "gpt-5.3-codex-xhigh",
     },
 }

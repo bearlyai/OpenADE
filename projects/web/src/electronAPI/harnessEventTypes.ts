@@ -11,7 +11,16 @@
  * - HarnessCommandEvent: Commands from Dashboard -> Electron (control actions)
  */
 
-import type { HarnessId, HarnessUsage, HarnessErrorCode, McpServerConfig as HarnessMcpServerConfig, McpStdioServerConfig, McpHttpServerConfig, ClaudeEvent, CodexEvent } from "@openade/harness"
+import type {
+    HarnessId,
+    HarnessUsage,
+    HarnessErrorCode,
+    McpServerConfig as HarnessMcpServerConfig,
+    McpStdioServerConfig,
+    McpHttpServerConfig,
+    ClaudeEvent,
+    CodexEvent,
+} from "@openade/harness"
 
 export type { HarnessId, HarnessMcpServerConfig as McpServerConfig, McpStdioServerConfig, McpHttpServerConfig }
 
@@ -20,9 +29,7 @@ export type { HarnessId, HarnessMcpServerConfig as McpServerConfig, McpStdioServ
 // ============================================================================
 
 /** Content block for Vision API support — text or base64 image */
-export type ContentBlock =
-    | { type: "text"; text: string }
-    | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
+export type ContentBlock = { type: "text"; text: string } | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
 
 // ============================================================================
 // Query Options (renderer → Electron)
@@ -92,9 +99,7 @@ export type HarnessCommandEvent =
 // Combined Event Type
 // ============================================================================
 
-export type HarnessStreamEvent =
-    | (HarnessExecutionEvent & { direction: "execution" })
-    | (HarnessCommandEvent & { direction: "command" })
+export type HarnessStreamEvent = (HarnessExecutionEvent & { direction: "execution" }) | (HarnessCommandEvent & { direction: "command" })
 
 // ============================================================================
 // Execution State (used by both sides for buffering)
@@ -133,10 +138,7 @@ export function extractRawMessageEvents(events: HarnessStreamEvent[]): HarnessRa
 /** Extract stderr output from unified event stream */
 export function extractStderr(events: HarnessStreamEvent[]): string[] {
     return events
-        .filter(
-            (e): e is HarnessExecutionEvent & { direction: "execution"; type: "stderr" } =>
-                e.direction === "execution" && e.type === "stderr"
-        )
+        .filter((e): e is HarnessExecutionEvent & { direction: "execution"; type: "stderr" } => e.direction === "execution" && e.type === "stderr")
         .map((e) => e.data)
 }
 

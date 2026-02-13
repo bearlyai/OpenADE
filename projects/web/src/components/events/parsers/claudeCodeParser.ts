@@ -5,20 +5,8 @@
  * Converts typed ClaudeEvent[] into MessageGroup[] for rendering.
  */
 
-import type {
-    ClaudeAssistantEvent,
-    ClaudeContentBlock,
-    ClaudeEvent,
-    ClaudeResultEvent,
-    ClaudeUserContentBlock,
-    ClaudeUserEvent,
-} from "@openade/harness"
-import type {
-    MessageGroup,
-    ResultGroup,
-    SystemGroup,
-    TodoItem,
-} from "../messageGroups"
+import type { ClaudeAssistantEvent, ClaudeContentBlock, ClaudeEvent, ClaudeResultEvent, ClaudeUserContentBlock, ClaudeUserEvent } from "@openade/harness"
+import type { MessageGroup, ResultGroup, SystemGroup, TodoItem } from "../messageGroups"
 
 /** Extract text content from assistant message */
 function getAssistantText(msg: ClaudeEvent): string | null {
@@ -46,9 +34,7 @@ function getThinkingText(msg: ClaudeEvent): string | null {
 function getToolUse(msg: ClaudeEvent): { id: string; name: string; input: Record<string, unknown> } | null {
     if (msg.type !== "assistant") return null
     const { content } = (msg as ClaudeAssistantEvent).message
-    const toolUseBlock = content.find(
-        (block): block is ClaudeContentBlock & { type: "tool_use" } => block.type === "tool_use",
-    )
+    const toolUseBlock = content.find((block): block is ClaudeContentBlock & { type: "tool_use" } => block.type === "tool_use")
     if (!toolUseBlock) return null
     return {
         id: toolUseBlock.id,
@@ -62,9 +48,7 @@ function getToolResult(msg: ClaudeEvent): { toolUseId: string; content: string; 
     if (msg.type !== "user") return null
     const { content } = (msg as ClaudeUserEvent).message
 
-    const toolResultBlock = content.find(
-        (block): block is ClaudeUserContentBlock & { type: "tool_result" } => block.type === "tool_result",
-    )
+    const toolResultBlock = content.find((block): block is ClaudeUserContentBlock & { type: "tool_result" } => block.type === "tool_result")
     if (!toolResultBlock) return null
 
     // Content can be a string or array of content blocks

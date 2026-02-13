@@ -14,6 +14,11 @@ export type CodexEvent =
 export interface CodexThreadStartedEvent {
     type: "thread.started"
     thread_id: string
+    // Enriched by harness (not emitted by Codex CLI)
+    session_id?: string
+    cwd?: string
+    model?: string
+    additional_directories?: string[]
 }
 
 export interface CodexTurnStartedEvent {

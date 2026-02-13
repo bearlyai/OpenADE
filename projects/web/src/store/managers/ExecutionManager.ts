@@ -268,14 +268,15 @@ export class ExecutionManager {
         console.debug("[ExecutionManager] runExecutionLoop: calling manager.startExecution")
         const taskModel = this.store.tasks.getTaskModel(ctx.taskId)
         const selectedModel = taskModel?.model ?? this.store.defaultModel
-        const env = USE_SAME_MODEL_FOR_AGENTS && ctx.harnessId === "claude-code"
-            ? {
-                  ANTHROPIC_DEFAULT_OPUS_MODEL: getModelFullId(selectedModel),
-                  ANTHROPIC_DEFAULT_SONNET_MODEL: getModelFullId(selectedModel),
-                  ANTHROPIC_DEFAULT_HAIKU_MODEL: getModelFullId(selectedModel),
-                  CLAUDE_CODE_SUBAGENT_MODEL: getModelFullId(selectedModel),
-              }
-            : undefined
+        const env =
+            USE_SAME_MODEL_FOR_AGENTS && ctx.harnessId === "claude-code"
+                ? {
+                      ANTHROPIC_DEFAULT_OPUS_MODEL: getModelFullId(selectedModel),
+                      ANTHROPIC_DEFAULT_SONNET_MODEL: getModelFullId(selectedModel),
+                      ANTHROPIC_DEFAULT_HAIKU_MODEL: getModelFullId(selectedModel),
+                      CLAUDE_CODE_SUBAGENT_MODEL: getModelFullId(selectedModel),
+                  }
+                : undefined
         const query = await manager.startExecution(
             ctx.prompt,
             {
@@ -347,9 +348,7 @@ export class ExecutionManager {
         }
 
         // Persist any error events from the execution so they render in the UI
-        const errorEvents = query.executionState.events.filter(
-            (e) => e.direction === "execution" && e.type === "error"
-        )
+        const errorEvents = query.executionState.events.filter((e) => e.direction === "execution" && e.type === "error")
         for (const errorEvent of errorEvents) {
             this.store.events.appendStreamEventToEvent({
                 taskId: ctx.taskId,

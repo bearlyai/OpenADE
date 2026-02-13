@@ -172,9 +172,19 @@ export class CodexHarness implements Harness<CodexEvent> {
 
                     const events: HarnessEvent<CodexEvent>[] = []
 
-                    // Extract session_started from thread.started
+                    // Extract session_started from thread.started and enrich with query metadata
                     if (event.type === "thread.started") {
                         events.push({ type: "session_started", sessionId: event.thread_id })
+                        events.push({
+                            type: "message",
+                            message: {
+                                ...event,
+                                session_id: event.thread_id,
+                                cwd: q.cwd,
+                                model: q.model,
+                                additional_directories: q.additionalDirectories,
+                            },
+                        })
                     }
 
                     // Stash usage from turn.completed
@@ -199,8 +209,10 @@ export class CodexHarness implements Harness<CodexEvent> {
                         })
                     }
 
-                    // Always yield the raw message
-                    events.push({ type: "message", message: event })
+                    // Always yield the raw message (thread.started is already enriched above)
+                    if (event.type !== "thread.started") {
+                        events.push({ type: "message", message: event })
+                    }
 
                     return events
                 },

@@ -10,13 +10,7 @@
  *   - turn.failed / error → ResultGroup (error)
  */
 
-import type {
-    CodexEvent,
-    CodexItem,
-    CodexTurnCompletedEvent,
-    CodexTurnFailedEvent,
-    CodexErrorEvent,
-} from "@openade/harness"
+import type { CodexEvent, CodexItem, CodexTurnCompletedEvent, CodexTurnFailedEvent, CodexErrorEvent } from "@openade/harness"
 import type { MessageGroup } from "../messageGroups"
 
 /**
@@ -106,7 +100,19 @@ export function groupCodexMessages(messages: CodexEvent[]): MessageGroup[] {
             continue
         }
 
-        // thread.started, turn.started — no visual representation
+        // thread.started — session init pill
+        if (msg.type === "thread.started") {
+            const { type: _type, ...metadata } = msg as unknown as Record<string, unknown>
+            groups.push({
+                type: "system",
+                subtype: "init",
+                metadata,
+                messageIndex: i,
+            })
+            continue
+        }
+
+        // turn.started — no visual representation
     }
 
     return groups

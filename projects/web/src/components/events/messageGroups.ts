@@ -171,10 +171,7 @@ export function groupStreamEvents(events: HarnessStreamEvent[], harnessId: Harne
 
     // Extract stderr events and create StderrGroups
     const stderrGroups: StderrGroup[] = events
-        .filter(
-            (e): e is HarnessStreamEvent & { type: "stderr"; direction: "execution" } =>
-                e.direction === "execution" && e.type === "stderr",
-        )
+        .filter((e): e is HarnessStreamEvent & { type: "stderr"; direction: "execution" } => e.direction === "execution" && e.type === "stderr")
         .map((e) => ({
             type: "stderr" as const,
             data: e.data,
@@ -183,10 +180,7 @@ export function groupStreamEvents(events: HarnessStreamEvent[], harnessId: Harne
 
     // Extract harness-level error events (e.g. process_crashed) and render as ResultGroups
     const errorGroups: ResultGroup[] = events
-        .filter(
-            (e): e is HarnessStreamEvent & { type: "error"; direction: "execution" } =>
-                e.direction === "execution" && e.type === "error",
-        )
+        .filter((e): e is HarnessStreamEvent & { type: "error"; direction: "execution" } => e.direction === "execution" && e.type === "error")
         .map((e) => ({
             type: "result" as const,
             subtype: "error_during_execution" as const,
@@ -212,9 +206,7 @@ function groupRawMessageEvents(events: HarnessRawMessageEvent[], harnessId: Harn
             return groupClaudeCodeMessages(messages)
         }
         case "codex": {
-            const messages = events
-                .filter((e): e is HarnessRawMessageEvent & { harnessId: "codex" } => e.harnessId === "codex")
-                .map((e) => e.message)
+            const messages = events.filter((e): e is HarnessRawMessageEvent & { harnessId: "codex" } => e.harnessId === "codex").map((e) => e.message)
             return groupCodexMessages(messages)
         }
         default: {

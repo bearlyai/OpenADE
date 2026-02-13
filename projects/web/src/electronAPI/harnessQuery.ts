@@ -35,7 +35,18 @@ import {
 } from "./harnessEventTypes"
 
 // Re-export types for convenience
-export type { HarnessRawMessageEvent, HarnessStreamEvent, HarnessExecutionEvent, HarnessCommandEvent, ExecutionState, ToolResult, McpServerConfig, HarnessId, HarnessQueryOptions, ContentBlock }
+export type {
+    HarnessRawMessageEvent,
+    HarnessStreamEvent,
+    HarnessExecutionEvent,
+    HarnessCommandEvent,
+    ExecutionState,
+    ToolResult,
+    McpServerConfig,
+    HarnessId,
+    HarnessQueryOptions,
+    ContentBlock,
+}
 
 // ============================================================================
 // Client-Defined Tool Types
@@ -427,11 +438,7 @@ class HarnessQueryManagerImpl {
     /**
      * Start a new execution
      */
-    async startExecution(
-        prompt: string | ContentBlock[],
-        options: ClientHarnessQueryOptions,
-        executionId?: string
-    ): Promise<HarnessQuery | null> {
+    async startExecution(prompt: string | ContentBlock[], options: ClientHarnessQueryOptions, executionId?: string): Promise<HarnessQuery | null> {
         const promptPreview = typeof prompt === "string" ? prompt.slice(0, 100) : `[${prompt.length} content blocks]`
         console.debug("[HarnessQueryManager] startExecution called", {
             promptLength: prompt.length,
