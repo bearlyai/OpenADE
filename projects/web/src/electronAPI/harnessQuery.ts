@@ -454,7 +454,7 @@ class HarnessQueryManagerImpl {
         }
 
         const defaultAllowedTools = ["Read", "Edit", "Glob", "Bash", "Grep", "WebSearch", "WebFetch"]
-        const defaultDisallowedTools = ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"]
+        const defaultDisallowedTools = ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "Task(Plan)"]
         const readOnlyDisallowedTools = ["Edit", "Write", "NotebookEdit"]
 
         const isReadOnly = options.mode === "read-only"
