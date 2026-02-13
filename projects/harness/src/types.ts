@@ -75,8 +75,7 @@ export interface HarnessQuery {
 
     // ── Permissions ──
     mode: "read-only" | "yolo"
-    allowedTools?: string[]
-    disallowedTools?: string[]
+    disablePlanningTools?: boolean
 
     // ── Integrations ──
     mcpServers?: Record<string, McpServerConfig>

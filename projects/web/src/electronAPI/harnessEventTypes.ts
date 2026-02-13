@@ -52,8 +52,7 @@ export interface HarnessQueryOptions {
     forkSession?: boolean
     additionalDirectories?: string[]
     env?: Record<string, string>
-    allowedTools?: string[]
-    disallowedTools?: string[]
+    disablePlanningTools?: boolean
     mcpServerConfigs?: Record<string, HarnessMcpServerConfig>
     clientTools?: SerializedToolDefinition[]
 }

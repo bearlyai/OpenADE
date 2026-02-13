@@ -453,24 +453,12 @@ class HarnessQueryManagerImpl {
             return null
         }
 
-        const defaultAllowedTools = ["Read", "Edit", "Glob", "Bash", "Grep", "WebSearch", "WebFetch"]
-        const defaultDisallowedTools = ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "Task(Plan)"]
-        const readOnlyDisallowedTools = ["Edit", "Write", "NotebookEdit"]
-
-        const isReadOnly = options.mode === "read-only"
-
         const mergedOptions: ClientHarnessQueryOptions = {
             // Defaults
             model: "sonnet",
+            disablePlanningTools: true,
             // Caller options override defaults
             ...options,
-            // Merge array fields
-            allowedTools: [...defaultAllowedTools, ...(options.allowedTools ?? []).filter((t) => !defaultAllowedTools.includes(t))],
-            disallowedTools: [
-                ...defaultDisallowedTools,
-                ...(isReadOnly ? readOnlyDisallowedTools : []),
-                ...(options.disallowedTools ?? []).filter((t) => !defaultDisallowedTools.includes(t) && !readOnlyDisallowedTools.includes(t)),
-            ],
         }
 
         const finalId = executionId || crypto.randomUUID()
@@ -498,8 +486,8 @@ class HarnessQueryManagerImpl {
             harnessId: ipcOptions.harnessId,
             model: ipcOptions.model,
             cwd: ipcOptions.cwd,
-            allowedTools: ipcOptions.allowedTools,
-            disallowedTools: ipcOptions.disallowedTools,
+            mode: ipcOptions.mode,
+            disablePlanningTools: ipcOptions.disablePlanningTools,
             hasSerializedTools: !!serializedTools,
             serializedToolCount: serializedTools?.length ?? 0,
         })

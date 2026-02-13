@@ -139,8 +139,8 @@ describe("buildCodexArgs", () => {
         expect(result.args).toContain("abc-123")
     })
 
-    it("allowedTools and disallowedTools are ignored (no args produced)", () => {
-        const result = buildCodexArgs(makeQuery({ allowedTools: ["Read", "Bash"], disallowedTools: ["Write"] }), {})
+    it("disablePlanningTools is ignored for Codex (no args produced)", () => {
+        const result = buildCodexArgs(makeQuery({ disablePlanningTools: true }), {})
         expect(result.args).not.toContain("--allowed-tools")
         expect(result.args).not.toContain("--disallowed-tools")
     })

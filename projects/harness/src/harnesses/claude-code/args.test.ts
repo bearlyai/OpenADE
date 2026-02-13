@@ -46,10 +46,42 @@ describe("buildClaudeArgs", () => {
         expect(result.args).toContain("--dangerously-skip-permissions")
     })
 
-    it("mode: 'read-only' produces --permission-mode plan", () => {
+    it("mode: 'read-only' uses --permission-mode dontAsk (not plan)", () => {
         const result = buildClaudeArgs(makeQuery({ mode: "read-only" }), {})
         expect(result.args).toContain("--permission-mode")
-        expect(result.args).toContain("plan")
+        expect(result.args).toContain("dontAsk")
+        // Must NOT use plan mode (it injects unwanted system prompts)
+        expect(result.args).not.toContain("plan")
+        expect(result.args).not.toContain("--dangerously-skip-permissions")
+    })
+
+    it("mode: 'read-only' adds read-only allowed tools and Bash patterns to --allowedTools", () => {
+        const result = buildClaudeArgs(makeQuery({ mode: "read-only" }), {})
+        const allowedIdx = result.args.indexOf("--allowedTools")
+        expect(allowedIdx).toBeGreaterThan(-1)
+        const afterAllowed = result.args.slice(allowedIdx + 1)
+        // Read-only tools
+        expect(afterAllowed).toContain("Read")
+        expect(afterAllowed).toContain("Glob")
+        expect(afterAllowed).toContain("Grep")
+        expect(afterAllowed).toContain("WebSearch")
+        expect(afterAllowed).toContain("WebFetch")
+        // Bash patterns
+        expect(afterAllowed).toContain("Bash(git status *)")
+        expect(afterAllowed).toContain("Bash(git log *)")
+        expect(afterAllowed).toContain("Bash(git diff *)")
+        expect(afterAllowed).toContain("Bash(ls *)")
+        expect(afterAllowed).toContain("Bash(gh api *)")
+    })
+
+    it("mode: 'read-only' disallows write tools", () => {
+        const result = buildClaudeArgs(makeQuery({ mode: "read-only" }), {})
+        const disallowedIdx = result.args.indexOf("--disallowed-tools")
+        expect(disallowedIdx).toBeGreaterThan(-1)
+        const disallowedValue = result.args[disallowedIdx + 1]
+        expect(disallowedValue).toContain("Edit")
+        expect(disallowedValue).toContain("Write")
+        expect(disallowedValue).toContain("NotebookEdit")
     })
 
     it("model: 'opus' produces --model opus", () => {
@@ -91,16 +123,40 @@ describe("buildClaudeArgs", () => {
         expect(result.args).toContain("--resume")
     })
 
-    it("allowedTools produces --allowed-tools comma-separated", () => {
-        const result = buildClaudeArgs(makeQuery({ allowedTools: ["Read", "Bash"] }), {})
-        expect(result.args).toContain("--allowed-tools")
-        expect(result.args).toContain("Read,Bash")
+    it("disablePlanningTools: true adds planning tools to --disallowed-tools", () => {
+        const result = buildClaudeArgs(makeQuery({ disablePlanningTools: true }), {})
+        const disallowedIdx = result.args.indexOf("--disallowed-tools")
+        expect(disallowedIdx).toBeGreaterThan(-1)
+        const disallowedValue = result.args[disallowedIdx + 1]
+        expect(disallowedValue).toContain("EnterPlanMode")
+        expect(disallowedValue).toContain("ExitPlanMode")
+        expect(disallowedValue).toContain("Task(Plan)")
+        expect(disallowedValue).toContain("AskUserQuestion")
     })
 
-    it("disallowedTools produces --disallowed-tools comma-separated", () => {
-        const result = buildClaudeArgs(makeQuery({ disallowedTools: ["Write", "Edit"] }), {})
-        expect(result.args).toContain("--disallowed-tools")
-        expect(result.args).toContain("Write,Edit")
+    it("disablePlanningTools: false does not add planning tools to --disallowed-tools", () => {
+        const result = buildClaudeArgs(makeQuery({ disablePlanningTools: false }), {})
+        expect(result.args).not.toContain("--disallowed-tools")
+    })
+
+    it("mode: 'read-only' + disablePlanningTools combines both deny lists", () => {
+        const result = buildClaudeArgs(makeQuery({ mode: "read-only", disablePlanningTools: true }), {})
+        const disallowedIdx = result.args.indexOf("--disallowed-tools")
+        expect(disallowedIdx).toBeGreaterThan(-1)
+        const disallowedValue = result.args[disallowedIdx + 1]
+        // Write tools from read-only
+        expect(disallowedValue).toContain("Edit")
+        expect(disallowedValue).toContain("Write")
+        expect(disallowedValue).toContain("NotebookEdit")
+        // Planning tools
+        expect(disallowedValue).toContain("EnterPlanMode")
+        expect(disallowedValue).toContain("ExitPlanMode")
+    })
+
+    it("mode: 'yolo' without disablePlanningTools produces no tool lists", () => {
+        const result = buildClaudeArgs(makeQuery({ mode: "yolo" }), {})
+        expect(result.args).not.toContain("--allowedTools")
+        expect(result.args).not.toContain("--disallowed-tools")
     })
 
     it("additionalDirectories → --add-dir per entry", () => {

@@ -117,7 +117,7 @@ export function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessConfig,
         Object.assign(env, query.env)
     }
 
-    // Note: allowedTools and disallowedTools are ignored for Codex (no named tools)
+    // Note: disablePlanningTools is not applicable for Codex (no named tools / plan mode)
 
     return {
         command: "codex",

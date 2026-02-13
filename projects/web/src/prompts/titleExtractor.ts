@@ -43,11 +43,11 @@ ${description}`,
             harnessId: "claude-code",
             cwd: "",
             model: "haiku",
+            mode: "read-only",
+            disablePlanningTools: true,
             appendSystemPrompt: `You are a title generator. Generate a short, descriptive title (3-8 words) that captures the essence of the task.
 
 Usually the description is enough - respond immediately. If the description is vague or references a file you don't understand, you may Read or Glob one file to clarify, but keep research minimal.`,
-            allowedTools: ["Read", "Glob"],
-            disallowedTools: ["Grep", "Bash", "WebSearch", "WebFetch", "Edit", "Write", "Task"],
         }
     )
 

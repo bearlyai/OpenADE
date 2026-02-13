@@ -72,8 +72,7 @@ interface HarnessQueryOptions {
     forkSession?: boolean
     additionalDirectories?: string[]
     env?: Record<string, string>
-    allowedTools?: string[]
-    disallowedTools?: string[]
+    disablePlanningTools?: boolean
     mcpServerConfigs?: Record<string, McpServerConfig>
     clientTools?: SerializedToolDefinition[]
 }
@@ -537,8 +536,7 @@ async function handleStartQuery(
         forkSession: options.forkSession,
         additionalDirectories: options.additionalDirectories,
         env: options.env,
-        allowedTools: options.allowedTools,
-        disallowedTools: options.disallowedTools,
+        disablePlanningTools: options.disablePlanningTools,
         mcpServers: options.mcpServerConfigs,
         clientTools,
         signal: abortController.signal,
