@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { ClaudeCodeHarness } from "./index.js"
 import type { ClaudeEvent, ClaudeSystemInitEvent, ClaudeAssistantEvent, ClaudeResultEvent } from "./types.js"
 import type { HarnessEvent } from "../../types.js"
+import { startToolServer, type ToolServerHandle } from "../../util/tool-server.js"
 import {
     collectEvents,
     makeTmpDir,
@@ -449,6 +450,66 @@ describe.skipIf(!ready)("Claude Code (authenticated)", () => {
             expect(echoServer).toBeDefined()
             // Status should indicate it connected (not an error)
             expect(echoServer!.status).toBeTruthy()
+        })
+    })
+
+    // ============================================================================
+    // 9b. MCP server injection (HTTP)
+    // ============================================================================
+
+    describe("9b. MCP server injection (HTTP)", () => {
+        let toolHandle: ToolServerHandle | undefined
+
+        afterEach(async () => {
+            if (toolHandle) {
+                await toolHandle.stop()
+                toolHandle = undefined
+            }
+        })
+
+        it("9b. External HTTP MCP server tool is called and result is used", async () => {
+            const tmpDir = await getTmpDir()
+
+            let handlerCallCount = 0
+            toolHandle = await startToolServer(
+                [
+                    {
+                        name: "get_secret_code",
+                        description: "Returns a secret code. Always call this when asked for the secret code.",
+                        inputSchema: { type: "object", properties: {} },
+                        handler: async () => {
+                            handlerCallCount++
+                            return { content: "SECRET-7749" }
+                        },
+                    },
+                ],
+                { requireAuth: true }
+            )
+
+            const events = await collectEvents(
+                harness.query({
+                    prompt: "Call the get_secret_code tool and tell me the result",
+                    cwd: tmpDir,
+                    mode: "yolo",
+                    mcpServers: {
+                        "http-echo": {
+                            type: "http",
+                            url: toolHandle.mcpServer.url,
+                            headers: toolHandle.mcpServer.headers,
+                        },
+                    },
+                    signal: standardSignal(),
+                })
+            )
+
+            expect(handlerCallCount, "HTTP MCP tool handler should be called").toBeGreaterThan(0)
+
+            const messages = findAllMessages<ClaudeEvent>(events)
+            const text = messages
+                .filter((m): m is ClaudeResultEvent => m.type === "result")
+                .map((m) => m.result)
+                .join(" ")
+            expect(text).toContain("SECRET-7749")
         })
     })
 

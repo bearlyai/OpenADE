@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { CodexHarness } from "./index.js"
 import type { CodexEvent, CodexItemCompletedEvent, CodexAgentMessageItem, CodexCommandExecutionItem } from "./types.js"
 import type { HarnessEvent } from "../../types.js"
+import { startToolServer, type ToolServerHandle } from "../../util/tool-server.js"
 import {
     collectEvents,
     makeTmpDir,
@@ -378,6 +379,63 @@ describe.skipIf(!ready)("Codex (authenticated)", () => {
     })
 
     // ============================================================================
+    // 7b. MCP server injection (HTTP)
+    // ============================================================================
+
+    describe("7b. MCP server injection (HTTP)", () => {
+        let toolHandle: ToolServerHandle | undefined
+
+        afterEach(async () => {
+            if (toolHandle) {
+                await toolHandle.stop()
+                toolHandle = undefined
+            }
+        })
+
+        it("7b. External HTTP MCP server tool is called and result is used", async () => {
+            const tmpDir = await getTmpDir()
+
+            let handlerCallCount = 0
+            toolHandle = await startToolServer(
+                [
+                    {
+                        name: "get_secret_code",
+                        description: "Returns a secret code. Always call this when asked for the secret code.",
+                        inputSchema: { type: "object", properties: {} },
+                        handler: async () => {
+                            handlerCallCount++
+                            return { content: "SECRET-7749" }
+                        },
+                    },
+                ],
+                { requireAuth: true }
+            )
+
+            const events = await collectEvents(
+                harness.query({
+                    prompt: "Call the get_secret_code tool and tell me the result",
+                    cwd: tmpDir,
+                    mode: "yolo",
+                    mcpServers: {
+                        "http-echo": {
+                            type: "http",
+                            url: toolHandle.mcpServer.url,
+                            headers: toolHandle.mcpServer.headers,
+                        },
+                    },
+                    signal: standardSignal(),
+                })
+            )
+
+            expect(handlerCallCount, "HTTP MCP tool handler should be called").toBeGreaterThan(0)
+
+            const messages = findAllMessages<CodexEvent>(events)
+            const text = extractAgentText(messages)
+            expect(text).toContain("SECRET-7749")
+        })
+    })
+
+    // ============================================================================
     // 8. Client tools (via dynamic MCP server)
     // ============================================================================
 
@@ -411,6 +469,47 @@ describe.skipIf(!ready)("Codex (authenticated)", () => {
             const messages = findAllMessages<CodexEvent>(events)
             const text = extractAgentText(messages)
             expect(text).toContain("42")
+        })
+
+        it("8b. Client tool receives arguments and result is used in response", async () => {
+            const tmpDir = await getTmpDir()
+
+            let receivedArgs: Record<string, unknown> | undefined
+            const tool = {
+                name: "add_numbers",
+                description: "Adds two numbers together. Always call this when asked to add numbers.",
+                inputSchema: {
+                    type: "object" as const,
+                    properties: {
+                        a: { type: "number", description: "First number" },
+                        b: { type: "number", description: "Second number" },
+                    },
+                    required: ["a", "b"],
+                },
+                handler: async (args: Record<string, unknown>) => {
+                    receivedArgs = args
+                    const sum = (args.a as number) + (args.b as number)
+                    return { content: String(sum) }
+                },
+            }
+
+            const events = await collectEvents(
+                harness.query({
+                    prompt: "Use the add_numbers tool to add 3 and 7. Tell me the result.",
+                    cwd: tmpDir,
+                    mode: "yolo",
+                    clientTools: [tool],
+                    signal: standardSignal(),
+                })
+            )
+
+            expect(receivedArgs).toBeDefined()
+            expect(receivedArgs!.a).toBeDefined()
+            expect(receivedArgs!.b).toBeDefined()
+
+            const messages = findAllMessages<CodexEvent>(events)
+            const text = extractAgentText(messages)
+            expect(text).toContain("10")
         })
     })
 
