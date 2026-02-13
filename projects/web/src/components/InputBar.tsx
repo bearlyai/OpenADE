@@ -81,6 +81,7 @@ export const InputBar = observer(function InputBar({
     onModelChange,
     harnessId,
     onHarnessChange,
+    allowHarnessSwitch = true,
     hideTray = false,
 }: {
     input: InputManager
@@ -100,6 +101,7 @@ export const InputBar = observer(function InputBar({
     onModelChange?: (model: string) => void
     harnessId?: HarnessId
     onHarnessChange?: (harnessId: HarnessId) => void
+    allowHarnessSwitch?: boolean
     /** Dev: Hide tray buttons and slide-out */
     hideTray?: boolean
 }) {
@@ -117,6 +119,7 @@ export const InputBar = observer(function InputBar({
     // Get tray content from config
     const trayConfig = tray.openTray ? getTrayConfig(tray.openTray) : null
     const trayContent = trayConfig?.renderContent(tray) ?? null
+    const showHarnessPicker = !!(allowHarnessSwitch && harnessId && onHarnessChange)
 
     return (
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-full max-w-3xl px-4" style={{ zIndex: Z_INDEX.INPUT_BAR }}>
@@ -149,13 +152,13 @@ export const InputBar = observer(function InputBar({
                                 )}
                             </div>
                         )}
-                        {harnessId && onHarnessChange && (
+                        {showHarnessPicker && harnessId && onHarnessChange && (
                             <div className={cx("shrink-0", !gitStatus?.branch && "ml-auto")}>
                                 <HarnessPicker value={harnessId} onChange={onHarnessChange} />
                             </div>
                         )}
                         {selectedModel && onModelChange && (
-                            <div className={cx("shrink-0", !gitStatus?.branch && !harnessId && "ml-auto")}>
+                            <div className={cx("shrink-0", !gitStatus?.branch && !showHarnessPicker && "ml-auto")}>
                                 <ModelPicker value={selectedModel} onChange={onModelChange} harnessId={harnessId} />
                             </div>
                         )}

@@ -193,7 +193,7 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
                 selectedModel={taskModel.model}
                 onModelChange={(m) => taskModel.setModel(m)}
                 harnessId={taskModel.harnessId}
-                onHarnessChange={(id) => taskModel.setHarnessId(id)}
+                allowHarnessSwitch={false}
                 hideTray={codeStore.personalSettingsStore?.settings.current.devHideTray}
             />
         </div>

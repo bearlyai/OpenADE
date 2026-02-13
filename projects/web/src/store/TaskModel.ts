@@ -6,7 +6,7 @@
  */
 
 import { makeAutoObservable, runInAction } from "mobx"
-import { DEFAULT_MODEL, getDefaultModelForHarness } from "../constants"
+import { DEFAULT_MODEL, MODEL_REGISTRY, getDefaultModelForHarness, resolveModelForHarness } from "../constants"
 import { extractRawMessageEvents } from "../electronAPI/harnessEventTypes"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import type { GitStatusResponse } from "../electronAPI/git"
@@ -53,6 +53,8 @@ export class TaskModel {
                 }
             })
         )
+
+        this.initializeExecutionSelectionFromHistory()
     }
 
     /**
@@ -118,14 +120,49 @@ export class TaskModel {
     // === Model & Harness ===
 
     setModel(modelId: string): void {
-        this.model = modelId
+        this.model = this.normalizeModelForHarness(modelId, this.harnessId)
     }
 
     setHarnessId(id: HarnessId): void {
+        if (this.hasActionHistory) return
         if (id === this.harnessId) return
         this.harnessId = id
         // Reset model to the new harness's default
         this.model = getDefaultModelForHarness(id)
+    }
+
+    private get hasActionHistory(): boolean {
+        const events = this.task?.events ?? []
+        return events.some((event) => event.type === "action")
+    }
+
+    private initializeExecutionSelectionFromHistory(): void {
+        const events = this.task?.events ?? []
+        for (let i = events.length - 1; i >= 0; i--) {
+            const event = events[i]
+            if (event.type !== "action") continue
+
+            this.harnessId = event.execution.harnessId
+            const persistedModelId = event.execution.modelId
+            this.model = persistedModelId
+                ? this.normalizeModelForHarness(persistedModelId, event.execution.harnessId)
+                : getDefaultModelForHarness(event.execution.harnessId)
+            return
+        }
+    }
+
+    private normalizeModelForHarness(modelId: string, harnessId: HarnessId): string {
+        const config = MODEL_REGISTRY[harnessId]
+        if (!config) return modelId
+
+        if (config.models.some((model) => model.id === modelId)) {
+            return modelId
+        }
+
+        const byFullId = config.models.find((model) => model.fullId === modelId)
+        if (byFullId) return byFullId.id
+
+        return resolveModelForHarness(modelId, harnessId)
     }
 
     private get task(): Task | undefined {
