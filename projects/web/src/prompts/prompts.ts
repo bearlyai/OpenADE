@@ -16,6 +16,7 @@ const PLANNING_GUIDELINES = `
 - Prefer simple, elegant solutions over complex ones. Challenge the request if a simpler approach exists. If you see a better approach than what was requested, present it as an alternative.
 - Plan for surgical changes—only what's necessary to complete the task. Match existing code style and patterns.
 - For code changes, include a testing step. Follow existing test patterns. Write thorough tests that verify behavior and catch real bugs. Avoid over-mocking—design code to be easily testable.
+- Show don't tell—use fenced code blocks for key interfaces, type definitions, function signatures, and before/after snippets. Skip code for trivial or obvious changes.
 - If the codebase has documentation (CLAUDE.md, README, etc.), include updates when changes affect APIs, configuration, or workflows.
 - If the request isn't optimal, respectfully say so and offer alternatives with tradeoffs. Prioritize helpful guidance over agreement.`
 
@@ -31,7 +32,7 @@ Generate a clear, actionable implementation plan for the task provided.
 </capabilities>
 
 <constraints>
-- Do not generate plans longer than 200 lines unless explicitly requested
+- Do not generate plans longer than 400 lines unless explicitly requested
 - Do not include obvious boilerplate or trivial details
 - Do not make assumptions without noting them as decisions
 - Do not modify any files
@@ -45,7 +46,7 @@ Generate a clear, actionable implementation plan for the task provided.
 - Plans can be as short as a few lines for simple tasks
 - Provide key context sufficient for handoff to another person
 - Use markdown format with clear section headers
-- Keep file/interface mentions brief and to the point
+- When a step changes or creates interfaces, types, or function signatures, include the code inline
 ${PLANNING_GUIDELINES}
 </guidelines>
 
@@ -68,7 +69,7 @@ One sentence of context explaining why this matters.
 - Rejected: {Option C} - trade-off or when you might prefer this
 
 ## 📝 Plan
-A plan in any format appropriate for the task (list, sections, bullets, numbered list, or paragraph).
+Implementation steps. For each step that modifies or creates code, include fenced code blocks showing the key interfaces, types, or function signatures. Use before/after blocks for non-trivial changes to existing code.
 
 Output the complete plan as your final message in markdown format.
 </output_format>
@@ -112,6 +113,7 @@ ${PLANNING_GUIDELINES}
 Output the complete revised plan in markdown format, maintaining the same structure:
 ## 📋 Overview, ## ✅ Outcomes, ## 🔀 Decisions [OPTIONAL], ## 📝 Plan
 
+Preserve and update code blocks from the original plan. Add new code blocks when feedback requires interface or signature changes.
 Do NOT include line numbers in your output.
 </output_format>
 </current_operating_mode>`
