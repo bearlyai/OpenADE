@@ -13,9 +13,15 @@ function makeQuery(overrides: Partial<HarnessQuery> = {}): HarnessQuery {
 }
 
 describe("buildCodexArgs", () => {
-    it("mode: 'yolo' includes --full-auto and --json", () => {
+    it("mode: 'yolo' produces --sandbox workspace-write -a never", () => {
         const result = buildCodexArgs(makeQuery({ mode: "yolo" }), {})
-        expect(result.args).toContain("--full-auto")
+        expect(result.args).not.toContain("--full-auto")
+        const sandboxIdx = result.args.indexOf("--sandbox")
+        expect(sandboxIdx).toBeGreaterThanOrEqual(0)
+        expect(result.args[sandboxIdx + 1]).toBe("workspace-write")
+        const aIdx = result.args.indexOf("-a")
+        expect(aIdx).toBeGreaterThanOrEqual(0)
+        expect(result.args[aIdx + 1]).toBe("never")
         expect(result.args).toContain("--json")
         expect(result.args).toContain("exec")
     })

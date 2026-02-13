@@ -35,7 +35,7 @@ export function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessConfig,
     if (query.mode === "read-only") {
         rootArgs.push("-a", "on-request")
     } else if (query.mode === "yolo") {
-        rootArgs.push("--full-auto")
+        rootArgs.push("--sandbox", "workspace-write", "-a", "never")
     }
 
     // ── Subcommand ──
