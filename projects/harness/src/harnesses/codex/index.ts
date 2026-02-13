@@ -4,7 +4,6 @@ import { execFileSync } from "node:child_process"
 import type { Harness } from "../../harness.js"
 import type {
     HarnessMeta,
-    HarnessModel,
     HarnessCapabilities,
     HarnessInstallStatus,
     SlashCommand,
@@ -39,14 +38,6 @@ export class CodexHarness implements Harness<CodexEvent> {
             vendor: "OpenAI",
             website: "https://openai.com/index/introducing-codex/",
         }
-    }
-
-    models(): HarnessModel[] {
-        return [
-            { id: "gpt-5.3-codex", label: "GPT-5.3 Codex", isDefault: true },
-            { id: "o3", label: "o3", isDefault: false },
-            { id: "o4-mini", label: "o4-mini", isDefault: false },
-        ]
     }
 
     capabilities(): HarnessCapabilities {

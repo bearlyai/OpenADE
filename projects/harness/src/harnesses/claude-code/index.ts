@@ -7,7 +7,6 @@ import { execFileSync } from "node:child_process"
 import type { Harness } from "../../harness.js"
 import type {
     HarnessMeta,
-    HarnessModel,
     HarnessCapabilities,
     HarnessInstallStatus,
     SlashCommand,
@@ -42,14 +41,6 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
             vendor: "Anthropic",
             website: "https://docs.anthropic.com/en/docs/claude-code",
         }
-    }
-
-    models(): HarnessModel[] {
-        return [
-            { id: "opus", label: "Opus 4.6", isDefault: false },
-            { id: "sonnet", label: "Sonnet 4.5", isDefault: true },
-            { id: "haiku", label: "Haiku 4.5", isDefault: false },
-        ]
     }
 
     capabilities(): HarnessCapabilities {

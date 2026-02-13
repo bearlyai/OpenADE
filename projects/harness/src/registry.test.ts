@@ -2,16 +2,13 @@ import { describe, it, expect, vi } from "vitest"
 import { HarnessRegistry } from "./registry.js"
 import { HarnessError } from "./errors.js"
 import type { Harness } from "./harness.js"
-import type { HarnessMeta, HarnessModel, HarnessCapabilities, HarnessInstallStatus, SlashCommand, HarnessQuery, HarnessEvent } from "./types.js"
+import type { HarnessMeta, HarnessCapabilities, HarnessInstallStatus, SlashCommand, HarnessQuery, HarnessEvent } from "./types.js"
 
 function makeFakeHarness(id: string, installStatus?: Partial<HarnessInstallStatus>): Harness {
     return {
         id,
         meta(): HarnessMeta {
             return { id, name: id, vendor: "test", website: "https://test.com" }
-        },
-        models(): HarnessModel[] {
-            return [{ id: "default", label: "Default", isDefault: true }]
         },
         capabilities(): HarnessCapabilities {
             return {

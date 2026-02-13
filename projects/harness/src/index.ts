@@ -14,7 +14,6 @@ export type {
     HarnessUsage,
     HarnessErrorCode,
     HarnessMeta,
-    HarnessModel,
     HarnessInstallStatus,
     HarnessCapabilities,
     SlashCommand,

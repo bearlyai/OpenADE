@@ -119,12 +119,6 @@ export interface HarnessMeta {
     website: string
 }
 
-export interface HarnessModel {
-    id: string
-    label: string
-    isDefault?: boolean
-}
-
 export interface HarnessInstallStatus {
     installed: boolean
     version?: string
