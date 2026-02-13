@@ -9,8 +9,8 @@
     "typecheck": "tsgo --noEmit",
     "test": "vitest run --exclude 'src/**/*.integration.test.ts'",
     "test:watch": "vitest --exclude 'src/**/*.integration.test.ts'",
-    "test:integration": "vitest run 'src/**/*.integration.test.ts'",
-    "test:all": "vitest run"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:all": "vitest run --exclude 'src/**/*.integration.test.ts' && vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {},
   "devDependencies": {
