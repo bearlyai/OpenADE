@@ -10,7 +10,8 @@
 
 import { captureError, track } from "../../analytics"
 import { USE_SAME_MODEL_FOR_AGENTS, getModelFullId } from "../../constants"
-import { type ClaudeStreamEvent, type McpServerConfig, getClaudeQueryManager, isClaudeApiAvailable } from "../../electronAPI/claude"
+import type { HarnessId, HarnessStreamEvent, McpServerConfig } from "../../electronAPI/harnessEventTypes"
+import { getHarnessQueryManager, isHarnessApiAvailable } from "../../electronAPI/harnessQuery"
 import { getGitStatus, isGitApiAvailable } from "../../electronAPI/git"
 import { buildMcpServerConfigs } from "../../electronAPI/mcp"
 import {
@@ -127,8 +128,8 @@ export class ExecutionManager {
         const { cwd, additionalDirectories } = this.getExecutionPaths(taskModel, repo)
 
         try {
-            if (!isClaudeApiAvailable()) {
-                console.debug("[ExecutionManager] Claude API not available (not in Electron?) - aborting runAction")
+            if (!isHarnessApiAvailable()) {
+                console.debug("[ExecutionManager] Harness API not available (not in Electron?) - aborting runAction")
                 return
             }
 
@@ -156,6 +157,7 @@ export class ExecutionManager {
                 source,
                 includesCommentIds: consumedCommentIds,
                 modelId: taskModel.model,
+                harnessId: taskModel.harnessId,
                 gitRefsBefore,
             })
             if (!eventResult) {
@@ -170,16 +172,13 @@ export class ExecutionManager {
 
             // Build MCP server configs from enabled servers
             const mcpServerConfigs = this.buildMcpServerConfigs(task.enabledMcpServerIds)
-            console.log("[ExecutionManager] MCP config", {
-                taskEnabledMcpServerIds: task.enabledMcpServerIds,
-                mcpServerConfigs: mcpServerConfigs ? Object.keys(mcpServerConfigs) : null,
-            })
 
             // Run execution
             await this.runExecutionLoop({
                 taskId,
                 eventId,
                 executionId,
+                harnessId: taskModel.harnessId,
                 prompt: userMessage,
                 appendSystemPrompt: systemPrompt,
                 cwd,
@@ -205,7 +204,7 @@ export class ExecutionManager {
             this.store.queries.clearActiveQuery(taskId)
             this.store.setTaskWorking(taskId, false)
             if (executionId) {
-                getClaudeQueryManager().cleanup(executionId)
+                getHarnessQueryManager().cleanup(executionId)
             }
             this.fireAfterEvent(taskId, source.type, executionSuccess)
         }
@@ -242,6 +241,7 @@ export class ExecutionManager {
         taskId: string
         eventId: string
         executionId: string
+        harnessId: HarnessId
         prompt: string | ContentBlock[]
         appendSystemPrompt?: string
         cwd: string
@@ -263,12 +263,12 @@ export class ExecutionManager {
             hasImages: Array.isArray(ctx.prompt),
         })
 
-        const manager = getClaudeQueryManager()
+        const manager = getHarnessQueryManager()
 
         console.debug("[ExecutionManager] runExecutionLoop: calling manager.startExecution")
         const taskModel = this.store.tasks.getTaskModel(ctx.taskId)
         const selectedModel = taskModel?.model ?? this.store.defaultModel
-        const modelEnvVars = USE_SAME_MODEL_FOR_AGENTS
+        const env = USE_SAME_MODEL_FOR_AGENTS && ctx.harnessId === "claude-code"
             ? {
                   ANTHROPIC_DEFAULT_OPUS_MODEL: getModelFullId(selectedModel),
                   ANTHROPIC_DEFAULT_SONNET_MODEL: getModelFullId(selectedModel),
@@ -279,16 +279,17 @@ export class ExecutionManager {
         const query = await manager.startExecution(
             ctx.prompt,
             {
+                harnessId: ctx.harnessId,
                 cwd: ctx.cwd,
                 additionalDirectories: ctx.additionalDirectories,
                 model: selectedModel,
-                maxThinkingTokens: 10000,
-                resume: ctx.parentSessionId,
+                thinking: "high",
+                resumeSessionId: ctx.parentSessionId,
                 forkSession: !!ctx.parentSessionId,
-                readOnly: ctx.readOnly,
+                mode: ctx.readOnly ? "read-only" : undefined,
                 appendSystemPrompt: ctx.appendSystemPrompt,
                 mcpServerConfigs: ctx.mcpServerConfigs,
-                modelEnvVars,
+                env,
             },
             ctx.executionId
         )
@@ -310,15 +311,18 @@ export class ExecutionManager {
         let messageCount = 0
         for await (const msg of query.stream()) {
             messageCount++
-            console.debug("[ExecutionManager] stream message received", { messageCount, msgType: msg.type })
+            const rawMsg = msg as Record<string, unknown>
 
-            const streamEvent: ClaudeStreamEvent = {
+            // Cast needed: TypeScript can't verify harnessId↔message correlation
+            // when constructing the event generically across harness types.
+            const streamEvent = {
                 id: crypto.randomUUID(),
-                type: "sdk_message",
+                type: "raw_message" as const,
                 executionId: ctx.executionId,
+                harnessId: ctx.harnessId,
                 message: msg,
-                direction: "execution",
-            }
+                direction: "execution" as const,
+            } as HarnessStreamEvent
 
             this.store.events.appendStreamEventToEvent({
                 taskId: ctx.taskId,
@@ -327,8 +331,8 @@ export class ExecutionManager {
             })
 
             // Update SDK capabilities from system:init message
-            if (msg.type === "system" && "subtype" in msg && (msg as Record<string, unknown>).subtype === "init") {
-                taskModel?.sdkCapabilities.updateFromInitMessage(msg as Record<string, unknown>)
+            if (rawMsg.type === "system" && rawMsg.subtype === "init") {
+                taskModel?.sdkCapabilities.updateFromInitMessage(rawMsg)
             }
 
             if (!sessionIdSaved && query.sessionId) {
@@ -342,19 +346,26 @@ export class ExecutionManager {
             }
         }
 
-        console.debug("[ExecutionManager] runExecutionLoop: stream ended", {
-            executionId: ctx.executionId,
-            totalMessages: messageCount,
-            queryIsComplete: query.isComplete,
-            queryIsAborted: query.isAborted,
-        })
+        // Persist any error events from the execution so they render in the UI
+        const errorEvents = query.executionState.events.filter(
+            (e) => e.direction === "execution" && e.type === "error"
+        )
+        for (const errorEvent of errorEvents) {
+            this.store.events.appendStreamEventToEvent({
+                taskId: ctx.taskId,
+                eventId: ctx.eventId,
+                streamEvent: errorEvent,
+            })
+        }
+
+        const success = query.executionState.status !== "error"
 
         await manager.clearBuffer(ctx.executionId)
 
         this.store.events.completeActionEvent({
             taskId: ctx.taskId,
             eventId: ctx.eventId,
-            success: true,
+            success,
         })
 
         // Capture git refs after execution completes

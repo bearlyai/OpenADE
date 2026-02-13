@@ -109,6 +109,35 @@ describe("buildCodexArgs", () => {
         expect(cIndices.length).toBeGreaterThanOrEqual(2)
     })
 
+    it("resume does not include exec-level flags (--sandbox, -m, -C, --add-dir, -c)", () => {
+        const result = buildCodexArgs(
+            makeQuery({
+                mode: "read-only",
+                resumeSessionId: "abc-123",
+                model: "o3",
+                cwd: "/tmp/test",
+                thinking: "high",
+                additionalDirectories: ["/extra"],
+            }),
+            {}
+        )
+        // Resume subcommand should only accept --json, session ID, and prompt
+        expect(result.args).not.toContain("--sandbox")
+        expect(result.args).not.toContain("-m")
+        expect(result.args).not.toContain("-C")
+        expect(result.args).not.toContain("--add-dir")
+        // -c for thinking/config should also be excluded
+        const cIndices = result.args.reduce<number[]>((acc, arg, i) => {
+            if (arg === "-c") acc.push(i)
+            return acc
+        }, [])
+        expect(cIndices).toHaveLength(0)
+        // But should still have the basics
+        expect(result.args).toContain("--json")
+        expect(result.args).toContain("resume")
+        expect(result.args).toContain("abc-123")
+    })
+
     it("allowedTools and disallowedTools are ignored (no args produced)", () => {
         const result = buildCodexArgs(makeQuery({ allowedTools: ["Read", "Bash"], disallowedTools: ["Write"] }), {})
         expect(result.args).not.toContain("--allowed-tools")

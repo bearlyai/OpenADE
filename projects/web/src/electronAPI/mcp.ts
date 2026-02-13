@@ -6,7 +6,7 @@
  */
 
 import type { McpOAuthTokens, McpServerItem } from "../persistence/mcpServerStore"
-import type { McpHttpServerConfig, McpServerConfig, McpStdioServerConfig } from "./claudeEventTypes"
+import type { McpHttpServerConfig, McpServerConfig, McpStdioServerConfig } from "./harnessEventTypes"
 
 // Re-export types for convenience
 export type { McpServerConfig, McpStdioServerConfig, McpHttpServerConfig }

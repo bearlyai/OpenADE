@@ -2,7 +2,7 @@
 // Identifiers
 // ============================================================================
 
-export type HarnessId = string // "claude-code" | "codex" | future harnesses
+export type HarnessId = "claude-code" | "codex"
 
 // ============================================================================
 // Prompt Content

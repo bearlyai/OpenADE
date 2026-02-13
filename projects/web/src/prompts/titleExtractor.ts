@@ -5,8 +5,7 @@
  */
 
 import { z } from "zod"
-import { zodToJsonSchema } from "zod-to-json-schema"
-import { getClaudeQueryManager } from "../electronAPI/claude"
+import { getHarnessQueryManager } from "../electronAPI/harnessQuery"
 
 const titleSchema = z.object({
     title: z.string().describe("A short, descriptive title for the task (3-8 words)"),
@@ -26,25 +25,29 @@ export function generateSlug(): string {
     return `task-${generateRandomChars(8)}`
 }
 
-/** Generate a title from description using Claude Agent SDK with structured output */
-export async function generateTitle(description: string, abortController: AbortController): Promise<string | null> {
-    const manager = getClaudeQueryManager()
+/** Generate a title from description using harness execution with structured output */
+export async function generateTitle(description: string, abortController: AbortController, harnessId?: string): Promise<string | null> {
+    // Title generation requires appendSystemPrompt (Claude Code specific).
+    // For other harnesses, fall back to truncation.
+    if (harnessId && harnessId !== "claude-code") {
+        return fallbackTitle(description)
+    }
+
+    const manager = getHarnessQueryManager()
 
     const query = await manager.startExecution(
         `Generate a short, descriptive title (3-8 words) for this task:
 
 ${description}`,
         {
-            model: "claude-haiku-4-5-20251001",
-            systemPrompt: `You are a title generator. Generate a short, descriptive title (3-8 words) that captures the essence of the task.
+            harnessId: "claude-code",
+            cwd: "",
+            model: "haiku",
+            appendSystemPrompt: `You are a title generator. Generate a short, descriptive title (3-8 words) that captures the essence of the task.
 
 Usually the description is enough - respond immediately. If the description is vague or references a file you don't understand, you may Read or Glob one file to clarify, but keep research minimal.`,
             allowedTools: ["Read", "Glob"],
             disallowedTools: ["Grep", "Bash", "WebSearch", "WebFetch", "Edit", "Write", "Task"],
-            outputFormat: {
-                type: "json_schema",
-                schema: zodToJsonSchema(titleSchema),
-            },
         }
     )
 
@@ -55,8 +58,9 @@ Usually the description is enough - respond immediately. If the description is v
 
     try {
         for await (const msg of query.stream()) {
-            if (msg.type === "result" && "structured_output" in msg && msg.structured_output) {
-                const parsed = titleSchema.safeParse(msg.structured_output)
+            const m = msg as Record<string, unknown>
+            if (m.type === "result" && "structured_output" in m && m.structured_output) {
+                const parsed = titleSchema.safeParse(m.structured_output)
                 if (parsed.success) {
                     return parsed.data.title
                 }

@@ -14,6 +14,10 @@ import { execCommand } from "./subprocess"
 import { isDev } from "../../config"
 import { createWriteStream } from "fs"
 
+// Note: getCliJsPath() has been removed. The @openade/harness library handles
+// binary resolution internally via its ClaudeCodeHarnessConfig.binaryPath and
+// resolveExecutable() utilities.
+
 // ============================================================================
 // Type Definitions
 // IMPORTANT: Keep ManagedBinaryStatus in sync with projects/dashboard/src/pages/code/electronAPI/binaries.ts
@@ -159,26 +163,6 @@ function enhancePath(): void {
     }
 }
 
-/**
- * Get the path to the SDK's cli.js, using the asar-unpacked path in packaged builds.
- * Bun cannot read from asar archives, so we must point it at the unpacked copy.
- * Returns undefined in dev (SDK resolves it fine on its own).
- */
-export function getCliJsPath(): string | undefined {
-    if (isDev) return undefined
-
-    // In production the SDK lives inside app.asar, but asarUnpack extracts it to app.asar.unpacked
-    const sdkDir = path.dirname(require.resolve("@anthropic-ai/claude-agent-sdk/sdk.mjs"))
-    const unpackedDir = sdkDir.replace("app.asar", "app.asar.unpacked")
-    const cliPath = path.join(unpackedDir, "cli.js")
-
-    if (fs.existsSync(cliPath)) {
-        return cliPath
-    }
-
-    logger.warn("[Binaries] Unpacked cli.js not found at:", cliPath)
-    return undefined
-}
 
 // ============================================================================
 // Download

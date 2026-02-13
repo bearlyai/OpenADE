@@ -1,5 +1,5 @@
 import { unlink, rm } from "node:fs/promises"
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 
 import type { Harness } from "../../harness.js"
 import type {
@@ -81,16 +81,16 @@ export class CodexHarness implements Harness<CodexEvent> {
             // Version check failed
         }
 
-        // Check auth status
+        // Check auth status — codex writes login status to stderr
         let authenticated = false
         try {
-            const output = execFileSync(binaryPath, ["login", "status"], {
+            const result = spawnSync(binaryPath, ["login", "status"], {
                 encoding: "utf-8",
                 timeout: 10000,
                 stdio: ["pipe", "pipe", "pipe"],
             })
-            // If the command succeeds and mentions "logged in", authenticated
-            authenticated = /logged in/i.test(output)
+            const combined = (result.stdout ?? "") + (result.stderr ?? "")
+            authenticated = /logged in/i.test(combined)
         } catch {
             // login status failed or returned non-zero — not authenticated
         }

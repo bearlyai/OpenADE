@@ -10,8 +10,8 @@
  */
 
 import { exhaustive } from "exhaustive"
-import type { ClaudeStreamEvent } from "../../electronAPI/claude"
-import { extractSDKMessages } from "../../electronAPI/claudeEventTypes"
+import type { HarnessStreamEvent, HarnessId } from "../../electronAPI/harnessEventTypes"
+import { extractRawMessageEvents } from "../../electronAPI/harnessEventTypes"
 import { snapshotsApi } from "../../electronAPI/snapshots"
 import { syncTaskPreviewFromStore, taskFromStore } from "../../persistence"
 import type { ActionEvent, ActionEventSource, GitRefs, ImageAttachment, SnapshotEvent } from "../../types"
@@ -22,18 +22,17 @@ import type { CodeStore } from "../store"
 const PR_URL_PATTERNS = [/https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/, /https:\/\/gitlab\.com\/[^/]+\/[^/]+\/-\/merge_requests\/\d+/]
 
 /** Extract a PR URL from LLM execution output */
-function extractPrUrl(events: ClaudeStreamEvent[]): string | null {
-    const sdkMessages = extractSDKMessages(events)
-    for (const msg of sdkMessages) {
-        if (msg.type !== "assistant") continue
-        const message = msg as { message?: { content?: unknown } }
-        if (!message.message?.content || !Array.isArray(message.message.content)) continue
-        const content = message.message.content as Array<{ type: string; text?: string }>
-        for (const block of content) {
-            if (block.type !== "text" || !block.text) continue
-            for (const pattern of PR_URL_PATTERNS) {
-                const match = block.text.match(pattern)
-                if (match) return match[0]
+function extractPrUrl(events: HarnessStreamEvent[]): string | null {
+    const messageEvents = extractRawMessageEvents(events)
+    for (const evt of messageEvents) {
+        // PR URLs are only found in Claude Code assistant messages with text content
+        if (evt.harnessId === "claude-code" && evt.message.type === "assistant") {
+            for (const block of evt.message.message.content) {
+                if (block.type !== "text" || !block.text) continue
+                for (const pattern of PR_URL_PATTERNS) {
+                    const match = block.text.match(pattern)
+                    if (match) return match[0]
+                }
             }
         }
     }
@@ -80,22 +79,22 @@ export class EventManager {
     getDefunctSessionId(event: ActionEvent): string | null {
         // Check stderr events
         const stderrText = event.execution.events
-            .filter((e): e is ClaudeStreamEvent & { type: "stderr"; direction: "execution" } => e.direction === "execution" && e.type === "stderr")
+            .filter((e): e is HarnessStreamEvent & { type: "stderr"; direction: "execution" } => e.direction === "execution" && e.type === "stderr")
             .map((e) => e.data)
             .join(" ")
 
         // Check error events
         const errorText = event.execution.events
-            .filter((e): e is ClaudeStreamEvent & { type: "error"; direction: "execution" } => e.direction === "execution" && e.type === "error")
+            .filter((e): e is HarnessStreamEvent & { type: "error"; direction: "execution" } => e.direction === "execution" && e.type === "error")
             .map((e) => e.error)
             .join(" ")
 
-        // Check SDK result messages for errors array
+        // Check raw result messages for errors array (handles both v1 sdk_message and v2 raw_message)
         const resultErrors: string[] = []
         for (const e of event.execution.events) {
-            if (e.direction === "execution" && e.type === "sdk_message") {
-                const msg = e.message as { type?: string; errors?: string[] }
-                if (msg.type === "result" && msg.errors) {
+            if (e.direction === "execution" && (e.type === "raw_message" || (e.type as string) === "sdk_message")) {
+                const msg = (e as Record<string, unknown>).message as { type?: string; errors?: string[] }
+                if (msg?.type === "result" && msg.errors) {
                     resultErrors.push(...msg.errors)
                 }
             }
@@ -166,6 +165,7 @@ export class EventManager {
         source,
         includesCommentIds = [],
         modelId,
+        harnessId,
         gitRefsBefore,
     }: {
         taskId: string
@@ -175,6 +175,7 @@ export class EventManager {
         source: ActionEventSource
         includesCommentIds?: string[]
         modelId?: string
+        harnessId: HarnessId
         gitRefsBefore?: GitRefs
     }): { eventId: string } | null {
         const taskStore = this.store.getCachedTaskStore(taskId)
@@ -190,7 +191,7 @@ export class EventManager {
             userInput,
             ...(images && images.length > 0 ? { images } : {}),
             execution: {
-                type: "claude-code",
+                harnessId,
                 executionId,
                 modelId,
                 events: [],
@@ -215,7 +216,7 @@ export class EventManager {
     }: {
         taskId: string
         eventId: string
-        streamEvent: ClaudeStreamEvent
+        streamEvent: HarnessStreamEvent
     }): void {
         const taskStore = this.store.getCachedTaskStore(taskId)
         if (!taskStore) {

@@ -100,6 +100,7 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
                 <div className="ml-3 border-l-2 border-primary/20">
                     <InlineMessages
                         events={event.execution.events}
+                        harnessId={event.execution.harnessId ?? "claude-code"}
                         sourceType={event.source.type}
                         sessionInfo={sessionInfo}
                         taskId={taskId}

@@ -328,8 +328,8 @@ function formatUserInlineComments(comments: Comment[]): string {
 }
 
 // Re-export ContentBlock from canonical definition
-export type { ContentBlock } from "../electronAPI/claudeEventTypes"
-import type { ContentBlock } from "../electronAPI/claudeEventTypes"
+export type { ContentBlock } from "../electronAPI/harnessEventTypes"
+import type { ContentBlock } from "../electronAPI/harnessEventTypes"
 
 // === Complete Prompt Builders ===
 

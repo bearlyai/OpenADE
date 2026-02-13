@@ -50,40 +50,44 @@ export function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessConfig,
     // Always JSON output
     execArgs.push("--json")
 
-    // Sandbox for read-only
-    if (query.mode === "read-only") {
-        execArgs.push("--sandbox", "read-only")
-    }
-
-    // Model
-    if (query.model) {
-        execArgs.push("-m", query.model)
-    }
-
-    // Working directory
-    if (query.cwd) {
-        execArgs.push("-C", query.cwd)
-    }
-
-    // Additional directories
-    if (query.additionalDirectories) {
-        for (const dir of query.additionalDirectories) {
-            execArgs.push("--add-dir", dir)
+    // `codex exec resume` only accepts: --json [SESSION_ID] [PROMPT]
+    // All other exec-level flags are only valid for `codex exec`
+    if (!query.resumeSessionId) {
+        // Sandbox for read-only
+        if (query.mode === "read-only") {
+            execArgs.push("--sandbox", "read-only")
         }
-    }
 
-    // Thinking / reasoning effort
-    if (query.thinking) {
-        const effort = THINKING_EFFORT_MAP[query.thinking]
-        if (effort) {
-            execArgs.push("-c", `model_reasoning_effort=${effort}`)
+        // Model
+        if (query.model) {
+            execArgs.push("-m", query.model)
         }
-    }
 
-    // MCP config overrides (passed through from the harness class)
-    if (mcpConfigArgs) {
-        for (const arg of mcpConfigArgs) {
-            execArgs.push("-c", arg)
+        // Working directory
+        if (query.cwd) {
+            execArgs.push("-C", query.cwd)
+        }
+
+        // Additional directories
+        if (query.additionalDirectories) {
+            for (const dir of query.additionalDirectories) {
+                execArgs.push("--add-dir", dir)
+            }
+        }
+
+        // Thinking / reasoning effort
+        if (query.thinking) {
+            const effort = THINKING_EFFORT_MAP[query.thinking]
+            if (effort) {
+                execArgs.push("-c", `model_reasoning_effort=${effort}`)
+            }
+        }
+
+        // MCP config overrides (passed through from the harness class)
+        if (mcpConfigArgs) {
+            for (const arg of mcpConfigArgs) {
+                execArgs.push("-c", arg)
+            }
         }
     }
 

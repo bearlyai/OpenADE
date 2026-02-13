@@ -1,6 +1,6 @@
 # Code Module
 
-Task planning and execution system with Claude Agent SDK. Users describe tasks, Claude generates plans, users can review/revise before execution.
+Task planning and execution system with pluggable AI harnesses (`@openade/harness`). Supports multiple execution engines (Claude Code, Codex, etc.) through a unified interface. Users describe tasks, the AI generates plans, users can review/revise before execution.
 
 This is a TypeScript-first codebase. When fixing type errors, focus on proper TypeScript solutions rather than workarounds.
 
@@ -110,7 +110,7 @@ Dashboard (`electronAPI/`) ↔ Electron (`projects/electron/src/modules/code/`)
 
 **All Electron APIs used in the code module must go through `electronAPI/`.** Do not import from `@/electronWindowApi` or other shared Electron utilities. This keeps the code module's dependencies isolated for easier migration.
 
-Main modules: claude (execution), git (worktrees, diffs), process (scripts), pty (terminal), files (search), shell (directory picker, open URL)
+Main modules: harness (execution via `@openade/harness`), git (worktrees, diffs), process (scripts), pty (terminal), files (search), shell (directory picker, open URL)
 
 ## Task Lifecycle
 
@@ -302,10 +302,12 @@ Import from `../components/ui` not `@/funktionalChat/components`.
 | MCP presets & icons | `constants.ts` |
 | Store coordinator | `store/store.ts` |
 | Task observable | `store/TaskModel.ts` |
-| Claude execution | `store/managers/ExecutionManager.ts` |
+| Harness execution | `store/managers/ExecutionManager.ts` |
 | Available commands | `store/managers/InputManager.ts` |
 | MCP server manager | `store/managers/McpServerManager.ts` |
-| Claude IPC | `electronAPI/claude.ts` |
+| Harness IPC | `electronAPI/harnessQuery.ts` |
+| Harness event types | `electronAPI/harnessEventTypes.ts` |
+| Harness event compat | `electronAPI/harnessEventCompat.ts` |
 | Git IPC | `electronAPI/git.ts` |
 | Shell IPC | `electronAPI/shell.ts` |
 | Data folder IPC | `electronAPI/dataFolder.ts` |

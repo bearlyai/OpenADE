@@ -197,7 +197,7 @@ export const MCP_PRESETS: Record<string, McpPreset> = {
 export const MCP_PRESET_IDS = Object.keys(MCP_PRESETS) as (keyof typeof MCP_PRESETS)[]
 
 // ============================================================================
-// Claude Model Configuration
+// Claude Model Configuration (legacy, kept for backward compat)
 // ============================================================================
 
 export const CLAUDE_MODELS = [
@@ -207,19 +207,97 @@ export const CLAUDE_MODELS = [
 ] as const
 
 export const DEFAULT_MODEL = "opus"
+/** @deprecated Use string instead - models are now per-harness */
 export type ClaudeModelId = (typeof CLAUDE_MODELS)[number]["id"]
 
-/** Get the full model ID (e.g. "claude-opus-4-6") from an alias (e.g. "opus") */
-export function getModelFullId(alias: ClaudeModelId): string {
-    return CLAUDE_MODELS.find((m) => m.id === alias)!.fullId
+// ============================================================================
+// Multi-Harness Model Registry (Phase 4)
+// ============================================================================
+
+import type { HarnessId } from "./electronAPI/harnessEventTypes"
+
+export interface ModelEntry {
+    id: string       // alias used in the picker (e.g. "opus", "o3")
+    fullId: string   // wire model ID sent to the CLI
+    label: string    // display label
 }
 
-/** Normalize a raw model ID to its display class name (e.g. "Opus", "Sonnet", "Haiku") */
+export interface HarnessModelConfig {
+    models: ModelEntry[]
+    defaultModel: string  // alias ID
+}
+
+/**
+ * Registry of models per harness. Each harness defines its own set of
+ * available models and a default.
+ */
+export const MODEL_REGISTRY: Record<HarnessId, HarnessModelConfig> = {
+    "claude-code": {
+        models: [
+            { id: "opus", fullId: "claude-opus-4-6", label: "Opus 4.6" },
+            { id: "sonnet", fullId: "claude-sonnet-4-5-20250929", label: "Sonnet 4.5" },
+            { id: "haiku", fullId: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
+        ],
+        defaultModel: "opus",
+    },
+    codex: {
+        models: [
+            { id: "gpt-5.3-codex-xhigh", fullId: "gpt-5.3-codex-xhigh", label: "GPT-5.3 Codex xHigh" },
+        ],
+        defaultModel: "gpt-5.3-codex-xhigh",
+    },
+}
+
+export const DEFAULT_HARNESS_ID: HarnessId = "claude-code"
+
+/** Get the full model ID from an alias. Searches the specified harness first, then all. */
+export function getModelFullId(alias: string, harnessId?: HarnessId): string {
+    // If harnessId given, look there first
+    if (harnessId) {
+        const config = MODEL_REGISTRY[harnessId]
+        if (config) {
+            const found = config.models.find((m) => m.id === alias)
+            if (found) return found.fullId
+        }
+    }
+
+    // Fallback: search all harnesses (backward compat)
+    for (const config of Object.values(MODEL_REGISTRY)) {
+        const found = config.models.find((m) => m.id === alias)
+        if (found) return found.fullId
+    }
+
+    // If alias is already a full ID, return as-is
+    return alias
+}
+
+/** Get models for a specific harness */
+export function getModelsForHarness(harnessId: HarnessId): ModelEntry[] {
+    return MODEL_REGISTRY[harnessId]?.models ?? []
+}
+
+/** Get default model alias for a harness */
+export function getDefaultModelForHarness(harnessId: HarnessId): string {
+    return MODEL_REGISTRY[harnessId]?.defaultModel ?? DEFAULT_MODEL
+}
+
+/** Resolve the best model alias for a given harness, falling back to that harness's default */
+export function resolveModelForHarness(alias: string, harnessId: HarnessId): string {
+    const config = MODEL_REGISTRY[harnessId]
+    if (!config) return alias
+    const found = config.models.find((m) => m.id === alias)
+    if (found) return found.id
+    return config.defaultModel
+}
+
+/** Normalize a raw model ID to its display class name (e.g. "Opus", "Sonnet", "Haiku", "o3") */
 export function normalizeModelClass(modelId: string): string {
     const lower = modelId.toLowerCase()
     if (lower.includes("opus")) return "Opus"
     if (lower.includes("sonnet")) return "Sonnet"
     if (lower.includes("haiku")) return "Haiku"
+    // Codex models
+    if (lower.includes("codex")) return "Codex"
     return "Other"
 }
 

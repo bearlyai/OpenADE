@@ -1,4 +1,4 @@
-import { extractSDKMessages } from "../electronAPI/claudeEventTypes"
+import { extractRawMessageEvents } from "../electronAPI/harnessEventTypes"
 import type { CodeEvent } from "../types"
 import type { TaskPreviewUsage } from "./repoStore"
 
@@ -13,17 +13,20 @@ export function computeTaskUsage(events: Array<CodeEvent & { id: string }>): Tas
         if (event.type !== "action") continue
         eventCount++
         const modelId = event.execution.modelId ?? "unknown"
-        const sdkMessages = extractSDKMessages(event.execution.events)
-        for (const msg of sdkMessages) {
-            if (msg.type === "result") {
-                const r = msg as unknown as {
-                    total_cost_usd: number
-                    usage: { input_tokens: number; output_tokens: number }
-                }
-                totalCostUsd += r.total_cost_usd ?? 0
-                inputTokens += r.usage?.input_tokens ?? 0
-                outputTokens += r.usage?.output_tokens ?? 0
-                costByModel[modelId] = (costByModel[modelId] ?? 0) + (r.total_cost_usd ?? 0)
+        const messageEvents = extractRawMessageEvents(event.execution.events)
+        for (const evt of messageEvents) {
+            // Usage/cost data is only in Claude Code result events currently
+            if (evt.harnessId === "claude-code" && evt.message.type === "result") {
+                totalCostUsd += evt.message.total_cost_usd ?? 0
+                const usage = evt.message.usage as { input_tokens?: number; output_tokens?: number } | undefined
+                inputTokens += usage?.input_tokens ?? 0
+                outputTokens += usage?.output_tokens ?? 0
+                costByModel[modelId] = (costByModel[modelId] ?? 0) + (evt.message.total_cost_usd ?? 0)
+            }
+            // Codex usage comes from turn.completed events
+            if (evt.harnessId === "codex" && evt.message.type === "turn.completed") {
+                inputTokens += evt.message.usage.input_tokens ?? 0
+                outputTokens += evt.message.usage.output_tokens ?? 0
             }
         }
     }

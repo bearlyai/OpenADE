@@ -60,26 +60,23 @@ describe("buildClaudeArgs", () => {
 
     it("thinking: 'low' → --effort low", () => {
         const result = buildClaudeArgs(makeQuery({ thinking: "low" }), {})
-        expect(result.args).toContain("--effort")
-        expect(result.args).toContain("low")
-        expect(result.args).toContain("--max-thinking-tokens")
-        expect(result.args).toContain("3000")
+        const effortIdx = result.args.indexOf("--effort")
+        expect(effortIdx).toBeGreaterThan(-1)
+        expect(result.args[effortIdx + 1]).toBe("low")
     })
 
     it("thinking: 'med' → --effort medium", () => {
         const result = buildClaudeArgs(makeQuery({ thinking: "med" }), {})
         const effortIdx = result.args.indexOf("--effort")
+        expect(effortIdx).toBeGreaterThan(-1)
         expect(result.args[effortIdx + 1]).toBe("medium")
-        const tokensIdx = result.args.indexOf("--max-thinking-tokens")
-        expect(result.args[tokensIdx + 1]).toBe("5000")
     })
 
     it("thinking: 'high' → --effort high", () => {
         const result = buildClaudeArgs(makeQuery({ thinking: "high" }), {})
         const effortIdx = result.args.indexOf("--effort")
+        expect(effortIdx).toBeGreaterThan(-1)
         expect(result.args[effortIdx + 1]).toBe("high")
-        const tokensIdx = result.args.indexOf("--max-thinking-tokens")
-        expect(result.args[tokensIdx + 1]).toBe("10000")
     })
 
     it("resumeSessionId produces --resume <id>", () => {

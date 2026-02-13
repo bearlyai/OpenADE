@@ -152,17 +152,46 @@ const openadeAPI = {
     },
 
     // ========================================================================
-    // Claude (with streaming)
+    // Harness (unified AI coding CLI interface, with streaming)
+    // ========================================================================
+    harness: {
+        // Unified command interface
+        command: (command: unknown) => ipcRenderer.invoke("harness:command", command),
+        // Convenience methods (wrap harness:command with the correct type)
+        query: (args: { executionId: string; prompt: unknown; options: unknown }) =>
+            ipcRenderer.invoke("harness:command", { id: crypto.randomUUID(), type: "start_query", ...args }),
+        toolResponse: (args: { executionId: string; callId: string; result?: unknown; error?: string }) =>
+            ipcRenderer.invoke("harness:command", { id: crypto.randomUUID(), type: "tool_response", ...args }),
+        abort: (args: { executionId: string }) =>
+            ipcRenderer.invoke("harness:command", { id: crypto.randomUUID(), type: "abort", ...args }),
+        reconnect: (args: { executionId: string }) =>
+            ipcRenderer.invoke("harness:command", { id: crypto.randomUUID(), type: "reconnect", ...args }),
+        // Check install status of all registered harnesses
+        checkStatus: () => ipcRenderer.invoke("harness:check-status"),
+        // Streaming events (new channel)
+        onEvent: (cb: (event: unknown) => void) =>
+            createListener("harness:event", cb as (...args: unknown[]) => void),
+        // Tool call events (per execution)
+        onToolCall: (executionId: string, cb: (callId: string, name: string, args: unknown) => void) => {
+            const handler = (_event: IpcRendererEvent, callId: string, name: string, args: unknown) =>
+                cb(callId, name, args)
+            ipcRenderer.on(`claude:tool-call:${executionId}`, handler)
+            return () => ipcRenderer.removeListener(`claude:tool-call:${executionId}`, handler)
+        },
+    },
+
+    // ========================================================================
+    // Claude (legacy backward compat — delegates to harness)
     // ========================================================================
     claude: {
-        // Unified command interface
+        // Unified command interface (legacy channel)
         command: (command: unknown) => ipcRenderer.invoke("claude:command", command),
-        // Legacy handlers (for backward compatibility)
+        // Legacy handlers
         query: (args: unknown) => ipcRenderer.invoke("claude:query", args),
         toolResponse: (args: unknown) => ipcRenderer.invoke("claude:tool-response", args),
         reconnect: (args: unknown) => ipcRenderer.invoke("claude:reconnect", args),
         abort: (args: unknown) => ipcRenderer.invoke("claude:abort", args),
-        // Streaming events
+        // Streaming events (legacy channel)
         onEvent: (cb: (event: unknown) => void) =>
             createListener("claude:event", cb as (...args: unknown[]) => void),
         onToolCall: (executionId: string, cb: (callId: string, name: string, args: unknown) => void) => {

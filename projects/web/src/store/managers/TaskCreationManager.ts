@@ -3,6 +3,7 @@ import { makeAutoObservable, runInAction } from "mobx"
 import { track } from "../../analytics"
 import { addTaskPreview, syncTaskPreviewFromStore, taskFromStore, updateTaskPreview } from "../../persistence"
 import { fallbackTitle, generateSlug, generateTitle } from "../../prompts/titleExtractor"
+import type { HarnessId } from "../../electronAPI/harnessEventTypes"
 import type { IsolationStrategy, SetupEnvironmentEvent, TaskDeviceEnvironment } from "../../types"
 import { getDeviceId } from "../../utils/deviceId"
 import { ulid } from "../../utils/ulid"
@@ -17,6 +18,7 @@ export interface TaskCreationOptions {
     mode: "plan" | "do" | "ask"
     isolationStrategy: IsolationStrategy
     enabledMcpServerIds?: string[]
+    harnessId?: HarnessId
 }
 
 export interface TaskCreation {
@@ -26,6 +28,7 @@ export interface TaskCreation {
     mode: "plan" | "do" | "ask"
     isolationStrategy: IsolationStrategy
     enabledMcpServerIds?: string[]
+    harnessId?: HarnessId
     phase: CreationPhase | "pending" | "completing"
     error: string | null
     slug: string | null
@@ -52,6 +55,7 @@ export class TaskCreationManager {
             mode: options.mode,
             isolationStrategy: options.isolationStrategy,
             enabledMcpServerIds: options.enabledMcpServerIds,
+            harnessId: options.harnessId,
             phase: "pending",
             error: null,
             slug: null,
@@ -296,8 +300,16 @@ export class TaskCreationManager {
                 hasMcpServers: (creation.enabledMcpServerIds?.length ?? 0) > 0,
             })
 
+            // Set harness on the TaskModel before execution starts
+            if (creation.harnessId) {
+                const taskModel = this.store.tasks.getTaskModel(task.id)
+                if (taskModel) {
+                    taskModel.setHarnessId(creation.harnessId)
+                }
+            }
+
             // Generate title async - don't block task creation
-            this.generateTitleAsync(task.id, creation.repoId, creation.description)
+            this.generateTitleAsync(task.id, creation.repoId, creation.description, creation.harnessId)
 
             setTimeout(() => {
                 const input = { userInput: creation.description, images: [] }
@@ -324,7 +336,7 @@ export class TaskCreationManager {
     }
 
     /** Generate title async and update task when done (fire-and-forget) */
-    private async generateTitleAsync(taskId: string, repoId: string, description: string): Promise<void> {
+    private async generateTitleAsync(taskId: string, repoId: string, description: string, harnessId?: HarnessId): Promise<void> {
         const updateTitle = (title: string) => {
             // Update task preview in repo store (sidebar display)
             if (this.store.repoStore) {
@@ -343,7 +355,7 @@ export class TaskCreationManager {
 
         try {
             const abortController = new AbortController()
-            const generatedTitle = await generateTitle(description, abortController)
+            const generatedTitle = await generateTitle(description, abortController, harnessId)
             updateTitle(generatedTitle ?? fallbackTitle(description))
         } catch (err) {
             console.error("[TaskCreationManager] Title generation failed:", err)

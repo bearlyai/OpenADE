@@ -3,23 +3,24 @@
   "version": "0.53.0",
   "scripts": {
     "postinstall": "electron-rebuild -f -w node-pty",
+    "build:harness": "cd ../harness && yarn install && yarn build",
     "clean": "rm -rf ./dist",
-    "build": "npm run clean && node ./build.mjs",
+    "build": "npm run build:harness && npm install && npm run clean && node ./build.mjs",
     "watch": "yarn && modd",
-    "start": "npm install && RELEASE=head DEBUG=1 npm run build && npx electron dist/main.js",
+    "start": "npm run build:harness && npm install && RELEASE=head DEBUG=1 npm run build && npx electron dist/main.js",
     "typecheck": "tsgo --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
-    "build:web": "cd ../web && yarn install && yarn build && cd ../electron && cp -r ../web/dist ./dist/web",
+    "build:web": "npm run build:harness && cd ../web && yarn install && yarn build && cd ../electron && cp -r ../web/dist ./dist/web",
     "build:test-mac": "npm run build && npm run build:web && NONOTARY=1 CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir && rm -rf /Applications/OpenADE.app && cp -R dist/electron/mac-arm64/OpenADE.app /Applications/OpenADE.app && xattr -cr /Applications/OpenADE.app && open /Applications/OpenADE.app",
     "knip": "knip"
   },
   "description": "Task planning and execution powered by Claude.",
   "author": "OpenADE",
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.37",
+    "@openade/harness": "file:../harness",
     "@sentry/electron": "^5.10.0",
     "electron-context-menu": "^3.6.1",
     "electron-log": "^4.4.8",
@@ -52,9 +53,7 @@
       "dist/main.js",
       "dist/preload.js"
     ],
-    "asarUnpack": [
-      "node_modules/@anthropic-ai/claude-agent-sdk/**"
-    ],
+    "asarUnpack": [],
     "extraResources": [
       "dist/pages/**",
       "dist/web/**"

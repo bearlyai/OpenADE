@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "npm run typecheck && npm run clean && vite build",
+    "build:harness": "cd ../harness && yarn install && yarn build",
+    "build": "npm run build:harness && yarn install && npm run typecheck && npm run clean && vite build",
     "clean": "rm -rf ./dist/*",
-    "start": "yarn install && vite dev",
+    "start": "npm run build:harness && yarn install && vite dev",
     "test": "vitest --run",
     "typecheck": "(npm run biome || true) && tsgo --noEmit",
     "biome": "biome format --write && biome lint --write --diagnostic-level=error",
@@ -57,7 +58,7 @@
     "zod-to-json-schema": "^3.22.5"
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.37",
+    "@openade/harness": "file:../harness",
     "@biomejs/biome": "^1.9.4",
     "@types/diff": "^5.0.2",
     "@types/jstoxml": "^5.0.0",

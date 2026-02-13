@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react"
-import type { ClaudeStreamEvent } from "../../electronAPI/claudeEventTypes"
+import type { HarnessStreamEvent, HarnessId } from "../../electronAPI/harnessEventTypes"
 import type { ActionEventSource } from "../../types"
 import { FileViewer } from "../FilesAndDiffs"
 import { type CommentContext, type DisplayContext, type GroupWithMeta, type MergedGroup, groupStreamEvents } from "../events/messageGroups"
@@ -16,7 +16,8 @@ export interface SessionInfo {
 }
 
 export interface InlineMessagesProps {
-    events: ClaudeStreamEvent[]
+    events: HarnessStreamEvent[]
+    harnessId: HarnessId
     sourceType: ActionEventSource["type"]
     sessionInfo?: SessionInfo
     taskId: string
@@ -53,9 +54,9 @@ function toggleSet(set: Set<string>, id: string): Set<string> {
     return next
 }
 
-export function InlineMessages({ events, sourceType, sessionInfo: _sessionInfo, taskId, actionEventId }: InlineMessagesProps) {
+export function InlineMessages({ events, harnessId, sourceType, sessionInfo: _sessionInfo, taskId, actionEventId }: InlineMessagesProps) {
     // 1. Group raw events (no tool merging - groupByRenderMode handles pill grouping)
-    const groups = useMemo(() => groupStreamEvents(events), [events])
+    const groups = useMemo(() => groupStreamEvents(events, harnessId), [events, harnessId])
 
     // 2. Find last text index for context
     const lastTextIndex = useMemo(() => {

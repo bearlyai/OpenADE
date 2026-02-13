@@ -2,7 +2,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { unlink, rm } from "node:fs/promises"
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 
 import type { Harness } from "../../harness.js"
 import type {
@@ -84,56 +84,25 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
             // Version check failed
         }
 
-        // Probe for auth status
+        // Check auth via `claude auth status` (outputs JSON with { loggedIn: boolean, ... })
         let authenticated = false
         try {
-            const ac = new AbortController()
-            const timeout = setTimeout(() => ac.abort(), 15000)
+            const env: Record<string, string> = { ...process.env as Record<string, string> }
+            // Unset CLAUDECODE so the command works inside nested Claude Code sessions
+            delete env.CLAUDECODE
 
-            const probeArgs = ["--print", "__harness_probe__", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]
-
-            for await (const event of spawnJsonl<Record<string, unknown>>({
-                command: binaryPath,
-                args: probeArgs,
-                signal: ac.signal,
-                parseLine: (line) => {
-                    try {
-                        const parsed = JSON.parse(line)
-                        return { type: "message", message: parsed }
-                    } catch {
-                        return null
-                    }
-                },
-            })) {
-                if (event.type === "message") {
-                    const msg = event.message as Record<string, unknown>
-                    // If we get a system:init, auth is working
-                    if (msg.type === "system" && msg.subtype === "init") {
-                        authenticated = true
-                        ac.abort()
-                        break
-                    }
-                    // Check for auth failure in result
-                    if (msg.type === "result") {
-                        const result = msg as Record<string, unknown>
-                        if (
-                            result.is_error &&
-                            typeof result.result === "string" &&
-                            (result.result.includes("Not logged in") || result.result.includes("authentication"))
-                        ) {
-                            authenticated = false
-                        } else {
-                            authenticated = true
-                        }
-                        ac.abort()
-                        break
-                    }
-                }
+            const result = spawnSync(binaryPath, ["auth", "status"], {
+                encoding: "utf-8",
+                timeout: 10000,
+                env,
+                stdio: ["pipe", "pipe", "pipe"],
+            })
+            if (result.status === 0 && result.stdout) {
+                const parsed = JSON.parse(result.stdout.trim())
+                authenticated = parsed.loggedIn === true
             }
-
-            clearTimeout(timeout)
         } catch {
-            // Probe failed — assume not authenticated
+            // Auth check failed — assume not authenticated
         }
 
         return {
@@ -162,10 +131,17 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
         try {
             const probeArgs = ["--print", "__harness_probe__", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]
 
+            // Unset CLAUDECODE so the probe works inside nested Claude Code sessions
+            const probeEnv: Record<string, string> = {}
+            if (process.env.CLAUDECODE) {
+                probeEnv.CLAUDECODE = ""
+            }
+
             for await (const event of spawnJsonl<Record<string, unknown>>({
                 command: binaryPath,
                 args: probeArgs,
                 cwd,
+                env: probeEnv,
                 signal: ac.signal,
                 parseLine: (line) => {
                     try {

@@ -1,21 +1,22 @@
 /**
  * Message grouping utility for inline message rendering
  *
- * Groups SDK messages into:
+ * Groups harness messages into:
  * - TextGroup: Assistant text messages (rendered as File components)
  * - ToolGroup: Paired tool_use + tool_result (rendered as expandable tabs)
  * - EditGroup: Edit tool calls (rendered as diffs)
  * - BashGroup: Bash commands (rendered as prompt/response)
- * - StderrGroup: stderr output from Claude process
+ * - StderrGroup: stderr output from harness process
  *
- * Now supports unified ClaudeStreamEvent[] as input (extracts SDKMessages internally).
+ * Delegates to per-harness parsers (e.g. claudeCodeParser) based on harnessId.
  */
 
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { ReactNode } from "react"
-import type { ClaudeStreamEvent } from "../../electronAPI/claudeEventTypes"
-import { extractSDKMessages } from "../../electronAPI/claudeEventTypes"
+import type { HarnessStreamEvent, HarnessId, HarnessRawMessageEvent } from "../../electronAPI/harnessEventTypes"
+import { extractRawMessageEvents } from "../../electronAPI/harnessEventTypes"
 import type { ActionEventSource } from "../../types"
+import { groupClaudeCodeMessages } from "./parsers/claudeCodeParser"
+import { groupCodexMessages } from "./parsers/codexParser"
 
 // ============================================================================
 // Render Mode Types
@@ -151,292 +152,6 @@ export interface ThinkingGroup {
 
 export type MessageGroup = TextGroup | ThinkingGroup | ToolGroup | EditGroup | WriteGroup | BashGroup | SystemGroup | ResultGroup | StderrGroup | TodoWriteGroup
 
-/** Extract text content from assistant message */
-function getAssistantText(msg: SDKMessage): string | null {
-    if (msg.type !== "assistant") return null
-    const message = msg as { message?: { content?: unknown } }
-    if (!message.message?.content || !Array.isArray(message.message.content)) return null
-    const content = message.message.content as Array<{ type: string; text?: string }>
-    const text = content
-        .filter((block) => block.type === "text")
-        .map((block) => block.text || "")
-        .join("")
-    return text.trim() || null
-}
-
-/** Extract thinking content from assistant message */
-function getThinkingText(msg: SDKMessage): string | null {
-    if (msg.type !== "assistant") return null
-    const message = msg as { message?: { content?: unknown } }
-    if (!message.message?.content || !Array.isArray(message.message.content)) return null
-    const content = message.message.content as Array<{ type: string; thinking?: string }>
-    const text = content
-        .filter((block) => block.type === "thinking")
-        .map((block) => block.thinking || "")
-        .join("")
-    return text.trim() || null
-}
-
-/** Extract tool_use from assistant message */
-function getToolUse(msg: SDKMessage): { id: string; name: string; input: unknown } | null {
-    if (msg.type !== "assistant") return null
-    const message = msg as { message?: { content?: unknown } }
-    if (!message.message?.content || !Array.isArray(message.message.content)) return null
-    const content = message.message.content as Array<{
-        type: string
-        id?: string
-        name?: string
-        input?: unknown
-    }>
-    const toolUseBlock = content.find((block) => block.type === "tool_use")
-    if (!toolUseBlock) return null
-    return {
-        id: toolUseBlock.id || "unknown",
-        name: toolUseBlock.name || "unknown",
-        input: toolUseBlock.input,
-    }
-}
-
-/** Extract tool_result from user message */
-function getToolResult(msg: SDKMessage): { toolUseId: string; content: string; isError: boolean } | null {
-    if (msg.type !== "user") return null
-
-    // User messages have content nested in message.content (like assistant messages)
-    const message = msg as {
-        message?: {
-            content?: unknown
-        }
-    }
-    if (!message.message?.content) return null
-
-    // Content must be an array to search for tool_result
-    if (!Array.isArray(message.message.content)) return null
-
-    const content = message.message.content as Array<{
-        type: string
-        tool_use_id?: string
-        content?: unknown
-        is_error?: boolean
-    }>
-    const toolResultBlock = content.find((block) => block.type === "tool_result")
-    if (!toolResultBlock) return null
-
-    // Content can be a string or array of content blocks
-    let contentStr: string
-    if (typeof toolResultBlock.content === "string") {
-        contentStr = toolResultBlock.content
-    } else if (Array.isArray(toolResultBlock.content)) {
-        contentStr = toolResultBlock.content.map((c: { type: string; text?: string }) => (c.type === "text" ? c.text || "" : JSON.stringify(c))).join("\n")
-    } else {
-        contentStr = JSON.stringify(toolResultBlock.content)
-    }
-
-    return {
-        toolUseId: toolResultBlock.tool_use_id || "unknown",
-        content: contentStr,
-        isError: toolResultBlock.is_error === true,
-    }
-}
-
-/**
- * Group messages into text and tool groups for inline rendering
- * Internal helper - use groupStreamEvents for the public API.
- */
-function groupMessages(messages: SDKMessage[]): MessageGroup[] {
-    const groups: MessageGroup[] = []
-
-    // Build a map of tool_use_id → user message index for quick lookup
-    const toolResultMap = new Map<string, { index: number; content: string; isError: boolean }>()
-    for (let i = 0; i < messages.length; i++) {
-        const result = getToolResult(messages[i])
-        if (result) {
-            toolResultMap.set(result.toolUseId, {
-                index: i,
-                content: result.content,
-                isError: result.isError,
-            })
-        }
-    }
-
-    // Process messages in order
-    for (let i = 0; i < messages.length; i++) {
-        const msg = messages[i]
-
-        // Handle system messages
-        if (msg.type === "system") {
-            const systemMsg = msg as { subtype?: string; status?: string | null; [key: string]: unknown }
-            const subtype = systemMsg.subtype as SystemGroup["subtype"] | undefined
-
-            // Skip status messages when status is null (they're meaningless)
-            if (subtype === "status" && systemMsg.status === null) {
-                continue
-            }
-
-            // Only include specific subtypes we want to display
-            if (subtype === "compact_boundary" || subtype === "status" || subtype === "init" || subtype === "hook_response") {
-                const { type: _type, subtype: _subtype, uuid: _uuid, ...metadata } = systemMsg
-                groups.push({
-                    type: "system",
-                    subtype,
-                    metadata,
-                    messageIndex: i,
-                })
-            }
-            continue
-        }
-
-        // Handle result messages
-        if (msg.type === "result") {
-            const resultMsg = msg as unknown as {
-                subtype: ResultGroup["subtype"]
-                duration_ms: number
-                total_cost_usd: number
-                usage: { input_tokens: number; output_tokens: number }
-                is_error: boolean
-                result?: string
-                errors?: string[]
-            }
-            groups.push({
-                type: "result",
-                subtype: resultMsg.subtype,
-                durationMs: resultMsg.duration_ms,
-                totalCostUsd: resultMsg.total_cost_usd,
-                usage: {
-                    inputTokens: resultMsg.usage?.input_tokens ?? 0,
-                    outputTokens: resultMsg.usage?.output_tokens ?? 0,
-                },
-                isError: resultMsg.is_error,
-                result: resultMsg.result,
-                errors: resultMsg.errors,
-                messageIndex: i,
-            })
-            continue
-        }
-
-        // Skip user messages (they're handled via tool_result pairing)
-        if (msg.type === "user") {
-            continue
-        }
-
-        // Handle assistant messages
-        if (msg.type === "assistant") {
-            const thinking = getThinkingText(msg)
-            const text = getAssistantText(msg)
-            const toolUse = getToolUse(msg)
-
-            // If has thinking, create thinking group (before text)
-            if (thinking) {
-                groups.push({
-                    type: "thinking",
-                    text: thinking,
-                    messageIndex: i,
-                })
-            }
-
-            // If has text, create text group
-            if (text) {
-                groups.push({
-                    type: "text",
-                    text,
-                    messageIndex: i,
-                })
-            }
-
-            // If has tool use, create appropriate group
-            if (toolUse) {
-                const result = toolResultMap.get(toolUse.id)
-
-                // Check if this is an Edit tool call
-                if (toolUse.name === "Edit") {
-                    const input = toolUse.input as {
-                        file_path?: string
-                        old_string?: string
-                        new_string?: string
-                    }
-                    groups.push({
-                        type: "edit",
-                        toolUseId: toolUse.id,
-                        filePath: input.file_path || "unknown",
-                        oldString: input.old_string || "",
-                        newString: input.new_string || "",
-                        isError: result?.isError ?? false,
-                        isPending: result === undefined,
-                        errorMessage: result?.isError ? result.content : undefined,
-                        messageIndices: [i, result?.index],
-                    })
-                } else if (toolUse.name === "Write") {
-                    // Write tool call - render as diff (empty -> content)
-                    const input = toolUse.input as {
-                        file_path?: string
-                        content?: string
-                    }
-                    groups.push({
-                        type: "write",
-                        toolUseId: toolUse.id,
-                        filePath: input.file_path || "unknown",
-                        content: input.content || "",
-                        isError: result?.isError ?? false,
-                        isPending: result === undefined,
-                        errorMessage: result?.isError ? result.content : undefined,
-                        messageIndices: [i, result?.index],
-                    })
-                } else if (toolUse.name === "Bash") {
-                    // Bash tool call - render as prompt/response
-                    const input = toolUse.input as {
-                        command?: string
-                        description?: string
-                    }
-                    groups.push({
-                        type: "bash",
-                        toolUseId: toolUse.id,
-                        command: input.command || "",
-                        description: input.description,
-                        result: result?.content,
-                        isError: result?.isError ?? false,
-                        isPending: result === undefined,
-                        messageIndices: [i, result?.index],
-                    })
-                } else if (toolUse.name === "TodoWrite") {
-                    // TodoWrite tool call - render as todo list with completion visualization
-                    const input = toolUse.input as {
-                        todos?: Array<{
-                            content?: string
-                            status?: "pending" | "in_progress" | "completed"
-                            activeForm?: string
-                        }>
-                    }
-                    const todos: TodoItem[] = (input.todos || []).map((t) => ({
-                        content: t.content || "",
-                        status: t.status || "pending",
-                        activeForm: t.activeForm || t.content || "",
-                    }))
-                    groups.push({
-                        type: "todoWrite",
-                        toolUseId: toolUse.id,
-                        todos,
-                        isError: result?.isError ?? false,
-                        isPending: result === undefined,
-                        messageIndices: [i, result?.index],
-                    })
-                } else {
-                    // Regular tool group
-                    groups.push({
-                        type: "tool",
-                        toolUseId: toolUse.id,
-                        toolName: toolUse.name,
-                        input: toolUse.input,
-                        result: result?.content,
-                        isError: result?.isError ?? false,
-                        messageIndices: [i, result?.index],
-                    })
-                }
-            }
-        }
-    }
-
-    return groups
-}
-
 // MergedGroup is now just MessageGroup - no tool merging needed
 // The groupByRenderMode function handles grouping consecutive pills
 export type MergedGroup = MessageGroup
@@ -444,24 +159,67 @@ export type MergedGroup = MessageGroup
 /**
  * Group unified stream events into message groups for inline rendering
  *
- * This is the preferred entry point for the unified event system.
- * Extracts SDKMessages from events and also creates StderrGroups for stderr events.
+ * Extracts raw messages from events, dispatches to the appropriate
+ * per-harness parser, and appends stderr groups.
  */
-export function groupStreamEvents(events: ClaudeStreamEvent[]): MessageGroup[] {
-    // Extract SDK messages and process them using existing logic
-    const messages = extractSDKMessages(events)
-    const sdkGroups = groupMessages(messages)
+export function groupStreamEvents(events: HarnessStreamEvent[], harnessId: HarnessId): MessageGroup[] {
+    // Extract typed raw message events — discriminated union on harnessId
+    const messageEvents = extractRawMessageEvents(events)
+
+    // Group by harness using narrowing (no unsafe casts)
+    const messageGroups = groupRawMessageEvents(messageEvents, harnessId)
 
     // Extract stderr events and create StderrGroups
     const stderrGroups: StderrGroup[] = events
-        .filter((e): e is ClaudeStreamEvent & { type: "stderr"; direction: "execution" } => e.direction === "execution" && e.type === "stderr")
+        .filter(
+            (e): e is HarnessStreamEvent & { type: "stderr"; direction: "execution" } =>
+                e.direction === "execution" && e.type === "stderr",
+        )
         .map((e) => ({
             type: "stderr" as const,
             data: e.data,
             eventId: e.id,
         }))
 
-    // For now, append stderr at the end (could be interleaved chronologically in future)
-    // Interleaving would require tracking event order, which adds complexity
-    return [...sdkGroups, ...stderrGroups]
+    // Extract harness-level error events (e.g. process_crashed) and render as ResultGroups
+    const errorGroups: ResultGroup[] = events
+        .filter(
+            (e): e is HarnessStreamEvent & { type: "error"; direction: "execution" } =>
+                e.direction === "execution" && e.type === "error",
+        )
+        .map((e) => ({
+            type: "result" as const,
+            subtype: "error_during_execution" as const,
+            durationMs: 0,
+            totalCostUsd: 0,
+            usage: { inputTokens: 0, outputTokens: 0 },
+            isError: true,
+            errors: [e.error],
+            messageIndex: -1,
+        }))
+
+    // Append stderr and errors at the end
+    return [...messageGroups, ...stderrGroups, ...errorGroups]
+}
+
+/** Dispatch raw message events to per-harness parser using discriminated union narrowing */
+function groupRawMessageEvents(events: HarnessRawMessageEvent[], harnessId: HarnessId): MessageGroup[] {
+    switch (harnessId) {
+        case "claude-code": {
+            const messages = events
+                .filter((e): e is HarnessRawMessageEvent & { harnessId: "claude-code" } => e.harnessId === "claude-code")
+                .map((e) => e.message)
+            return groupClaudeCodeMessages(messages)
+        }
+        case "codex": {
+            const messages = events
+                .filter((e): e is HarnessRawMessageEvent & { harnessId: "codex" } => e.harnessId === "codex")
+                .map((e) => e.message)
+            return groupCodexMessages(messages)
+        }
+        default: {
+            const _exhaustive: never = harnessId
+            return _exhaustive
+        }
+    }
 }

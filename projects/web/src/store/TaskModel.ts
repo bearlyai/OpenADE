@@ -6,8 +6,9 @@
  */
 
 import { makeAutoObservable, runInAction } from "mobx"
-import { type ClaudeModelId, DEFAULT_MODEL } from "../constants"
-import { extractSDKMessages } from "../electronAPI/claudeEventTypes"
+import { DEFAULT_MODEL, getDefaultModelForHarness } from "../constants"
+import { extractRawMessageEvents } from "../electronAPI/harnessEventTypes"
+import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import type { GitStatusResponse } from "../electronAPI/git"
 import { computeTaskUsage } from "../persistence/taskStatsUtils"
 import type { ActionEvent, CodeEvent, IsolationStrategy, Task, TaskDeviceEnvironment } from "../types"
@@ -23,7 +24,8 @@ import type { CodeStore } from "./store"
 
 export class TaskModel {
     gitStatus: GitStatusResponse | null = null
-    model: ClaudeModelId = DEFAULT_MODEL
+    model: string = DEFAULT_MODEL
+    harnessId: HarnessId = "claude-code"
     private gitStateLoading = false
     private _environmentCache: TaskEnvironment | null = null
     private _environmentDeviceId: string | null = null
@@ -113,10 +115,17 @@ export class TaskModel {
         return this._sdkCapabilities
     }
 
-    // === Model ===
+    // === Model & Harness ===
 
-    setModel(modelId: ClaudeModelId): void {
+    setModel(modelId: string): void {
         this.model = modelId
+    }
+
+    setHarnessId(id: HarnessId): void {
+        if (id === this.harnessId) return
+        this.harnessId = id
+        // Reset model to the new harness's default
+        this.model = getDefaultModelForHarness(id)
     }
 
     private get task(): Task | undefined {
@@ -330,10 +339,10 @@ export class TaskModel {
         let durationMs = 0
         for (const event of events) {
             if (event.type !== "action") continue
-            const sdkMessages = extractSDKMessages(event.execution.events)
-            for (const msg of sdkMessages) {
-                if (msg.type === "result") {
-                    durationMs += (msg as { duration_ms: number }).duration_ms ?? 0
+            const messageEvents = extractRawMessageEvents(event.execution.events)
+            for (const evt of messageEvents) {
+                if (evt.harnessId === "claude-code" && evt.message.type === "result") {
+                    durationMs += evt.message.duration_ms ?? 0
                 }
             }
         }

@@ -1,19 +1,19 @@
 /**
  * QueryManager
  *
- * Manages active Claude queries for abort functionality.
+ * Manages active harness queries for abort functionality.
  * Tracks queries per task and handles abort operations.
  *
- * Uses the unified ClaudeStreamEvent system.
+ * Uses the unified HarnessStreamEvent system.
  */
 
 import { makeAutoObservable } from "mobx"
-import { type ClaudeQuery, getClaudeQueryManager } from "../../electronAPI/claude"
-import { hasOnlyInitMessage } from "../../electronAPI/claudeEventTypes"
+import { hasOnlyInitMessage } from "../../electronAPI/harnessEventTypes"
+import { type HarnessQuery, getHarnessQueryManager } from "../../electronAPI/harnessQuery"
 import type { CodeStore } from "../store"
 
 export class QueryManager {
-    private activeQueries: Map<string, { query: ClaudeQuery; eventId: string | null; parentSessionId?: string }> = new Map()
+    private activeQueries: Map<string, { query: HarnessQuery; eventId: string | null; parentSessionId?: string }> = new Map()
 
     constructor(private store: CodeStore) {
         makeAutoObservable(this, {
@@ -23,7 +23,7 @@ export class QueryManager {
 
     // ==================== Query tracking ====================
 
-    setActiveQuery(taskId: string, query: ClaudeQuery, eventId: string | null, parentSessionId?: string): void {
+    setActiveQuery(taskId: string, query: HarnessQuery, eventId: string | null, parentSessionId?: string): void {
         this.activeQueries.set(taskId, { query, eventId, parentSessionId })
     }
 
@@ -31,7 +31,7 @@ export class QueryManager {
         this.activeQueries.delete(taskId)
     }
 
-    getActiveQuery(taskId: string): { query: ClaudeQuery; eventId: string | null; parentSessionId?: string } | null {
+    getActiveQuery(taskId: string): { query: HarnessQuery; eventId: string | null; parentSessionId?: string } | null {
         return this.activeQueries.get(taskId) || null
     }
 
@@ -76,7 +76,7 @@ export class QueryManager {
 
         // Cleanup manager reference
         const executionId = active.query.id
-        getClaudeQueryManager().cleanup(executionId)
+        getHarnessQueryManager().cleanup(executionId)
 
         console.debug("[QueryManager] Task stopped successfully", taskId, { sessionId })
     }

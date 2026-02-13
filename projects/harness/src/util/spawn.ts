@@ -36,7 +36,7 @@ export async function* spawnJsonl<M>(options: SpawnJsonlOptions<M>): AsyncGenera
     const proc = nodeSpawn(command, args, {
         cwd,
         env: env ? { ...process.env, ...env } : undefined,
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe"],
     })
 
     let stderrBuf = ""
@@ -121,7 +121,7 @@ export async function* spawnJsonl<M>(options: SpawnJsonlOptions<M>): AsyncGenera
             })
 
             rl.on("close", () => {
-                // readline done
+                // readline finished — exit handler will finalize
             })
         }
 

@@ -6,15 +6,15 @@
  * rather than relying on raw Electron detection.
  *
  * Also manages an in-memory cache of SDK capabilities (slash commands, skills, plugins)
- * per working directory. The cache is populated from system:init messages during normal
- * queries and can be probed on demand via a lightweight empty-prompt query.
+ * per (harnessId, cwd). The cache is populated from system:init messages during normal
+ * queries and can be probed on demand via the harness's discoverSlashCommands().
  */
 
 import { ipcMain, type IpcMainInvokeEvent } from "electron"
 import logger from "electron-log"
 import { isDev } from "../../config"
-import { query } from "@anthropic-ai/claude-agent-sdk"
-import { resolve as resolveBinary, getCliJsPath } from "./binaries"
+import { registry } from "./harness"
+import type { HarnessId } from "@openade/harness"
 
 // ============================================================================
 // Type Definitions
@@ -53,98 +53,83 @@ function checkAllowed(e: IpcMainInvokeEvent): boolean {
 }
 
 // ============================================================================
-// SDK Capabilities Cache (in-memory, keyed by cwd)
+// SDK Capabilities Cache (in-memory, keyed by "harnessId:cwd")
 // ============================================================================
 
 const sdkCapabilitiesCache = new Map<string, SdkCapabilities>()
 
-/** Get cached SDK capabilities for a working directory */
-function getSdkCache(cwd: string): SdkCapabilities | null {
-	return sdkCapabilitiesCache.get(cwd) ?? null
+function cacheKey(harnessId: HarnessId, cwd: string): string {
+	return `${harnessId}:${cwd}`
 }
 
-/** Update cached SDK capabilities for a working directory */
-export function setSdkCache(cwd: string, data: SdkCapabilities): void {
-	sdkCapabilitiesCache.set(cwd, data)
-	logger.info("[Capabilities] SDK cache updated for", cwd, JSON.stringify({
+/** Get cached SDK capabilities for a (harnessId, cwd) pair */
+function getSdkCache(cwd: string, harnessId: HarnessId = "claude-code"): SdkCapabilities | null {
+	return sdkCapabilitiesCache.get(cacheKey(harnessId, cwd)) ?? null
+}
+
+/** Update cached SDK capabilities for a working directory (backward compat: default to claude-code) */
+export function setSdkCache(cwd: string, data: SdkCapabilities, harnessId: HarnessId = "claude-code"): void {
+	sdkCapabilitiesCache.set(cacheKey(harnessId, cwd), data)
+	logger.info("[Capabilities] SDK cache updated for", harnessId, cwd, JSON.stringify({
 		slash_commands: data.slash_commands.length,
 		skills: data.skills.length,
 		plugins: data.plugins.length,
 	}))
 }
 
-// Track in-flight probes to avoid duplicate concurrent probes for the same cwd
+// Track in-flight probes to avoid duplicate concurrent probes for the same (harnessId, cwd)
 const activeProbes = new Map<string, Promise<SdkCapabilities | null>>()
 
 /**
- * Run a lightweight probe to discover SDK capabilities for a cwd.
- * Sends an empty prompt and aborts immediately after receiving the system:init message.
- * No API tokens are consumed — init is emitted before any LLM call.
+ * Run a lightweight probe to discover SDK capabilities for a (harnessId, cwd).
+ * Uses harness.discoverSlashCommands() which runs a short-lived CLI invocation
+ * and aborts after receiving initial config. No API tokens are consumed.
  */
-async function runProbe(cwd: string): Promise<SdkCapabilities | null> {
-	// Deduplicate concurrent probes for the same cwd
-	const existing = activeProbes.get(cwd)
+async function runProbe(cwd: string, harnessId: HarnessId = "claude-code"): Promise<SdkCapabilities | null> {
+	const key = cacheKey(harnessId, cwd)
+
+	// Deduplicate concurrent probes for the same (harnessId, cwd)
+	const existing = activeProbes.get(key)
 	if (existing) return existing
 
 	const probePromise = (async () => {
-		logger.info("[Capabilities] Running SDK probe for", cwd)
-		const abortController = new AbortController()
+		logger.info("[Capabilities] Running harness probe for", harnessId, cwd)
 
 		try {
-			// Use managed bun binary if available (resolved via PATH), otherwise fall back to ELECTRON_RUN_AS_NODE
-		const hasManagedBun = !!resolveBinary("bun")
-		logger.info("[Capabilities] Runtime selection:", hasManagedBun ? "bun (managed)" : "node (ELECTRON_RUN_AS_NODE)")
-		const execConfig = hasManagedBun
-			? { executable: "bun" as const, pathToClaudeCodeExecutable: getCliJsPath(), env: { ...process.env } }
-			: { executable: process.execPath as "node", env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } }
+			const harness = registry.getOrThrow(harnessId)
+			const abortController = new AbortController()
+			const timeout = setTimeout(() => abortController.abort(), 15000)
 
-		const response = query({
-				prompt: "",
-				options: {
-					model: "claude-haiku-4-5-20251001",
-					tools: { type: "preset", preset: "claude_code" },
-					permissionMode: "bypassPermissions",
-					settingSources: ["user", "project", "local"],
-					cwd,
-					abortController,
-					...execConfig,
-					stderr: (data: string) => {
-						logger.error("[Capabilities] Probe stderr:", data)
-					},
-				},
-			})
+			const slashCommands = await harness.discoverSlashCommands(cwd, abortController.signal)
+			clearTimeout(timeout)
 
-			for await (const msg of response) {
-				if (msg.type === "system" && "subtype" in msg && msg.subtype === "init") {
-					const initMsg = msg as Record<string, unknown>
-					const capabilities: SdkCapabilities = {
-						slash_commands: (initMsg.slash_commands as string[]) ?? [],
-						skills: (initMsg.skills as string[]) ?? [],
-						plugins: (initMsg.plugins as { name: string; path: string }[]) ?? [],
-						cachedAt: Date.now(),
-					}
-					abortController.abort()
-					setSdkCache(cwd, capabilities)
-					return capabilities
-				}
+			const capabilities: SdkCapabilities = {
+				slash_commands: slashCommands
+					.filter((c) => c.type === "slash_command")
+					.map((c) => c.name),
+				skills: slashCommands
+					.filter((c) => c.type === "skill")
+					.map((c) => c.name),
+				plugins: [], // Plugins are extracted from init in streaming; not available via probe
+				cachedAt: Date.now(),
 			}
 
-			logger.warn("[Capabilities] Probe completed without system:init message")
-			return null
+			setSdkCache(cwd, capabilities, harnessId)
+			return capabilities
 		} catch (err) {
-			// AbortError is expected — we abort after getting init
+			// AbortError is expected if we time out
 			if (err instanceof Error && (err.name === "AbortError" || err.message?.includes("abort"))) {
-				const cached = getSdkCache(cwd)
+				const cached = getSdkCache(cwd, harnessId)
 				if (cached) return cached
 			}
 			logger.error("[Capabilities] Probe failed:", err)
 			return null
 		} finally {
-			activeProbes.delete(cwd)
+			activeProbes.delete(key)
 		}
 	})()
 
-	activeProbes.set(cwd, probePromise)
+	activeProbes.set(key, probePromise)
 	return probePromise
 }
 
@@ -165,23 +150,36 @@ export const load = () => {
 		} satisfies CodeModuleCapabilities
 	})
 
-	ipcMain.handle("code:sdk-capabilities", async (event, args: { cwd: string }) => {
+	ipcMain.handle("code:sdk-capabilities", async (event, args: { cwd: string; harnessId?: HarnessId }) => {
 		if (!checkAllowed(event)) throw new Error("not allowed")
 
-		const { cwd } = args
+		const { cwd, harnessId = "claude-code" } = args
 
 		// Return cached if available
-		const cached = getSdkCache(cwd)
+		const cached = getSdkCache(cwd, harnessId)
 		if (cached) return cached
 
 		// Run probe to discover capabilities
-		return await runProbe(cwd)
+		return await runProbe(cwd, harnessId)
 	})
 
-	ipcMain.handle("code:invalidate-sdk-capabilities", async (event, args: { cwd: string }) => {
+	ipcMain.handle("code:invalidate-sdk-capabilities", async (event, args: { cwd: string; harnessId?: HarnessId }) => {
 		if (!checkAllowed(event)) throw new Error("not allowed")
-		sdkCapabilitiesCache.delete(args.cwd)
+		const harnessId = args.harnessId ?? "claude-code"
+		sdkCapabilitiesCache.delete(cacheKey(harnessId, args.cwd))
 		return { ok: true }
+	})
+
+	// New handler: check install status for all registered harnesses
+	ipcMain.handle("harness:check-status", async (event) => {
+		if (!checkAllowed(event)) throw new Error("not allowed")
+		const statusMap = await registry.checkAllInstallStatus()
+		// Convert Map to plain object for IPC serialization
+		const result: Record<string, unknown> = {}
+		for (const [id, status] of statusMap) {
+			result[id] = status
+		}
+		return result
 	})
 
 	logger.info("[Capabilities] IPC handlers registered successfully")

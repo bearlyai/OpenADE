@@ -4,13 +4,14 @@ import { observer } from "mobx-react"
 import { useRef } from "react"
 import { Z_INDEX } from "../constants"
 import { openUrlInNativeBrowser } from "../electronAPI/shell"
-import type { ClaudeModelId } from "../constants"
+import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import type { GitStatusResponse } from "../electronAPI/git"
 import type { Command, InputManager } from "../store/managers/InputManager"
 import type { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager"
 import type { SmartEditorManager } from "../store/managers/SmartEditorManager"
 import type { TrayManager } from "../store/managers/TrayManager"
 import type { Comment } from "../types"
+import { HarnessPicker } from "./HarnessPicker"
 import { ModelPicker } from "./ModelPicker"
 import { processImageBlob } from "../utils/imageAttachment"
 import { SmartEditor, type SmartEditorRef } from "./SmartEditor"
@@ -78,6 +79,8 @@ export const InputBar = observer(function InputBar({
     unsubmittedComments = [],
     selectedModel,
     onModelChange,
+    harnessId,
+    onHarnessChange,
     hideTray = false,
 }: {
     input: InputManager
@@ -93,8 +96,10 @@ export const InputBar = observer(function InputBar({
     /** SDK capabilities manager for slash command discovery */
     sdkCapabilities?: SdkCapabilitiesManager
     unsubmittedComments?: Comment[]
-    selectedModel?: ClaudeModelId
-    onModelChange?: (model: ClaudeModelId) => void
+    selectedModel?: string
+    onModelChange?: (model: string) => void
+    harnessId?: HarnessId
+    onHarnessChange?: (harnessId: HarnessId) => void
     /** Dev: Hide tray buttons and slide-out */
     hideTray?: boolean
 }) {
@@ -144,9 +149,14 @@ export const InputBar = observer(function InputBar({
                                 )}
                             </div>
                         )}
-                        {selectedModel && onModelChange && (
+                        {harnessId && onHarnessChange && (
                             <div className={cx("shrink-0", !gitStatus?.branch && "ml-auto")}>
-                                <ModelPicker value={selectedModel} onChange={onModelChange} />
+                                <HarnessPicker value={harnessId} onChange={onHarnessChange} />
+                            </div>
+                        )}
+                        {selectedModel && onModelChange && (
+                            <div className={cx("shrink-0", !gitStatus?.branch && !harnessId && "ml-auto")}>
+                                <ModelPicker value={selectedModel} onChange={onModelChange} harnessId={harnessId} />
                             </div>
                         )}
                     </div>

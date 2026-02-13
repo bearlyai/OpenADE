@@ -1,6 +1,7 @@
 import { makeAutoObservable, reaction, runInAction } from "mobx"
 import { analytics, track } from "../analytics"
-import { type ClaudeModelId, DEFAULT_MODEL } from "../constants"
+import { DEFAULT_MODEL, getDefaultModelForHarness } from "../constants"
+import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { getDeviceConfig, setTelemetryDisabled } from "../electronAPI/deviceConfig"
 import { setGlobalEnv } from "../electronAPI/subprocess"
 import type { McpServerStore } from "../persistence/mcpServerStore"
@@ -35,7 +36,8 @@ export interface CodeStoreConfig {
 
 export class CodeStore {
     readonly config: CodeStoreConfig
-    defaultModel: ClaudeModelId = DEFAULT_MODEL
+    defaultModel: string = DEFAULT_MODEL
+    defaultHarnessId: HarnessId = "claude-code"
     workingTaskIds: Set<string> = new Set()
 
     repoStore: RepoStore | null = null
@@ -337,7 +339,13 @@ export class CodeStore {
         return this.workingTaskIds.has(taskId)
     }
 
-    setDefaultModel(modelId: ClaudeModelId): void {
+    setDefaultModel(modelId: string): void {
         this.defaultModel = modelId
+    }
+
+    setDefaultHarnessId(harnessId: HarnessId): void {
+        this.defaultHarnessId = harnessId
+        // Reset default model to match the new harness
+        this.defaultModel = getDefaultModelForHarness(harnessId)
     }
 }

@@ -18,6 +18,7 @@ import {
 } from "lucide-react"
 import { observer } from "mobx-react"
 import { useEffect, useMemo, useRef, useState } from "react"
+import { HarnessPicker } from "../components/HarnessPicker"
 import { ModelPicker } from "../components/ModelPicker"
 import { SmartEditor, type SmartEditorRef } from "../components/SmartEditor"
 import { TaskMcpSelector } from "../components/mcp/TaskMcpSelector"
@@ -255,6 +256,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
             mode,
             isolationStrategy: useWorktree && selectedBranch ? { type: "worktree", sourceBranch: selectedBranch } : { type: "head" },
             enabledMcpServerIds: selectedMcpServerIds.length > 0 ? selectedMcpServerIds : undefined,
+            harnessId: codeStore.defaultHarnessId,
         })
 
         editorManager.clear()
@@ -409,7 +411,8 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                         >
                             <ImagePlus size={16} />
                         </button>
-                        <ModelPicker value={codeStore.defaultModel} onChange={(m) => codeStore.setDefaultModel(m)} />
+                        <HarnessPicker value={codeStore.defaultHarnessId} onChange={(id) => codeStore.setDefaultHarnessId(id)} />
+                        <ModelPicker value={codeStore.defaultModel} onChange={(m) => codeStore.setDefaultModel(m)} harnessId={codeStore.defaultHarnessId} />
                     </div>
 
                     {/* Center section: Worktree toggle + branch selector */}

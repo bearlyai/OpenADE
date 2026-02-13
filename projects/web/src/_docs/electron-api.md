@@ -6,22 +6,27 @@ IPC wrappers in `electronAPI/` communicate with Electron main process handlers i
 
 | Module | What It Does |
 |--------|--------------|
-| `claude.ts` | Claude Agent SDK execution. Singleton `ClaudeQueryManager` manages queries. |
+| `harnessQuery.ts` | Harness execution. Singleton `HarnessQueryManager` manages queries across harnesses (Claude Code, Codex, etc.). |
 | `process.ts` | Spawn processes with streaming output. `ProcessHandle` class per process. |
 | `pty.ts` | Terminal PTY for interactive shell. `PtyHandle` class per terminal. |
 | `git.ts` | Git operations (worktrees, diffs, status). Stateless functions. |
 | `files.ts` | Fuzzy file search. Uses git ls-files, ripgrep, or fs walk. |
 
-## Claude Execution
+## Harness Execution
 
-Get the singleton manager and start a query:
+Get the singleton manager and start an execution:
 
 ```typescript
-const manager = getClaudeQueryManager()
-const query = await manager.startQuery(prompt, options)
+const manager = getHarnessQueryManager()
+const query = await manager.startExecution(prompt, {
+    harnessId: "claude-code",
+    mode: "plan",
+    thinking: "high",
+    resumeSessionId: "...",
+})
 
 for await (const msg of query.stream()) {
-    // Handle SDK messages
+    // Handle harness events
 }
 ```
 
@@ -30,18 +35,15 @@ Reconnect to running execution after page refresh:
 const query = await manager.attachExecution(executionId)
 ```
 
-Tool handlers can be registered for client-side tools:
-```typescript
-query.registerToolHandler("myTool", async (args) => {
-    return { content: [{ type: "text", text: "result" }] }
-})
-```
+Client tools are registered at the IPC layer via `harness:tool_call` / `harness:tool_response` channels.
 
 ## Event Types
 
-`claudeEventTypes.ts` defines the unified event stream. Events have a `direction`:
-- `execution` - From Electron (sdk_message, complete, error, tool_call, etc.)
+`harnessEventTypes.ts` defines the unified event stream. Events have a `direction`:
+- `execution` - From Electron (raw_message, complete, error, tool_call, etc.)
 - `command` - From Dashboard (start_query, tool_response, abort, etc.)
+
+`harnessEventCompat.ts` provides a tolerant reader that normalizes v1 persisted events (type: "sdk_message") to v2 (type: "raw_message" with harnessId).
 
 All events stored in `ActionEvent.execution.events`.
 

@@ -5,10 +5,12 @@
  */
 
 import type { AnnotationSide } from "@pierre/diffs"
-import type { ClaudeStreamEvent } from "./electronAPI/claudeEventTypes"
+import type { HarnessStreamEvent, HarnessId } from "./electronAPI/harnessEventTypes"
 
 // Re-export types for convenience
-export type { ClaudeStreamEvent }
+export type { HarnessStreamEvent, HarnessId }
+/** @deprecated Use HarnessStreamEvent instead */
+export type ClaudeStreamEvent = HarnessStreamEvent
 
 // ============================================================================
 // Execution Types - supports multiple execution engines
@@ -19,20 +21,16 @@ export interface GitRefs {
     branch?: string
 }
 
-/** Claude Code execution - uses Claude Agent SDK */
-interface ClaudeCodeExecution {
-    type: "claude-code"
+export interface Execution {
+    harnessId: HarnessId     // "claude-code" | "codex" | ...
     executionId: string
-    sessionId?: string // Claude session ID returned from this execution
-    parentSessionId?: string // Claude session ID we forked from (previous event's session)
+    sessionId?: string
+    parentSessionId?: string
     modelId?: string
-    events: ClaudeStreamEvent[]
+    events: HarnessStreamEvent[]
     gitRefsBefore?: GitRefs
     gitRefsAfter?: GitRefs
 }
-
-/** Union type for all execution engines (currently only claude-code) */
-export type Execution = ClaudeCodeExecution
 
 export interface User {
     id: string

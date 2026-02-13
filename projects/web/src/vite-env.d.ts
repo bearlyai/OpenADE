@@ -92,17 +92,15 @@ interface OpenADEAPI {
         // biome-ignore lint: callback types are cast by consumer
         onExit: (ptyId: string, cb: (data: unknown) => void) => () => void
     }
-    claude: {
+    harness: {
         command: (command: unknown) => Promise<unknown>
-        query: (args: unknown) => Promise<unknown>
-        toolResponse: (args: unknown) => Promise<unknown>
-        reconnect: (args: unknown) => Promise<unknown>
-        abort: (args: unknown) => Promise<unknown>
+        query: (args: { executionId: string; prompt: unknown; options: unknown }) => Promise<unknown>
+        toolResponse: (args: { executionId: string; callId: string; result?: unknown; error?: string }) => Promise<unknown>
+        reconnect: (args: { executionId: string }) => Promise<unknown>
+        abort: (args: { executionId: string }) => Promise<unknown>
+        checkStatus: () => Promise<unknown>
         onEvent: (cb: (event: unknown) => void) => () => void
         onToolCall: (executionId: string, cb: (callId: string, name: string, args: unknown) => void) => () => void
-        onMessage: (executionId: string, cb: (message: unknown) => void) => () => void
-        onComplete: (executionId: string, cb: () => void) => () => void
-        onError: (executionId: string, cb: (error: unknown) => void) => () => void
     }
     mcp: {
         testConnection: (params: unknown) => Promise<unknown>

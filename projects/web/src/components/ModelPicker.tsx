@@ -1,21 +1,29 @@
-import { CLAUDE_MODELS, type ClaudeModelId } from "../constants"
+import { type ModelEntry, MODEL_REGISTRY, DEFAULT_HARNESS_ID } from "../constants"
+import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { Select } from "./ui/Select"
 
 interface ModelPickerProps {
-    value: ClaudeModelId
-    onChange: (modelId: ClaudeModelId) => void
+    value: string
+    onChange: (modelId: string) => void
+    harnessId?: HarnessId
 }
 
-const MODEL_ENTRIES = CLAUDE_MODELS.map((m) => ({
-    id: m.id as ClaudeModelId,
-    content: m.label,
-}))
+function getModelEntries(harnessId: HarnessId): Array<{ id: string; content: string }> {
+    const config = MODEL_REGISTRY[harnessId]
+    if (!config) return []
+    return config.models.map((m: ModelEntry) => ({
+        id: m.id,
+        content: m.label,
+    }))
+}
 
-export function ModelPicker({ value, onChange }: ModelPickerProps) {
+export function ModelPicker({ value, onChange, harnessId = DEFAULT_HARNESS_ID }: ModelPickerProps) {
+    const entries = getModelEntries(harnessId)
+
     return (
         <Select
             selectedId={value}
-            entries={MODEL_ENTRIES}
+            entries={entries}
             onSelect={(entry) => onChange(entry.id)}
             noArrow
             side="top"

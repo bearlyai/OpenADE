@@ -21,12 +21,6 @@ const THINKING_EFFORT_MAP: Record<string, string> = {
     high: "high",
 }
 
-const THINKING_TOKENS_MAP: Record<string, number> = {
-    low: 3000,
-    med: 5000,
-    high: 10000,
-}
-
 /**
  * Builds CLI arguments for the `claude` binary from a HarnessQuery.
  */
@@ -66,10 +60,6 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
         if (effort) {
             args.push("--effort", effort)
         }
-        const tokens = THINKING_TOKENS_MAP[query.thinking]
-        if (tokens) {
-            args.push("--max-thinking-tokens", String(tokens))
-        }
     }
 
     // ── Session ──
@@ -79,7 +69,6 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
     if (query.forkSession) {
         args.push("--fork-session")
     }
-
     // ── Permissions ──
     if (query.mode === "read-only") {
         args.push("--permission-mode", "plan")
@@ -108,6 +97,9 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
     // This function only builds the base args.
 
     // ── Environment variables ──
+
+    // Prevent nested-session detection when the harness itself runs inside Claude Code
+    env.CLAUDECODE = ""
 
     // Telemetry
     const disableTelemetry = config.disableTelemetry ?? true

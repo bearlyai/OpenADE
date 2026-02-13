@@ -1,38 +1,41 @@
 /**
- * Claude Agent SDK Bridge - Client Side
+ * Harness Query Bridge - Client Side
  *
  * Unified event stream API for communicating with Electron main process.
+ * Replaces claude.ts with harness-agnostic types.
  *
  * Architecture:
- * - ClaudeQueryManager: Singleton that manages all executions and routes events
- * - ClaudeQuery: Individual query instance for a single execution
+ * - HarnessQueryManager: Singleton that manages all executions and routes events
+ * - HarnessQuery: Individual query instance for a single execution
  *
  * Features:
- * - Single unified event stream (ClaudeStreamEvent)
+ * - Single unified event stream (HarnessStreamEvent)
  * - Global buffering and deduplication
  * - Reconnection support after renderer refresh
  * - Client-defined tools with renderer-side handlers
  */
 
-import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { ZodObject, ZodRawShape, z } from "zod"
 import { zodToJsonSchema } from "zod-to-json-schema"
 import {
-    type ClaudeCommandEvent,
-    type ClaudeExecutionEvent,
-    type ClaudeStreamEvent,
+    type ContentBlock,
     type ExecutionState,
+    type HarnessCommandEvent,
+    type HarnessExecutionEvent,
+    type HarnessId,
+    type HarnessQueryOptions,
+    type HarnessRawMessageEvent,
+    type HarnessStreamEvent,
     type McpServerConfig,
-    type QueryOptions,
     type SerializedToolDefinition,
     type ToolResult,
-    extractSDKMessages,
+    extractRawMessageEvents,
     extractStderr,
     hasEventId,
-} from "./claudeEventTypes"
+} from "./harnessEventTypes"
 
 // Re-export types for convenience
-export type { SDKMessage, ClaudeStreamEvent, ClaudeExecutionEvent, ClaudeCommandEvent, ExecutionState, ToolResult, McpServerConfig }
+export type { HarnessRawMessageEvent, HarnessStreamEvent, HarnessExecutionEvent, HarnessCommandEvent, ExecutionState, ToolResult, McpServerConfig, HarnessId, HarnessQueryOptions, ContentBlock }
 
 // ============================================================================
 // Client-Defined Tool Types
@@ -55,17 +58,9 @@ interface ClientToolDefinition<Schema extends ZodRawShape = ZodRawShape> {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyClientToolDefinition = ClientToolDefinition<any>
 
-export type ClientQueryOptions = Omit<Options, "abortController" | "mcpServers" | "canUseTool" | "hooks" | "stderr" | "spawnClaudeCodeProcess"> & {
-    /** Client-defined tools that execute in the renderer process */
-    clientTools?: AnyClientToolDefinition[]
-    /** When true, disallows write tools (Edit, Write, NotebookEdit) */
-    readOnly?: boolean
-    /** System prompt to append (convenience shorthand for systemPrompt.append) */
-    appendSystemPrompt?: string
-    /** MCP server configurations to use for this execution (keyed by server name) */
-    mcpServerConfigs?: Record<string, McpServerConfig>
-    /** Environment variables to control model selection for nested agents */
-    modelEnvVars?: Record<string, string>
+export type ClientHarnessQueryOptions = HarnessQueryOptions & {
+    /** Client-defined tools that execute in the renderer process (with handlers) */
+    clientToolDefinitions?: AnyClientToolDefinition[]
 }
 
 // ============================================================================
@@ -75,36 +70,37 @@ export type ClientQueryOptions = Omit<Options, "abortController" | "mcpServers" 
 import { isCodeModuleAvailable } from "./capabilities"
 
 // ============================================================================
-// ClaudeQuery Class
+// HarnessQuery Class
 // ============================================================================
 
 type EventHandler = (...args: unknown[]) => void
 type ToolHandler = (args: unknown) => Promise<ToolResult>
 
 /**
- * ClaudeQuery - wrapper for a single query to Claude
+ * HarnessQuery - wrapper for a single query to a harness
  */
-export class ClaudeQuery {
+export class HarnessQuery {
     private _executionId: string
-    private _options: ClientQueryOptions
+    private _options: ClientHarnessQueryOptions
     private _executionState: ExecutionState
     private _isAborted = false
     private listeners: Map<string, EventHandler[]> = new Map()
     private toolHandlers: Map<string, ToolHandler> = new Map()
 
-    constructor(executionId: string, options: ClientQueryOptions = {}) {
+    constructor(executionId: string, options: ClientHarnessQueryOptions = { harnessId: "claude-code", cwd: "" }) {
         this._executionId = executionId
         this._options = options
         this._executionState = {
             executionId,
+            harnessId: options.harnessId,
             status: "in_progress",
             events: [],
             createdAt: new Date().toISOString(),
         }
 
         // Register tool handlers
-        if (options.clientTools) {
-            for (const tool of options.clientTools) {
+        if (options.clientToolDefinitions) {
+            for (const tool of options.clientToolDefinitions) {
                 this.toolHandlers.set(tool.name, tool.handler as ToolHandler)
             }
         }
@@ -121,7 +117,7 @@ export class ClaudeQuery {
     }
 
     /** Query options */
-    get options(): ClientQueryOptions {
+    get options(): ClientHarnessQueryOptions {
         return this._options
     }
 
@@ -140,9 +136,9 @@ export class ClaudeQuery {
         return this._isAborted
     }
 
-    /** Get all SDK messages from the event stream */
-    getSDKMessages(): SDKMessage[] {
-        return extractSDKMessages(this._executionState.events)
+    /** Get all raw message events from the event stream */
+    getRawMessageEvents(): HarnessRawMessageEvent[] {
+        return extractRawMessageEvents(this._executionState.events)
     }
 
     /** Get all stderr output from the event stream */
@@ -159,14 +155,14 @@ export class ClaudeQuery {
      * Handle an incoming event from the manager
      * Returns true if the event was new (not a duplicate)
      */
-    handleEvent(event: ClaudeStreamEvent): boolean {
+    handleEvent(event: HarnessStreamEvent): boolean {
         // Deduplicate by event ID
         if (hasEventId(this._executionState.events, event.id)) {
-            console.debug("[ClaudeQuery] handleEvent: duplicate event skipped", { executionId: this._executionId, eventId: event.id, type: event.type })
+            console.debug("[HarnessQuery] handleEvent: duplicate event skipped", { executionId: this._executionId, eventId: event.id, type: event.type })
             return false
         }
 
-        console.debug("[ClaudeQuery] handleEvent", { executionId: this._executionId, direction: event.direction, type: event.type, eventId: event.id })
+        console.debug("[HarnessQuery] handleEvent", { executionId: this._executionId, direction: event.direction, type: event.type, eventId: event.id })
 
         // Add to buffer
         this._executionState.events.push(event)
@@ -179,9 +175,9 @@ export class ClaudeQuery {
         return true
     }
 
-    private processExecutionEvent(event: ClaudeExecutionEvent & { direction: "execution" }): void {
+    private processExecutionEvent(event: HarnessExecutionEvent & { direction: "execution" }): void {
         switch (event.type) {
-            case "sdk_message":
+            case "raw_message":
                 this.emit("message", event.message)
                 break
 
@@ -201,6 +197,7 @@ export class ClaudeQuery {
                 break
 
             case "error":
+                console.error("[HarnessQuery] Execution error:", event.error)
                 this._executionState.status = "error"
                 this._executionState.completedAt = new Date().toISOString()
                 this.emit("error", event.error)
@@ -213,15 +210,15 @@ export class ClaudeQuery {
     }
 
     private async handleToolCall(callId: string, toolName: string, args: unknown): Promise<void> {
-        console.debug("[ClaudeQuery] handleToolCall", { executionId: this._executionId, callId, toolName, hasArgs: !!args })
+        console.debug("[HarnessQuery] handleToolCall", { executionId: this._executionId, callId, toolName, hasArgs: !!args })
         if (!window.openadeAPI) {
-            console.debug("[ClaudeQuery] handleToolCall: no openadeAPI, cannot respond", { callId, toolName })
+            console.debug("[HarnessQuery] handleToolCall: no openadeAPI, cannot respond", { callId, toolName })
             return
         }
 
         const handler = this.toolHandlers.get(toolName)
         if (!handler) {
-            console.debug("[ClaudeQuery] No handler for tool (expected during reconnect):", toolName)
+            console.debug("[HarnessQuery] No handler for tool (expected during reconnect):", toolName)
             await this.sendToolResponse(callId, {
                 content: [{ type: "text", text: "Tool handler not available (reconnected session)" }],
             })
@@ -239,7 +236,7 @@ export class ClaudeQuery {
     private async sendToolResponse(callId: string, result?: ToolResult, error?: string): Promise<void> {
         if (!window.openadeAPI) return
 
-        const command: ClaudeCommandEvent = {
+        const command: HarnessCommandEvent = {
             id: crypto.randomUUID(),
             type: "tool_response",
             executionId: this._executionId,
@@ -249,7 +246,7 @@ export class ClaudeQuery {
         }
 
         // Send via openadeAPI
-        await window.openadeAPI.claude.toolResponse({
+        await window.openadeAPI.harness.toolResponse({
             executionId: this._executionId,
             callId,
             result,
@@ -293,14 +290,15 @@ export class ClaudeQuery {
     }
 
     /**
-     * Async generator that yields messages as they arrive
+     * Async generator that yields raw messages as they arrive.
+     * Messages are untyped here — callers narrow via harnessId on the persisted event.
      */
-    async *stream(): AsyncGenerator<SDKMessage> {
-        const messageQueue: SDKMessage[] = []
+    async *stream(): AsyncGenerator<unknown> {
+        const messageQueue: unknown[] = []
         let resolveNext: (() => void) | null = null
         let isDone = false
 
-        const onMessage = (msg: SDKMessage) => {
+        const onMessage = (msg: unknown) => {
             messageQueue.push(msg)
             if (resolveNext) {
                 resolveNext()
@@ -351,7 +349,7 @@ export class ClaudeQuery {
     async abort(): Promise<void> {
         if (!window.openadeAPI) return
 
-        await window.openadeAPI.claude.abort({ executionId: this._executionId })
+        await window.openadeAPI.harness.abort({ executionId: this._executionId })
         this._isAborted = true
         this._executionState.status = "aborted"
         this._executionState.completedAt = new Date().toISOString()
@@ -363,37 +361,37 @@ export class ClaudeQuery {
     async clearBuffer(): Promise<void> {
         if (!window.openadeAPI) return
 
-        const command: ClaudeCommandEvent = {
+        const command: HarnessCommandEvent = {
             id: crypto.randomUUID(),
             type: "clear_buffer",
             executionId: this._executionId,
         }
 
-        await window.openadeAPI.claude.command(command)
+        await window.openadeAPI.harness.command(command)
     }
 
     /**
      * Clean up this query's resources (removes from manager)
      */
     cleanup(): void {
-        getClaudeQueryManager().cleanup(this._executionId)
+        getHarnessQueryManager().cleanup(this._executionId)
     }
 }
 
 // ============================================================================
-// ClaudeQueryManager Singleton
+// HarnessQueryManager Singleton
 // ============================================================================
 
 /**
- * ClaudeQueryManager - manages all Claude executions
+ * HarnessQueryManager - manages all harness executions
  *
  * Provides a single point of contact for:
  * - Starting new executions
  * - Attaching to existing executions (reconnection)
- * - Routing events to appropriate ClaudeQuery instances
+ * - Routing events to appropriate HarnessQuery instances
  */
-class ClaudeQueryManagerImpl {
-    private queries: Map<string, ClaudeQuery> = new Map()
+class HarnessQueryManagerImpl {
+    private queries: Map<string, HarnessQuery> = new Map()
     // @ts-expect-error Stored for potential future cleanup - intentionally unused
     private _unsubscribeEvent: (() => void) | null = null
 
@@ -403,20 +401,20 @@ class ClaudeQueryManagerImpl {
 
     private setupEventListener(): void {
         if (!window.openadeAPI) {
-            console.debug("[ClaudeQueryManager] setupEventListener: no openadeAPI available, skipping")
+            console.debug("[HarnessQueryManager] setupEventListener: no openadeAPI available, skipping")
             return
         }
 
-        console.debug("[ClaudeQueryManager] setupEventListener: registering claude event listener")
+        console.debug("[HarnessQueryManager] setupEventListener: registering harness event listener")
 
         // Subscribe to unified events using the new pattern
-        this._unsubscribeEvent = window.openadeAPI.claude.onEvent((event) => {
-            const streamEvent = event as ClaudeStreamEvent
+        this._unsubscribeEvent = window.openadeAPI.harness.onEvent((event) => {
+            const streamEvent = event as HarnessStreamEvent
             const query = this.queries.get(streamEvent.executionId)
             if (query) {
                 query.handleEvent(streamEvent)
             } else {
-                console.debug("[ClaudeQueryManager] event received for unknown executionId", {
+                console.debug("[HarnessQueryManager] event received for unknown executionId", {
                     executionId: streamEvent.executionId,
                     direction: streamEvent.direction,
                     type: streamEvent.type,
@@ -430,85 +428,74 @@ class ClaudeQueryManagerImpl {
      * Start a new execution
      */
     async startExecution(
-        prompt: string | import("./claudeEventTypes").ContentBlock[],
-        options: ClientQueryOptions = {},
+        prompt: string | ContentBlock[],
+        options: ClientHarnessQueryOptions,
         executionId?: string
-    ): Promise<ClaudeQuery | null> {
+    ): Promise<HarnessQuery | null> {
         const promptPreview = typeof prompt === "string" ? prompt.slice(0, 100) : `[${prompt.length} content blocks]`
-        console.debug("[ClaudeQueryManager] startExecution called", {
+        console.debug("[HarnessQueryManager] startExecution called", {
             promptLength: prompt.length,
             promptPreview,
             executionId,
+            harnessId: options.harnessId,
             model: options.model,
             cwd: options.cwd,
-            readOnly: options.readOnly,
-            hasClientTools: !!(options.clientTools && options.clientTools.length > 0),
+            mode: options.mode,
+            hasClientToolDefinitions: !!(options.clientToolDefinitions && options.clientToolDefinitions.length > 0),
             hasMcpServerConfigs: !!options.mcpServerConfigs,
-            resume: options.resume,
+            resumeSessionId: options.resumeSessionId,
             forkSession: options.forkSession,
             hasImages: Array.isArray(prompt),
         })
 
         if (!window.openadeAPI) {
-            console.debug("[ClaudeQueryManager] startExecution: no openadeAPI - not running in Electron")
+            console.debug("[HarnessQueryManager] startExecution: no openadeAPI - not running in Electron")
             return null
         }
 
-        // Default options - caller overrides take precedence
         const defaultAllowedTools = ["Read", "Edit", "Glob", "Bash", "Grep", "WebSearch", "WebFetch"]
         const defaultDisallowedTools = ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"]
-        // Note: Bash is intentionally allowed in read-only modes (plan/ask/revise) so the model can run
-        // read-only commands like git log, git diff, ls, etc. The system prompt provides soft enforcement
-        // against state-changing commands.
         const readOnlyDisallowedTools = ["Edit", "Write", "NotebookEdit"]
 
-        // Build systemPrompt option if appendSystemPrompt is provided
-        const systemPromptOption = options.appendSystemPrompt
-            ? { type: "preset" as const, preset: "claude_code" as const, append: options.appendSystemPrompt }
-            : options.systemPrompt
+        const isReadOnly = options.mode === "read-only"
 
-        const mergedOptions: ClientQueryOptions = {
-            // Defaults that can be overridden
+        const mergedOptions: ClientHarnessQueryOptions = {
+            // Defaults
             model: "sonnet",
-            tools: { type: "preset", preset: "claude_code" },
-            permissionMode: "bypassPermissions",
-            settingSources: ["user", "project", "local"],
             // Caller options override defaults
             ...options,
-            // Handle systemPrompt specially
-            systemPrompt: systemPromptOption,
-            // Merge array fields: combine defaults with caller additions
+            // Merge array fields
             allowedTools: [...defaultAllowedTools, ...(options.allowedTools ?? []).filter((t) => !defaultAllowedTools.includes(t))],
             disallowedTools: [
                 ...defaultDisallowedTools,
-                ...(options.readOnly ? readOnlyDisallowedTools : []),
+                ...(isReadOnly ? readOnlyDisallowedTools : []),
                 ...(options.disallowedTools ?? []).filter((t) => !defaultDisallowedTools.includes(t) && !readOnlyDisallowedTools.includes(t)),
             ],
         }
 
         const finalId = executionId || crypto.randomUUID()
-        const query = new ClaudeQuery(finalId, mergedOptions)
+        const query = new HarnessQuery(finalId, mergedOptions)
 
         // Register with manager
         this.queries.set(finalId, query)
 
         // Serialize tool definitions for IPC
         const { z } = await import("zod")
-        const serializedTools: SerializedToolDefinition[] | undefined = mergedOptions.clientTools?.map((t) => ({
+        const serializedTools: SerializedToolDefinition[] | undefined = mergedOptions.clientToolDefinitions?.map((t) => ({
             name: t.name,
             description: t.description,
             inputSchema: zodToJsonSchema(z.object(t.inputSchema)),
         }))
 
         // Build IPC options - exclude client-side-only fields
-        const { clientTools: _, appendSystemPrompt: __, readOnly: ___, modelEnvVars: extractedModelEnvVars, ...restOptions } = mergedOptions
-        const baseIpcOptions = { ...restOptions, ...(extractedModelEnvVars ? { modelEnvVars: extractedModelEnvVars } : {}) }
-        const ipcOptions: QueryOptions = serializedTools ? { ...baseIpcOptions, clientTools: serializedTools } : baseIpcOptions
+        const { clientToolDefinitions: _, ...restOptions } = mergedOptions
+        const ipcOptions: HarnessQueryOptions = serializedTools ? { ...restOptions, clientTools: serializedTools } : restOptions
 
         // Start the query
-        console.debug("[ClaudeQueryManager] startExecution: invoking openadeAPI.claude.query", {
+        console.debug("[HarnessQueryManager] startExecution: invoking openadeAPI.harness.query", {
             executionId: finalId,
             promptLength: prompt.length,
+            harnessId: ipcOptions.harnessId,
             model: ipcOptions.model,
             cwd: ipcOptions.cwd,
             allowedTools: ipcOptions.allowedTools,
@@ -518,19 +505,19 @@ class ClaudeQueryManagerImpl {
         })
 
         try {
-            const ipcResult = await window.openadeAPI.claude.query({
+            const ipcResult = await window.openadeAPI.harness.query({
                 executionId: finalId,
                 prompt,
                 options: ipcOptions,
             })
-            console.debug("[ClaudeQueryManager] startExecution: query succeeded", {
+            console.debug("[HarnessQueryManager] startExecution: query succeeded", {
                 executionId: finalId,
                 ipcResult,
             })
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err)
             const errorStack = err instanceof Error ? err.stack : undefined
-            console.debug("[ClaudeQueryManager] startExecution: query FAILED", {
+            console.debug("[HarnessQueryManager] startExecution: query FAILED", {
                 executionId: finalId,
                 errorMessage,
                 errorStack,
@@ -546,17 +533,17 @@ class ClaudeQueryManagerImpl {
     /**
      * Attach to an existing execution (reconnection)
      */
-    async attachExecution(executionId: string, toolHandlers?: Map<string, ToolHandler>): Promise<ClaudeQuery | null> {
-        console.debug("[ClaudeQueryManager] attachExecution called", { executionId, hasToolHandlers: !!toolHandlers })
+    async attachExecution(executionId: string, toolHandlers?: Map<string, ToolHandler>): Promise<HarnessQuery | null> {
+        console.debug("[HarnessQueryManager] attachExecution called", { executionId, hasToolHandlers: !!toolHandlers })
         if (!window.openadeAPI) {
-            console.debug("[ClaudeQueryManager] attachExecution: no openadeAPI available")
+            console.debug("[HarnessQueryManager] attachExecution: no openadeAPI available")
             return null
         }
 
         // Check if we already have this query
         let query = this.queries.get(executionId)
         if (!query) {
-            query = new ClaudeQuery(executionId)
+            query = new HarnessQuery(executionId)
             this.queries.set(executionId, query)
         }
 
@@ -568,10 +555,10 @@ class ClaudeQueryManagerImpl {
         }
 
         // Reconnect to get buffered events
-        const result = (await window.openadeAPI.claude.reconnect({ executionId })) as {
+        const result = (await window.openadeAPI.harness.reconnect({ executionId })) as {
             ok: boolean
             found: boolean
-            events?: ClaudeStreamEvent[]
+            events?: HarnessStreamEvent[]
             completed?: boolean
             error?: string
         }
@@ -594,7 +581,7 @@ class ClaudeQueryManagerImpl {
     /**
      * Get an existing query
      */
-    getQuery(executionId: string): ClaudeQuery | null {
+    getQuery(executionId: string): HarnessQuery | null {
         return this.queries.get(executionId) || null
     }
 
@@ -617,20 +604,20 @@ class ClaudeQueryManagerImpl {
 }
 
 // Singleton instance
-let managerInstance: ClaudeQueryManagerImpl | null = null
+let managerInstance: HarnessQueryManagerImpl | null = null
 
-export function getClaudeQueryManager(): ClaudeQueryManagerImpl {
+export function getHarnessQueryManager(): HarnessQueryManagerImpl {
     if (!managerInstance) {
-        managerInstance = new ClaudeQueryManagerImpl()
+        managerInstance = new HarnessQueryManagerImpl()
     }
     return managerInstance
 }
 
 /**
- * Check if Claude API is available (running in Electron)
+ * Check if Harness API is available (running in Electron)
  */
-export function isClaudeApiAvailable(): boolean {
+export function isHarnessApiAvailable(): boolean {
     const available = isCodeModuleAvailable()
-    console.debug("[ClaudeAPI] isClaudeApiAvailable called", { available, hasOpenadeAPI: !!window.openadeAPI })
+    console.debug("[HarnessAPI] isHarnessApiAvailable called", { available, hasOpenadeAPI: !!window.openadeAPI })
     return available
 }

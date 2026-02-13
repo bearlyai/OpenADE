@@ -13,7 +13,7 @@ import { load as loadMoveToApplications } from "./modules/moveToApplications"
 import { load as loadWindowControls } from "./modules/windowControls"
 import { load as loadWindowFrame } from "./modules/windowFrame"
 import { load as loadSubprocess, cleanup as cleanupSubprocess } from "./modules/code/subprocess"
-import { load as loadClaudeSdk, cleanup as cleanupClaude, hasActiveQueries } from "./modules/code/claude"
+import { load as loadHarness, cleanup as cleanupHarness, hasActiveQueries } from "./modules/code/harness"
 import { load as loadGit, cleanup as cleanupGit } from "./modules/code/git"
 import { load as loadProcess, cleanup as cleanupProcess } from "./modules/code/process"
 import { load as loadPty, cleanup as cleanupPty } from "./modules/code/pty"
@@ -46,9 +46,9 @@ const main = () => {
     loadFindInPage()
     loadDirSync()
     loadSubprocess() // Must be loaded before other code modules that use execCommand
-    loadBinaries() // Must be loaded before Claude SDK — enhances PATH with managed binaries
+    loadBinaries() // Must be loaded before harness — enhances PATH with managed binaries
     loadCapabilities()
-    loadClaudeSdk()
+    loadHarness()
     loadGit()
     loadProcess()
     loadPty()
@@ -69,7 +69,7 @@ const main = () => {
         shell.openExternal(args)
     })
 
-    // Graceful shutdown - abort active Claude queries and cleanup git/processes/ptys
+    // Graceful shutdown - abort active harness queries and cleanup git/processes/ptys
     // Show confirmation dialog if agents are running
     app.on("before-quit", (event) => {
         if (hasActiveQueries()) {
@@ -90,7 +90,7 @@ const main = () => {
         }
 
         cleanupSentry()
-        cleanupClaude()
+        cleanupHarness()
         cleanupGit()
         cleanupProcess()
         cleanupPty()
@@ -110,7 +110,7 @@ const main = () => {
 
     process.on("SIGINT", () => {
         cleanupSentry()
-        cleanupClaude()
+        cleanupHarness()
         cleanupGit()
         cleanupProcess()
         cleanupPty()
@@ -131,7 +131,7 @@ const main = () => {
 
     process.on("SIGTERM", () => {
         cleanupSentry()
-        cleanupClaude()
+        cleanupHarness()
         cleanupGit()
         cleanupProcess()
         cleanupPty()

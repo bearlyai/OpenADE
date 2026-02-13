@@ -2,7 +2,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import type { Harness } from "./harness.js"
 import type { HarnessEvent } from "./types.js"
 
 export async function collectEvents<M>(gen: AsyncGenerator<HarnessEvent<M>>): Promise<HarnessEvent<M>[]> {
@@ -120,12 +119,3 @@ export function getErrorEvents<M>(events: HarnessEvent<M>[]): Extract<HarnessEve
     return events.filter((e) => e.type === "error") as Extract<HarnessEvent<M>, { type: "error" }>[]
 }
 
-export async function requireHarness<M>(harness: Harness<M>): Promise<void> {
-    const status = await harness.checkInstallStatus()
-    if (!status.installed) {
-        throw new Error(`${harness.id} is not installed — skipping suite`)
-    }
-    if (!status.authenticated) {
-        throw new Error(`${harness.id} is installed but not authenticated — skipping suite`)
-    }
-}
