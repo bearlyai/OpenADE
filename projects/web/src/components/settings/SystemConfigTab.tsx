@@ -4,12 +4,14 @@
  * System configuration settings tab showing binary status and environment variables.
  */
 
-import { CheckCircle, Eye, EyeOff, Loader2, Minus, Plus, RefreshCw, RotateCcw, XCircle } from "lucide-react"
+import { AlertTriangle, CheckCircle, Eye, EyeOff, Loader2, Minus, Plus, RefreshCw, RotateCcw, XCircle } from "lucide-react"
 import { observer } from "mobx-react"
 import { useEffect, useState } from "react"
 import { type ManagedBinaryStatus, ensureBinary, getStatuses } from "../../electronAPI/binaries"
+import { type HarnessStatusMap, getHarnessStatuses, isHarnessStatusApiAvailable } from "../../electronAPI/harnessStatus"
 import { isSystemApiAvailable } from "../../electronAPI/system"
 import type { CodeStore } from "../../store/store"
+import { getHarnessAuthTypeLabel, getHarnessDisplayName, toHarnessStatusView } from "./harnessStatusUtils"
 
 interface KeyValuePair {
     key: string
@@ -102,6 +104,101 @@ const KeyValueEditor = ({
                 Add Variable
             </button>
         </div>
+    )
+}
+
+const HarnessStatusSection = () => {
+    const [statuses, setStatuses] = useState<HarnessStatusMap>({})
+    const [isLoading, setIsLoading] = useState(true)
+    const [error, setError] = useState<string | null>(null)
+
+    const refresh = async () => {
+        setIsLoading(true)
+        try {
+            const result = await getHarnessStatuses()
+            setStatuses(result.statuses)
+            setError(result.error)
+        } finally {
+            setIsLoading(false)
+        }
+    }
+
+    useEffect(() => {
+        if (!isHarnessStatusApiAvailable()) {
+            setIsLoading(false)
+            return
+        }
+
+        refresh()
+    }, [])
+
+    if (!isSystemApiAvailable()) return null
+
+    const entries = Object.entries(statuses).sort((a, b) => getHarnessDisplayName(a[0]).localeCompare(getHarnessDisplayName(b[0])))
+
+    return (
+        <section>
+            <div className="flex items-center justify-between mb-1">
+                <h3 className="text-base font-semibold text-base-content">Harness Status</h3>
+                <button
+                    type="button"
+                    onClick={refresh}
+                    disabled={isLoading}
+                    className="btn w-8 h-8 flex items-center justify-center bg-transparent hover:bg-base-300 text-muted hover:text-base-content transition-colors disabled:opacity-50"
+                    title="Refresh"
+                >
+                    <RefreshCw size={14} className={isLoading ? "animate-spin" : ""} />
+                </button>
+            </div>
+            <p className="text-sm text-muted mb-4">Install and authentication status for each configured harness CLI.</p>
+
+            {isLoading && entries.length === 0 && (
+                <div className="flex items-center gap-2 p-3 text-sm text-muted">
+                    <Loader2 size={16} className="animate-spin" />
+                    Loading...
+                </div>
+            )}
+
+            {error && <div className="p-3 border border-warning/30 bg-warning/10 text-sm text-warning">{error}</div>}
+
+            {!isLoading && entries.length === 0 && !error && (
+                <div className="p-3 border border-border bg-base-200/40 text-sm text-muted">No harnesses registered.</div>
+            )}
+
+            {entries.length > 0 && (
+                <div className="flex flex-col gap-2">
+                    {entries.map(([harnessId, status]) => {
+                        const view = toHarnessStatusView(status)
+                        const toneClass =
+                            view.tone === "success"
+                                ? "bg-success/15 text-success border-success/30"
+                                : view.tone === "warning"
+                                  ? "bg-warning/15 text-warning border-warning/30"
+                                  : "bg-error/15 text-error border-error/30"
+                        const StatusIcon = view.tone === "success" ? CheckCircle : view.tone === "warning" ? AlertTriangle : XCircle
+
+                        return (
+                            <div key={harnessId} className="p-3 bg-base-200/40 border border-border">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <p className="text-sm font-medium text-base-content">{getHarnessDisplayName(harnessId)}</p>
+                                        <p className="text-xs text-muted mt-1">{view.subtitle}</p>
+                                    </div>
+                                    <div className={`px-2 py-1 border text-xs font-medium shrink-0 flex items-center gap-1.5 ${toneClass}`}>
+                                        <StatusIcon size={12} />
+                                        <span>{view.label}</span>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2 mt-2 text-xs text-muted">
+                                    <span className="px-1.5 py-0.5 border border-border bg-base-100 font-mono">{status.version ?? "version unknown"}</span>
+                                    <span className="px-1.5 py-0.5 border border-border bg-base-100">{getHarnessAuthTypeLabel(status.authType)}</span>
+                                </div>
+                            </div>
+                        )
+                    })}
+                </div>
+            )}
+        </section>
     )
 }
 
@@ -290,6 +387,9 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
 
     return (
         <div className="flex flex-col gap-8">
+            {/* Harnesses Section */}
+            <HarnessStatusSection />
+
             {/* Managed Runtimes Section */}
             <ManagedBinariesSection />
 
