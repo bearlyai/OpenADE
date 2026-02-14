@@ -18,6 +18,7 @@ import { spawnJsonl } from "../../util/spawn.js"
 import { startToolServer, type ToolServerHandle } from "../../util/tool-server.js"
 import { buildCodexArgs, type CodexHarnessConfig } from "./args.js"
 import { buildCodexMcpConfigOverrides } from "./config-overrides.js"
+import { calculateCostUsd } from "./pricing.js"
 import { parseCodexEvent, type CodexEvent, type CodexTurnCompletedEvent } from "./types.js"
 
 export type { CodexHarnessConfig } from "./args.js"
@@ -50,7 +51,7 @@ export class CodexHarness implements Harness<CodexEvent> {
             supportsFork: false,
             supportsClientTools: true,
             supportsStreamingTokens: false,
-            supportsCostTracking: false,
+            supportsCostTracking: true,
             supportsNamedTools: false,
             supportsImages: true,
         }
@@ -222,10 +223,14 @@ export class CodexHarness implements Harness<CodexEvent> {
                     const durationMs = Date.now() - startTime
 
                     if (code === 0 || lastUsage) {
+                        const inputTokens = lastUsage?.input_tokens ?? 0
+                        const outputTokens = lastUsage?.output_tokens ?? 0
+                        const cacheReadTokens = lastUsage?.cached_input_tokens
                         const usage: HarnessUsage = {
-                            inputTokens: lastUsage?.input_tokens ?? 0,
-                            outputTokens: lastUsage?.output_tokens ?? 0,
-                            cacheReadTokens: lastUsage?.cached_input_tokens,
+                            inputTokens,
+                            outputTokens,
+                            cacheReadTokens,
+                            costUsd: calculateCostUsd(q.model, inputTokens, outputTokens, cacheReadTokens),
                             durationMs,
                         }
                         return { type: "complete", usage }

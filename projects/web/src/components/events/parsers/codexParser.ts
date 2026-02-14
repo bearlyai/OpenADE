@@ -19,7 +19,7 @@ import type { MessageGroup } from "../messageGroups"
  * Prefers `item.completed` over `item.started` for the same item ID
  * (completed has final output, exit code, etc.).
  */
-export function groupCodexMessages(messages: CodexEvent[]): MessageGroup[] {
+export function groupCodexMessages(messages: CodexEvent[], completionUsage?: { costUsd?: number; durationMs?: number }): MessageGroup[] {
     const groups: MessageGroup[] = []
 
     // Track which item IDs we've seen via item.completed so we can skip
@@ -56,8 +56,8 @@ export function groupCodexMessages(messages: CodexEvent[]): MessageGroup[] {
             groups.push({
                 type: "result",
                 subtype: "success",
-                durationMs: 0,
-                totalCostUsd: 0,
+                durationMs: completionUsage?.durationMs ?? 0,
+                totalCostUsd: completionUsage?.costUsd ?? 0,
                 usage: {
                     inputTokens: tc.usage.input_tokens,
                     outputTokens: tc.usage.output_tokens,

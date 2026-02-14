@@ -11,6 +11,7 @@
  * Delegates to per-harness parsers (e.g. claudeCodeParser) based on harnessId.
  */
 
+import type { HarnessUsage } from "@openade/harness"
 import type { ReactNode } from "react"
 import type { HarnessStreamEvent, HarnessId, HarnessRawMessageEvent } from "../../electronAPI/harnessEventTypes"
 import { extractRawMessageEvents } from "../../electronAPI/harnessEventTypes"
@@ -166,8 +167,11 @@ export function groupStreamEvents(events: HarnessStreamEvent[], harnessId: Harne
     // Extract typed raw message events — discriminated union on harnessId
     const messageEvents = extractRawMessageEvents(events)
 
+    // Extract completion usage from the harness-level complete event
+    const completionUsage = extractCompletionUsage(events)
+
     // Group by harness using narrowing (no unsafe casts)
-    const messageGroups = groupRawMessageEvents(messageEvents, harnessId)
+    const messageGroups = groupRawMessageEvents(messageEvents, harnessId, completionUsage)
 
     // Extract stderr events and create StderrGroups
     const stderrGroups: StderrGroup[] = events
@@ -197,7 +201,11 @@ export function groupStreamEvents(events: HarnessStreamEvent[], harnessId: Harne
 }
 
 /** Dispatch raw message events to per-harness parser using discriminated union narrowing */
-function groupRawMessageEvents(events: HarnessRawMessageEvent[], harnessId: HarnessId): MessageGroup[] {
+function groupRawMessageEvents(
+    events: HarnessRawMessageEvent[],
+    harnessId: HarnessId,
+    completionUsage?: { costUsd?: number; durationMs?: number },
+): MessageGroup[] {
     switch (harnessId) {
         case "claude-code": {
             const messages = events
@@ -207,11 +215,21 @@ function groupRawMessageEvents(events: HarnessRawMessageEvent[], harnessId: Harn
         }
         case "codex": {
             const messages = events.filter((e): e is HarnessRawMessageEvent & { harnessId: "codex" } => e.harnessId === "codex").map((e) => e.message)
-            return groupCodexMessages(messages)
+            return groupCodexMessages(messages, completionUsage)
         }
         default: {
             const _exhaustive: never = harnessId
             return _exhaustive
         }
     }
+}
+
+function extractCompletionUsage(events: HarnessStreamEvent[]): { costUsd?: number; durationMs?: number } | undefined {
+    for (const e of events) {
+        if (e.direction === "execution" && e.type === "complete" && e.usage) {
+            const usage = e.usage as HarnessUsage
+            return { costUsd: usage.costUsd, durationMs: usage.durationMs }
+        }
+    }
+    return undefined
 }

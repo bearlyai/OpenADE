@@ -241,8 +241,11 @@ export const MODEL_REGISTRY: Record<HarnessId, HarnessModelConfig> = {
         defaultModel: "opus",
     },
     codex: {
-        models: [{ id: "gpt-5.3-codex-xhigh", fullId: "gpt-5.3-codex-xhigh", label: "GPT-5.3 Codex xHigh" }],
-        defaultModel: "gpt-5.3-codex-xhigh",
+        models: [
+            { id: "gpt-5.3-codex", fullId: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+            { id: "gpt-5.3-codex-spark", fullId: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark" },
+        ],
+        defaultModel: "gpt-5.3-codex",
     },
 }
 

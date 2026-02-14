@@ -1,3 +1,5 @@
+import type { HarnessUsage } from "@openade/harness"
+import type { HarnessStreamEvent } from "../electronAPI/harnessEventTypes"
 import { extractRawMessageEvents } from "../electronAPI/harnessEventTypes"
 import type { CodeEvent } from "../types"
 import type { TaskPreviewUsage } from "./repoStore"
@@ -23,13 +25,32 @@ export function computeTaskUsage(events: Array<CodeEvent & { id: string }>): Tas
                 outputTokens += usage?.output_tokens ?? 0
                 costByModel[modelId] = (costByModel[modelId] ?? 0) + (evt.message.total_cost_usd ?? 0)
             }
-            // Codex usage comes from turn.completed events
+            // Codex token usage comes from turn.completed events
             if (evt.harnessId === "codex" && evt.message.type === "turn.completed") {
                 inputTokens += evt.message.usage.input_tokens ?? 0
                 outputTokens += evt.message.usage.output_tokens ?? 0
             }
         }
+
+        // Codex cost comes from the harness-level complete event (enriched by the harness lib)
+        const harnessId = event.execution.harnessId ?? "claude-code"
+        if (harnessId === "codex") {
+            const completeCost = extractCompleteCost(event.execution.events)
+            if (completeCost !== undefined) {
+                totalCostUsd += completeCost
+                costByModel[modelId] = (costByModel[modelId] ?? 0) + completeCost
+            }
+        }
     }
 
     return { inputTokens, outputTokens, totalCostUsd, eventCount, costByModel }
+}
+
+function extractCompleteCost(events: HarnessStreamEvent[]): number | undefined {
+    for (const e of events) {
+        if (e.direction === "execution" && e.type === "complete") {
+            return (e as { usage?: HarnessUsage }).usage?.costUsd
+        }
+    }
+    return undefined
 }

@@ -66,13 +66,13 @@ describe("TaskModel harness lock", () => {
     it("hydrates harness/model from latest action event", () => {
         const task = createTask([
             createActionEvent({ id: "a1", harnessId: "claude-code", modelId: "opus" }),
-            createActionEvent({ id: "a2", harnessId: "codex", modelId: "gpt-5.3-codex-xhigh" }),
+            createActionEvent({ id: "a2", harnessId: "codex", modelId: "gpt-5.3-codex" }),
         ])
 
         const model = new TaskModel(createStore(task), task.id)
 
         expect(model.harnessId).toBe("codex")
-        expect(model.model).toBe("gpt-5.3-codex-xhigh")
+        expect(model.model).toBe("gpt-5.3-codex")
     })
 
     it("maps persisted full model IDs to harness aliases", () => {
@@ -85,13 +85,13 @@ describe("TaskModel harness lock", () => {
     })
 
     it("does not allow harness switching once action history exists", () => {
-        const task = createTask([createActionEvent({ id: "a1", harnessId: "codex", modelId: "gpt-5.3-codex-xhigh" })])
+        const task = createTask([createActionEvent({ id: "a1", harnessId: "codex", modelId: "gpt-5.3-codex" })])
 
         const model = new TaskModel(createStore(task), task.id)
         model.setHarnessId("claude-code")
 
         expect(model.harnessId).toBe("codex")
-        expect(model.model).toBe("gpt-5.3-codex-xhigh")
+        expect(model.model).toBe("gpt-5.3-codex")
     })
 
     it("allows model switching while harness remains locked", () => {

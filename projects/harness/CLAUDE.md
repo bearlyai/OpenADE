@@ -67,6 +67,8 @@ src/
 │       ├── args.test.ts
 │       ├── config-overrides.ts # buildCodexMcpConfigOverrides() — -c flag generation
 │       ├── config-overrides.test.ts
+│       ├── pricing.ts         # calculateCostUsd() — token-based cost for Codex models
+│       ├── pricing.test.ts
 │       └── index.ts            # CodexHarness class
 ```
 
