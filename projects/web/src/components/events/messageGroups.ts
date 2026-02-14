@@ -157,6 +157,9 @@ export type MessageGroup = TextGroup | ThinkingGroup | ToolGroup | EditGroup | W
 // The groupByRenderMode function handles grouping consecutive pills
 export type MergedGroup = MessageGroup
 
+// Stderr lines matching these patterns are internal CLI noise and hidden from the UI
+const STDERR_NOISE_PATTERNS = [/codex_core::rollout/]
+
 /**
  * Group unified stream events into message groups for inline rendering
  *
@@ -173,9 +176,12 @@ export function groupStreamEvents(events: HarnessStreamEvent[], harnessId: Harne
     // Group by harness using narrowing (no unsafe casts)
     const messageGroups = groupRawMessageEvents(messageEvents, harnessId, completionUsage)
 
-    // Extract stderr events and create StderrGroups
+    // Extract stderr events and create StderrGroups, filtering out known noise
     const stderrGroups: StderrGroup[] = events
-        .filter((e): e is HarnessStreamEvent & { type: "stderr"; direction: "execution" } => e.direction === "execution" && e.type === "stderr")
+        .filter(
+            (e): e is HarnessStreamEvent & { type: "stderr"; direction: "execution" } =>
+                e.direction === "execution" && e.type === "stderr" && !STDERR_NOISE_PATTERNS.some((p) => p.test(e.data)),
+        )
         .map((e) => ({
             type: "stderr" as const,
             data: e.data,

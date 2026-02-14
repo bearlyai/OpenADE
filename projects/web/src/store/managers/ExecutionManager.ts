@@ -347,13 +347,17 @@ export class ExecutionManager {
             }
         }
 
-        // Persist any error events from the execution so they render in the UI
-        const errorEvents = query.executionState.events.filter((e) => e.direction === "execution" && e.type === "error")
-        for (const errorEvent of errorEvents) {
+        // Persist non-raw_message execution events (complete, error, stderr, etc.).
+        // The stream loop above only persists raw_message events; the remaining
+        // envelope events carry usage/cost data, error details, and other metadata.
+        const envelopeEvents = query.executionState.events.filter(
+            (e) => e.direction === "execution" && e.type !== "raw_message",
+        )
+        for (const envelopeEvent of envelopeEvents) {
             this.store.events.appendStreamEventToEvent({
                 taskId: ctx.taskId,
                 eventId: ctx.eventId,
-                streamEvent: errorEvent,
+                streamEvent: envelopeEvent,
             })
         }
 
