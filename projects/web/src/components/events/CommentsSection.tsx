@@ -69,7 +69,7 @@ export function CommentsSection({ comments, variant: _variant }: CommentsSection
 
     return (
         <div className="border-t border-border">
-            <div className="border-l-2 border-info bg-info/5 mx-3 my-2">
+            <div className="border-l-2 border-info bg-info/5 mx-5 my-2">
                 <button
                     type="button"
                     onClick={() => setExpanded(!expanded)}

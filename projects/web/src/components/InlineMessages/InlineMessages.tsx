@@ -178,7 +178,7 @@ export function UserInputMessage({ text }: { text: string }) {
 
     return (
         <div className="border-t border-border">
-            <div className="border-l-2 border-primary bg-primary/5 mx-3 my-2 overflow-hidden">
+            <div className="border-l-2 border-primary bg-primary/5 mx-5 my-2 overflow-hidden">
                 <FileViewer file={{ name: "input.md", contents: displayText, lang: "markdown" }} disableFileHeader disableLineNumbers commentHandlers={null} />
                 {isLong && (
                     <button

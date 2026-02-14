@@ -97,7 +97,7 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
             {includedComments.length > 0 && <CommentsSection comments={includedComments} variant="submitted" />}
 
             {event.execution.events.length > 0 && (
-                <div className="ml-3 border-l-2 border-primary/20">
+                <div className="ml-5 border-l-2 border-primary/20">
                     <InlineMessages
                         events={event.execution.events}
                         harnessId={event.execution.harnessId ?? "claude-code"}
