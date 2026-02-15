@@ -41,9 +41,14 @@ Also add to `TrayType` union in `store/managers/TrayManager.ts`.
 | `components/tray/TrayButtons.tsx` | Renders toggle buttons from config |
 | `components/tray/TraySlideOut.tsx` | Slide-out animation wrapper |
 
-## Prototype - No Migrations
+## Backwards Compatibility
 
-**Don't write migration code or backwards compatibility logic.** If data model changes, ask user to delete and recreate. localStorage can be cleared.
+**This is a production app with real user data.** Existing tasks, workspaces, persisted events, and storage state must continue to work after code changes. When changing data models or storage schemas:
+
+- Write tolerant readers that handle both old and new shapes (see `harnessEventCompat.ts` for the pattern)
+- Use `??` fallbacks for fields that may be absent in old persisted data (e.g. `event.execution.harnessId ?? "claude-code"`)
+- Never rename or remove persisted fields without a compat layer
+- Test with fixtures that represent old data shapes
 
 ## Code Style
 

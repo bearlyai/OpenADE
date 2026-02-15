@@ -142,11 +142,16 @@ export class TaskModel {
             const event = events[i]
             if (event.type !== "action") continue
 
-            this.harnessId = event.execution.harnessId
+            // v1 compat: pre-harness tasks stored `type` instead of `harnessId`
+            const harnessId: HarnessId =
+                event.execution.harnessId ??
+                ((event.execution as unknown as Record<string, unknown>).type as HarnessId) ??
+                "claude-code"
+            this.harnessId = harnessId
             const persistedModelId = event.execution.modelId
             this.model = persistedModelId
-                ? this.normalizeModelForHarness(persistedModelId, event.execution.harnessId)
-                : getDefaultModelForHarness(event.execution.harnessId)
+                ? this.normalizeModelForHarness(persistedModelId, harnessId)
+                : getDefaultModelForHarness(harnessId)
             return
         }
     }

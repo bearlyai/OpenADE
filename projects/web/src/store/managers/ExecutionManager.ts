@@ -271,13 +271,14 @@ export class ExecutionManager {
         console.debug("[ExecutionManager] runExecutionLoop: calling manager.startExecution")
         const taskModel = this.store.tasks.getTaskModel(ctx.taskId)
         const selectedModel = taskModel?.model ?? this.store.defaultModel
+        const fullModelId = getModelFullId(selectedModel, ctx.harnessId)
         const env =
             USE_SAME_MODEL_FOR_AGENTS && ctx.harnessId === "claude-code"
                 ? {
-                      ANTHROPIC_DEFAULT_OPUS_MODEL: getModelFullId(selectedModel),
-                      ANTHROPIC_DEFAULT_SONNET_MODEL: getModelFullId(selectedModel),
-                      ANTHROPIC_DEFAULT_HAIKU_MODEL: getModelFullId(selectedModel),
-                      CLAUDE_CODE_SUBAGENT_MODEL: getModelFullId(selectedModel),
+                      ANTHROPIC_DEFAULT_OPUS_MODEL: fullModelId,
+                      ANTHROPIC_DEFAULT_SONNET_MODEL: fullModelId,
+                      ANTHROPIC_DEFAULT_HAIKU_MODEL: fullModelId,
+                      CLAUDE_CODE_SUBAGENT_MODEL: fullModelId,
                   }
                 : undefined
         const query = await manager.startExecution(
@@ -286,7 +287,7 @@ export class ExecutionManager {
                 harnessId: ctx.harnessId,
                 cwd: ctx.cwd,
                 additionalDirectories: ctx.additionalDirectories,
-                model: selectedModel,
+                model: fullModelId,
                 thinking: "high",
                 resumeSessionId: ctx.parentSessionId,
                 forkSession: !!ctx.parentSessionId,

@@ -114,4 +114,56 @@ describe("TaskModel harness lock", () => {
         expect(model.harnessId).toBe("codex")
         expect(model.model).toBe(getDefaultModelForHarness("codex"))
     })
+
+    it("v1 compat: reads harnessId from legacy `type` field", () => {
+        // Pre-harness tasks stored `type: "claude-code"` instead of `harnessId`
+        const legacyEvent = {
+            id: "a1",
+            type: "action" as const,
+            status: "completed" as const,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            completedAt: "2026-01-01T00:00:01.000Z",
+            userInput: "test",
+            execution: {
+                type: "claude-code",
+                executionId: "a1-exec",
+                modelId: "claude-opus-4-6",
+                events: [],
+            },
+            source: { type: "do" as const, userLabel: "Do" },
+            includesCommentIds: [],
+            result: { success: true },
+        } as unknown as ActionEvent
+
+        const task = createTask([legacyEvent])
+        const model = new TaskModel(createStore(task), task.id)
+
+        expect(model.harnessId).toBe("claude-code")
+        expect(model.model).toBe("opus")
+    })
+
+    it("v1 compat: defaults to claude-code when neither harnessId nor type exists", () => {
+        const legacyEvent = {
+            id: "a1",
+            type: "action" as const,
+            status: "completed" as const,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            completedAt: "2026-01-01T00:00:01.000Z",
+            userInput: "test",
+            execution: {
+                executionId: "a1-exec",
+                modelId: "opus",
+                events: [],
+            },
+            source: { type: "do" as const, userLabel: "Do" },
+            includesCommentIds: [],
+            result: { success: true },
+        } as unknown as ActionEvent
+
+        const task = createTask([legacyEvent])
+        const model = new TaskModel(createStore(task), task.id)
+
+        expect(model.harnessId).toBe("claude-code")
+        expect(model.model).toBe("opus")
+    })
 })
