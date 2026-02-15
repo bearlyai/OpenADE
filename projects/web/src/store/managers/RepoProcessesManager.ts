@@ -323,6 +323,7 @@ export class RepoProcessesManager {
         runInAction(() => {
             instance.status = "stopped"
             instance.processHandle = null
+            instance.output += "[Process] Stopped.\n"
         })
     }
 

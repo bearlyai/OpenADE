@@ -183,6 +183,26 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
         }
     }
 
+    // Collect all daemon items across all config groups for global start/stop
+    const allDaemonItems = configGroups.flatMap((group) => group.processes.filter((item) => item.process.type === "daemon").map((item) => ({ ...item, config: group.config })))
+    const allStoppedDaemons = allDaemonItems.filter((item) => {
+        const status = item.instance?.status ?? "stopped"
+        return status === "stopped" || status === "error"
+    })
+    const allRunningDaemons = allDaemonItems.filter((item) => item.instance?.status === "running")
+
+    const handleStartAllDaemons = useCallback(async () => {
+        for (const item of allStoppedDaemons) {
+            await repoProcesses.startProcess(item.process, item.config, context, procsResult!)
+        }
+    }, [allStoppedDaemons, context, procsResult, repoProcesses])
+
+    const handleStopAllDaemons = useCallback(async () => {
+        for (const item of allRunningDaemons) {
+            await repoProcesses.stopProcess(item.process.id)
+        }
+    }, [allRunningDaemons, repoProcesses])
+
     const hasProcesses = configGroups.length > 0
     const hasErrors = procsResult && procsResult.errors.length > 0
 
@@ -246,6 +266,26 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                 <div className="flex-shrink-0 flex items-center justify-between px-2.5 py-1.5 border-b border-border bg-base-200/50">
                     <span className="text-xs font-medium text-muted uppercase tracking-wider">Processes</span>
                     <div className="flex items-center">
+                        {allStoppedDaemons.length > 0 && (
+                            <button
+                                type="button"
+                                onClick={handleStartAllDaemons}
+                                className="btn p-1 text-muted hover:text-success transition-colors"
+                                title="Start all daemons"
+                            >
+                                <Play size={12} />
+                            </button>
+                        )}
+                        {allRunningDaemons.length > 0 && (
+                            <button
+                                type="button"
+                                onClick={handleStopAllDaemons}
+                                className="btn p-1 text-muted hover:text-error transition-colors"
+                                title="Stop all daemons"
+                            >
+                                <Square size={12} />
+                            </button>
+                        )}
                         <Menu
                             trigger={
                                 <button type="button" className="btn p-1 text-muted hover:text-base-content transition-colors" title="Edit">
