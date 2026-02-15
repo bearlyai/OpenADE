@@ -1,7 +1,7 @@
 import cx from "classnames"
-import { ExternalLink, GitBranch, ImagePlus, X, Zap } from "lucide-react"
+import { ExternalLink, GitBranch, ImagePlus, X } from "lucide-react"
 import { observer } from "mobx-react"
-import { useRef, useState } from "react"
+import { useRef } from "react"
 import { Z_INDEX } from "../constants"
 import { openUrlInNativeBrowser } from "../electronAPI/shell"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
@@ -12,7 +12,6 @@ import type { SmartEditorManager } from "../store/managers/SmartEditorManager"
 import type { TrayManager } from "../store/managers/TrayManager"
 import type { Comment } from "../types"
 import { HarnessPicker } from "./HarnessPicker"
-import { StrategyPicker } from "./hyperplan/StrategyPicker"
 import { ModelPicker } from "./ModelPicker"
 import { processImageBlob } from "../utils/imageAttachment"
 import { SmartEditor, type SmartEditorRef } from "./SmartEditor"
@@ -108,16 +107,11 @@ export const InputBar = observer(function InputBar({
 }) {
     const editorRef = useRef<SmartEditorRef>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
-    const [showHyperPlan, setShowHyperPlan] = useState(false)
 
     // Get commands from InputManager
     const { commands } = input
     const hasComments = unsubmittedComments.length > 0
     const hasPendingImages = editorManager.pendingImages.length > 0
-
-    // Check if the plan command is currently visible (determines if HyperPlan button should show)
-    const planCommand = commands.find((c) => c.id === "plan")
-    const showHyperPlanButton = planCommand?.show ?? false
 
     // Strip "openade/" worktree prefix from branch display
     const displayBranch = gitStatus?.branch?.replace(/^openade\//, "")
@@ -255,41 +249,8 @@ export const InputBar = observer(function InputBar({
                             />
                         </div>
                     ))}
-                    {/* HyperPlan button — shown alongside Plan */}
-                    {showHyperPlanButton && (
-                        <div className={cx(input.isDisabled && "opacity-50 pointer-events-none")}>
-                            <button
-                                type="button"
-                                onClick={() => setShowHyperPlan(true)}
-                                disabled={!planCommand?.enabled}
-                                className={cx(
-                                    BUTTON_BASE,
-                                    planCommand?.enabled
-                                        ? "text-base-content cursor-pointer hover:bg-base-300 active:bg-base-300 active:scale-95"
-                                        : "text-muted/50 cursor-not-allowed",
-                                )}
-                            >
-                                <Zap size={14} />
-                                HyperPlan
-                            </button>
-                        </div>
-                    )}
                 </div>
             </div>
-
-            {/* HyperPlan modal */}
-            {showHyperPlan && (
-                <StrategyPicker
-                    onClose={() => setShowHyperPlan(false)}
-                    onRun={() => {
-                        setShowHyperPlan(false)
-                        // Strategy preferences already saved by StrategyPicker.handleRun.
-                        // The plan command reads the active strategy to dispatch correctly.
-                        tray.close()
-                        input.runCommand("plan")
-                    }}
-                />
-            )}
         </div>
     )
 })
