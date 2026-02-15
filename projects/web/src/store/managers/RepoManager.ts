@@ -43,6 +43,7 @@ export class RepoManager {
             createdBy: item.createdBy,
             createdAt: item.createdAt,
             updatedAt: item.updatedAt,
+            archived: item.archived,
         }))
     }
 
@@ -80,6 +81,11 @@ export class RepoManager {
         updateRepoInStore(this.store.repoStore, id, updates)
 
         return this.getRepo(id) ?? null
+    }
+
+    async setRepoArchived(id: string, archived: boolean): Promise<void> {
+        if (!this.store.repoStore) return
+        updateRepoInStore(this.store.repoStore, id, { archived })
     }
 
     /** Alias for deleteRepo - kept for backward compatibility */

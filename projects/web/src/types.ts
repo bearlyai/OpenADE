@@ -45,6 +45,7 @@ export interface Repo {
     createdBy: User
     createdAt: string
     updatedAt: string
+    archived?: boolean
 }
 
 // ============================================================================

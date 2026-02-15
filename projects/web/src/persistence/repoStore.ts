@@ -64,6 +64,7 @@ export interface RepoItem {
     createdBy: User
     createdAt: string
     updatedAt: string
+    archived?: boolean
     tasks: TaskPreview[]
 }
 
@@ -123,10 +124,11 @@ export function addRepo(
 /**
  * Updates an existing repo's editable fields.
  */
-export function updateRepo(store: RepoStore, repoId: string, updates: Partial<Pick<RepoItem, "name" | "path">>): void {
+export function updateRepo(store: RepoStore, repoId: string, updates: Partial<Pick<RepoItem, "name" | "path" | "archived">>): void {
     store.repos.update(repoId, (draft) => {
         if (updates.name !== undefined) draft.name = updates.name
         if (updates.path !== undefined) draft.path = updates.path
+        if (updates.archived !== undefined) draft.archived = updates.archived
         draft.updatedAt = new Date().toISOString()
     })
 }
