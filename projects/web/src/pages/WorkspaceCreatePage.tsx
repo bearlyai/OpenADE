@@ -214,10 +214,11 @@ export const WorkspaceCreatePage = observer(() => {
                     return
                 }
 
-                const gitResult = await initGit({ directory: fullPath })
-                if (!gitResult.success) {
-                    setSubmitError(gitResult.error || "Failed to initialize git repository")
-                    return
+                // Best-effort git init — prototypes work without git
+                try {
+                    await initGit({ directory: fullPath })
+                } catch {
+                    // ignore
                 }
 
                 const repo = await codeStore.repos.addRepo({ name: prototypeName.trim(), path: fullPath })
