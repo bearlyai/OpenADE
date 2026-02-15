@@ -151,6 +151,13 @@ export class HyperPlanExecutor {
                 callbacks.onTerminalEvent(streamEvent)
             }
 
+            // Persist envelope events (complete, error, etc.) — critical for Codex
+            // cost tracking where cost lives on the harness-level complete event
+            const envelopeEvents = query.executionState.events.filter((e) => e.direction === "execution" && e.type !== "raw_message")
+            for (const ev of envelopeEvents) {
+                callbacks.onTerminalEvent(ev)
+            }
+
             return { sessionId, success: query.executionState.status !== "error" }
         } finally {
             this.activeQueries = this.activeQueries.filter((q) => q !== query)
@@ -273,16 +280,22 @@ export class HyperPlanExecutor {
             const text = extractPlanText(allEvents, step.agent.harnessId)
             const success = query.executionState.status !== "error"
 
-            if (!isTerminal) {
-                callbacks.onSubPlanStatusChange(step.id, success ? "completed" : "error", text ?? undefined, success ? undefined : "Execution failed")
-            }
-
-            // Also persist envelope events for terminal step
+            // Persist envelope events (complete, error, etc.) for all steps.
+            // Critical for Codex cost tracking where cost lives on the
+            // harness-level complete event rather than on a raw message.
+            const envelopeEvents = allEvents.filter((e) => e.direction === "execution" && e.type !== "raw_message")
             if (isTerminal) {
-                const envelopeEvents = query.executionState.events.filter((e) => e.direction === "execution" && e.type !== "raw_message")
                 for (const ev of envelopeEvents) {
                     callbacks.onTerminalEvent(ev)
                 }
+            } else {
+                for (const ev of envelopeEvents) {
+                    callbacks.onSubPlanEvent(step.id, ev)
+                }
+            }
+
+            if (!isTerminal) {
+                callbacks.onSubPlanStatusChange(step.id, success ? "completed" : "error", text ?? undefined, success ? undefined : "Execution failed")
             }
 
             if (text) {

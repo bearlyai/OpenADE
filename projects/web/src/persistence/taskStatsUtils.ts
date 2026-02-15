@@ -41,6 +41,35 @@ export function computeTaskUsage(events: Array<CodeEvent & { id: string }>): Tas
                 costByModel[modelId] = (costByModel[modelId] ?? 0) + completeCost
             }
         }
+
+        // HyperPlan sub-executions: aggregate cost/tokens from each sub-plan
+        if (event.hyperplanSubExecutions) {
+            for (const sub of event.hyperplanSubExecutions) {
+                const subModelId = sub.modelId ?? modelId
+                const subHarnessId = sub.harnessId ?? "claude-code"
+                const subMessageEvents = extractRawMessageEvents(sub.events)
+                for (const evt of subMessageEvents) {
+                    if (evt.harnessId === "claude-code" && evt.message.type === "result") {
+                        totalCostUsd += evt.message.total_cost_usd ?? 0
+                        const usage = evt.message.usage as { input_tokens?: number; output_tokens?: number } | undefined
+                        inputTokens += usage?.input_tokens ?? 0
+                        outputTokens += usage?.output_tokens ?? 0
+                        costByModel[subModelId] = (costByModel[subModelId] ?? 0) + (evt.message.total_cost_usd ?? 0)
+                    }
+                    if (evt.harnessId === "codex" && evt.message.type === "turn.completed") {
+                        inputTokens += evt.message.usage.input_tokens ?? 0
+                        outputTokens += evt.message.usage.output_tokens ?? 0
+                    }
+                }
+                if (subHarnessId === "codex") {
+                    const completeCost = extractCompleteCost(sub.events)
+                    if (completeCost !== undefined) {
+                        totalCostUsd += completeCost
+                        costByModel[subModelId] = (costByModel[subModelId] ?? 0) + completeCost
+                    }
+                }
+            }
+        }
     }
 
     return { inputTokens, outputTokens, totalCostUsd, eventCount, costByModel }
