@@ -4,6 +4,7 @@ export const Z_INDEX = {
     INPUT_BAR_TRAY: 90,
     PORTAL_CONTAINER: 200,
     RELEASE_NOTIFICATION: 201,
+    ONBOARDING_MODAL: 300,
 } as const
 
 const LAST_VIEWED_KEY = "_code_last_viewed"

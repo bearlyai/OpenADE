@@ -10,13 +10,12 @@ import { ArrowLeft, ArrowRight, Sparkles } from "lucide-react"
 import { observer } from "mobx-react"
 import { useState } from "react"
 import { useHotkeys } from "react-hotkeys-hook"
+import { Z_INDEX } from "../../constants"
 import type { CodeStore } from "../../store/store"
 import { ScrollArea } from "../ui/ScrollArea"
 import { OnboardingActionsStep } from "./OnboardingActionsStep"
 import { OnboardingThemeStep } from "./OnboardingThemeStep"
 import { OnboardingWorkspaceStep } from "./OnboardingWorkspaceStep"
-
-const Z_INDEX_MODAL = "z-50"
 
 type OnboardingStep = 0 | 1 | 2
 
@@ -94,8 +93,9 @@ export const OnboardingModal = NiceModal.create(
 
         return (
             <div
-                className={`absolute inset-0 bg-black/50 flex items-start justify-center ${Z_INDEX_MODAL} p-4`}
+                className="fixed inset-0 bg-black/50 flex items-start justify-center p-4"
                 style={{
+                    zIndex: Z_INDEX.ONBOARDING_MODAL,
                     backdropFilter: "blur(5px)",
                     WebkitBackdropFilter: "blur(5px)",
                     paddingTop: "max(min(80px, 15%), 1rem)",
