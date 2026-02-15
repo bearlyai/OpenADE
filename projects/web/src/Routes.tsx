@@ -236,7 +236,7 @@ export const CodeWorkspaceTaskRoute = observer(() => {
         <div className="flex items-center gap-2">
             <button
                 type="button"
-                className="btn flex items-center justify-center w-7 h-7 rounded-md hover:bg-secondary text-muted hover:text-base-content"
+                className="btn flex items-center justify-center w-7 h-7 text-muted hover:bg-base-200 hover:text-base-content"
                 onClick={handleRegenerateTitle}
                 title="Regenerate title"
                 aria-label="Regenerate title"
