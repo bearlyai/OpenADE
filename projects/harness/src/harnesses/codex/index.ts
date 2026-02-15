@@ -5,6 +5,7 @@ import type { Harness } from "../../harness.js"
 import type {
     HarnessMeta,
     HarnessCapabilities,
+    HarnessModelConfig,
     HarnessInstallStatus,
     SlashCommand,
     HarnessQuery,
@@ -54,6 +55,16 @@ export class CodexHarness implements Harness<CodexEvent> {
             supportsCostTracking: true,
             supportsNamedTools: false,
             supportsImages: true,
+        }
+    }
+
+    models(): HarnessModelConfig {
+        return {
+            models: [
+                { id: "gpt-5.3-codex", fullId: "gpt-5.3-codex", label: "GPT-5.3 Codex", displayClass: "Codex" },
+                { id: "gpt-5.3-codex-spark", fullId: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark", displayClass: "Codex" },
+            ],
+            defaultModel: "gpt-5.3-codex",
         }
     }
 

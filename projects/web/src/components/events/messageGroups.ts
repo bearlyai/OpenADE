@@ -180,7 +180,7 @@ export function groupStreamEvents(events: HarnessStreamEvent[], harnessId: Harne
     const stderrGroups: StderrGroup[] = events
         .filter(
             (e): e is HarnessStreamEvent & { type: "stderr"; direction: "execution" } =>
-                e.direction === "execution" && e.type === "stderr" && !STDERR_NOISE_PATTERNS.some((p) => p.test(e.data)),
+                e.direction === "execution" && e.type === "stderr" && !STDERR_NOISE_PATTERNS.some((p) => p.test(e.data))
         )
         .map((e) => ({
             type: "stderr" as const,
@@ -210,7 +210,7 @@ export function groupStreamEvents(events: HarnessStreamEvent[], harnessId: Harne
 function groupRawMessageEvents(
     events: HarnessRawMessageEvent[],
     harnessId: HarnessId,
-    completionUsage?: { costUsd?: number; durationMs?: number },
+    completionUsage?: { costUsd?: number; durationMs?: number }
 ): MessageGroup[] {
     switch (harnessId) {
         case "claude-code": {

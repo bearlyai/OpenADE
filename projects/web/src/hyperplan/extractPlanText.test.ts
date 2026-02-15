@@ -40,7 +40,12 @@ describe("extractPlanText", () => {
             const events = [
                 claudeRawEvent({
                     type: "assistant",
-                    message: { content: [{ type: "text", text: "Part 1" }, { type: "text", text: "Part 2" }] },
+                    message: {
+                        content: [
+                            { type: "text", text: "Part 1" },
+                            { type: "text", text: "Part 2" },
+                        ],
+                    },
                 }),
             ]
             expect(extractPlanText(events, "claude-code")).toBe("Part 1\nPart 2")
@@ -103,9 +108,7 @@ describe("extractPlanText", () => {
         })
 
         it("returns null when no agent_message items exist", () => {
-            const events = [
-                codexRawEvent({ type: "item.completed", item: { type: "tool_call" } }),
-            ]
+            const events = [codexRawEvent({ type: "item.completed", item: { type: "tool_call" } })]
             expect(extractPlanText(events, "codex")).toBeNull()
         })
     })

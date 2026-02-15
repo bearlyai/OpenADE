@@ -184,7 +184,9 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
     }
 
     // Collect all daemon items across all config groups for global start/stop
-    const allDaemonItems = configGroups.flatMap((group) => group.processes.filter((item) => item.process.type === "daemon").map((item) => ({ ...item, config: group.config })))
+    const allDaemonItems = configGroups.flatMap((group) =>
+        group.processes.filter((item) => item.process.type === "daemon").map((item) => ({ ...item, config: group.config }))
+    )
     const allStoppedDaemons = allDaemonItems.filter((item) => {
         const status = item.instance?.status ?? "stopped"
         return status === "stopped" || status === "error"

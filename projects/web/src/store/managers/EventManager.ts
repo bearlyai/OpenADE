@@ -66,7 +66,11 @@ export class EventManager {
         const events = taskStore.events.all()
         for (let i = events.length - 1; i >= 0; i--) {
             const event = events[i]
-            if (event.type === "action" && (event.source.type === "plan" || event.source.type === "revise" || event.source.type === "hyperplan") && event.status === "completed") {
+            if (
+                event.type === "action" &&
+                (event.source.type === "plan" || event.source.type === "revise" || event.source.type === "hyperplan") &&
+                event.status === "completed"
+            ) {
                 return event
             }
         }

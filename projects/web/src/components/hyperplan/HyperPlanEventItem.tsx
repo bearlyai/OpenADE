@@ -56,31 +56,18 @@ function SubPlanPane({
             {/* Pane content */}
             <div className="max-h-[300px] overflow-y-auto">
                 {sub.events.length > 0 ? (
-                    <InlineMessages
-                        events={sub.events}
-                        harnessId={sub.harnessId}
-                        sourceType="plan"
-                        taskId={taskId}
-                        actionEventId={actionEventId}
-                    />
+                    <InlineMessages events={sub.events} harnessId={sub.harnessId} sourceType="plan" taskId={taskId} actionEventId={actionEventId} />
                 ) : (
                     <div className="px-3 py-4 text-center text-xs text-muted">Waiting...</div>
                 )}
             </div>
             {/* Error display */}
-            {sub.status === "error" && sub.error && (
-                <div className="px-2 py-1.5 bg-error/10 text-error text-xs border-t border-border">{sub.error}</div>
-            )}
+            {sub.status === "error" && sub.error && <div className="px-2 py-1.5 bg-error/10 text-error text-xs border-t border-border">{sub.error}</div>}
         </div>
     )
 }
 
-export const HyperPlanEventItem = observer(function HyperPlanEventItem({
-    event,
-    expanded,
-    onToggle,
-    taskId,
-}: HyperPlanEventItemProps) {
+export const HyperPlanEventItem = observer(function HyperPlanEventItem({ event, expanded, onToggle, taskId }: HyperPlanEventItemProps) {
     const subExecutions = event.hyperplanSubExecutions ?? []
     const terminalEvents = event.execution.events
 

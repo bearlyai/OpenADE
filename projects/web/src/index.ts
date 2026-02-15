@@ -29,4 +29,4 @@ export { CodeLayout, type CodeLayoutProps } from "./layout/CodeLayout"
 export { CodeAppLayout } from "./layout/CodeAppLayout"
 
 // Constants
-export { MODEL_REGISTRY, type ModelEntry, DEFAULT_HARNESS_ID, DEFAULT_MODEL, CLAUDE_MODELS } from "./constants"
+export { MODEL_REGISTRY, type ModelEntry, DEFAULT_HARNESS_ID, DEFAULT_MODEL, CLAUDE_MODELS, HARNESS_META } from "./constants"

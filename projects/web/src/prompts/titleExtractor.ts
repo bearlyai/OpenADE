@@ -35,20 +35,15 @@ export function generateSlug(): string {
 export async function generateTitle(description: string, abortController: AbortController, harnessId?: HarnessId | string): Promise<string | null> {
     const manager = getHarnessQueryManager()
 
-    const query = await manager.startExecution(
-        `Generate a short, descriptive title (3-8 words) for this task:\n\n${description}`,
-        {
-            harnessId: (harnessId as HarnessId) ?? "claude-code",
-            cwd: "",
-            model: getTitleModel((harnessId as HarnessId) ?? "claude-code"),
-            mode: "read-only",
-            disablePlanningTools: true,
-            appendSystemPrompt:
-                "You are a title generator. Output a title in this exact format:\n" +
-                "Title: <your 3-8 word title>\n" +
-                "Do not output anything else.",
-        }
-    )
+    const query = await manager.startExecution(`Generate a short, descriptive title (3-8 words) for this task:\n\n${description}`, {
+        harnessId: (harnessId as HarnessId) ?? "claude-code",
+        cwd: "",
+        model: getTitleModel((harnessId as HarnessId) ?? "claude-code"),
+        mode: "read-only",
+        disablePlanningTools: true,
+        appendSystemPrompt:
+            "You are a title generator. Output a title in this exact format:\n" + "Title: <your 3-8 word title>\n" + "Do not output anything else.",
+    })
 
     if (!query) return null
 

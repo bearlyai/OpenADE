@@ -1,4 +1,4 @@
-import type { HarnessId, HarnessMeta, HarnessCapabilities, HarnessInstallStatus, SlashCommand, HarnessQuery, HarnessEvent } from "./types.js"
+import type { HarnessId, HarnessMeta, HarnessCapabilities, HarnessModelConfig, HarnessInstallStatus, SlashCommand, HarnessQuery, HarnessEvent } from "./types.js"
 
 export interface Harness<M = unknown> {
     readonly id: HarnessId
@@ -6,6 +6,7 @@ export interface Harness<M = unknown> {
     // ── Discovery (sync, cheap, no I/O) ──
     meta(): HarnessMeta
     capabilities(): HarnessCapabilities
+    models(): HarnessModelConfig
 
     // ── Status (async, may shell out) ──
     checkInstallStatus(): Promise<HarnessInstallStatus>

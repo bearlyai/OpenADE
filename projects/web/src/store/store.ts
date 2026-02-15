@@ -361,11 +361,10 @@ export class CodeStore {
         const settings = this.personalSettingsStore?.settings.get()
         const strategyId = settings?.hyperplanStrategyId ?? "standard"
 
-        const agents: AgentCouplet[] =
-            settings?.hyperplanAgents?.map((a) => ({
-                harnessId: a.harnessId as HarnessId,
-                modelId: a.modelId,
-            })) ?? [{ harnessId: this.defaultHarnessId, modelId: this.defaultModel }]
+        const agents: AgentCouplet[] = settings?.hyperplanAgents?.map((a) => ({
+            harnessId: a.harnessId as HarnessId,
+            modelId: a.modelId,
+        })) ?? [{ harnessId: this.defaultHarnessId, modelId: this.defaultModel }]
 
         const reconciler: AgentCouplet = settings?.hyperplanReconciler
             ? { harnessId: settings.hyperplanReconciler.harnessId as HarnessId, modelId: settings.hyperplanReconciler.modelId }

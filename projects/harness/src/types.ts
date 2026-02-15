@@ -144,3 +144,19 @@ export interface SlashCommand {
     name: string
     type: "skill" | "slash_command"
 }
+
+// ============================================================================
+// Model Configuration
+// ============================================================================
+
+export interface ModelEntry {
+    id: string // alias used in picker (e.g. "opus", "o3")
+    fullId: string // wire model ID sent to CLI
+    label: string // display label (e.g. "Opus 4.6")
+    displayClass: string // normalized class for grouping/display (e.g. "Opus")
+}
+
+export interface HarnessModelConfig {
+    models: ModelEntry[]
+    defaultModel: string // alias ID
+}

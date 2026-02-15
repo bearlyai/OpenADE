@@ -1,4 +1,4 @@
-import { MODEL_REGISTRY } from "../constants"
+import { MODEL_REGISTRY, HARNESS_META } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { Select } from "./ui/Select"
 
@@ -7,15 +7,10 @@ interface HarnessPickerProps {
     onChange: (harnessId: HarnessId) => void
 }
 
-const HARNESS_LABELS: Record<string, string> = {
-    "claude-code": "Claude Code",
-    codex: "Codex",
-}
-
 function getHarnessEntries(): Array<{ id: HarnessId; content: string }> {
     return (Object.keys(MODEL_REGISTRY) as HarnessId[]).map((id) => ({
         id,
-        content: HARNESS_LABELS[id] ?? id,
+        content: HARNESS_META[id]?.name ?? id,
     }))
 }
 

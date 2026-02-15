@@ -24,7 +24,8 @@ import { getHarnessDisplayName } from "../settings/harnessStatusUtils"
 
 function DiagramNode({ x, y, label, variant = "agent" }: { x: number; y: number; label: string; variant?: "agent" | "reconciler" | "output" }) {
     const fill = variant === "reconciler" ? "var(--color-warning)" : variant === "output" ? "var(--color-success)" : "var(--color-primary)"
-    const textFill = variant === "reconciler" ? "var(--color-warning-content)" : variant === "output" ? "var(--color-success-content)" : "var(--color-primary-content)"
+    const textFill =
+        variant === "reconciler" ? "var(--color-warning-content)" : variant === "output" ? "var(--color-success-content)" : "var(--color-primary-content)"
     const w = label.length * 6.5 + 18
     return (
         <g>
@@ -132,7 +133,7 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
     const [reconcilerIndex, setReconcilerIndex] = useState(() => {
         if (!settings?.hyperplanReconciler) return 0
         const idx = selectedAgents.findIndex(
-            (a) => a.harnessId === settings.hyperplanReconciler!.harnessId && a.modelId === settings.hyperplanReconciler!.modelId,
+            (a) => a.harnessId === settings.hyperplanReconciler!.harnessId && a.modelId === settings.hyperplanReconciler!.modelId
         )
         return idx >= 0 ? idx : 0
     })
@@ -181,7 +182,7 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
 
     const isAgentSelected = useCallback(
         (couplet: AgentCouplet) => selectedAgents.some((a) => a.harnessId === couplet.harnessId && a.modelId === couplet.modelId),
-        [selectedAgents],
+        [selectedAgents]
     )
 
     const toggleAgent = useCallback(
@@ -195,7 +196,7 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                 setSelectedAgents([...selectedAgents, couplet])
             }
         },
-        [selectedAgents, reconcilerIndex, isAgentSelected],
+        [selectedAgents, reconcilerIndex, isAgentSelected]
     )
 
     const handleRun = useCallback(
@@ -204,7 +205,7 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
             store.setHyperPlanPreferences(strategyId, selectedAgents, reconciler)
             onRun(strategyId)
         },
-        [store, selectedAgents, reconcilerIndex, onRun],
+        [store, selectedAgents, reconcilerIndex, onRun]
     )
 
     return (
@@ -224,7 +225,11 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                         <Zap size={16} className="text-primary" />
                         <h2 className="text-base font-semibold text-base-content">HyperPlan</h2>
                     </div>
-                    <button type="button" className="btn w-7 h-7 flex items-center justify-center text-muted hover:text-base-content hover:bg-base-200 transition-colors" onClick={onClose}>
+                    <button
+                        type="button"
+                        className="btn w-7 h-7 flex items-center justify-center text-muted hover:text-base-content hover:bg-base-200 transition-colors"
+                        onClick={onClose}
+                    >
                         <X size={15} />
                     </button>
                 </div>
@@ -245,7 +250,7 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                                         onClick={() => setSelectedStrategyId(preset.id)}
                                         className={cx(
                                             "btn w-full text-left border transition-colors cursor-pointer",
-                                            isSelected ? "border-primary bg-primary/5" : "border-border hover:border-base-300 hover:bg-base-200/50",
+                                            isSelected ? "border-primary bg-primary/5" : "border-border hover:border-base-300 hover:bg-base-200/50"
                                         )}
                                     >
                                         <div className="px-4 py-3">
@@ -282,8 +287,8 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                                     <div className="flex items-start gap-2.5 p-3 mb-3 bg-warning/10 border border-warning/20 text-xs text-warning">
                                         <AlertTriangle size={14} className="shrink-0 mt-0.5" />
                                         <span>
-                                            Multi-agent strategies work best with 2+ configured harnesses.
-                                            Install and authenticate additional coding agents in Settings.
+                                            Multi-agent strategies work best with 2+ configured harnesses. Install and authenticate additional coding agents in
+                                            Settings.
                                         </span>
                                     </div>
                                 )}
@@ -293,9 +298,7 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                                         <div key={harnessLabel}>
                                             <div className="text-[11px] font-semibold text-muted mb-1.5 flex items-center gap-1.5">
                                                 {harnessLabel}
-                                                {!couplets[0].available && !statusLoading && (
-                                                    <span className="text-error font-normal">— not available</span>
-                                                )}
+                                                {!couplets[0].available && !statusLoading && <span className="text-error font-normal">— not available</span>}
                                             </div>
                                             <div className="space-y-0.5">
                                                 {couplets.map((couplet) => {
@@ -311,14 +314,16 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                                                             className={cx(
                                                                 "flex items-center gap-2.5 px-3 py-2 text-sm transition-colors",
                                                                 !couplet.available && "opacity-35",
-                                                                selected ? "bg-base-200" : "hover:bg-base-200/40",
+                                                                selected ? "bg-base-200" : "hover:bg-base-200/40"
                                                             )}
                                                         >
                                                             <button
                                                                 type="button"
                                                                 className={cx(
                                                                     "btn w-4 h-4 border flex items-center justify-center shrink-0 transition-colors",
-                                                                    selected ? "bg-primary border-primary text-primary-content" : "border-border hover:border-muted",
+                                                                    selected
+                                                                        ? "bg-primary border-primary text-primary-content"
+                                                                        : "border-border hover:border-muted"
                                                                 )}
                                                                 onClick={() => couplet.available && toggleAgent(couplet)}
                                                                 disabled={!couplet.available}
@@ -333,11 +338,11 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                                                                     type="button"
                                                                     className={cx(
                                                                         "btn p-1 transition-colors shrink-0",
-                                                                        isReconciler ? "text-warning" : "text-muted hover:text-warning",
+                                                                        isReconciler ? "text-warning" : "text-muted hover:text-warning"
                                                                     )}
                                                                     onClick={() => {
                                                                         const idx = selectedAgents.findIndex(
-                                                                            (a) => a.harnessId === couplet.harnessId && a.modelId === couplet.modelId,
+                                                                            (a) => a.harnessId === couplet.harnessId && a.modelId === couplet.modelId
                                                                         )
                                                                         if (idx >= 0) setReconcilerIndex(idx)
                                                                     }}
@@ -388,7 +393,7 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                                 "btn flex items-center gap-2 px-4 h-9 text-sm font-semibold transition-all",
                                 canRun
                                     ? "bg-primary text-primary-content hover:bg-primary/80 cursor-pointer active:scale-95"
-                                    : "bg-primary/30 text-primary-content/40 cursor-not-allowed",
+                                    : "bg-primary/30 text-primary-content/40 cursor-not-allowed"
                             )}
                             onClick={() => handleRun(selectedStrategyId)}
                             disabled={!canRun}

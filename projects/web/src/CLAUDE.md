@@ -305,6 +305,7 @@ Import from `../components/ui` not `@/funktionalChat/components`.
 | Prompt templates | `prompts.ts` |
 | Local routing | `routing.ts` |
 | MCP presets & icons | `constants.ts` |
+| Model catalog (from harness) | `constants.ts` (re-exports from `@openade/harness`) |
 | Store coordinator | `store/store.ts` |
 | Task observable | `store/TaskModel.ts` |
 | Harness execution | `store/managers/ExecutionManager.ts` |

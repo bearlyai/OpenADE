@@ -17,7 +17,23 @@ export type {
     HarnessInstallStatus,
     HarnessCapabilities,
     SlashCommand,
+    ModelEntry,
+    HarnessModelConfig,
 } from "./types.js"
+
+// ── Model catalog (pure data, no Node I/O — safe for renderer) ──
+export {
+    MODEL_REGISTRY,
+    HARNESS_META,
+    DEFAULT_HARNESS_ID,
+    DEFAULT_MODEL,
+    getModelFullId,
+    getModelsForHarness,
+    getDefaultModelForHarness,
+    resolveModelForHarness,
+    normalizeModelClass,
+} from "./models.js"
+export type { HarnessMetaEntry } from "./models.js"
 
 // ── Core interface ──
 export type { Harness } from "./harness.js"

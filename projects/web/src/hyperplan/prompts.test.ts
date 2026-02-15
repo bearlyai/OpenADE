@@ -18,7 +18,7 @@ describe("buildHyperPlanStepPrompt", () => {
 describe("buildReviewStepPrompt", () => {
     it("wraps plan text in XML tags with step ID", () => {
         const result = buildReviewStepPrompt("task desc", "The plan content", "plan_0")
-        expect(result.userMessage).toContain("<plan_to_review id=\"plan_0\">")
+        expect(result.userMessage).toContain('<plan_to_review id="plan_0">')
         expect(result.userMessage).toContain("The plan content")
         expect(result.userMessage).toContain("</plan_to_review>")
     })
@@ -31,7 +31,7 @@ describe("buildReviewStepPrompt", () => {
 
     it("system prompt instructs review mode", () => {
         const result = buildReviewStepPrompt("task", "plan", "plan_0")
-        expect(result.systemPrompt).toContain("mode=\"review\"")
+        expect(result.systemPrompt).toContain('mode="review"')
         expect(result.systemPrompt).toContain("Strengths")
         expect(result.systemPrompt).toContain("Weaknesses")
         expect(result.systemPrompt).toContain("Risks")
@@ -109,9 +109,7 @@ describe("buildReconcileStepPrompt", () => {
         for (let i = 0; i < 50; i++) {
             const result = buildReconcileStepPrompt("task", inputs)
             // Extract the order of content blocks by finding which content appears first
-            const contentPositions = ["CONTENT_FIRST", "CONTENT_SECOND", "CONTENT_THIRD"]
-                .map((c) => result.userMessage.indexOf(c))
-                .join(",")
+            const contentPositions = ["CONTENT_FIRST", "CONTENT_SECOND", "CONTENT_THIRD"].map((c) => result.userMessage.indexOf(c)).join(",")
             contentOrders.add(contentPositions)
         }
 

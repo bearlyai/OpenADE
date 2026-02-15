@@ -81,7 +81,7 @@ Specific, actionable improvements. For each suggestion, reference the plan secti
 export function buildReviewStepPrompt(
     taskDescription: string,
     planText: string,
-    planStepId: string,
+    planStepId: string
 ): {
     systemPrompt: string
     userMessage: string
@@ -164,7 +164,7 @@ export interface ReconcileInput {
 
 export function buildReconcileStepPrompt(
     taskDescription: string,
-    inputs: ReconcileInput[],
+    inputs: ReconcileInput[]
 ): {
     systemPrompt: string
     userMessage: string

@@ -8,6 +8,7 @@ import type { Harness } from "../../harness.js"
 import type {
     HarnessMeta,
     HarnessCapabilities,
+    HarnessModelConfig,
     HarnessInstallStatus,
     SlashCommand,
     HarnessQuery,
@@ -56,6 +57,17 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
             supportsCostTracking: true,
             supportsNamedTools: true,
             supportsImages: true,
+        }
+    }
+
+    models(): HarnessModelConfig {
+        return {
+            models: [
+                { id: "opus", fullId: "claude-opus-4-6", label: "Opus 4.6", displayClass: "Opus" },
+                { id: "sonnet", fullId: "claude-sonnet-4-5-20250929", label: "Sonnet 4.5", displayClass: "Sonnet" },
+                { id: "haiku", fullId: "claude-haiku-4-5-20251001", label: "Haiku 4.5", displayClass: "Haiku" },
+            ],
+            defaultModel: "opus",
         }
     }
 

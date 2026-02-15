@@ -38,8 +38,9 @@ npx @biomejs/biome lint --write --diagnostic-level=error src/  # lint
 
 ```
 src/
-├── types.ts                    # All shared types (HarnessQuery, HarnessEvent, etc.)
+├── types.ts                    # All shared types (HarnessQuery, HarnessEvent, ModelEntry, etc.)
 ├── harness.ts                  # Harness<M> interface — the unified contract
+├── models.ts                   # Model catalog — pure data, browser-safe (MODEL_REGISTRY, helpers)
 ├── errors.ts                   # HarnessError, HarnessNotInstalledError, HarnessAuthError
 ├── registry.ts                 # HarnessRegistry — register/get/getAll harnesses
 ├── index.ts                    # Public barrel export
@@ -76,7 +77,7 @@ src/
 
 | Concept | Description |
 |---|---|
-| `Harness<M>` | Interface every harness implements. `M` is the harness-specific event type |
+| `Harness<M>` | Interface every harness implements. `M` is the harness-specific event type. Includes `models()` for declaring supported models |
 | `HarnessQuery` | Normalized input: prompt, model, mode, MCP servers, client tools, signal |
 | `HarnessEvent<M>` | Stream envelope: `message`, `session_started`, `complete`, `error`, `stderr` |
 | `ClaudeEvent` | Discriminated union of all Claude CLI `--output-format stream-json` line types |

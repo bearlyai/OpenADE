@@ -9,7 +9,7 @@
  * The ExecutionManager is the glue that connects this to persistence.
  */
 
-import { USE_SAME_MODEL_FOR_AGENTS, getModelFullId } from "../constants"
+import { getModelFullId } from "../constants"
 import type { HarnessStreamEvent, McpServerConfig } from "../electronAPI/harnessEventTypes"
 import { type ClientHarnessQueryOptions, type HarnessQuery, getHarnessQueryManager, isHarnessApiAvailable } from "../electronAPI/harnessQuery"
 import { extractPlanText } from "./extractPlanText"
@@ -274,19 +274,12 @@ export class HyperPlanExecutor {
             const success = query.executionState.status !== "error"
 
             if (!isTerminal) {
-                callbacks.onSubPlanStatusChange(
-                    step.id,
-                    success ? "completed" : "error",
-                    text ?? undefined,
-                    success ? undefined : "Execution failed",
-                )
+                callbacks.onSubPlanStatusChange(step.id, success ? "completed" : "error", text ?? undefined, success ? undefined : "Execution failed")
             }
 
             // Also persist envelope events for terminal step
             if (isTerminal) {
-                const envelopeEvents = query.executionState.events.filter(
-                    (e) => e.direction === "execution" && e.type !== "raw_message",
-                )
+                const envelopeEvents = query.executionState.events.filter((e) => e.direction === "execution" && e.type !== "raw_message")
                 for (const ev of envelopeEvents) {
                     callbacks.onTerminalEvent(ev)
                 }
@@ -306,37 +299,19 @@ export class HyperPlanExecutor {
     /**
      * Start a harness query for a step.
      */
-    private async startQuery(
-        step: HyperPlanStep,
-        prompt: string,
-        appendSystemPrompt: string,
-        executionId?: string,
-    ): Promise<HarnessQuery | null> {
+    private async startQuery(step: HyperPlanStep, prompt: string, appendSystemPrompt: string, executionId?: string): Promise<HarnessQuery | null> {
         const { cwd, additionalDirectories, mcpServerConfigs } = this.config
         const manager = getHarnessQueryManager()
-
-        // Build environment vars for same-model subagent enforcement
-        let env: Record<string, string> | undefined
-        if (USE_SAME_MODEL_FOR_AGENTS && step.agent.harnessId === "claude-code") {
-            const fullId = getModelFullId(step.agent.modelId)
-            env = {
-                ANTHROPIC_DEFAULT_OPUS_MODEL: fullId,
-                ANTHROPIC_DEFAULT_SONNET_MODEL: fullId,
-                ANTHROPIC_DEFAULT_HAIKU_MODEL: fullId,
-                CLAUDE_CODE_SUBAGENT_MODEL: fullId,
-            }
-        }
 
         const options: ClientHarnessQueryOptions = {
             harnessId: step.agent.harnessId,
             cwd,
             additionalDirectories,
-            model: step.agent.modelId,
+            model: getModelFullId(step.agent.modelId, step.agent.harnessId),
             thinking: "high",
             mode: "read-only",
             appendSystemPrompt,
             mcpServerConfigs,
-            env,
         }
 
         return manager.startExecution(prompt, options, executionId)

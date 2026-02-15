@@ -9,7 +9,7 @@
  */
 
 import { captureError, track } from "../../analytics"
-import { USE_SAME_MODEL_FOR_AGENTS, getModelFullId } from "../../constants"
+import { getModelFullId } from "../../constants"
 import type { HarnessId, HarnessStreamEvent, McpServerConfig } from "../../electronAPI/harnessEventTypes"
 import { getHarnessQueryManager, isHarnessApiAvailable } from "../../electronAPI/harnessQuery"
 import { getGitStatus, isGitApiAvailable } from "../../electronAPI/git"
@@ -272,15 +272,6 @@ export class ExecutionManager {
         const taskModel = this.store.tasks.getTaskModel(ctx.taskId)
         const selectedModel = taskModel?.model ?? this.store.defaultModel
         const fullModelId = getModelFullId(selectedModel, ctx.harnessId)
-        const env =
-            USE_SAME_MODEL_FOR_AGENTS && ctx.harnessId === "claude-code"
-                ? {
-                      ANTHROPIC_DEFAULT_OPUS_MODEL: fullModelId,
-                      ANTHROPIC_DEFAULT_SONNET_MODEL: fullModelId,
-                      ANTHROPIC_DEFAULT_HAIKU_MODEL: fullModelId,
-                      CLAUDE_CODE_SUBAGENT_MODEL: fullModelId,
-                  }
-                : undefined
         const query = await manager.startExecution(
             ctx.prompt,
             {
@@ -294,7 +285,6 @@ export class ExecutionManager {
                 mode: ctx.readOnly ? "read-only" : undefined,
                 appendSystemPrompt: ctx.appendSystemPrompt,
                 mcpServerConfigs: ctx.mcpServerConfigs,
-                env,
             },
             ctx.executionId
         )
@@ -354,9 +344,7 @@ export class ExecutionManager {
         // Persist non-raw_message execution events (complete, error, stderr, etc.).
         // The stream loop above only persists raw_message events; the remaining
         // envelope events carry usage/cost data, error details, and other metadata.
-        const envelopeEvents = query.executionState.events.filter(
-            (e) => e.direction === "execution" && e.type !== "raw_message",
-        )
+        const envelopeEvents = query.executionState.events.filter((e) => e.direction === "execution" && e.type !== "raw_message")
         for (const envelopeEvent of envelopeEvents) {
             this.store.events.appendStreamEventToEvent({
                 taskId: ctx.taskId,
