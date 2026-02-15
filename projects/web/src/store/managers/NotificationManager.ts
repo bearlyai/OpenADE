@@ -1,7 +1,7 @@
 import type { ActionEvent, ActionEventSource } from "../../types"
 import type { CodeStore } from "../store"
 
-type NotifiableEventType = Exclude<ActionEventSource["type"], "ask">
+type NotifiableEventType = Exclude<ActionEventSource["type"], "ask" | "hyperplan">
 
 const NOTIFICATION_CLEANUP_MS = 5 * 60 * 1000
 
@@ -31,7 +31,7 @@ export class NotificationManager {
     }
 
     private isNotifiableEvent(eventType: ActionEventSource["type"]): eventType is NotifiableEventType {
-        return eventType !== "ask"
+        return eventType !== "ask" && eventType !== "hyperplan"
     }
 
     private getNotificationMessage(eventType: NotifiableEventType, label?: string): string {

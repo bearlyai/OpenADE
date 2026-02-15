@@ -84,6 +84,15 @@ export interface PersonalSettings {
     devHideTray?: boolean
     /** Version string of the latest release notes the user has seen */
     lastSeenReleaseVersion?: string
+
+    // === HyperPlan settings ===
+
+    /** HyperPlan default strategy ID: "standard" | "ensemble" | "cross-review" */
+    hyperplanStrategyId?: string
+    /** HyperPlan agent couplets for multi-agent strategies */
+    hyperplanAgents?: Array<{ harnessId: string; modelId: string }>
+    /** HyperPlan reconciler agent couplet */
+    hyperplanReconciler?: { harnessId: string; modelId: string }
 }
 
 /**

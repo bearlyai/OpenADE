@@ -15,12 +15,14 @@ import {
     Settings,
     Star,
     X,
+    Zap,
 } from "lucide-react"
 import { observer } from "mobx-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { HarnessPicker } from "../components/HarnessPicker"
 import { ModelPicker } from "../components/ModelPicker"
 import { SmartEditor, type SmartEditorRef } from "../components/SmartEditor"
+import { StrategyPicker } from "../components/hyperplan/StrategyPicker"
 import { TaskMcpSelector } from "../components/mcp/TaskMcpSelector"
 import { Select, Switch } from "../components/ui"
 import type { BranchInfo, GitStatusResponse } from "../electronAPI/git"
@@ -145,6 +147,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
     const [selectedMcpServerIds, setSelectedMcpServerIds] = useState<string[]>([])
     const editorRef = useRef<SmartEditorRef>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
+    const [showHyperPlan, setShowHyperPlan] = useState(false)
 
     // Get SmartEditorManager for task creation
     const editorManager = codeStore.smartEditors.getManager("task-create", workspaceId)
@@ -538,6 +541,20 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                         </button>
                         <button
                             type="button"
+                            onClick={() => setShowHyperPlan(true)}
+                            disabled={isDisabled}
+                            className={cx(
+                                "btn flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
+                                isDisabled
+                                    ? "text-muted/50 cursor-not-allowed"
+                                    : "text-base-content hover:bg-base-200 active:bg-base-300 active:scale-95 cursor-pointer"
+                            )}
+                        >
+                            <Zap size={14} />
+                            HyperPlan
+                        </button>
+                        <button
+                            type="button"
                             onClick={() => handleCreate("ask")}
                             disabled={isDisabled}
                             className={cx(
@@ -553,6 +570,19 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                     </div>
                 </div>
             </div>
+
+            {/* HyperPlan modal */}
+            {showHyperPlan && (
+                <StrategyPicker
+                    onClose={() => setShowHyperPlan(false)}
+                    onRun={() => {
+                        setShowHyperPlan(false)
+                        // Strategy preferences already saved by StrategyPicker.handleRun.
+                        // handleCreate("plan") reads the active strategy to dispatch correctly.
+                        handleCreate("plan")
+                    }}
+                />
+            )}
         </div>
     )
 })

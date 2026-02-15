@@ -20,7 +20,7 @@ import { type YArrayHandle, arrayOfType } from "./storage"
 export interface TaskPreviewLastEvent {
     type: "action" | "setup_environment" | "snapshot"
     status: "in_progress" | "completed" | "error" | "stopped"
-    sourceType?: "plan" | "revise" | "run_plan" | "do" | "ask" // Only for action events
+    sourceType?: "plan" | "revise" | "run_plan" | "do" | "ask" | "hyperplan" // Only for action events
     sourceLabel: string // Display label ("Plan", "Do", "Ask", "Setup", "Snapshot")
     at: string // ISO timestamp
 }

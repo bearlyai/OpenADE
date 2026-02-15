@@ -6,6 +6,7 @@
 
 import type { AnnotationSide } from "@pierre/diffs"
 import type { HarnessStreamEvent, HarnessId } from "./electronAPI/harnessEventTypes"
+import type { HyperPlanSubExecution } from "./hyperplan/types"
 
 // Re-export types for convenience
 export type { HarnessStreamEvent, HarnessId }
@@ -127,6 +128,7 @@ export type ActionEventSource =
     | { type: "run_plan"; userLabel: string; planEventId: string }
     | { type: "do"; userLabel: string }
     | { type: "ask"; userLabel: string }
+    | { type: "hyperplan"; userLabel: string; strategyId: string }
 
 /** Action event - all LLM executions (plans, revisions, direct actions, etc.) */
 export interface ActionEvent extends BaseEvent {
@@ -138,6 +140,8 @@ export interface ActionEvent extends BaseEvent {
     result?: {
         success: boolean
     }
+    /** HyperPlan sub-executions (planning/review steps). Only present when source.type === "hyperplan". */
+    hyperplanSubExecutions?: HyperPlanSubExecution[]
 }
 
 /** Setup environment event - sets up worktree for git repos (no execution) */

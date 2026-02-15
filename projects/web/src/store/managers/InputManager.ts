@@ -106,6 +106,11 @@ export class InputManager {
         return "Retry"
     }
 
+    /** Label for the plan button — always "Plan"; HyperPlan is a separate button */
+    private get planButtonLabel(): string {
+        return "Plan"
+    }
+
     /** Stop all processes associated with this task (used before closing) */
     private async stopTaskProcesses(): Promise<void> {
         const env = this.taskModel?.environment
@@ -240,10 +245,11 @@ export class InputManager {
                 },
             },
 
-            // Plan - create a new plan (consumes comments)
+            // Plan - create a new plan (consumes comments).
+            // Uses HyperPlan when a multi-agent strategy is active.
             {
                 id: "plan",
-                label: "Plan",
+                label: this.planButtonLabel,
                 icon: FileText,
                 order: 15,
                 style: { variant: "primary" },
@@ -251,7 +257,12 @@ export class InputManager {
                 enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()
-                    await this.store.execution.executePlan(this.taskId, input)
+                    const strategy = this.store.getActiveHyperPlanStrategy()
+                    if (strategy.id === "standard") {
+                        await this.store.execution.executePlan(this.taskId, input)
+                    } else {
+                        await this.store.execution.executeHyperPlan(this.taskId, input, strategy)
+                    }
                 },
             },
 

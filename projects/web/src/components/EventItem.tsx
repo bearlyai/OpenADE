@@ -8,13 +8,14 @@ import type { ActionEvent, CodeEvent } from "../types"
 import { ActionEventItem, type DisplayMode } from "./events/ActionEventItem"
 import { SetupEventItem } from "./events/SetupEventItem"
 import { SnapshotEventItem } from "./events/SnapshotEventItem"
+import { HyperPlanEventItem } from "./hyperplan/HyperPlanEventItem"
 
 /** Event types that should never auto-expand (loading, isLast, etc.) - only manual toggle */
 export const NO_AUTO_EXPAND_TYPES: Set<CodeEvent["type"]> = new Set(["snapshot"])
 
-/** Check if an ActionEvent is a plan or revise type */
+/** Check if an ActionEvent is a plan, revise, or hyperplan type */
 function isPlanOrRevise(event: ActionEvent): boolean {
-    return event.source.type === "plan" || event.source.type === "revise"
+    return event.source.type === "plan" || event.source.type === "revise" || event.source.type === "hyperplan"
 }
 
 export const EventItem = observer(
@@ -49,6 +50,11 @@ export const EventItem = observer(
 
         switch (event.type) {
             case "action": {
+                // HyperPlan events get their own renderer
+                if (event.source.type === "hyperplan") {
+                    return <HyperPlanEventItem {...baseProps} event={event} taskId={taskId} />
+                }
+
                 const isPlan = isPlanOrRevise(event)
                 // Determine display mode based on source type
                 // plan/revise -> full, do/ask/run_plan -> compact

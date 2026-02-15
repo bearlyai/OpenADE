@@ -14,6 +14,9 @@ import type { HarnessId, HarnessStreamEvent, McpServerConfig } from "../../elect
 import { getHarnessQueryManager, isHarnessApiAvailable } from "../../electronAPI/harnessQuery"
 import { getGitStatus, isGitApiAvailable } from "../../electronAPI/git"
 import { buildMcpServerConfigs } from "../../electronAPI/mcp"
+import { HyperPlanExecutor, type HyperPlanCallbacks } from "../../hyperplan/HyperPlanExecutor"
+import type { HyperPlanStrategy } from "../../hyperplan/types"
+import { isStandardStrategy } from "../../hyperplan/strategies"
 import {
     type ContentBlock,
     type PromptBuildContext,
@@ -465,6 +468,199 @@ export class ExecutionManager {
             readOnly: false,
             createSnapshot: true,
         })
+    }
+
+    // === HyperPlan execution ===
+
+    async executeHyperPlan(taskId: string, input: UserInputContext, strategy: HyperPlanStrategy): Promise<void> {
+        // For standard strategies, just delegate to normal executePlan
+        if (isStandardStrategy(strategy)) {
+            return this.executePlan(taskId, input)
+        }
+
+        console.debug("[ExecutionManager] executeHyperPlan called", {
+            taskId,
+            strategyId: strategy.id,
+            stepCount: strategy.steps.length,
+        })
+
+        const taskModel = this.store.tasks.getTaskModel(taskId)
+        const task = this.store.tasks.getTask(taskId)
+        const repo = task ? this.store.repos.getRepo(task.repoId) : null
+
+        if (!task || !taskModel || !repo) {
+            console.debug("[ExecutionManager] executeHyperPlan: missing prerequisites")
+            return
+        }
+
+        if (this.store.isTaskWorking(taskId)) {
+            console.debug("[ExecutionManager] executeHyperPlan: task already working")
+            return
+        }
+
+        this.store.setTaskWorking(taskId, true)
+
+        const { cwd, additionalDirectories } = this.getExecutionPaths(taskModel, repo)
+        const mcpServerConfigs = this.buildMcpServerConfigs(task.enabledMcpServerIds)
+
+        // The terminal step's executionId becomes the main execution ID
+        const executionId = crypto.randomUUID()
+        let executionSuccess = false
+
+        try {
+            if (!isHarnessApiAvailable()) {
+                console.debug("[ExecutionManager] Harness API not available - aborting executeHyperPlan")
+                return
+            }
+
+            const gitRefsBefore = await this.getGitRefs(cwd)
+
+            // Find the terminal step to get the harness/model for the main execution record
+            const terminalStep = strategy.steps.find((s) => s.id === strategy.terminalStepId)!
+
+            // Create the ActionEvent — the main execution record uses the terminal step's harness
+            const eventResult = this.store.events.createActionEvent({
+                taskId,
+                userInput: input.userInput,
+                images: input.images.length > 0 ? input.images : undefined,
+                executionId,
+                source: { type: "hyperplan", userLabel: "HyperPlan", strategyId: strategy.id },
+                includesCommentIds: [],
+                modelId: terminalStep.agent.modelId,
+                harnessId: terminalStep.agent.harnessId,
+                gitRefsBefore,
+            })
+
+            if (!eventResult) {
+                console.debug("[ExecutionManager] createActionEvent returned null - aborting")
+                return
+            }
+
+            const { eventId } = eventResult
+            this.store.tasks.getTaskUIState(taskId).expandOnlyEvent(eventId)
+
+            // Create sub-execution records for all non-terminal steps
+            for (const step of strategy.steps) {
+                if (step.id === strategy.terminalStepId) continue
+                this.store.events.addHyperPlanSubExecution({
+                    taskId,
+                    eventId,
+                    subExecution: {
+                        stepId: step.id,
+                        primitive: step.primitive,
+                        harnessId: step.agent.harnessId,
+                        modelId: step.agent.modelId,
+                        executionId: "", // Set when the query starts
+                        status: "in_progress",
+                        events: [],
+                    },
+                })
+            }
+
+            // Set up an AbortController for the executor
+            const abortController = new AbortController()
+
+            // Build callbacks that persist to YJS
+            const callbacks: HyperPlanCallbacks = {
+                onSubPlanStarted: (stepId, subExecutionId) => {
+                    this.store.events.updateSubExecutionStatus({
+                        taskId,
+                        eventId,
+                        stepId,
+                        status: "in_progress",
+                    })
+                    // Update the executionId on the sub-execution
+                    const taskStore = this.store.getCachedTaskStore(taskId)
+                    if (taskStore) {
+                        taskStore.events.update(eventId, (draft) => {
+                            if (draft.type !== "action") return
+                            const sub = draft.hyperplanSubExecutions?.find((s) => s.stepId === stepId)
+                            if (sub) sub.executionId = subExecutionId
+                        })
+                    }
+                },
+
+                onSubPlanEvent: (stepId, streamEvent) => {
+                    this.store.events.appendStreamEventToSubExecution({
+                        taskId,
+                        eventId,
+                        stepId,
+                        streamEvent,
+                    })
+                },
+
+                onSubPlanStatusChange: (stepId, status, resultText, error) => {
+                    this.store.events.updateSubExecutionStatus({
+                        taskId,
+                        eventId,
+                        stepId,
+                        status: status === "running" ? "in_progress" : status === "completed" ? "completed" : "error",
+                        resultText,
+                        error,
+                    })
+                },
+
+                onTerminalEvent: (streamEvent) => {
+                    this.store.events.appendStreamEventToEvent({
+                        taskId,
+                        eventId,
+                        streamEvent,
+                    })
+                },
+
+                onTerminalSessionId: (sessionId) => {
+                    this.store.events.updateEventSessionIds({
+                        taskId,
+                        eventId,
+                        sessionId,
+                    })
+                },
+            }
+
+            // Create and run the executor
+            const executor = new HyperPlanExecutor({
+                strategy,
+                taskDescription: input.userInput,
+                cwd,
+                additionalDirectories,
+                mcpServerConfigs,
+                callbacks,
+                signal: abortController.signal,
+            })
+
+            const result = await executor.execute()
+            executionSuccess = result.success
+
+            this.store.events.completeActionEvent({
+                taskId,
+                eventId,
+                success: result.success,
+            })
+
+            // Capture git refs after execution completes
+            const gitRefsAfter = await this.getGitRefs(cwd)
+            if (gitRefsAfter) {
+                this.store.events.updateEventGitRefsAfter({
+                    taskId,
+                    eventId,
+                    gitRefsAfter,
+                })
+            }
+        } catch (err) {
+            console.error("[ExecutionManager] executeHyperPlan failed:", err)
+            track("execution_error", { eventType: "hyperplan" })
+
+            if (err instanceof Error) {
+                captureError(err, {
+                    tags: { eventType: "hyperplan" },
+                    extra: { taskId, executionId, strategyId: strategy.id },
+                })
+            }
+        } finally {
+            this.store.queries.clearActiveQuery(taskId)
+            this.store.setTaskWorking(taskId, false)
+            this.fireAfterEvent(taskId, "hyperplan", executionSuccess)
+        }
     }
 
     // === Cancel Plan ===

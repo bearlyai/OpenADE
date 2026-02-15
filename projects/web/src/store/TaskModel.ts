@@ -339,7 +339,7 @@ export class TaskModel {
         const events = this.task?.events ?? []
         for (let i = events.length - 1; i >= 0; i--) {
             const e = events[i]
-            if (e.type === "action" && e.status === "completed" && (e.source.type === "plan" || e.source.type === "revise")) {
+            if (e.type === "action" && e.status === "completed" && (e.source.type === "plan" || e.source.type === "revise" || e.source.type === "hyperplan")) {
                 return e
             }
         }

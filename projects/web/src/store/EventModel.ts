@@ -11,6 +11,7 @@
 
 import { action, computed, observable, runInAction } from "mobx"
 import { snapshotsApi } from "../electronAPI/snapshots"
+import type { HyperPlanSubExecution } from "../hyperplan/types"
 import type { ActionEvent, ActionEventSource, ClaudeStreamEvent, CodeEvent, SetupEnvironmentEvent, SnapshotEvent } from "../types"
 import type { CodeStore } from "./store"
 
@@ -131,6 +132,23 @@ export class ActionEventModel extends EventModel {
     @computed
     get result(): { success: boolean } | undefined {
         return this.actionEvent?.result
+    }
+
+    // === HyperPlan accessors ===
+
+    @computed
+    get isHyperPlan(): boolean {
+        return this.source.type === "hyperplan"
+    }
+
+    @computed
+    get hyperplanSubExecutions(): HyperPlanSubExecution[] | undefined {
+        return this.actionEvent?.hyperplanSubExecutions
+    }
+
+    @computed
+    get hyperplanStrategyId(): string | undefined {
+        return this.source.type === "hyperplan" ? this.source.strategyId : undefined
     }
 
     // === Label ===

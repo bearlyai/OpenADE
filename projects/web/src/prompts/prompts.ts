@@ -11,7 +11,7 @@ import { makeSimpleXmlTag } from "../utils/makeXML"
 // =============================================================================
 
 // Shared guidelines for Plan and Revise modes
-const PLANNING_GUIDELINES = `
+export const PLANNING_GUIDELINES = `
 - State assumptions explicitly in the Decisions section. If uncertain about requirements, note what clarification would help.
 - Prefer simple, elegant solutions over complex ones. Challenge the request if a simpler approach exists. If you see a better approach than what was requested, present it as an alternative.
 - Plan for surgical changes—only what's necessary to complete the task. Match existing code style and patterns.
@@ -21,7 +21,7 @@ const PLANNING_GUIDELINES = `
 - If the request isn't optimal, respectfully say so and offer alternatives with tradeoffs. Prioritize helpful guidance over agreement.`
 
 // PLAN
-const PLAN_MODE_INSTRUCTIONS = `<current_operating_mode mode="plan">
+export const PLAN_MODE_INSTRUCTIONS = `<current_operating_mode mode="plan">
 Generate a clear, actionable implementation plan for the task provided.
 
 <capabilities>

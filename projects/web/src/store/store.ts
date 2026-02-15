@@ -2,6 +2,8 @@ import { makeAutoObservable, reaction, runInAction } from "mobx"
 import { analytics, track } from "../analytics"
 import { DEFAULT_MODEL, getDefaultModelForHarness } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
+import { crossReviewStrategy, ensembleStrategy, standardStrategy } from "../hyperplan/strategies"
+import type { AgentCouplet, HyperPlanStrategy } from "../hyperplan/types"
 import { getDeviceConfig, setTelemetryDisabled } from "../electronAPI/deviceConfig"
 import { setGlobalEnv } from "../electronAPI/subprocess"
 import type { McpServerStore } from "../persistence/mcpServerStore"
@@ -347,5 +349,48 @@ export class CodeStore {
         this.defaultHarnessId = harnessId
         // Reset default model to match the new harness
         this.defaultModel = getDefaultModelForHarness(harnessId)
+    }
+
+    // === HyperPlan Strategy Resolution ===
+
+    /**
+     * Resolve the active HyperPlan strategy from persisted preferences.
+     * Falls back to Standard (single-agent) if no preference is set.
+     */
+    getActiveHyperPlanStrategy(): HyperPlanStrategy {
+        const settings = this.personalSettingsStore?.settings.get()
+        const strategyId = settings?.hyperplanStrategyId ?? "standard"
+
+        const agents: AgentCouplet[] =
+            settings?.hyperplanAgents?.map((a) => ({
+                harnessId: a.harnessId as HarnessId,
+                modelId: a.modelId,
+            })) ?? [{ harnessId: this.defaultHarnessId, modelId: this.defaultModel }]
+
+        const reconciler: AgentCouplet = settings?.hyperplanReconciler
+            ? { harnessId: settings.hyperplanReconciler.harnessId as HarnessId, modelId: settings.hyperplanReconciler.modelId }
+            : agents[0]
+
+        switch (strategyId) {
+            case "ensemble":
+                if (agents.length < 2) return standardStrategy(agents[0])
+                return ensembleStrategy(agents, reconciler)
+            case "cross-review":
+                if (agents.length < 2) return standardStrategy(agents[0])
+                return crossReviewStrategy(agents[0], agents[1], reconciler)
+            default:
+                return standardStrategy(agents[0])
+        }
+    }
+
+    /**
+     * Save HyperPlan strategy preferences.
+     */
+    setHyperPlanPreferences(strategyId: string, agents: AgentCouplet[], reconciler: AgentCouplet): void {
+        this.personalSettingsStore?.settings.set({
+            hyperplanStrategyId: strategyId,
+            hyperplanAgents: agents.map((a) => ({ harnessId: a.harnessId, modelId: a.modelId })),
+            hyperplanReconciler: { harnessId: reconciler.harnessId, modelId: reconciler.modelId },
+        })
     }
 }

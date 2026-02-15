@@ -314,7 +314,12 @@ export class TaskCreationManager {
             setTimeout(() => {
                 const input = { userInput: creation.description, images: [] }
                 if (creation.mode === "plan") {
-                    this.store.execution.executePlan(task.id, input)
+                    const strategy = this.store.getActiveHyperPlanStrategy()
+                    if (strategy.id === "standard") {
+                        this.store.execution.executePlan(task.id, input)
+                    } else {
+                        this.store.execution.executeHyperPlan(task.id, input, strategy)
+                    }
                 } else if (creation.mode === "ask") {
                     this.store.execution.executeAsk({ taskId: task.id, input })
                 } else {

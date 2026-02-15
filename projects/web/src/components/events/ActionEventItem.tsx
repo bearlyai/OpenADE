@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowUpFromLine, FileText, GitCommit, HelpCircle, Play, RefreshCw } from "lucide-react"
+import { AlertTriangle, ArrowUpFromLine, FileText, GitCommit, HelpCircle, Play, RefreshCw, Zap } from "lucide-react"
 import { observer } from "mobx-react"
 import { useEffect, useMemo, useState } from "react"
 import { openUrlInNativeBrowser } from "../../electronAPI/shell"
@@ -26,6 +26,8 @@ function getEventIcon(sourceType: ActionEvent["source"]["type"], userLabel?: str
             return { icon: <RefreshCw size="1em" className="flex-shrink-0 text-primary" />, label: "Revise" }
         case "ask":
             return { icon: <HelpCircle size="1em" className="flex-shrink-0 text-info" />, label: "Ask" }
+        case "hyperplan":
+            return { icon: <Zap size="1em" className="flex-shrink-0 text-primary" />, label: "HyperPlan" }
         default:
             if (userLabel === "Commit") return { icon: <GitCommit size="1em" className="flex-shrink-0 text-muted" />, label: "Commit" }
             if (userLabel === "Push") return { icon: <ArrowUpFromLine size="1em" className="flex-shrink-0 text-muted" />, label: "Push" }
@@ -34,7 +36,7 @@ function getEventIcon(sourceType: ActionEvent["source"]["type"], userLabel?: str
 }
 
 function isPlanOrRevise(event: ActionEvent): boolean {
-    return event.source.type === "plan" || event.source.type === "revise"
+    return event.source.type === "plan" || event.source.type === "revise" || event.source.type === "hyperplan"
 }
 
 export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: ActionEventItemProps) => {

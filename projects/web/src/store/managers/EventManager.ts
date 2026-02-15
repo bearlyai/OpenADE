@@ -14,6 +14,7 @@ import type { HarnessStreamEvent, HarnessId } from "../../electronAPI/harnessEve
 import { extractRawMessageEvents } from "../../electronAPI/harnessEventTypes"
 import { snapshotsApi } from "../../electronAPI/snapshots"
 import { syncTaskPreviewFromStore, taskFromStore } from "../../persistence"
+import type { HyperPlanSubExecution } from "../../hyperplan/types"
 import type { ActionEvent, ActionEventSource, GitRefs, ImageAttachment, SnapshotEvent } from "../../types"
 import { ulid } from "../../utils/ulid"
 import type { CodeStore } from "../store"
@@ -65,7 +66,7 @@ export class EventManager {
         const events = taskStore.events.all()
         for (let i = events.length - 1; i >= 0; i--) {
             const event = events[i]
-            if (event.type === "action" && (event.source.type === "plan" || event.source.type === "revise") && event.status === "completed") {
+            if (event.type === "action" && (event.source.type === "plan" || event.source.type === "revise" || event.source.type === "hyperplan") && event.status === "completed") {
                 return event
             }
         }
@@ -526,6 +527,83 @@ export class EventManager {
             console.error("[EventManager] createSnapshot: Failed to create snapshot (non-blocking):", err)
             return false
         }
+    }
+
+    // ==================== HyperPlan Sub-Execution Operations ====================
+
+    /** Add a sub-execution entry to a hyperplan event */
+    addHyperPlanSubExecution({
+        taskId,
+        eventId,
+        subExecution,
+    }: {
+        taskId: string
+        eventId: string
+        subExecution: HyperPlanSubExecution
+    }): void {
+        const taskStore = this.store.getCachedTaskStore(taskId)
+        if (!taskStore) return
+
+        taskStore.events.update(eventId, (draft) => {
+            if (draft.type !== "action") return
+            if (!draft.hyperplanSubExecutions) {
+                draft.hyperplanSubExecutions = []
+            }
+            draft.hyperplanSubExecutions.push(subExecution)
+        })
+    }
+
+    /** Append a stream event to a sub-execution within a hyperplan event */
+    appendStreamEventToSubExecution({
+        taskId,
+        eventId,
+        stepId,
+        streamEvent,
+    }: {
+        taskId: string
+        eventId: string
+        stepId: string
+        streamEvent: HarnessStreamEvent
+    }): void {
+        const taskStore = this.store.getCachedTaskStore(taskId)
+        if (!taskStore) return
+
+        taskStore.events.update(eventId, (draft) => {
+            if (draft.type !== "action") return
+            const sub = draft.hyperplanSubExecutions?.find((s) => s.stepId === stepId)
+            if (!sub) return
+            if (sub.events.some((e) => e.id === streamEvent.id)) return
+            sub.events.push(streamEvent)
+        })
+    }
+
+    /** Update a sub-execution's status and result text */
+    updateSubExecutionStatus({
+        taskId,
+        eventId,
+        stepId,
+        status,
+        resultText,
+        error,
+    }: {
+        taskId: string
+        eventId: string
+        stepId: string
+        status: HyperPlanSubExecution["status"]
+        resultText?: string
+        error?: string
+    }): void {
+        const taskStore = this.store.getCachedTaskStore(taskId)
+        if (!taskStore) return
+
+        taskStore.events.update(eventId, (draft) => {
+            if (draft.type !== "action") return
+            const sub = draft.hyperplanSubExecutions?.find((s) => s.stepId === stepId)
+            if (!sub) return
+            sub.status = status
+            if (resultText !== undefined) sub.resultText = resultText
+            if (error !== undefined) sub.error = error
+        })
     }
 
     // ==================== Plan Cancellation ====================
