@@ -13,6 +13,7 @@ export class TaskManager {
     tasksById: Map<string, Task> = new Map()
     tasksLoading = false
     loadedRepoIds: Set<string> = new Set()
+    regeneratingTitleTaskIds: Set<string> = new Set()
     private taskModels: Map<string, TaskModel> = new Map()
     private taskUIStates: Map<string, TaskUIStateManager> = new Map()
     private disposers: Array<() => void> = []
@@ -308,13 +309,17 @@ export class TaskManager {
             })
         }
 
+        runInAction(() => this.regeneratingTitleTaskIds.add(taskId))
         try {
             const abortController = new AbortController()
-            const generatedTitle = await generateTitle(description, abortController, harnessId)
+            const events = taskStore.events.all()
+            const generatedTitle = await generateTitle(description, abortController, harnessId, events)
             updateTitle(generatedTitle ?? fallbackTitle(description))
         } catch (err) {
             console.error("[TaskManager] Title regeneration failed:", err)
             updateTitle(fallbackTitle(description))
+        } finally {
+            runInAction(() => this.regeneratingTitleTaskIds.delete(taskId))
         }
     }
 }

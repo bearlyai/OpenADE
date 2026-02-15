@@ -7,6 +7,8 @@
 import { getDefaultModelForHarness, getModelFullId, MODEL_REGISTRY } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { getHarnessQueryManager } from "../electronAPI/harnessQuery"
+import { extractPlanText } from "../hyperplan/extractPlanText"
+import type { CodeEvent } from "../types"
 
 /** Pick a model for title generation, resolved to the full wire ID for the given harness */
 function getTitleModel(harnessId: HarnessId): string {
@@ -31,11 +33,53 @@ export function generateSlug(): string {
     return `task-${generateRandomChars(8)}`
 }
 
+const MAX_CONVERSATION_CONTEXT_CHARS = 2000
+
+/** Build a truncated conversation summary from task events for title generation */
+export function buildConversationContext(events: CodeEvent[]): string | null {
+    const parts: string[] = []
+
+    for (const event of events) {
+        if (event.type !== "action") continue
+
+        if (event.userInput) {
+            parts.push(`User: ${event.userInput}`)
+        }
+
+        const assistantText = extractPlanText(event.execution.events, event.execution.harnessId)
+        if (assistantText) {
+            parts.push(`Assistant: ${assistantText}`)
+        }
+    }
+
+    if (parts.length === 0) return null
+
+    let context = parts.join("\n")
+    if (context.length > MAX_CONVERSATION_CONTEXT_CHARS) {
+        context = context.slice(0, MAX_CONVERSATION_CONTEXT_CHARS) + "..."
+    }
+    return context
+}
+
 /** Generate a title from description using harness execution */
-export async function generateTitle(description: string, abortController: AbortController, harnessId?: HarnessId | string): Promise<string | null> {
+export async function generateTitle(
+    description: string,
+    abortController: AbortController,
+    harnessId?: HarnessId | string,
+    events?: CodeEvent[],
+): Promise<string | null> {
     const manager = getHarnessQueryManager()
 
-    const query = await manager.startExecution(`Generate a short, descriptive title (3-8 words) for this task:\n\n${description}`, {
+    let prompt = `Generate a short, descriptive title (3-8 words) for this task:\n\n${description}`
+
+    if (events && events.length > 0) {
+        const context = buildConversationContext(events)
+        if (context) {
+            prompt += `\n\nHere is some of the conversation so far:\n\n${context}`
+        }
+    }
+
+    const query = await manager.startExecution(prompt, {
         harnessId: (harnessId as HarnessId) ?? "claude-code",
         cwd: "",
         model: getTitleModel((harnessId as HarnessId) ?? "claude-code"),

@@ -227,6 +227,7 @@ export const CodeWorkspaceTaskRoute = observer(() => {
     // Determine navbar title and icon
     const navbarTitle = taskModel?.title || "Task"
     const navbarIcon = <ListTodo size="1.25rem" className="text-muted" />
+    const isRegeneratingTitle = taskId ? codeStore.tasks.regeneratingTitleTaskIds.has(taskId) : false
     const handleRegenerateTitle = useCallback(() => {
         if (taskId) {
             codeStore.tasks.regenerateTitle(taskId)
@@ -236,12 +237,13 @@ export const CodeWorkspaceTaskRoute = observer(() => {
         <div className="flex items-center gap-2">
             <button
                 type="button"
-                className="btn flex items-center justify-center w-7 h-7 text-muted hover:bg-base-200 hover:text-base-content"
+                className="btn flex items-center justify-center w-7 h-7 text-muted hover:bg-base-200 hover:text-base-content disabled:opacity-50"
                 onClick={handleRegenerateTitle}
+                disabled={isRegeneratingTitle}
                 title="Regenerate title"
                 aria-label="Regenerate title"
             >
-                <RefreshCw size="0.85rem" />
+                {isRegeneratingTitle ? <Loader2 size="0.85rem" className="animate-spin" /> : <RefreshCw size="0.85rem" />}
             </button>
             <TaskStatsBar taskModel={taskModel} />
         </div>
