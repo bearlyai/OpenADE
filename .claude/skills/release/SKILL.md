@@ -1,10 +1,10 @@
 ---
 name: release
-description: Prepare release notes for a new version by analyzing changes since the last git tag.
+description: End-to-end release workflow — draft notes, run checks, push, watch CI, publish GitHub release, and update download links. Minimal user interaction required.
 disable-model-invocation: true
 ---
 
-Prepare release notes for a new version. Follow these steps carefully:
+End-to-end release workflow. The goal is to minimize back-and-forth with the user: gather info, present a single approval prompt, then execute everything autonomously (push, watch CI, fix failures, publish release, update links).
 
 ## 1. Find the latest version
 
@@ -30,6 +30,8 @@ cd projects/electron && npm run typecheck && npm run test
 cd projects/web && npm run typecheck && npm run test
 ```
 
+If biome makes any formatting fixes during typecheck, note those files — they must be included in the release commit.
+
 If any check fails, stop and report the failures to the user. Do NOT continue with the release until all checks pass.
 
 ## 4. Suggest a version number
@@ -44,58 +46,100 @@ Read `projects/web/src/versions.ts` to see the existing format. Draft a new entr
 - **date**: Today's date in `YYYY-MM-DD` format
 - **highlights**: 3-5 bullet points covering the most user-visible changes. Write from the user's perspective — what they can now do, not internal implementation details. Keep each bullet to one sentence.
 
-## 6. Present to the user for approval and apply
+Also draft the GitHub release notes using this format:
 
-Show the user:
+```markdown
+## Highlights
+
+- **<Feature/change name>** — Short description of what the user can now do.
+- ...
+
+## Other improvements
+
+- Bullet list of smaller fixes, improvements, or internal changes worth noting.
+```
+
+## 6. Present to the user for approval — single prompt
+
+Show the user everything at once:
 - The suggested version number
 - The drafted `RELEASE_NOTES` entry (formatted as it would appear in `versions.ts`)
-- A short summary of the commits that informed the highlights
+- The drafted GitHub release notes
+- A short summary table of commits that informed the highlights
 
 Ask the user:
 1. Whether the version number is correct
 2. Whether to add, edit, or remove any highlights
 3. Whether to proceed
 
+This should be the **only** user interaction. Once approved, execute steps 7–10 autonomously without asking further questions.
+
+## 7. Commit, tag, and push
+
 Once the user approves:
-- Add the new entry to the top of the `RELEASE_NOTES` array in `projects/web/src/versions.ts`
-- Update the `version` field in `projects/electron/package.json` to the new version number (e.g., `"version": "0.53.0"`). This is what Electron's "About" dialog displays.
-- Create a commit with the message `release: v<version>`
-- Create a git tag `v<version>`
-- Push the commit and tag (`git push && git push --tags`)
+
+1. Add the new entry to the top of the `RELEASE_NOTES` array in `projects/web/src/versions.ts`
+2. Stage the versions.ts change **plus any biome formatting fixes** from step 3
+3. Create a commit with the message `Release v<version>: <title>`
+4. Create a git tag `v<version>`
+5. Push the commit and tag (`git push && git push --tags`)
 
 Do all of this in one step — do NOT ask the user to confirm the push separately.
 
-## 7. Provide GitHub release notes
+## 8. Watch the CI build
 
-After the push succeeds, provide a ready-to-copy markdown block the user can paste directly into the GitHub release. Use this format:
+After pushing, the Release workflow will trigger automatically. Monitor it:
 
-```markdown
-## <Title> — v<version>
-
-<One-sentence summary of what this release brings.>
-
-### Highlights
-
-- **<Feature/change name>** — Short description of what the user can now do.
-- **<Feature/change name>** — Short description of what the user can now do.
-- ...
-
-### Other Changes
-
-- Bullet list of smaller fixes, improvements, or internal changes worth noting.
-
----
-
-**Full Changelog**: `v<previous-version>...v<version>`
+```
+gh run list --repo bearlyai/OpenADE --limit 1
+gh run watch <run-id> --repo bearlyai/OpenADE
 ```
 
-Keep the tone concise and user-facing. Use bold for feature names and keep descriptions to one sentence each.
+Wait for the build to complete. Check the final status of **all three platform jobs** (macOS, Windows, Linux):
 
-Remind the user to create the GitHub release and paste in the notes. Then ask the user to confirm once the GitHub release is published before continuing.
+```
+gh run view <run-id> --repo bearlyai/OpenADE
+```
 
-## 8. Update download links
+### If the build fails
 
-Once the user confirms the GitHub release is published and the assets are available:
+1. Inspect the failure: `gh run view <run-id> --repo bearlyai/OpenADE --log-failed`
+2. Diagnose and fix the issue locally
+3. Run the local checks again to verify the fix
+4. Commit the fix
+5. Move the tag to the new commit: `git tag -f v<version>`
+6. Force-push the tag: `git push && git push --tags --force`
+7. Go back to watching the new CI run
+8. Repeat until all three platforms pass
+
+### Common CI failures
+
+- **`Cannot find module '@openade/harness'`**: The harness `dist/` is gitignored. The CI workflow must build the harness before installing web dependencies. Check that `.github/workflows/release.yml` has "Install harness dependencies" and "Build harness" steps before "Install web dependencies" on all three platforms.
+- **Vite/Rollup errors about Node built-ins** (e.g., `"execFileSync" is not exported by "__vite-browser-external"`): The web app must import from `@openade/harness/browser` (not `@openade/harness`) to avoid pulling in Node-only modules. Check that all web imports use the `/browser` subpath.
+
+## 9. Publish the GitHub release
+
+**IMPORTANT**: electron-builder (via `--publish always`) creates a **draft** GitHub release with build artifacts (`.dmg`, `.exe`, `.AppImage`, etc.) attached. Do NOT create a new release with `gh release create` — that would produce a release without artifacts.
+
+Instead, edit the existing draft and publish it:
+
+```
+gh release edit v<version> --repo bearlyai/OpenADE \
+  --draft=false \
+  --title "v<version>: <title>" \
+  --notes "<github release notes from step 5>"
+```
+
+Verify it was published:
+```
+gh release view v<version> --repo bearlyai/OpenADE
+```
+
+Confirm that `draft: false` and that assets are listed.
+
+## 10. Update download links
+
+After the release is published:
 
 - Update all version-bearing links to the repo across the codebase. Search broadly with:
   ```
@@ -109,3 +153,5 @@ Once the user confirms the GitHub release is published and the assets are availa
   Verify the replacements look correct before proceeding — only update version strings within repo URLs and their associated filenames, not unrelated content.
 - Create a commit with the message `chore: update download links to v<version>`
 - Push the commit (`git push`)
+
+Report the final release URL to the user.
