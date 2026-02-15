@@ -8,6 +8,18 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.54.0",
+        title: "HyperPlan & Multi-Harness Support",
+        date: "2026-02-15",
+        highlights: [
+            "HyperPlan lets you run multiple AI agents in parallel with DAG-based planning strategies for complex tasks",
+            "Multi-harness support: switch between Claude Code and Codex backends from the same interface",
+            "Archive and hide workspaces from the sidebar to keep your project list tidy",
+            "Global start/stop buttons in the Processes tray to manage all daemons at once",
+            "Conversation context is now included when regenerating task titles for more accurate results",
+        ],
+    },
+    {
         version: "0.53.0",
         title: "Push to PR & Extended Thinking",
         date: "2026-02-10",

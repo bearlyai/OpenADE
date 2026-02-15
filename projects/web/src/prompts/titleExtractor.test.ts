@@ -74,16 +74,12 @@ describe("buildConversationContext", () => {
     })
 
     it("returns null when action events have no userInput or assistant text", () => {
-        const events: CodeEvent[] = [
-            makeActionEvent({ userInput: "", streamEvents: [] }),
-        ]
+        const events: CodeEvent[] = [makeActionEvent({ userInput: "", streamEvents: [] })]
         expect(buildConversationContext(events)).toBeNull()
     })
 
     it("extracts user input from action events", () => {
-        const events: CodeEvent[] = [
-            makeActionEvent({ userInput: "Fix the login bug" }),
-        ]
+        const events: CodeEvent[] = [makeActionEvent({ userInput: "Fix the login bug" })]
         expect(buildConversationContext(events)).toBe("User: Fix the login bug")
     })
 
@@ -91,14 +87,10 @@ describe("buildConversationContext", () => {
         const events: CodeEvent[] = [
             makeActionEvent({
                 userInput: "Fix the login bug",
-                streamEvents: [
-                    claudeRawEvent({ type: "result", result: "I fixed the authentication check in login.ts" }),
-                ],
+                streamEvents: [claudeRawEvent({ type: "result", result: "I fixed the authentication check in login.ts" })],
             }),
         ]
-        expect(buildConversationContext(events)).toBe(
-            "User: Fix the login bug\nAssistant: I fixed the authentication check in login.ts",
-        )
+        expect(buildConversationContext(events)).toBe("User: Fix the login bug\nAssistant: I fixed the authentication check in login.ts")
     })
 
     it("extracts assistant text from Codex agent_message events", () => {
@@ -114,31 +106,25 @@ describe("buildConversationContext", () => {
                 ],
             }),
         ]
-        expect(buildConversationContext(events)).toBe(
-            "User: Fix the login bug\nAssistant: I fixed the auth check",
-        )
+        expect(buildConversationContext(events)).toBe("User: Fix the login bug\nAssistant: I fixed the auth check")
     })
 
     it("handles multiple action events as conversation turns", () => {
         const events: CodeEvent[] = [
             makeActionEvent({
                 userInput: "Fix the login bug",
-                streamEvents: [
-                    claudeRawEvent({ type: "result", result: "I found the issue in auth.ts" }),
-                ],
+                streamEvents: [claudeRawEvent({ type: "result", result: "I found the issue in auth.ts" })],
             }),
             makeActionEvent({
                 userInput: "Also update the tests",
-                streamEvents: [
-                    claudeRawEvent({ type: "result", result: "Tests updated for the auth fix" }),
-                ],
+                streamEvents: [claudeRawEvent({ type: "result", result: "Tests updated for the auth fix" })],
             }),
         ]
         expect(buildConversationContext(events)).toBe(
             "User: Fix the login bug\n" +
-            "Assistant: I found the issue in auth.ts\n" +
-            "User: Also update the tests\n" +
-            "Assistant: Tests updated for the auth fix",
+                "Assistant: I found the issue in auth.ts\n" +
+                "User: Also update the tests\n" +
+                "Assistant: Tests updated for the auth fix"
         )
     })
 
@@ -154,9 +140,7 @@ describe("buildConversationContext", () => {
                 streamEvents: [claudeRawEvent({ type: "result", result: "Tests pass" })],
             }),
         ]
-        expect(buildConversationContext(events)).toBe(
-            "User: Fix the bug\nAssistant: Fixed\nUser: Run tests\nAssistant: Tests pass",
-        )
+        expect(buildConversationContext(events)).toBe("User: Fix the bug\nAssistant: Fixed\nUser: Run tests\nAssistant: Tests pass")
     })
 
     it("includes user input even when assistant text is missing", () => {

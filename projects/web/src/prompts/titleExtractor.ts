@@ -66,7 +66,7 @@ export async function generateTitle(
     description: string,
     abortController: AbortController,
     harnessId?: HarnessId | string,
-    events?: CodeEvent[],
+    events?: CodeEvent[]
 ): Promise<string | null> {
     const manager = getHarnessQueryManager()
 
