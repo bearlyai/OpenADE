@@ -10,7 +10,7 @@
  *   - turn.failed / error → ResultGroup (error)
  */
 
-import type { CodexEvent, CodexItem, CodexTurnCompletedEvent, CodexTurnFailedEvent, CodexErrorEvent } from "@openade/harness"
+import type { CodexEvent, CodexItem, CodexTurnCompletedEvent, CodexTurnFailedEvent, CodexErrorEvent } from "@openade/harness/browser"
 import type { MessageGroup } from "../messageGroups"
 
 /**

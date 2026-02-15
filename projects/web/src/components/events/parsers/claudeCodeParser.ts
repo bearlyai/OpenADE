@@ -5,7 +5,14 @@
  * Converts typed ClaudeEvent[] into MessageGroup[] for rendering.
  */
 
-import type { ClaudeAssistantEvent, ClaudeContentBlock, ClaudeEvent, ClaudeResultEvent, ClaudeUserContentBlock, ClaudeUserEvent } from "@openade/harness"
+import type {
+    ClaudeAssistantEvent,
+    ClaudeContentBlock,
+    ClaudeEvent,
+    ClaudeResultEvent,
+    ClaudeUserContentBlock,
+    ClaudeUserEvent,
+} from "@openade/harness/browser"
 import type { MessageGroup, ResultGroup, SystemGroup, TodoItem } from "../messageGroups"
 
 /** Extract text content from assistant message */

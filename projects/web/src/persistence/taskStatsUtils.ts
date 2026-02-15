@@ -1,4 +1,4 @@
-import type { HarnessUsage } from "@openade/harness"
+import type { HarnessUsage } from "@openade/harness/browser"
 import type { HarnessStreamEvent } from "../electronAPI/harnessEventTypes"
 import { extractRawMessageEvents } from "../electronAPI/harnessEventTypes"
 import type { CodeEvent } from "../types"

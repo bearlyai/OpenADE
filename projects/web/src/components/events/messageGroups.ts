@@ -11,7 +11,7 @@
  * Delegates to per-harness parsers (e.g. claudeCodeParser) based on harnessId.
  */
 
-import type { HarnessUsage } from "@openade/harness"
+import type { HarnessUsage } from "@openade/harness/browser"
 import type { ReactNode } from "react"
 import type { HarnessStreamEvent, HarnessId, HarnessRawMessageEvent } from "../../electronAPI/harnessEventTypes"
 import { extractRawMessageEvents } from "../../electronAPI/harnessEventTypes"

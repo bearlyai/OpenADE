@@ -211,9 +211,9 @@ export {
     getDefaultModelForHarness,
     resolveModelForHarness,
     normalizeModelClass,
-} from "@openade/harness"
-export type { ModelEntry, HarnessModelConfig } from "@openade/harness"
+} from "@openade/harness/browser"
+export type { ModelEntry, HarnessModelConfig } from "@openade/harness/browser"
 
 // Legacy compat
-import { MODEL_REGISTRY as _MODEL_REGISTRY } from "@openade/harness"
+import { MODEL_REGISTRY as _MODEL_REGISTRY } from "@openade/harness/browser"
 export const CLAUDE_MODELS = _MODEL_REGISTRY["claude-code"].models

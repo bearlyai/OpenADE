@@ -20,7 +20,7 @@ import type {
     McpHttpServerConfig,
     ClaudeEvent,
     CodexEvent,
-} from "@openade/harness"
+} from "@openade/harness/browser"
 
 export type { HarnessId, HarnessMcpServerConfig as McpServerConfig, McpStdioServerConfig, McpHttpServerConfig }
 
