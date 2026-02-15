@@ -2,7 +2,8 @@ import { makeAutoObservable, runInAction } from "mobx"
 import { gitApi } from "../../electronAPI/git"
 import { getTaskPtyId, ptyApi } from "../../electronAPI/pty"
 import { snapshotsApi } from "../../electronAPI/snapshots"
-import { deleteTaskPreview, syncTaskPreviewFromStore, taskFromStore } from "../../persistence"
+import { deleteTaskPreview, syncTaskPreviewFromStore, taskFromStore, updateTaskPreview } from "../../persistence"
+import { fallbackTitle, generateTitle } from "../../prompts/titleExtractor"
 import type { Task, TaskDeviceEnvironment } from "../../types"
 import { TaskModel } from "../TaskModel"
 import type { CodeStore } from "../store"
@@ -281,6 +282,39 @@ export class TaskManager {
         // Sync to RepoStore
         if (this.store.repoStore) {
             syncTaskPreviewFromStore(this.store.repoStore, taskStore.meta.current.repoId, taskStore)
+        }
+    }
+
+    async regenerateTitle(taskId: string): Promise<void> {
+        const task = this.getTask(taskId)
+        if (!task) return
+
+        const taskStore = this.store.getCachedTaskStore(taskId)
+        if (!taskStore) return
+
+        const description = task.description
+        if (!description) return
+
+        const taskModel = this.getTaskModel(taskId)
+        const harnessId = taskModel?.harnessId
+
+        const updateTitle = (title: string) => {
+            if (this.store.repoStore) {
+                updateTaskPreview(this.store.repoStore, task.repoId, taskId, { title })
+            }
+            taskStore.meta.update((draft) => {
+                draft.title = title
+                draft.updatedAt = new Date().toISOString()
+            })
+        }
+
+        try {
+            const abortController = new AbortController()
+            const generatedTitle = await generateTitle(description, abortController, harnessId)
+            updateTitle(generatedTitle ?? fallbackTitle(description))
+        } catch (err) {
+            console.error("[TaskManager] Title regeneration failed:", err)
+            updateTitle(fallbackTitle(description))
         }
     }
 }

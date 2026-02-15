@@ -1,6 +1,7 @@
 import type { TaskPreview } from "@/persistence/repoStore"
-import { Code, ListTodo, Loader2, Settings, Sparkles } from "lucide-react"
+import { Code, ListTodo, Loader2, RefreshCw, Settings, Sparkles } from "lucide-react"
 import { observer } from "mobx-react"
+import { useCallback } from "react"
 import { Navigate, useParams } from "react-router"
 import { TaskStatsBar } from "./components/TaskStatsBar"
 import { getLastViewed } from "./constants"
@@ -226,7 +227,25 @@ export const CodeWorkspaceTaskRoute = observer(() => {
     // Determine navbar title and icon
     const navbarTitle = taskModel?.title || "Task"
     const navbarIcon = <ListTodo size="1.25rem" className="text-muted" />
-    const navbarRight = taskModel ? <TaskStatsBar taskModel={taskModel} /> : undefined
+    const handleRegenerateTitle = useCallback(() => {
+        if (taskId) {
+            codeStore.tasks.regenerateTitle(taskId)
+        }
+    }, [codeStore, taskId])
+    const navbarRight = taskModel ? (
+        <div className="flex items-center gap-2">
+            <button
+                type="button"
+                className="btn flex items-center justify-center w-7 h-7 rounded-md hover:bg-secondary text-muted hover:text-base-content"
+                onClick={handleRegenerateTitle}
+                title="Regenerate title"
+                aria-label="Regenerate title"
+            >
+                <RefreshCw size="0.85rem" />
+            </button>
+            <TaskStatsBar taskModel={taskModel} />
+        </div>
+    ) : undefined
 
     // Workspace not found
     if (!repo) {
