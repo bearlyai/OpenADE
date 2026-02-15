@@ -28,6 +28,15 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           npm pkg set version=$VERSION
 
+      # Build harness (dist/ is gitignored, must exist before web install copies it)
+      - name: Install harness dependencies
+        working-directory: projects/harness
+        run: yarn install --frozen-lockfile
+
+      - name: Build harness
+        working-directory: projects/harness
+        run: yarn build
+
       # Build web UI first
       - name: Install web dependencies
         working-directory: projects/web
@@ -83,6 +92,15 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           npm pkg set version=$VERSION
 
+      # Build harness (dist/ is gitignored, must exist before web install copies it)
+      - name: Install harness dependencies
+        working-directory: projects/harness
+        run: yarn install --frozen-lockfile
+
+      - name: Build harness
+        working-directory: projects/harness
+        run: yarn build
+
       # Build web UI first
       - name: Install web dependencies
         working-directory: projects/web
@@ -135,6 +153,15 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           npm pkg set version=$VERSION
+
+      # Build harness (dist/ is gitignored, must exist before web install copies it)
+      - name: Install harness dependencies
+        working-directory: projects/harness
+        run: yarn install --frozen-lockfile
+
+      - name: Build harness
+        working-directory: projects/harness
+        run: yarn build
 
       # Build web UI first
       - name: Install web dependencies
