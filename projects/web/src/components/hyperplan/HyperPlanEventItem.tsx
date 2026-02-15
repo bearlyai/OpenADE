@@ -1,16 +1,13 @@
 /**
  * HyperPlanEventItem - Renders a HyperPlan action event
  *
- * Three phases:
- * 1. Planning - Side-by-side panes streaming sub-plans
- * 2. Reconciling - Sub-plans collapse to pills, terminal step streams
- * 3. Completed - Final plan displayed, sub-plans viewable
+ * Sub-plan panes are always displayed side-by-side horizontally.
+ * Below them, the terminal step (reconciliation) streams its output.
  */
 
-import cx from "classnames"
-import { ChevronDown, ChevronRight, Loader, Zap } from "lucide-react"
+import { Loader, Zap } from "lucide-react"
 import { observer } from "mobx-react"
-import { useMemo, useState } from "react"
+import { useMemo } from "react"
 import type { HyperPlanSubExecution } from "../../hyperplan/types"
 import type { ActionEvent } from "../../types"
 import { InlineMessages, type SessionInfo } from "../InlineMessages"
@@ -33,36 +30,6 @@ function SubPlanStatusBadge({ status }: { status: HyperPlanSubExecution["status"
         default:
             return <span className="w-2 h-2 rounded-full bg-base-300" />
     }
-}
-
-/** Compact pill for a completed sub-plan */
-function SubPlanPill({
-    sub,
-    onClick,
-    expanded,
-}: {
-    sub: HyperPlanSubExecution
-    onClick: () => void
-    expanded: boolean
-}) {
-    const harnessLabel = getHarnessDisplayName(sub.harnessId)
-
-    return (
-        <button
-            type="button"
-            className={cx(
-                "btn flex items-center gap-1.5 px-2 py-1 text-xs font-mono rounded border transition-colors",
-                expanded ? "border-primary bg-primary/5" : "border-border hover:bg-base-200",
-            )}
-            onClick={onClick}
-        >
-            <SubPlanStatusBadge status={sub.status} />
-            <span>
-                {harnessLabel} {sub.primitive === "review" ? "(Review)" : ""}
-            </span>
-            {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-        </button>
-    )
 }
 
 /** Streaming pane for a sub-plan */
@@ -114,8 +81,6 @@ export const HyperPlanEventItem = observer(function HyperPlanEventItem({
     onToggle,
     taskId,
 }: HyperPlanEventItemProps) {
-    const [expandedSubPlans, setExpandedSubPlans] = useState<Set<string>>(new Set())
-
     const subExecutions = event.hyperplanSubExecutions ?? []
     const terminalEvents = event.execution.events
 
@@ -134,18 +99,6 @@ export const HyperPlanEventItem = observer(function HyperPlanEventItem({
     }, [event.execution.sessionId, event.execution.parentSessionId])
 
     const strategyId = event.source.type === "hyperplan" ? event.source.strategyId : "unknown"
-
-    const toggleSubPlan = (stepId: string) => {
-        setExpandedSubPlans((prev) => {
-            const next = new Set(prev)
-            if (next.has(stepId)) {
-                next.delete(stepId)
-            } else {
-                next.add(stepId)
-            }
-            return next
-        })
-    }
 
     const phaseLabel = isPlanning ? "Planning..." : isReconciling ? "Reconciling..." : isComplete ? "Completed" : "Error"
 
@@ -167,38 +120,12 @@ export const HyperPlanEventItem = observer(function HyperPlanEventItem({
                     {isPlanning && <Loader size={10} className="animate-spin" />}
                 </div>
 
-                {/* Phase 1: Planning — side-by-side streaming panes */}
-                {isPlanning && subExecutions.length > 0 && (
+                {/* Sub-plans: always displayed side-by-side horizontally */}
+                {subExecutions.length > 0 && (
                     <div className="flex gap-2 mb-3">
                         {subExecutions.map((sub) => (
                             <SubPlanPane key={sub.stepId} sub={sub} taskId={taskId} actionEventId={event.id} />
                         ))}
-                    </div>
-                )}
-
-                {/* Phase 2/3: Reconciling or Completed — sub-plans as pills */}
-                {(isReconciling || isComplete) && subExecutions.length > 0 && (
-                    <div className="mb-3">
-                        <div className="flex items-center gap-1.5 flex-wrap mb-2">
-                            <span className="text-xs text-muted mr-1">Sub-plans:</span>
-                            {subExecutions.map((sub) => (
-                                <SubPlanPill
-                                    key={sub.stepId}
-                                    sub={sub}
-                                    onClick={() => toggleSubPlan(sub.stepId)}
-                                    expanded={expandedSubPlans.has(sub.stepId)}
-                                />
-                            ))}
-                        </div>
-
-                        {/* Expanded sub-plan content */}
-                        {subExecutions
-                            .filter((sub) => expandedSubPlans.has(sub.stepId))
-                            .map((sub) => (
-                                <div key={sub.stepId} className="mb-2">
-                                    <SubPlanPane sub={sub} taskId={taskId} actionEventId={event.id} />
-                                </div>
-                            ))}
                     </div>
                 )}
 
