@@ -246,7 +246,6 @@ export class InputManager {
             },
 
             // Plan - create a new plan (consumes comments).
-            // Uses HyperPlan when a multi-agent strategy is active.
             {
                 id: "plan",
                 label: this.planButtonLabel,
@@ -257,12 +256,7 @@ export class InputManager {
                 enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()
-                    const strategy = this.store.getActiveHyperPlanStrategy()
-                    if (strategy.id === "standard") {
-                        await this.store.execution.executePlan(this.taskId, input)
-                    } else {
-                        await this.store.execution.executeHyperPlan(this.taskId, input, strategy)
-                    }
+                    await this.store.execution.executePlan(this.taskId, input)
                 },
             },
 

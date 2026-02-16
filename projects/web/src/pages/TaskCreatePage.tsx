@@ -243,7 +243,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
         editorRef.current?.focus()
     }, [repo?.path, editorManager])
 
-    const handleCreate = (mode: "plan" | "do" | "ask") => {
+    const handleCreate = (mode: "plan" | "do" | "ask" | "hyperplan") => {
         if (!editorManager.value.trim() || !workspaceId) return
 
         const description = editorManager.value.trim()
@@ -575,11 +575,9 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
             {showHyperPlan && (
                 <StrategyPicker
                     onClose={() => setShowHyperPlan(false)}
-                    onRun={() => {
+                    onRun={(strategyId) => {
                         setShowHyperPlan(false)
-                        // Strategy preferences already saved by StrategyPicker.handleRun.
-                        // handleCreate("plan") reads the active strategy to dispatch correctly.
-                        handleCreate("plan")
+                        handleCreate(strategyId === "standard" ? "plan" : "hyperplan")
                     }}
                 />
             )}

@@ -15,7 +15,7 @@ export type CreationPhase = "workspace"
 export interface TaskCreationOptions {
     repoId: string
     description: string
-    mode: "plan" | "do" | "ask"
+    mode: "plan" | "do" | "ask" | "hyperplan"
     isolationStrategy: IsolationStrategy
     enabledMcpServerIds?: string[]
     harnessId?: HarnessId
@@ -25,7 +25,7 @@ export interface TaskCreation {
     id: string
     repoId: string
     description: string
-    mode: "plan" | "do" | "ask"
+    mode: "plan" | "do" | "ask" | "hyperplan"
     isolationStrategy: IsolationStrategy
     enabledMcpServerIds?: string[]
     harnessId?: HarnessId
@@ -314,12 +314,10 @@ export class TaskCreationManager {
             setTimeout(() => {
                 const input = { userInput: creation.description, images: [] }
                 if (creation.mode === "plan") {
+                    this.store.execution.executePlan(task.id, input)
+                } else if (creation.mode === "hyperplan") {
                     const strategy = this.store.getActiveHyperPlanStrategy()
-                    if (strategy.id === "standard") {
-                        this.store.execution.executePlan(task.id, input)
-                    } else {
-                        this.store.execution.executeHyperPlan(task.id, input, strategy)
-                    }
+                    this.store.execution.executeHyperPlan(task.id, input, strategy)
                 } else if (creation.mode === "ask") {
                     this.store.execution.executeAsk({ taskId: task.id, input })
                 } else {
