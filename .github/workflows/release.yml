@@ -11,7 +11,64 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Harness — must build first, web and electron depend on it
+      - name: Install harness dependencies
+        working-directory: projects/harness
+        run: yarn install --frozen-lockfile
+
+      - name: Typecheck harness
+        working-directory: projects/harness
+        run: yarn typecheck
+
+      - name: Test harness
+        working-directory: projects/harness
+        run: yarn test
+
+      - name: Build harness
+        working-directory: projects/harness
+        run: yarn build
+
+      # Web
+      - name: Install web dependencies
+        working-directory: projects/web
+        run: yarn install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        working-directory: projects/web
+        run: npx playwright install chromium --with-deps
+
+      - name: Typecheck web
+        working-directory: projects/web
+        run: yarn typecheck
+
+      - name: Test web
+        working-directory: projects/web
+        run: yarn test
+
+      # Electron
+      - name: Install electron dependencies
+        working-directory: projects/electron
+        run: yarn install --frozen-lockfile
+
+      - name: Typecheck electron
+        working-directory: projects/electron
+        run: yarn typecheck
+
+      - name: Test electron
+        working-directory: projects/electron
+        run: yarn test
+
   release-macos:
+    needs: validate
     runs-on: macos-latest
     environment: release
     steps:
@@ -51,10 +108,6 @@ jobs:
         working-directory: projects/electron
         run: yarn install --frozen-lockfile
 
-      - name: Typecheck electron
-        working-directory: projects/electron
-        run: yarn typecheck
-
       - name: Build electron
         working-directory: projects/electron
         run: yarn build
@@ -75,6 +128,7 @@ jobs:
         run: npx electron-builder --mac --universal --publish always
 
   release-windows:
+    needs: validate
     runs-on: windows-latest
     environment: release
     steps:
@@ -115,10 +169,6 @@ jobs:
         working-directory: projects/electron
         run: yarn install --frozen-lockfile
 
-      - name: Typecheck electron
-        working-directory: projects/electron
-        run: yarn typecheck
-
       - name: Build electron
         working-directory: projects/electron
         run: yarn build
@@ -138,6 +188,7 @@ jobs:
         run: npx electron-builder --win --x64 --publish always
 
   release-linux:
+    needs: validate
     runs-on: ubuntu-latest
     environment: release
     steps:
@@ -176,10 +227,6 @@ jobs:
       - name: Install electron dependencies
         working-directory: projects/electron
         run: yarn install --frozen-lockfile
-
-      - name: Typecheck electron
-        working-directory: projects/electron
-        run: yarn typecheck
 
       - name: Build electron
         working-directory: projects/electron
