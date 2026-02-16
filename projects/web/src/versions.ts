@@ -8,6 +8,15 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.55.0",
+        title: "Plan Button Fix",
+        date: "2026-02-15",
+        highlights: [
+            "Fixed Plan button incorrectly launching HyperPlan when a multi-agent strategy was previously selected",
+            "Plan and HyperPlan are now distinct actions — choosing Plan always runs standard planning regardless of persisted strategy",
+        ],
+    },
+    {
         version: "0.54.0",
         title: "HyperPlan & Multi-Harness Support",
         date: "2026-02-15",

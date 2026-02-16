@@ -1,6 +1,6 @@
 {
   "name": "OpenADE",
-  "version": "0.53.0",
+  "version": "0.55.0",
   "scripts": {
     "postinstall": "electron-rebuild -f -w node-pty",
     "build:harness": "cd ../harness && yarn install && yarn build",
