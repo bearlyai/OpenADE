@@ -19,6 +19,7 @@ import {
     getSessionStartedEvent,
     getErrorEvents,
     findAllEvents,
+    TEST_IMAGE_PNG_BASE64,
 } from "../../integration-helpers.js"
 
 const harness = new ClaudeCodeHarness()
@@ -87,11 +88,46 @@ describe.skipIf(!ready)("Claude Code (authenticated)", () => {
     })
 
     // ============================================================================
-    // 1c. Dash-prefixed prompts (regression for flag-parsing bug)
+    // 1c. CLI flag validation
     // ============================================================================
 
-    describe("1c. Dash-prefixed prompts", () => {
-        it("1c. Prompt starting with '-' is not parsed as a CLI flag", async () => {
+    describe("1c. CLI flag validation", () => {
+        it("1c. No 'unknown option' errors on basic query (catches invalid CLI flags)", async () => {
+            const tmpDir = await getTmpDir()
+            const events = await collectEvents(
+                harness.query({
+                    prompt: "Reply with exactly: ok",
+                    cwd: tmpDir,
+                    mode: "yolo",
+                    signal: trivialSignal(),
+                })
+            )
+
+            // Check stderr events for flag errors
+            const stderrEvents = findAllEvents(events, "stderr")
+            const flagErrors = stderrEvents.filter((e) =>
+                /unknown option|unrecognized option|invalid option/i.test((e as { data: string }).data)
+            )
+            expect(flagErrors, "CLI should accept all generated flags without errors").toHaveLength(0)
+
+            // Check error events too
+            const errors = getErrorEvents(events)
+            const optionErrors = errors.filter((e) =>
+                /unknown option|unrecognized option|invalid option/i.test((e as { error: string }).error)
+            )
+            expect(optionErrors, "No unknown option errors").toHaveLength(0)
+
+            const complete = getCompleteEvent(events)
+            expect(complete).toBeDefined()
+        })
+    })
+
+    // ============================================================================
+    // 1d. Dash-prefixed prompts (regression for flag-parsing bug)
+    // ============================================================================
+
+    describe("1d. Dash-prefixed prompts", () => {
+        it("1d. Prompt starting with '-' is not parsed as a CLI flag", async () => {
             const tmpDir = await getTmpDir()
             const events = await collectEvents(
                 harness.query({
@@ -111,7 +147,7 @@ describe.skipIf(!ready)("Claude Code (authenticated)", () => {
             expect(complete).toBeDefined()
         })
 
-        it("1d. Prompt starting with '--' is not parsed as a CLI flag", async () => {
+        it("1e. Prompt starting with '--' is not parsed as a CLI flag", async () => {
             const tmpDir = await getTmpDir()
             const events = await collectEvents(
                 harness.query({
@@ -685,6 +721,40 @@ describe.skipIf(!ready)("Claude Code (authenticated)", () => {
             const messages = findAllMessages<ClaudeEvent>(events)
             const text = extractAssistantText(messages)
             expect(text).toContain("unique-marker-a1b2c3")
+        })
+    })
+
+    // ============================================================================
+    // 13. Image prompt support
+    // ============================================================================
+
+    describe("13. Image prompt support", () => {
+        it("13a. Image PromptPart is delivered to model via stream-json", async () => {
+            const tmpDir = await getTmpDir()
+
+            const events = await collectEvents(
+                harness.query({
+                    prompt: [
+                        { type: "image", source: { kind: "base64", data: TEST_IMAGE_PNG_BASE64, mediaType: "image/png" } },
+                        { type: "text", text: "What word is written in this image? Reply with just that word." },
+                    ],
+                    cwd: tmpDir,
+                    mode: "yolo",
+                    signal: standardSignal(),
+                })
+            )
+
+            // Should complete without error
+            const complete = getCompleteEvent(events)
+            expect(complete).toBeDefined()
+
+            const errors = getErrorEvents(events)
+            expect(errors).toHaveLength(0)
+
+            // Model should read the text from the image
+            const messages = findAllMessages<ClaudeEvent>(events)
+            const text = extractAssistantText(messages).toLowerCase()
+            expect(text).toContain("igloo")
         })
     })
 })

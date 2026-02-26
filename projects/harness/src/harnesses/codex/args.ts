@@ -1,3 +1,8 @@
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { randomUUID } from "node:crypto"
+import { writeFile } from "node:fs/promises"
+
 import type { HarnessQuery, PromptPart } from "../../types.js"
 
 export interface CodexHarnessConfig {
@@ -23,7 +28,7 @@ const THINKING_EFFORT_MAP: Record<string, string> = {
 /**
  * Builds CLI arguments for the `codex` binary from a HarnessQuery.
  */
-export function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessConfig, mcpConfigArgs?: string[]): CodexArgBuildResult {
+export async function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessConfig, mcpConfigArgs?: string[]): Promise<CodexArgBuildResult> {
     const rootArgs: string[] = []
     const execArgs: string[] = []
     const env: Record<string, string> = {}
@@ -99,8 +104,18 @@ export function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessConfig,
         console.warn("[codex-harness] forkSession is not supported in Codex JSON mode. Ignoring.")
     }
 
-    // ── Build prompt ──
-    let promptText = resolvePromptText(query.prompt)
+    // ── Build prompt and extract images ──
+    const { promptText: rawPromptText, imagePaths, imageCleanup } = await resolveCodexPrompt(query.prompt)
+    cleanup.push(...imageCleanup)
+
+    // Image attachments via --image flag (only valid for `codex exec`, not `codex exec resume`)
+    if (imagePaths.length > 0 && !query.resumeSessionId) {
+        for (const imgPath of imagePaths) {
+            execArgs.push("-i", imgPath)
+        }
+    }
+
+    let promptText = rawPromptText
 
     // System prompt → prepend to user prompt (Codex has no native system prompt)
     const systemPrompt = query.systemPrompt ?? query.appendSystemPrompt
@@ -133,11 +148,42 @@ export function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessConfig,
     }
 }
 
-function resolvePromptText(prompt: string | PromptPart[]): string {
-    if (typeof prompt === "string") return prompt
+interface CodexResolvedPrompt {
+    promptText: string
+    imagePaths: string[]
+    imageCleanup: Array<{ path: string; type: "file" }>
+}
 
-    return prompt
-        .filter((p): p is Extract<PromptPart, { type: "text" }> => p.type === "text")
-        .map((p) => p.text)
-        .join("\n")
+async function resolveCodexPrompt(prompt: string | PromptPart[]): Promise<CodexResolvedPrompt> {
+    if (typeof prompt === "string") {
+        return { promptText: prompt, imagePaths: [], imageCleanup: [] }
+    }
+
+    const textParts: string[] = []
+    const imagePaths: string[] = []
+    const imageCleanup: Array<{ path: string; type: "file" }> = []
+
+    for (const part of prompt) {
+        if (part.type === "text") {
+            textParts.push(part.text)
+        } else if (part.type === "image") {
+            if (part.source.kind === "path") {
+                // Already on disk (e.g. ~/.openade/data/images/...) — reference directly
+                imagePaths.push(part.source.path)
+            } else if (part.source.kind === "base64") {
+                const ext = part.source.mediaType.split("/")[1] || "png"
+                const filename = `harness-img-${randomUUID()}.${ext}`
+                const filepath = join(tmpdir(), filename)
+                await writeFile(filepath, Buffer.from(part.source.data, "base64"))
+                imagePaths.push(filepath)
+                imageCleanup.push({ path: filepath, type: "file" })
+            }
+        }
+    }
+
+    return {
+        promptText: textParts.join("\n"),
+        imagePaths,
+        imageCleanup,
+    }
 }

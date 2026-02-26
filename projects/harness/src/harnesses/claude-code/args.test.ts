@@ -13,15 +13,7 @@ function makeQuery(overrides: Partial<HarnessQuery> = {}): HarnessQuery {
 }
 
 describe("buildClaudeArgs", () => {
-    it("includes default flags: --output-format stream-json, --verbose, --skip-git-repo-check", () => {
-        const result = buildClaudeArgs(makeQuery(), {})
-        expect(result.args).toContain("--output-format")
-        expect(result.args).toContain("stream-json")
-        expect(result.args).toContain("--verbose")
-        expect(result.args).toContain("--skip-git-repo-check")
-    })
-
-    it("includes -p flag and returns promptText separately", () => {
+    it("returns promptText separately (never in args array)", () => {
         const result = buildClaudeArgs(makeQuery({ prompt: "hello world" }), {})
         expect(result.args).toContain("-p")
         // Prompt is NOT in args — it's returned separately for safe positional placement
@@ -41,6 +33,56 @@ describe("buildClaudeArgs", () => {
         )
         expect(result.args).toContain("-p")
         expect(result.promptText).toBe("line 1\nline 2")
+        expect(result.stdinLines).toBeUndefined()
+        expect(result.args).not.toContain("--input-format")
+    })
+
+    it("prompt with image PromptPart uses stream-json transport", () => {
+        const result = buildClaudeArgs(
+            makeQuery({
+                prompt: [
+                    { type: "image", source: { kind: "base64", data: "iVBORw0KGgo=", mediaType: "image/png" } },
+                    { type: "text", text: "What is this?" },
+                ],
+            }),
+            {}
+        )
+        expect(result.args).toContain("--input-format")
+        expect(result.args).toContain("stream-json")
+        expect(result.promptText).toBeUndefined()
+        expect(result.stdinLines).toBeDefined()
+        expect(result.stdinLines).toHaveLength(1)
+        const parsed = JSON.parse(result.stdinLines![0])
+        expect(parsed.type).toBe("user")
+        expect(parsed.message.role).toBe("user")
+        expect(parsed.message.content).toHaveLength(2)
+        expect(parsed.message.content[0].type).toBe("image")
+        expect(parsed.message.content[0].source.type).toBe("base64")
+        expect(parsed.message.content[0].source.media_type).toBe("image/png")
+        expect(parsed.message.content[0].source.data).toBe("iVBORw0KGgo=")
+        expect(parsed.message.content[1].type).toBe("text")
+        expect(parsed.message.content[1].text).toBe("What is this?")
+    })
+
+    it("prompt with multiple images produces multiple image content blocks", () => {
+        const result = buildClaudeArgs(
+            makeQuery({
+                prompt: [
+                    { type: "image", source: { kind: "base64", data: "abc=", mediaType: "image/png" } },
+                    { type: "image", source: { kind: "base64", data: "def=", mediaType: "image/jpeg" } },
+                    { type: "text", text: "Compare these" },
+                ],
+            }),
+            {}
+        )
+        expect(result.stdinLines).toHaveLength(1)
+        const parsed = JSON.parse(result.stdinLines![0])
+        expect(parsed.message.content).toHaveLength(3)
+        expect(parsed.message.content[0].type).toBe("image")
+        expect(parsed.message.content[0].source.media_type).toBe("image/png")
+        expect(parsed.message.content[1].type).toBe("image")
+        expect(parsed.message.content[1].source.media_type).toBe("image/jpeg")
+        expect(parsed.message.content[2].type).toBe("text")
     })
 
     it("prompt starting with '-' is not included in args (prevents flag parsing)", () => {

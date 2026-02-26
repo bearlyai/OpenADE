@@ -200,7 +200,7 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
 
         // Build base args
         const buildResult = buildClaudeArgs(q, this.config)
-        const { args, promptText, env, cwd, cleanup } = buildResult
+        const { args, promptText, env, cwd, cleanup, stdinLines } = buildResult
 
         let toolServerHandle: ToolServerHandle | undefined
 
@@ -227,10 +227,13 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
                 cleanup.push({ path: mcpConfigPath, type: "file" })
             }
 
-            // ── Append prompt as positional arg after all flags ──
+            // ── Append prompt as positional arg after all flags (text mode only) ──
             // The `--` end-of-options separator ensures the prompt is never parsed
             // as a CLI flag, even if it starts with `-` (e.g. markdown bullet lists).
-            args.push("--", promptText)
+            // When using stream-json transport, the prompt is sent via stdin instead.
+            if (promptText !== undefined) {
+                args.push("--", promptText)
+            }
 
             // ── Spawn and stream ──
             let lastUsage: HarnessUsage | undefined
@@ -241,6 +244,7 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
                 cwd,
                 env,
                 signal: q.signal,
+                stdinLines,
                 parseLine: (line) => {
                     let parsed: unknown
                     try {

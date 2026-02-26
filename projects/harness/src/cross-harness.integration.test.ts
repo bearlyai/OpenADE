@@ -8,7 +8,7 @@ import { ClaudeCodeHarness } from "./harnesses/claude-code/index.js"
 import { CodexHarness } from "./harnesses/codex/index.js"
 import type { Harness } from "./harness.js"
 import type { HarnessEvent } from "./types.js"
-import { collectEvents, makeTmpDir, trivialSignal, standardSignal, findAllMessages } from "./integration-helpers.js"
+import { collectEvents, makeTmpDir, trivialSignal, standardSignal, findAllMessages, getCompleteEvent, getErrorEvents, TEST_IMAGE_PNG_BASE64 } from "./integration-helpers.js"
 import { startToolServer, type ToolServerHandle } from "./util/tool-server.js"
 
 const claude = new ClaudeCodeHarness()
@@ -355,6 +355,42 @@ describe.skipIf(!claudeReady || !codexReady)("Cross-harness integration", () => 
                     f.startsWith("harness-") && !f.startsWith("harness-integ-") && !f.startsWith("harness-mcp-")))
                 const newFiles = [...filesAfter].filter((f) => !filesBefore.has(f))
                 expect(newFiles, `${h.id}: no new temp files should remain after cleanup`).toEqual([])
+            }
+        })
+    })
+
+    // ============================================================================
+    // 5. Image prompt support
+    // ============================================================================
+
+    describe("5. Image prompt support", () => {
+        it("5a. Both harnesses deliver image prompts to the model", async () => {
+            const harnesses: Harness[] = [claude, codex]
+
+            for (const h of harnesses) {
+                const tmpDir = await getTmpDir()
+
+                const events = await collectEvents(
+                    h.query({
+                        prompt: [
+                            { type: "image", source: { kind: "base64", data: TEST_IMAGE_PNG_BASE64, mediaType: "image/png" } },
+                            { type: "text", text: "What word is written in this image? Reply with just that word." },
+                        ],
+                        cwd: tmpDir,
+                        mode: "yolo",
+                        signal: standardSignal(),
+                    })
+                )
+
+                const complete = getCompleteEvent(events)
+                expect(complete, `${h.id}: should complete`).toBeDefined()
+
+                const errors = getErrorEvents(events)
+                expect(errors, `${h.id}: should have no errors`).toHaveLength(0)
+
+                const messages = findAllMessages<unknown>(events)
+                const text = extractText(h.id, messages).toLowerCase()
+                expect(text, `${h.id}: should read text from the image`).toContain("igloo")
             }
         })
     })

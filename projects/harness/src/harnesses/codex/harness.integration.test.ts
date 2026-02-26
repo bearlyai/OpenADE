@@ -15,9 +15,11 @@ import {
     standardSignal,
     heavySignal,
     findAllMessages,
+    findAllEvents,
     getCompleteEvent,
     getSessionStartedEvent,
     getErrorEvents,
+    TEST_IMAGE_PNG_BASE64,
 } from "../../integration-helpers.js"
 
 const harness = new CodexHarness()
@@ -79,11 +81,44 @@ describe.skipIf(!ready)("Codex (authenticated)", () => {
     })
 
     // ============================================================================
-    // 1c. Dash-prefixed prompts (regression for flag-parsing bug)
+    // 1c. CLI flag validation
     // ============================================================================
 
-    describe("1c. Dash-prefixed prompts", () => {
-        it("1c. Prompt starting with '-' is not parsed as a CLI flag", async () => {
+    describe("1c. CLI flag validation", () => {
+        it("1c. No 'unknown option' errors on basic query (catches invalid CLI flags)", async () => {
+            const tmpDir = await getTmpDir()
+            const events = await collectEvents(
+                harness.query({
+                    prompt: "Reply with exactly: ok",
+                    cwd: tmpDir,
+                    mode: "yolo",
+                    signal: trivialSignal(),
+                })
+            )
+
+            const stderrEvents = findAllEvents(events, "stderr")
+            const flagErrors = stderrEvents.filter((e) =>
+                /unknown option|unrecognized option|invalid option/i.test((e as { data: string }).data)
+            )
+            expect(flagErrors, "CLI should accept all generated flags without errors").toHaveLength(0)
+
+            const errors = getErrorEvents(events)
+            const optionErrors = errors.filter((e) =>
+                /unknown option|unrecognized option|invalid option/i.test((e as { error: string }).error)
+            )
+            expect(optionErrors, "No unknown option errors").toHaveLength(0)
+
+            const complete = getCompleteEvent(events)
+            expect(complete).toBeDefined()
+        })
+    })
+
+    // ============================================================================
+    // 1d. Dash-prefixed prompts (regression for flag-parsing bug)
+    // ============================================================================
+
+    describe("1d. Dash-prefixed prompts", () => {
+        it("1d. Prompt starting with '-' is not parsed as a CLI flag", async () => {
             const tmpDir = await getTmpDir()
             const events = await collectEvents(
                 harness.query({
@@ -103,7 +138,7 @@ describe.skipIf(!ready)("Codex (authenticated)", () => {
             expect(complete).toBeDefined()
         })
 
-        it("1d. Prompt starting with '--' is not parsed as a CLI flag", async () => {
+        it("1e. Prompt starting with '--' is not parsed as a CLI flag", async () => {
             const tmpDir = await getTmpDir()
             const events = await collectEvents(
                 harness.query({
@@ -636,6 +671,40 @@ describe.skipIf(!ready)("Codex (authenticated)", () => {
             }
             // Either an error event or a thrown exception — both are valid
             expect(threwError || getErrorEvents(events).length > 0).toBe(true)
+        })
+    })
+
+    // ============================================================================
+    // 12. Image prompt support
+    // ============================================================================
+
+    describe("12. Image prompt support", () => {
+        it("12a. Image PromptPart is delivered to model via --image flag", async () => {
+            const tmpDir = await getTmpDir()
+
+            const events = await collectEvents(
+                harness.query({
+                    prompt: [
+                        { type: "image", source: { kind: "base64", data: TEST_IMAGE_PNG_BASE64, mediaType: "image/png" } },
+                        { type: "text", text: "What word is written in this image? Reply with just that word." },
+                    ],
+                    cwd: tmpDir,
+                    mode: "yolo",
+                    signal: standardSignal(),
+                })
+            )
+
+            // Should complete without error
+            const complete = getCompleteEvent(events)
+            expect(complete).toBeDefined()
+
+            const errors = getErrorEvents(events)
+            expect(errors).toHaveLength(0)
+
+            // Model should read the text from the image
+            const messages = findAllMessages<CodexEvent>(events)
+            const text = extractAgentText(messages).toLowerCase()
+            expect(text).toContain("igloo")
         })
     })
 })

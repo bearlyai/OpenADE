@@ -156,7 +156,7 @@ export class CodexHarness implements Harness<CodexEvent> {
             }
 
             // ── Build args ──
-            const buildResult = buildCodexArgs(q, this.config, mcpConfigArgs)
+            const buildResult = await buildCodexArgs(q, this.config, mcpConfigArgs)
             Object.assign(env, buildResult.env)
             cleanup.push(...buildResult.cleanup)
 

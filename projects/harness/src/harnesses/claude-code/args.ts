@@ -9,12 +9,15 @@ export interface ClaudeCodeHarnessConfig {
 
 export interface ClaudeArgBuildResult {
     args: string[]
-    /** Raw prompt text — must be appended after all flags as a positional arg (after `--`) */
-    promptText: string
+    /** Raw prompt text — must be appended after all flags as a positional arg (after `--`).
+     *  Undefined when using stream-json transport (prompt is sent via stdin). */
+    promptText?: string
     env: Record<string, string>
     cwd: string
     /** Temp files/dirs that need cleanup after the process exits */
     cleanup: Array<{ path: string; type: "file" | "dir" }>
+    /** When set, these lines must be written to the process stdin */
+    stdinLines?: string[]
 }
 
 /** Tools that are always disallowed when disablePlanningTools is set */
@@ -160,16 +163,21 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
 
     // ── Prompt ──
     // -p is a boolean flag (non-interactive / print mode).
-    // The prompt is a positional argument, returned separately as `promptText`
+    // For text-only prompts, the prompt is returned separately as `promptText`
     // so the caller can append it after all flags using `-- <prompt>` to prevent
     // prompts starting with `-` from being parsed as CLI flags.
-    const promptText = resolvePromptText(query.prompt)
+    // For multimodal prompts (with images), we use --input-format stream-json
+    // and send the content via stdin as NDJSON.
+    const transport = resolvePromptTransport(query.prompt)
     args.push("-p")
+
+    if (transport.kind === "stream-json") {
+        args.push("--input-format", "stream-json")
+    }
 
     // ── Always-present flags ──
     args.push("--output-format", "stream-json")
     args.push("--verbose")
-    args.push("--skip-git-repo-check")
 
     // ── Setting sources ──
     const settingSources = config.settingSources ?? ["user", "project", "local"]
@@ -280,18 +288,55 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
 
     return {
         args,
-        promptText,
+        promptText: transport.kind === "text" ? transport.promptText : undefined,
         env,
         cwd: query.cwd,
         cleanup,
+        stdinLines: transport.kind === "stream-json" ? transport.stdinLines : undefined,
     }
 }
 
-function resolvePromptText(prompt: string | PromptPart[]): string {
-    if (typeof prompt === "string") return prompt
+type PromptTransport = { kind: "text"; promptText: string } | { kind: "stream-json"; stdinLines: string[] }
 
-    return prompt
-        .filter((p): p is Extract<PromptPart, { type: "text" }> => p.type === "text")
-        .map((p) => p.text)
-        .join("\n")
+function resolvePromptTransport(prompt: string | PromptPart[]): PromptTransport {
+    if (typeof prompt === "string") {
+        return { kind: "text", promptText: prompt }
+    }
+
+    const hasImages = prompt.some((p) => p.type === "image")
+
+    if (!hasImages) {
+        // Text-only: use simple positional arg as before
+        const text = prompt
+            .filter((p): p is Extract<PromptPart, { type: "text" }> => p.type === "text")
+            .map((p) => p.text)
+            .join("\n")
+        return { kind: "text", promptText: text }
+    }
+
+    // Build Anthropic-format content blocks for stream-json input
+    const content: unknown[] = []
+    for (const part of prompt) {
+        if (part.type === "text") {
+            content.push({ type: "text", text: part.text })
+        } else if (part.type === "image" && part.source.kind === "base64") {
+            content.push({
+                type: "image",
+                source: {
+                    type: "base64",
+                    media_type: part.source.mediaType,
+                    data: part.source.data,
+                },
+            })
+        }
+    }
+
+    const userMessage = JSON.stringify({
+        type: "user",
+        message: { role: "user", content },
+        session_id: "default",
+        parent_tool_use_id: null,
+    })
+
+    return { kind: "stream-json", stdinLines: [userMessage] }
 }

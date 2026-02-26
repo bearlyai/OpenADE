@@ -9,6 +9,9 @@ export interface SpawnJsonlOptions<M> {
     env?: Record<string, string>
     signal: AbortSignal
 
+    /** Optional lines to write to stdin before closing. When set, stdin is piped instead of ignored. */
+    stdinLines?: string[]
+
     /**
      * Called for each line of stdout. Return event(s) to yield, or null to skip.
      */
@@ -36,8 +39,16 @@ export async function* spawnJsonl<M>(options: SpawnJsonlOptions<M>): AsyncGenera
     const proc = nodeSpawn(command, args, {
         cwd,
         env: env ? { ...process.env, ...env } : undefined,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: [options.stdinLines ? "pipe" : "ignore", "pipe", "pipe"],
     })
+
+    // Write stdin lines and close
+    if (options.stdinLines && proc.stdin) {
+        for (const line of options.stdinLines) {
+            proc.stdin.write(line + "\n")
+        }
+        proc.stdin.end()
+    }
 
     let stderrBuf = ""
     let killed = false
