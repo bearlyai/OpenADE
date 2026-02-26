@@ -265,7 +265,7 @@ describe("buildCodexArgs", () => {
         expect(result.cleanup).toHaveLength(0)
     })
 
-    it("resume mode does not include -i flag even with images", async () => {
+    it("resume mode includes -i flag with images", async () => {
         const result = await buildCodexArgs(
             makeQuery({
                 prompt: [
@@ -276,7 +276,9 @@ describe("buildCodexArgs", () => {
             }),
             {}
         )
-        expect(result.args).not.toContain("-i")
+        const iIdx = result.args.indexOf("-i")
+        expect(iIdx).toBeGreaterThan(-1)
+        expect(result.args[iIdx + 1]).toMatch(/harness-img-.*\.png$/)
     })
 
     it("multiple images produce multiple -i flags", async () => {

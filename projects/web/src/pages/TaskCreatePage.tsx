@@ -247,6 +247,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
         if (!editorManager.value.trim() || !workspaceId) return
 
         const description = editorManager.value.trim()
+        const images = [...editorManager.pendingImages]
 
         console.log("[TaskCreatePage] Creating task with MCP servers", {
             selectedMcpServerIds,
@@ -258,6 +259,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
             description,
             mode,
             isolationStrategy: useWorktree && selectedBranch ? { type: "worktree", sourceBranch: selectedBranch } : { type: "head" },
+            images,
             enabledMcpServerIds: selectedMcpServerIds.length > 0 ? selectedMcpServerIds : undefined,
             harnessId: codeStore.defaultHarnessId,
         })

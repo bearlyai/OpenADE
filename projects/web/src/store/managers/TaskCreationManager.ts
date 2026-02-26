@@ -4,7 +4,7 @@ import { track } from "../../analytics"
 import { addTaskPreview, syncTaskPreviewFromStore, taskFromStore, updateTaskPreview } from "../../persistence"
 import { fallbackTitle, generateSlug, generateTitle } from "../../prompts/titleExtractor"
 import type { HarnessId } from "../../electronAPI/harnessEventTypes"
-import type { IsolationStrategy, SetupEnvironmentEvent, TaskDeviceEnvironment } from "../../types"
+import type { ImageAttachment, IsolationStrategy, SetupEnvironmentEvent, TaskDeviceEnvironment, UserInputContext } from "../../types"
 import { getDeviceId } from "../../utils/deviceId"
 import { ulid } from "../../utils/ulid"
 import { TaskEnvironment } from "../TaskEnvironment"
@@ -17,6 +17,7 @@ export interface TaskCreationOptions {
     description: string
     mode: "plan" | "do" | "ask" | "hyperplan"
     isolationStrategy: IsolationStrategy
+    images?: ImageAttachment[]
     enabledMcpServerIds?: string[]
     harnessId?: HarnessId
 }
@@ -27,6 +28,7 @@ export interface TaskCreation {
     description: string
     mode: "plan" | "do" | "ask" | "hyperplan"
     isolationStrategy: IsolationStrategy
+    images: ImageAttachment[]
     enabledMcpServerIds?: string[]
     harnessId?: HarnessId
     phase: CreationPhase | "pending" | "completing"
@@ -35,6 +37,13 @@ export interface TaskCreation {
     abortController: AbortController
     createdAt: string
     completedTaskId: string | null
+}
+
+export function buildTaskCreationInput(description: string, images: ImageAttachment[]): UserInputContext {
+    return {
+        userInput: description,
+        images: [...images],
+    }
 }
 
 export class TaskCreationManager {
@@ -54,6 +63,7 @@ export class TaskCreationManager {
             description: options.description,
             mode: options.mode,
             isolationStrategy: options.isolationStrategy,
+            images: options.images ? [...options.images] : [],
             enabledMcpServerIds: options.enabledMcpServerIds,
             harnessId: options.harnessId,
             phase: "pending",
@@ -312,7 +322,7 @@ export class TaskCreationManager {
             this.generateTitleAsync(task.id, creation.repoId, creation.description, creation.harnessId)
 
             setTimeout(() => {
-                const input = { userInput: creation.description, images: [] }
+                const input = buildTaskCreationInput(creation.description, creation.images)
                 if (creation.mode === "plan") {
                     this.store.execution.executePlan(task.id, input)
                 } else if (creation.mode === "hyperplan") {

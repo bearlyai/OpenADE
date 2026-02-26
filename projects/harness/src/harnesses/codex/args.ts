@@ -58,8 +58,8 @@ export async function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessC
     // Skip git repo check — the app manages directory context
     execArgs.push("--skip-git-repo-check")
 
-    // `codex exec resume` only accepts: --json [SESSION_ID] [PROMPT]
-    // All other exec-level flags are only valid for `codex exec`
+    // `codex exec resume` accepts a smaller flag set than `codex exec`.
+    // Keep resume-safe flags outside this block, and gate the rest here.
     if (!query.resumeSessionId) {
         // Sandbox for read-only
         if (query.mode === "read-only") {
@@ -108,8 +108,9 @@ export async function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessC
     const { promptText: rawPromptText, imagePaths, imageCleanup } = await resolveCodexPrompt(query.prompt)
     cleanup.push(...imageCleanup)
 
-    // Image attachments via --image flag (only valid for `codex exec`, not `codex exec resume`)
-    if (imagePaths.length > 0 && !query.resumeSessionId) {
+    // Image attachments via --image/-i flag.
+    // Supported for both `codex exec` and `codex exec resume`.
+    if (imagePaths.length > 0) {
         for (const imgPath of imagePaths) {
             execArgs.push("-i", imgPath)
         }
