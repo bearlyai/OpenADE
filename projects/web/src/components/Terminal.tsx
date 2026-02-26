@@ -86,6 +86,8 @@ export function Terminal({ ptyId, cwd, className, onClose }: TerminalProps) {
         const container = containerRef.current
         if (!container) return
 
+        let resizeObserver: ResizeObserver | null = null
+
         async function setup() {
             if (!mounted || !container) return
 
@@ -103,6 +105,15 @@ export function Terminal({ ptyId, cwd, className, onClose }: TerminalProps) {
                     }
                     instance.containerEl = container
                 }
+
+                // Set up resize observer for the new container
+                resizeObserver = new ResizeObserver(() => {
+                    instance!.fitAddon.fit()
+                })
+                resizeObserver.observe(container)
+
+                // Re-fit to new container dimensions
+                instance.fitAddon.fit()
                 // Focus terminal when opened
                 instance.terminal.focus()
                 return
@@ -196,7 +207,7 @@ export function Terminal({ ptyId, cwd, className, onClose }: TerminalProps) {
             })
 
             // Set up resize observer for fit addon
-            const resizeObserver = new ResizeObserver(() => {
+            resizeObserver = new ResizeObserver(() => {
                 fitAddon.fit()
             })
             resizeObserver.observe(container)
@@ -209,6 +220,7 @@ export function Terminal({ ptyId, cwd, className, onClose }: TerminalProps) {
 
         return () => {
             mounted = false
+            resizeObserver?.disconnect()
         }
     }, [ptyId, cwd])
 
@@ -242,7 +254,9 @@ export function Terminal({ ptyId, cwd, className, onClose }: TerminalProps) {
                     Restart
                 </button>
             </div>
-            <div ref={containerRef} className="flex-1 min-h-0 p-2" style={{ backgroundColor: terminalTheme.background }} />
+            <div className="flex-1 min-h-0 px-2 pt-2" style={{ backgroundColor: terminalTheme.background }}>
+                <div ref={containerRef} className="h-full" />
+            </div>
         </div>
     )
 }
