@@ -107,3 +107,13 @@ The hero CTA and download section automatically detect the visitor's OS and:
 Meta tags are in `index.html` `<head>`. The OG image is referenced as `https://openade.ai/og.png`. When updating the OG image, make sure to keep the same filename so social media caches refresh naturally.
 
 Key meta tags: `title`, `description`, `canonical`, `og:*`, `twitter:*`, `theme-color`.
+
+## Messaging Guardrails
+
+Since v0.54.0 (2026-02-15), OpenADE supports both Claude Code and Codex, plus HyperPlan (multi-agent parallel planning).
+
+- Do **not** use "coming soon" language for shipped features.
+- When updating positioning copy, keep these files in sync:
+  1. `index.html` — hero, features, meta/OG/Twitter tags, JSON-LD
+  2. `og-template.html` — social preview subtitle (regenerate `public/og.png` after changes)
+  3. Root `README.md` — feature list, subtitle

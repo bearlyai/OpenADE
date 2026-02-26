@@ -7,7 +7,7 @@
 <p align="center">
   <strong>Agentic Development Environment for Devs Who Don't Ship Slop</strong>
   <br />
-  <sub>Free Local Software · Powered by Claude Code</sub>
+  <sub>Free Local Software · Powered by Claude Code & Codex</sub>
 </p>
 
 <p align="center">
@@ -80,6 +80,9 @@ We built this as a side project at [Bearly AI](https://bearly.ai) over a few wee
 ### 🎯 Plan → Revise → Do Workflow
 Describe your task, get a detailed implementation plan, refine it with inline comments, then execute with a single click. Your agents work from a shared understanding—not vibes.
 
+### ⚡ HyperPlan — Multi-Agent Planning
+Run multiple AI agents in parallel — even across providers — then reconcile their plans into one. Choose Ensemble or Cross-Review strategies to get the best plan before executing.
+
 ### 💬 Comment on Anything
 Files, diffs, changes, agent messages—everything is commentable. Point the agent directly at what you want to fix or improve. Type less, iterate faster, ship better.
 
@@ -102,10 +105,11 @@ Your code never leaves your machine. No cloud. No syncing to someone else's serv
 ### 🗂️ IDE Essentials Built In
 Diff viewer, file browser, fast search, full terminal, and process manager—all without leaving the app.
 
-### 💳 Uses Your Existing Claude Subscription
-No separate billing. No per-seat licensing. Works with your existing Claude Code subscription.
+### 💳 Uses Your Existing Subscriptions
+No separate billing. No per-seat licensing. Works with your existing Claude Code or Codex subscription.
 
-> **Coming soon**: Codex support
+### 🔀 Multi-Harness: Claude Code & Codex
+Switch between Claude Code and OpenAI Codex as your execution engine. Same UI, same workflow, different models under the hood.
 
 ### ⚡ Fast & Lean
 Snappy & Clean. We use the app 8+ hours a day so we make sure it is.

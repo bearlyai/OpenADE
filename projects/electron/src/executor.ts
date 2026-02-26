@@ -44,13 +44,30 @@ const isDevToolsEnabled = (): boolean => {
     return false
 }
 
+const isWindowVisibleOnAnyDisplay = (rect: Rectangle): boolean => {
+    const displays = screen.getAllDisplays()
+    // Ensure at least part of the title bar region (100×30px) is within
+    // a display's workArea so the user can drag/interact with the window.
+    const minVisibleWidth = 100
+    const minVisibleHeight = 30
+    for (const display of displays) {
+        const wa = display.workArea
+        const overlapX = Math.max(0, Math.min(rect.x + minVisibleWidth, wa.x + wa.width) - Math.max(rect.x, wa.x))
+        const overlapY = Math.max(0, Math.min(rect.y + minVisibleHeight, wa.y + wa.height) - Math.max(rect.y, wa.y))
+        if (overlapX > 0 && overlapY > 0) {
+            return true
+        }
+    }
+    return false
+}
+
 export const defaultExecutorBounds = (): Rectangle => {
     const currentDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
     const heightRatio = 0.8
     const width = Math.floor(Math.min(1000, 0.9 * currentDisplay.bounds.width))
     const height = Math.floor(Math.min(800, currentDisplay.bounds.height * heightRatio))
-    const x = Math.floor((currentDisplay.bounds.width - width) / 2)
-    const y = Math.floor((currentDisplay.bounds.height - height) / 2)
+    const x = Math.floor(currentDisplay.bounds.x + (currentDisplay.bounds.width - width) / 2)
+    const y = Math.floor(currentDisplay.bounds.y + (currentDisplay.bounds.height - height) / 2)
     return { x, y, height, width }
 }
 
@@ -58,7 +75,13 @@ const loadLastWindowSize = (): Rectangle => {
     try {
         const res = store.get(windowSizeStorageKey) as Rectangle | null
         if (res && res.height > 50 && res.width > 50) {
-            return res
+            if (isWindowVisibleOnAnyDisplay(res)) {
+                return res
+            }
+            // Position is off-screen (e.g., monitor disconnected) but size is valid.
+            // Keep user's preferred dimensions, reset position to a visible display.
+            const fallback = defaultExecutorBounds()
+            return { x: fallback.x, y: fallback.y, width: res.width, height: res.height }
         }
     } catch (e) {
         // pass
