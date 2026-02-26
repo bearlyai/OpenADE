@@ -44,7 +44,7 @@ const features = [
     {
         icon: Cpu,
         title: "AI-Powered Understanding",
-        description: "Claude understands your entire codebase, not just snippets",
+        description: "Your AI agent understands your entire codebase, not just snippets",
     },
     {
         icon: GitBranch,
@@ -73,8 +73,8 @@ export function DesktopRequiredPage() {
                 <p className="text-xl text-muted mb-4">AI-powered coding that actually understands your codebase.</p>
 
                 <p className="text-muted mb-12">
-                    OpenADE runs directly on your machine, giving Claude full access to your repositories, git history, and local environment. It's the most
-                    powerful way to code with AI.
+                    OpenADE runs directly on your machine, giving your AI agent full access to your repositories, git history, and local environment. It's the
+                    most powerful way to code with AI.
                 </p>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-12">
@@ -92,7 +92,7 @@ export function DesktopRequiredPage() {
                 <div className="bg-base-200 border border-border p-8">
                     <h2 className="text-lg font-semibold text-base-content mb-2">Desktop App Required</h2>
                     <p className="text-muted mb-6">
-                        OpenADE requires the desktop app to access your local files and run Claude's agent capabilities securely on your machine.
+                        OpenADE requires the desktop app to access your local files and run agent capabilities securely on your machine.
                     </p>
 
                     {detectedPlatform !== "unknown" ? (
