@@ -111,15 +111,16 @@ export class InputManager {
         return "Plan"
     }
 
-    /** Stop all processes associated with this task (used before closing) */
+    /** Stop all processes associated with this task (used before closing).
+     *  Only kills processes for worktree tasks — repo/global processes are shared and should persist. */
     private async stopTaskProcesses(): Promise<void> {
         const env = this.taskModel?.environment
         if (!env?.taskWorkingDir) return
 
         const task = this.store.tasks.getTask(this.taskId)
-        const isWorktree = task?.isolationStrategy?.type === "worktree"
-        const context = isWorktree ? { type: "worktree" as const, root: env.taskWorkingDir } : { type: "repo" as const }
-        await this.store.repoProcesses.stopAllForContext(context)
+        if (task?.isolationStrategy?.type === "worktree") {
+            await this.store.repoProcesses.stopAllForContext({ type: "worktree", root: env.taskWorkingDir })
+        }
     }
 
     // === Input mutations (delegated to SmartEditorManager) ===
