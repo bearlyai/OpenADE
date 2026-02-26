@@ -235,8 +235,11 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
         return bTime.localeCompare(aTime)
     }
     const openPreviews = previews.filter((t) => !t.closed).sort(sortByRecent)
+    // Running tasks float to the top
+    const runningPreviews = openPreviews.filter((t) => codeStore.workingTaskIds.has(t.id))
+    const nonRunningPreviews = openPreviews.filter((t) => !codeStore.workingTaskIds.has(t.id))
     const closedPreviews = previews.filter((t) => t.closed).sort(sortByRecent)
-    const sortedPreviews = [...openPreviews, ...closedPreviews]
+    const sortedPreviews = [...runningPreviews, ...nonRunningPreviews, ...closedPreviews]
     const creations = codeStore.creation.getCreationsForRepo(workspaceId)
 
     const handleAddTask = () => {
