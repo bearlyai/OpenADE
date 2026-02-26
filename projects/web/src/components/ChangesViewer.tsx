@@ -1,37 +1,15 @@
-import { ArrowRight, ChevronDown, ChevronRight, Columns2, FileCode, FileImage, FileText, Folder, Minus, Pencil, Plus, RefreshCw, Rows2 } from "lucide-react"
+import { ArrowRight, ChevronDown, ChevronRight, FileCode, FileImage, Folder, RefreshCw } from "lucide-react"
 import { observer } from "mobx-react"
 import { useEffect, useMemo, useState } from "react"
 import { twMerge } from "tailwind-merge"
 import { type ChangedFileInfo, type GitStatusResponse, gitApi } from "../electronAPI/git"
 import { useCodeStore } from "../store/context"
+import { StatusIcon, type ViewMode, ViewModeToggle } from "./git/shared"
 import { Select } from "./ui/Select"
 import { type AnnotationSide, type CommentHandlers, FileViewer, MultiFileDiffViewer } from "./FilesAndDiffs"
 import { buildFileTree, collectAllDirPaths, flattenFileTree, type FlatTreeEntry } from "./utils/changesTree"
 
-type ViewMode = "split" | "unified" | "current"
 type DiffSource = "uncommitted" | "from-base"
-
-function ViewModeToggle({ value, onChange }: { value: ViewMode; onChange: (v: ViewMode) => void }) {
-    const buttonClass = (mode: ViewMode) =>
-        twMerge(
-            "btn flex items-center justify-center w-8 h-8 text-xs font-medium transition-colors",
-            value === mode ? "bg-base-300 text-base-content" : "text-muted hover:text-base-content"
-        )
-
-    return (
-        <div className="flex items-center border border-border">
-            <button type="button" onClick={() => onChange("split")} className={buttonClass("split")} title="Split view">
-                <Columns2 size={14} />
-            </button>
-            <button type="button" onClick={() => onChange("unified")} className={buttonClass("unified")} title="Unified view">
-                <Rows2 size={14} />
-            </button>
-            <button type="button" onClick={() => onChange("current")} className={buttonClass("current")} title="Current file">
-                <FileText size={14} />
-            </button>
-        </div>
-    )
-}
 
 const DIFF_SOURCE_ENTRIES = [
     { id: "uncommitted" as DiffSource, content: "Uncommitted" },
@@ -50,19 +28,6 @@ function DiffSourceSelect({ value, onChange }: { value: DiffSource; onChange: (v
             }}
         />
     )
-}
-
-function StatusIcon({ status }: { status: ChangedFileInfo["status"] }) {
-    switch (status) {
-        case "added":
-            return <Plus size="1em" className="text-success" />
-        case "deleted":
-            return <Minus size="1em" className="text-error" />
-        case "renamed":
-            return <ArrowRight size="1em" className="text-warning" />
-        default:
-            return <Pencil size="1em" className="text-primary" />
-    }
 }
 
 interface ChangesTreeItemProps {
@@ -89,7 +54,7 @@ function ChangesTreeItem({ entry, expanded, selected, onSelect, onToggle }: Chan
                 title={node.path}
             >
                 {expanded ? <ChevronDown size={14} className="flex-shrink-0 text-muted" /> : <ChevronRight size={14} className="flex-shrink-0 text-muted" />}
-                <Folder size={14} className="flex-shrink-0 text-warning" />
+                <Folder size={14} className="flex-shrink-0 text-muted" />
                 <span className="truncate font-mono text-xs">{node.name}</span>
                 <span className="ml-auto flex-shrink-0 text-xs text-muted">{node.fileCount}</span>
             </button>
