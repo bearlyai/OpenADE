@@ -5,6 +5,7 @@ describe("buildCommitPrompt", () => {
     it("returns base commit prompt when no additional instructions", () => {
         const prompt = ACTION_PROMPTS.commit()
         expect(prompt).toContain("Review the current git working tree")
+        expect(prompt).toContain("Follow repository conventions before committing")
         expect(prompt).not.toContain("user_commit_instructions")
     })
 
@@ -33,6 +34,7 @@ describe("buildCommitAndPushPrompt", () => {
         const prompt = ACTION_PROMPTS.commitAndPush(undefined, false, "feature/my-branch")
         expect(prompt).toContain("Run one unified git workflow")
         expect(prompt).toContain("Review the current git working tree")
+        expect(prompt).toContain("Follow repository conventions before committing")
         expect(prompt).toContain("If there is nothing to commit, continue directly to push existing commits")
         expect(prompt).toContain("git push --set-upstream origin feature/my-branch")
     })

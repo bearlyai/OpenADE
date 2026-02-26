@@ -203,6 +203,7 @@ const RETRY_PROMPT =
 const COMMIT_PROMPT_BASE = `Review the current git working tree and create a commit for the changes.
 
 - Run git status and git diff to understand what changed
+- Follow repository conventions before committing (run whatever formatting/linting/checks are expected for the touched files)
 - Write a clear commit message that explains the "why" not just the "what"
 - Stage only the relevant changes (use git add selectively if needed)
 - Do not undo, revert, or modify any existing changes — commit the changes you made.
