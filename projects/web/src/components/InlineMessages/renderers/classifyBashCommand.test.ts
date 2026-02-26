@@ -191,6 +191,55 @@ describe("classifyBashCommand", () => {
         })
     })
 
+    describe("write commands", () => {
+        it("classifies echo with redirection as write", () => {
+            const result = classifyBashCommand("echo 'hello' > out.txt")
+            expect(result.semanticType).toBe("write")
+            expect(result.label).toBe("Write out.txt")
+        })
+
+        it("classifies cat heredoc with redirection as write", () => {
+            const result = classifyBashCommand("cat <<'EOF' > config.json")
+            expect(result.semanticType).toBe("write")
+            expect(result.label).toBe("Write config.json")
+        })
+
+        it("classifies append redirection as write", () => {
+            const result = classifyBashCommand("echo 'line' >> log.txt")
+            expect(result.semanticType).toBe("write")
+            expect(result.label).toBe("Write log.txt")
+        })
+
+        it("does not classify /dev/null redirection as write", () => {
+            const result = classifyBashCommand("some-cmd 2>&1 > /dev/null")
+            expect(result.semanticType).not.toBe("write")
+        })
+
+        it("classifies tee as write", () => {
+            const result = classifyBashCommand("tee output.txt")
+            expect(result.semanticType).toBe("write")
+            expect(result.label).toBe("Write file")
+        })
+
+        it("classifies cp as write", () => {
+            const result = classifyBashCommand("cp src/file.txt dst/file.txt")
+            expect(result.semanticType).toBe("write")
+            expect(result.label).toBe("Copy file")
+        })
+
+        it("classifies mv as write", () => {
+            const result = classifyBashCommand("mv old.txt new.txt")
+            expect(result.semanticType).toBe("write")
+            expect(result.label).toBe("Move file")
+        })
+
+        it("classifies wrapped redirection as write", () => {
+            const result = classifyBashCommand('/bin/zsh -lc \'cat <<"EOF" > /tmp/test.py\nprint("hello")\nEOF\'')
+            expect(result.semanticType).toBe("write")
+            expect(result.label).toBe("Write test.py")
+        })
+    })
+
     describe("edit commands", () => {
         it("classifies sed -i as edit", () => {
             const result = classifyBashCommand("sed -i 's/foo/bar/g' file.txt")

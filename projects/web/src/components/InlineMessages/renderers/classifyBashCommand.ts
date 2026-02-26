@@ -7,7 +7,7 @@
  * human-friendly label used by the bash pill/row renderer.
  */
 
-export type BashSemanticType = "search" | "read" | "list" | "edit" | "git" | "bash"
+export type BashSemanticType = "search" | "read" | "list" | "edit" | "write" | "git" | "bash"
 
 export interface ClassifiedCommand {
     /** The inner command after stripping shell wrappers */
@@ -71,7 +71,8 @@ const PRIORITY: Record<BashSemanticType, number> = {
     read: 2,
     git: 3,
     search: 4,
-    edit: 5,
+    write: 5,
+    edit: 6,
 }
 
 /** Classify a single command segment (no pipes, no &&) */
@@ -108,6 +109,14 @@ function classifySegment(segment: string): { semanticType: BashSemanticType; lab
         return { semanticType: "edit", label: "Edit file" }
     }
 
+    // --- Write patterns ---
+    if (/^tee\s/.test(trimmed)) {
+        return { semanticType: "write", label: "Write file" }
+    }
+    if (/^(cp|mv)\s/.test(trimmed)) {
+        return { semanticType: "write", label: trimmed.startsWith("cp") ? "Copy file" : "Move file" }
+    }
+
     // --- List patterns ---
     if (/^(ls|tree)(\s|$)/.test(trimmed)) {
         return { semanticType: "list", label: "List files" }
@@ -121,11 +130,18 @@ function classifySegment(segment: string): { semanticType: BashSemanticType; lab
     return null
 }
 
-/** Classify a full pipe chain for patterns that span pipes (e.g., "nl file | sed -n ...") */
+/** Classify a full pipe chain for patterns that span pipes or redirection */
 function classifyChain(chain: string): { semanticType: BashSemanticType; label: string } | null {
     // Piped commands ending in sed -n / head / tail are reads
     if (/\|\s*(sed\s+-n|head|tail)\s/.test(chain)) {
         return { semanticType: "read", label: summarizeRead(chain) }
+    }
+    // Output redirection to a file (> or >>) — indicates writing/creating a file
+    // Skip /dev/null and fd redirects (2>, &>)
+    const redirectMatch = chain.match(/(?:^|[^0-9&])\s*>>?\s+(?!\/dev\/null)([^\s;&|]+)/)
+    if (redirectMatch) {
+        const filename = redirectMatch[1].split("/").pop() || redirectMatch[1]
+        return { semanticType: "write", label: `Write ${truncate(filename, 30)}` }
     }
     return null
 }

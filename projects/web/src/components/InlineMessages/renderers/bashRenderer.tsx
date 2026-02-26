@@ -1,4 +1,4 @@
-import { AlertCircle, FileText, FolderOpen, GitBranch, Pencil, Search, Terminal } from "lucide-react"
+import { AlertCircle, FilePlus, FileText, FolderOpen, GitBranch, Pencil, Search, Terminal } from "lucide-react"
 import { useCallback, useMemo } from "react"
 import type { Comment, CommentSource } from "../../../types"
 import { type AnnotationSide, type CommentHandlers, FileViewer } from "../../FilesAndDiffs"
@@ -46,6 +46,8 @@ function getSemanticIcon(semanticType: BashSemanticType) {
             return <FolderOpen size="0.85em" className="text-muted flex-shrink-0" />
         case "edit":
             return <Pencil size="0.85em" className="text-muted flex-shrink-0" />
+        case "write":
+            return <FilePlus size="0.85em" className="text-muted flex-shrink-0" />
         case "git":
             return <GitBranch size="0.85em" className="text-muted flex-shrink-0" />
         default:
