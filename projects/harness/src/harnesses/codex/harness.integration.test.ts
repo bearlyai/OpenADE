@@ -82,6 +82,51 @@ describe.skipIf(!ready)("Codex (authenticated)", () => {
     })
 
     // ============================================================================
+    // 1c. Dash-prefixed prompts (regression for flag-parsing bug)
+    // ============================================================================
+
+    describe("1c. Dash-prefixed prompts", () => {
+        it("1c. Prompt starting with '-' is not parsed as a CLI flag", async () => {
+            const tmpDir = await getTmpDir()
+            const events = await collectEvents(
+                harness.query({
+                    prompt: "- Files should have a download button\n- We should show some metadata",
+                    cwd: tmpDir,
+                    mode: "yolo",
+                    signal: trivialSignal(),
+                })
+            )
+
+            // Must not have "unknown option" errors
+            const errors = getErrorEvents(events)
+            const hasOptionError = errors.some((e) => /unknown option/i.test((e as { error: string }).error))
+            expect(hasOptionError).toBe(false)
+
+            const complete = getCompleteEvent(events)
+            expect(complete).toBeDefined()
+        })
+
+        it("1d. Prompt starting with '--' is not parsed as a CLI flag", async () => {
+            const tmpDir = await getTmpDir()
+            const events = await collectEvents(
+                harness.query({
+                    prompt: "--help me understand this codebase",
+                    cwd: tmpDir,
+                    mode: "yolo",
+                    signal: trivialSignal(),
+                })
+            )
+
+            const errors = getErrorEvents(events)
+            const hasOptionError = errors.some((e) => /unknown option/i.test((e as { error: string }).error))
+            expect(hasOptionError).toBe(false)
+
+            const complete = getCompleteEvent(events)
+            expect(complete).toBeDefined()
+        })
+    })
+
+    // ============================================================================
     // 2. Basic query lifecycle
     // ============================================================================
 

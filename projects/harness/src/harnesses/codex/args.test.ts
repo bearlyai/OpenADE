@@ -147,7 +147,7 @@ describe("buildCodexArgs", () => {
 
     it("system prompt is prepended to the prompt text", () => {
         const result = buildCodexArgs(makeQuery({ prompt: "do something", systemPrompt: "Be helpful" }), {})
-        // The last arg should be the prompt with system instructions prepended
+        // The last arg should be the prompt with system instructions prepended (after --)
         const lastArg = result.args[result.args.length - 1]
         expect(lastArg).toContain("<system-instructions>")
         expect(lastArg).toContain("Be helpful")
@@ -173,6 +173,37 @@ describe("buildCodexArgs", () => {
         )
         const lastArg = result.args[result.args.length - 1]
         expect(lastArg).toBe("part 1\npart 2")
+    })
+
+    it("prompt starting with '-' is placed after '--' separator to avoid flag parsing", () => {
+        const result = buildCodexArgs(makeQuery({ prompt: "- Fix the download button" }), {})
+        const dashDashIdx = result.args.indexOf("--")
+        expect(dashDashIdx).toBeGreaterThan(-1)
+        expect(result.args[dashDashIdx + 1]).toBe("- Fix the download button")
+    })
+
+    it("prompt starting with '--' is safely placed after '--' separator", () => {
+        const result = buildCodexArgs(makeQuery({ prompt: "--help" }), {})
+        const dashDashIdx = result.args.indexOf("--")
+        expect(dashDashIdx).toBeGreaterThan(-1)
+        expect(result.args[dashDashIdx + 1]).toBe("--help")
+    })
+
+    it("resume with dash-prefixed prompt uses '--' separator", () => {
+        const result = buildCodexArgs(makeQuery({ prompt: "- Continue fixing", resumeSessionId: "abc-123" }), {})
+        const dashDashIdx = result.args.indexOf("--")
+        expect(dashDashIdx).toBeGreaterThan(-1)
+        // After --, positional args: session ID then prompt
+        expect(result.args[dashDashIdx + 1]).toBe("abc-123")
+        expect(result.args[dashDashIdx + 2]).toBe("- Continue fixing")
+    })
+
+    it("multi-line prompt with dash-prefixed lines is placed after '--' separator", () => {
+        const prompt = "- Files should have a download button\n- We should show some metadata"
+        const result = buildCodexArgs(makeQuery({ prompt }), {})
+        const dashDashIdx = result.args.indexOf("--")
+        expect(dashDashIdx).toBeGreaterThan(-1)
+        expect(result.args[dashDashIdx + 1]).toBe(prompt)
     })
 
     it("query env is merged into result env", () => {

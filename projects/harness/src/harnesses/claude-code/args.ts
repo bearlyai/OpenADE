@@ -9,6 +9,8 @@ export interface ClaudeCodeHarnessConfig {
 
 export interface ClaudeArgBuildResult {
     args: string[]
+    /** Raw prompt text — must be appended after all flags as a positional arg (after `--`) */
+    promptText: string
     env: Record<string, string>
     cwd: string
     /** Temp files/dirs that need cleanup after the process exits */
@@ -157,8 +159,12 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
     const cleanup: Array<{ path: string; type: "file" | "dir" }> = []
 
     // ── Prompt ──
+    // -p is a boolean flag (non-interactive / print mode).
+    // The prompt is a positional argument, returned separately as `promptText`
+    // so the caller can append it after all flags using `-- <prompt>` to prevent
+    // prompts starting with `-` from being parsed as CLI flags.
     const promptText = resolvePromptText(query.prompt)
-    args.push("-p", promptText)
+    args.push("-p")
 
     // ── Always-present flags ──
     args.push("--output-format", "stream-json")
@@ -273,6 +279,7 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
 
     return {
         args,
+        promptText,
         env,
         cwd: query.cwd,
         cleanup,

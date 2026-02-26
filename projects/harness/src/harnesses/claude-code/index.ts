@@ -200,7 +200,7 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
 
         // Build base args
         const buildResult = buildClaudeArgs(q, this.config)
-        const { args, env, cwd, cleanup } = buildResult
+        const { args, promptText, env, cwd, cleanup } = buildResult
 
         let toolServerHandle: ToolServerHandle | undefined
 
@@ -226,6 +226,11 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
                 args.push("--strict-mcp-config")
                 cleanup.push({ path: mcpConfigPath, type: "file" })
             }
+
+            // ── Append prompt as positional arg after all flags ──
+            // The `--` end-of-options separator ensures the prompt is never parsed
+            // as a CLI flag, even if it starts with `-` (e.g. markdown bullet lists).
+            args.push("--", promptText)
 
             // ── Spawn and stream ──
             let lastUsage: HarnessUsage | undefined

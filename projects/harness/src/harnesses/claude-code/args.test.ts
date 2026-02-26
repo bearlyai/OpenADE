@@ -20,14 +20,15 @@ describe("buildClaudeArgs", () => {
         expect(result.args).toContain("--verbose")
     })
 
-    it("includes prompt with -p flag", () => {
+    it("includes -p flag and returns promptText separately", () => {
         const result = buildClaudeArgs(makeQuery({ prompt: "hello world" }), {})
-        const pIdx = result.args.indexOf("-p")
-        expect(pIdx).toBeGreaterThanOrEqual(0)
-        expect(result.args[pIdx + 1]).toBe("hello world")
+        expect(result.args).toContain("-p")
+        // Prompt is NOT in args — it's returned separately for safe positional placement
+        expect(result.args).not.toContain("hello world")
+        expect(result.promptText).toBe("hello world")
     })
 
-    it("handles PromptPart[] by joining text parts", () => {
+    it("handles PromptPart[] by joining text parts into promptText", () => {
         const result = buildClaudeArgs(
             makeQuery({
                 prompt: [
@@ -37,8 +38,28 @@ describe("buildClaudeArgs", () => {
             }),
             {}
         )
-        const pIdx = result.args.indexOf("-p")
-        expect(result.args[pIdx + 1]).toBe("line 1\nline 2")
+        expect(result.args).toContain("-p")
+        expect(result.promptText).toBe("line 1\nline 2")
+    })
+
+    it("prompt starting with '-' is not included in args (prevents flag parsing)", () => {
+        const result = buildClaudeArgs(makeQuery({ prompt: "- Files should have a download button" }), {})
+        expect(result.promptText).toBe("- Files should have a download button")
+        // Prompt must not be in args where it could be parsed as a flag
+        expect(result.args).not.toContain("- Files should have a download button")
+    })
+
+    it("prompt starting with '--' is safely returned as promptText", () => {
+        const result = buildClaudeArgs(makeQuery({ prompt: "--help" }), {})
+        expect(result.promptText).toBe("--help")
+        expect(result.args).not.toContain("--help")
+    })
+
+    it("multi-line prompt with dash-prefixed lines is safely returned as promptText", () => {
+        const prompt = "- Files should have a download button\n- We should show some of the metadata"
+        const result = buildClaudeArgs(makeQuery({ prompt }), {})
+        expect(result.promptText).toBe(prompt)
+        expect(result.args).not.toContain(prompt)
     })
 
     it("mode: 'yolo' produces --dangerously-skip-permissions", () => {

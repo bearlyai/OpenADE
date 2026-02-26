@@ -106,10 +106,12 @@ export function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessConfig,
     }
 
     // ── Session ID (for resume) or prompt as positional args ──
+    // The `--` end-of-options separator ensures the prompt is never parsed
+    // as a CLI flag, even if it starts with `-` (e.g. markdown bullet lists).
     if (query.resumeSessionId) {
-        execArgs.push(query.resumeSessionId, promptText)
+        execArgs.push("--", query.resumeSessionId, promptText)
     } else {
-        execArgs.push(promptText)
+        execArgs.push("--", promptText)
     }
 
     // Merge query env
