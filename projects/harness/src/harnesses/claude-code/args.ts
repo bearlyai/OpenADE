@@ -169,6 +169,7 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
     // ── Always-present flags ──
     args.push("--output-format", "stream-json")
     args.push("--verbose")
+    args.push("--skip-git-repo-check")
 
     // ── Setting sources ──
     const settingSources = config.settingSources ?? ["user", "project", "local"]

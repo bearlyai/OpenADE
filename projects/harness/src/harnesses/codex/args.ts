@@ -31,6 +31,9 @@ export function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessConfig,
 
     // ── Root-level flags (before exec subcommand) ──
 
+    // Skip git repo check — the app manages directory context
+    rootArgs.push("--skip-git-repo-check")
+
     // Permissions / mode
     if (query.mode === "read-only") {
         rootArgs.push("-a", "on-request")

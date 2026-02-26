@@ -1,5 +1,4 @@
 import { describe, it, expect, afterEach } from "vitest"
-import { execFileSync } from "node:child_process"
 import { existsSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -37,8 +36,6 @@ afterEach(async () => {
 async function getTmpDir(): Promise<string> {
     const tmp = await makeTmpDir()
     tmpDirs.push(tmp)
-    // Codex requires a trusted (git) directory
-    execFileSync("git", ["init"], { cwd: tmp.path, stdio: "ignore" })
     return tmp.path
 }
 

@@ -13,6 +13,15 @@ function makeQuery(overrides: Partial<HarnessQuery> = {}): HarnessQuery {
 }
 
 describe("buildCodexArgs", () => {
+    it("always includes --skip-git-repo-check", () => {
+        const result = buildCodexArgs(makeQuery(), {})
+        expect(result.args).toContain("--skip-git-repo-check")
+        // Should appear before exec subcommand (root-level flag)
+        const skipIdx = result.args.indexOf("--skip-git-repo-check")
+        const execIdx = result.args.indexOf("exec")
+        expect(skipIdx).toBeLessThan(execIdx)
+    })
+
     it("mode: 'yolo' produces --yolo", () => {
         const result = buildCodexArgs(makeQuery({ mode: "yolo" }), {})
         expect(result.args).toContain("--yolo")

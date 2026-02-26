@@ -13,11 +13,12 @@ function makeQuery(overrides: Partial<HarnessQuery> = {}): HarnessQuery {
 }
 
 describe("buildClaudeArgs", () => {
-    it("includes default flags: --output-format stream-json, --verbose", () => {
+    it("includes default flags: --output-format stream-json, --verbose, --skip-git-repo-check", () => {
         const result = buildClaudeArgs(makeQuery(), {})
         expect(result.args).toContain("--output-format")
         expect(result.args).toContain("stream-json")
         expect(result.args).toContain("--verbose")
+        expect(result.args).toContain("--skip-git-repo-check")
     })
 
     it("includes -p flag and returns promptText separately", () => {
