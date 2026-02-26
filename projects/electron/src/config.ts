@@ -1,4 +1,5 @@
 import * as path from "path"
+import { pathToFileURL } from "url"
 
 export const isDev = process.env.NODE_ENV === "dev"
 
@@ -10,6 +11,6 @@ export const getMainUrl = (): string => {
     }
     // Production: load from bundled files
     const webPath = path.join(process.resourcesPath, "dist", "web", "index.html")
-    return `file://${webPath}`
+    return pathToFileURL(webPath).href
 }
 
