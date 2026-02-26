@@ -86,9 +86,9 @@ Once the user approves:
 
 Do all of this in one step — do NOT ask the user to confirm the push separately.
 
-## 8. Watch the CI build
+## 8. Watch the CI build (MUST pass before publishing)
 
-After pushing, the Release workflow will trigger automatically. Monitor it:
+After pushing, the Release workflow will trigger automatically. **You MUST wait for all CI jobs to pass before proceeding to step 9.** Never publish a release with failing or in-progress CI. Monitor it:
 
 ```
 gh run list --repo bearlyai/OpenADE --limit 1
@@ -119,9 +119,13 @@ gh run view <run-id> --repo bearlyai/OpenADE
 
 ## 9. Publish the GitHub release
 
-**IMPORTANT**: electron-builder (via `--publish always`) creates a **draft** GitHub release with build artifacts (`.dmg`, `.exe`, `.AppImage`, etc.) attached. Do NOT create a new release with `gh release create` — that would produce a release without artifacts.
+**CRITICAL — TWO HARD RULES**:
 
-Instead, edit the existing draft and publish it:
+1. **NEVER use `gh release create`.** electron-builder creates a draft release with build artifacts (`.dmg`, `.exe`, `.AppImage`, etc.) attached during CI. Using `gh release create` produces a **separate** release with **zero artifacts**, which means users download nothing. Always use `gh release edit` on the existing draft instead.
+
+2. **NEVER publish until ALL GitHub Actions CI jobs are green.** A failed or in-progress build means missing or broken artifacts. You must confirm every job (validate, release-linux, release-macos, release-windows) shows `conclusion: success` before proceeding.
+
+To publish, edit the existing draft:
 
 ```
 gh release edit v<version> --repo bearlyai/OpenADE \

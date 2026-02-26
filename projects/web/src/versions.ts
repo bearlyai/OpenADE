@@ -8,7 +8,7 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
-        version: "0.60.0",
+        version: "0.61.0",
         title: "Git Log, Smart Bash Pills & Image Prompts",
         date: "2026-02-26",
         highlights: [
