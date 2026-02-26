@@ -4,7 +4,8 @@ Prompt templates and builders in `prompts.ts`.
 
 ## Modes
 
-Each mode has distinct instructions sent via `appendSystemPrompt`:
+Each mode has distinct instructions sent via `appendSystemPrompt`.
+Execution may also append context-safety instructions (for example, worktree-only constraints).
 
 | Mode | Purpose | Can Modify Files? |
 |------|---------|-------------------|
@@ -12,7 +13,7 @@ Each mode has distinct instructions sent via `appendSystemPrompt`:
 | `revise` | Update existing plan based on feedback | No (but can explore) |
 | `execute` | Run approved plan | Yes |
 | `ask` | Answer questions about codebase | No (read-only) |
-| `do` | Direct execution (no system prompt) | Yes |
+| `do` | Direct execution (no mode prompt) | Yes |
 
 ## Prompt Builders
 
@@ -26,6 +27,10 @@ interface PromptResult {
 ```
 
 Builders: `buildPlanGenerationPrompt`, `buildRevisePrompt`, `buildRunPlanPrompt`, `buildAskPrompt`, `buildDoPrompt`
+
+Execution-context helpers:
+- `buildWorktreeExecutionInstruction(...)` - Appends a worktree safety instruction when isolation type is `worktree`
+- `mergeAppendSystemPrompt(...)` - Combines mode prompts with execution-context prompts
 
 ## Comment Formatting
 

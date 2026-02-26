@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { getDefaultModelForHarness } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import type { ActionEvent, Task } from "../types"
@@ -165,5 +165,61 @@ describe("TaskModel harness lock", () => {
 
         expect(model.harnessId).toBe("claude-code")
         expect(model.model).toBe("opus")
+    })
+})
+
+describe("TaskModel environment loading", () => {
+    it("coalesces concurrent loadEnvironment calls", async () => {
+        const task: Task = {
+            ...createTask([]),
+            deviceEnvironments: [
+                {
+                    id: "device-1",
+                    deviceId: "test-device",
+                    setupComplete: true,
+                    createdAt: "2026-01-01T00:00:00.000Z",
+                    lastUsedAt: "2026-01-01T00:00:00.000Z",
+                },
+            ],
+        }
+
+        const repo = {
+            id: "repo-1",
+            name: "Repo",
+            path: "/tmp/repo/subdir",
+            createdBy: { id: "u1", email: "u1@example.com" },
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+        }
+
+        const getGitInfo = vi.fn(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 25))
+            return null
+        })
+
+        const store = {
+            execution: {
+                onAfterEvent: () => () => {},
+            },
+            tasks: {
+                getTask: (taskId: string) => (taskId === task.id ? task : null),
+            },
+            repos: {
+                getRepo: (repoId: string) => (repoId === repo.id ? repo : undefined),
+                getGitInfo,
+            },
+        } as unknown as CodeStore
+
+        localStorage.setItem("openade-device-id", "test-device")
+
+        try {
+            const model = new TaskModel(store, task.id)
+            const [first, second] = await Promise.all([model.loadEnvironment(), model.loadEnvironment()])
+            expect(first).toBeTruthy()
+            expect(first).toBe(second)
+            expect(getGitInfo).toHaveBeenCalledTimes(1)
+        } finally {
+            localStorage.removeItem("openade-device-id")
+        }
     })
 })

@@ -29,7 +29,7 @@ export class TaskModel {
     private gitStateLoading = false
     private _environmentCache: TaskEnvironment | null = null
     private _environmentDeviceId: string | null = null
-    private _environmentLoading = false
+    private _environmentLoadPromise: Promise<TaskEnvironment | null> | null = null
     private _inputManager: InputManager | null = null
     private _trayManager: TrayManager | null = null
     private _fileBrowser: FileBrowserManager | null = null
@@ -271,15 +271,12 @@ export class TaskModel {
             return null
         }
 
-        // Prevent concurrent loads
-        if (this._environmentLoading) {
-            // Wait for the current load to complete
-            await new Promise((resolve) => setTimeout(resolve, 50))
-            return this.environment
+        // Coalesce concurrent loads to a single in-flight promise.
+        if (this._environmentLoadPromise) {
+            return this._environmentLoadPromise
         }
 
-        this._environmentLoading = true
-        try {
+        const loadPromise = (async () => {
             // Fetch git info asynchronously
             const gitInfo = await this.store.repos.getGitInfo(this.repoId)
 
@@ -291,14 +288,22 @@ export class TaskModel {
             })
 
             return env
+        })()
+
+        this._environmentLoadPromise = loadPromise
+        try {
+            return await loadPromise
         } finally {
-            this._environmentLoading = false
+            if (this._environmentLoadPromise === loadPromise) {
+                this._environmentLoadPromise = null
+            }
         }
     }
 
     invalidateEnvironmentCache(): void {
         this._environmentCache = null
         this._environmentDeviceId = null
+        this._environmentLoadPromise = null
     }
 
     get hasWorkingChanges(): boolean {

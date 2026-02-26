@@ -63,6 +63,20 @@ export class TaskEnvironment {
         })
     }
 
+    /** Root directory for this task's execution context */
+    get taskRootDir(): string {
+        return exhaustive.tag(this.task.isolationStrategy, "type", {
+            worktree: () => {
+                const worktreeDir = this.deviceEnv.worktreeDir
+                if (!worktreeDir) {
+                    throw new Error("Worktree mode requires worktreeDir")
+                }
+                return worktreeDir
+            },
+            head: () => this.repo.path,
+        })
+    }
+
     private get worktreeId(): string | null {
         return exhaustive.tag(this.task.isolationStrategy, "type", {
             worktree: () => this.task.slug,

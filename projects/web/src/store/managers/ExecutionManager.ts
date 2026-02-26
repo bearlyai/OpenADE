@@ -17,6 +17,7 @@ import { buildMcpServerConfigs } from "../../electronAPI/mcp"
 import { HyperPlanExecutor, type HyperPlanCallbacks } from "../../hyperplan/HyperPlanExecutor"
 import type { HyperPlanStrategy } from "../../hyperplan/types"
 import { isStandardStrategy } from "../../hyperplan/strategies"
+import { buildWorktreeExecutionInstruction, mergeAppendSystemPrompt } from "../../prompts/executionContext"
 import {
     type ContentBlock,
     type PromptBuildContext,
@@ -126,15 +127,23 @@ export class ExecutionManager {
         this.store.setTaskWorking(taskId, true)
         let executionId: string | undefined
         let executionSuccess = false
-
-        // Get execution paths early so we can capture git refs before event creation
-        const { cwd, additionalDirectories } = this.getExecutionPaths(taskModel, repo)
+        let cwd = repo.path
+        let additionalDirectories: string[] | undefined
+        let appendSystemPrompt: string | undefined = systemPrompt
 
         try {
             if (!isHarnessApiAvailable()) {
                 console.debug("[ExecutionManager] Harness API not available (not in Electron?) - aborting runAction")
                 return
             }
+
+            // Resolve execution paths after environment load (required for worktree correctness).
+            const executionPaths = await this.getExecutionPaths(taskModel, repo)
+            cwd = executionPaths.cwd
+            additionalDirectories = executionPaths.additionalDirectories
+
+            const worktreeInstruction = buildWorktreeExecutionInstruction(task.isolationStrategy, cwd)
+            appendSystemPrompt = mergeAppendSystemPrompt(systemPrompt, worktreeInstruction)
 
             console.debug("[ExecutionManager] Starting execution", {
                 taskId,
@@ -183,7 +192,7 @@ export class ExecutionManager {
                 executionId,
                 harnessId: taskModel.harnessId,
                 prompt: userMessage,
-                appendSystemPrompt: systemPrompt,
+                appendSystemPrompt,
                 cwd,
                 additionalDirectories,
                 parentSessionId,
@@ -213,13 +222,18 @@ export class ExecutionManager {
         }
     }
 
-    private getExecutionPaths(taskModel: TaskModel, repo: Repo): { cwd: string; additionalDirectories?: string[] } {
-        const env = taskModel.environment
+    private async getExecutionPaths(taskModel: TaskModel, repo: Repo): Promise<{ cwd: string; additionalDirectories?: string[] }> {
+        const env = taskModel.environment ?? (await taskModel.loadEnvironment())
         if (env) {
             const cwd = env.taskWorkingDir
-            const additionalDirectories = repo.path !== cwd ? [repo.path] : undefined
+            const additionalDirectories = env.taskRootDir !== cwd ? [env.taskRootDir] : undefined
             return { cwd, additionalDirectories }
         }
+
+        if (taskModel.isolationStrategy?.type === "worktree") {
+            throw new Error("Worktree environment is not ready; cannot resolve execution cwd")
+        }
+
         return { cwd: repo.path }
     }
 
@@ -488,8 +502,9 @@ export class ExecutionManager {
         }
 
         this.store.setTaskWorking(taskId, true)
-
-        const { cwd, additionalDirectories } = this.getExecutionPaths(taskModel, repo)
+        let cwd = repo.path
+        let additionalDirectories: string[] | undefined
+        let worktreeInstruction: string | undefined
         const mcpServerConfigs = this.buildMcpServerConfigs(task.enabledMcpServerIds)
 
         // The terminal step's executionId becomes the main execution ID
@@ -501,6 +516,11 @@ export class ExecutionManager {
                 console.debug("[ExecutionManager] Harness API not available - aborting executeHyperPlan")
                 return
             }
+
+            const executionPaths = await this.getExecutionPaths(taskModel, repo)
+            cwd = executionPaths.cwd
+            additionalDirectories = executionPaths.additionalDirectories
+            worktreeInstruction = buildWorktreeExecutionInstruction(task.isolationStrategy, cwd)
 
             const gitRefsBefore = await this.getGitRefs(cwd)
 
@@ -612,6 +632,7 @@ export class ExecutionManager {
                 taskDescription: input.userInput,
                 cwd,
                 additionalDirectories,
+                appendSystemPromptSuffix: worktreeInstruction,
                 mcpServerConfigs,
                 callbacks,
                 signal: abortController.signal,
