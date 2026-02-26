@@ -19,6 +19,7 @@ import type { MessageGroup, ResultGroup, SystemGroup, TodoItem } from "../messag
 function getAssistantText(msg: ClaudeEvent): string | null {
     if (msg.type !== "assistant") return null
     const { content } = (msg as ClaudeAssistantEvent).message
+    if (!Array.isArray(content)) return null
     const text = content
         .filter((block): block is ClaudeContentBlock & { type: "text" } => block.type === "text")
         .map((block) => block.text)
@@ -30,6 +31,7 @@ function getAssistantText(msg: ClaudeEvent): string | null {
 function getThinkingText(msg: ClaudeEvent): string | null {
     if (msg.type !== "assistant") return null
     const { content } = (msg as ClaudeAssistantEvent).message
+    if (!Array.isArray(content)) return null
     const text = content
         .filter((block): block is ClaudeContentBlock & { type: "thinking" } => block.type === "thinking")
         .map((block) => block.thinking)
@@ -41,6 +43,7 @@ function getThinkingText(msg: ClaudeEvent): string | null {
 function getToolUse(msg: ClaudeEvent): { id: string; name: string; input: Record<string, unknown> } | null {
     if (msg.type !== "assistant") return null
     const { content } = (msg as ClaudeAssistantEvent).message
+    if (!Array.isArray(content)) return null
     const toolUseBlock = content.find((block): block is ClaudeContentBlock & { type: "tool_use" } => block.type === "tool_use")
     if (!toolUseBlock) return null
     return {
@@ -54,6 +57,7 @@ function getToolUse(msg: ClaudeEvent): { id: string; name: string; input: Record
 function getToolResult(msg: ClaudeEvent): { toolUseId: string; content: string; isError: boolean } | null {
     if (msg.type !== "user") return null
     const { content } = (msg as ClaudeUserEvent).message
+    if (!Array.isArray(content)) return null
 
     const toolResultBlock = content.find((block): block is ClaudeUserContentBlock & { type: "tool_result" } => block.type === "tool_result")
     if (!toolResultBlock) return null
