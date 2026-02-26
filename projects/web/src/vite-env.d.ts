@@ -123,6 +123,7 @@ interface OpenADEAPI {
     shell: {
         selectDirectory: (params: unknown) => Promise<unknown>
         openUrl: (params: unknown) => Promise<void>
+        openPath: (params: unknown) => Promise<void>
         createDirectory: (params: unknown) => Promise<unknown>
     }
     subprocess: {

@@ -50,6 +50,17 @@ export async function createDirectory(path: string): Promise<CreateDirectoryResp
 }
 
 /**
+ * Open a path in the native file manager (Finder, Explorer, etc.)
+ */
+export function openPathInFileManager(path: string): void {
+    if (!window.openadeAPI) {
+        console.warn("[ShellAPI] Not running in Electron")
+        return
+    }
+    window.openadeAPI.shell.openPath({ path })
+}
+
+/**
  * Open URL in native browser
  */
 export function openUrlInNativeBrowser(url: string): void {

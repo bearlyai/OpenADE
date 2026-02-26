@@ -71,8 +71,18 @@ export async function fetchPlatformInfo(): Promise<PlatformInfo> {
  * Get cached platform info synchronously
  * Returns default info if not yet fetched - call fetchPlatformInfo() first
  */
-function getPlatformInfo(): PlatformInfo {
+export function getPlatformInfo(): PlatformInfo {
     return cachedPlatformInfo ?? defaultPlatformInfo
+}
+
+/**
+ * Get the OS-specific file manager name (Finder, Explorer, File Manager)
+ */
+export function getFileManagerName(): string {
+    const { platform } = getPlatformInfo()
+    if (platform === "darwin") return "Finder"
+    if (platform === "win32") return "Explorer"
+    return "File Manager"
 }
 
 /**

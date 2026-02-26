@@ -11,6 +11,8 @@ IPC wrappers in `electronAPI/` communicate with Electron main process handlers i
 | `pty.ts` | Terminal PTY for interactive shell. `PtyHandle` class per terminal. |
 | `git.ts` | Git operations (worktrees, diffs, status). Stateless functions. |
 | `files.ts` | Fuzzy file search. Uses git ls-files, ripgrep, or fs walk. |
+| `shell.ts` | Shell/OS operations (directory picker, open URL, open path in file manager). Stateless functions. |
+| `platform.ts` | Platform info (OS, path separator, home dir) and utilities (file manager name). Cached after first fetch. |
 
 ## Harness Execution
 

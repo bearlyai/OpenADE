@@ -1,4 +1,4 @@
-import { ArrowRight, Columns2, FileCode, FileImage, FileText, Minus, Pencil, Plus, RefreshCw, Rows2 } from "lucide-react"
+import { ArrowRight, ChevronDown, ChevronRight, Columns2, FileCode, FileImage, FileText, Folder, Minus, Pencil, Plus, RefreshCw, Rows2 } from "lucide-react"
 import { observer } from "mobx-react"
 import { useEffect, useMemo, useState } from "react"
 import { twMerge } from "tailwind-merge"
@@ -6,7 +6,7 @@ import { type ChangedFileInfo, type GitStatusResponse, gitApi } from "../electro
 import { useCodeStore } from "../store/context"
 import { Select } from "./ui/Select"
 import { type AnnotationSide, type CommentHandlers, FileViewer, MultiFileDiffViewer } from "./FilesAndDiffs"
-import { getFileDir, getFileName } from "./utils/paths"
+import { buildFileTree, collectAllDirPaths, flattenFileTree, type FlatTreeEntry } from "./utils/changesTree"
 
 type ViewMode = "split" | "unified" | "current"
 type DiffSource = "uncommitted" | "from-base"
@@ -65,33 +65,58 @@ function StatusIcon({ status }: { status: ChangedFileInfo["status"] }) {
     }
 }
 
-interface FileListItemProps {
-    file: ChangedFileInfo
+interface ChangesTreeItemProps {
+    entry: FlatTreeEntry
+    expanded: boolean
     selected: boolean
-    onClick: () => void
+    onSelect: () => void
+    onToggle: () => void
 }
 
-function FileListItem({ file, selected, onClick }: FileListItemProps) {
-    const fileName = getFileName(file.path)
-    const fileDir = getFileDir(file.path)
+function ChangesTreeItem({ entry, expanded, selected, onSelect, onToggle }: ChangesTreeItemProps) {
+    const { node, depth } = entry
+
+    if (node.isDir) {
+        return (
+            <button
+                type="button"
+                onClick={onToggle}
+                className={twMerge(
+                    "btn w-full flex items-center gap-1 py-1 pr-2 text-sm text-left transition-colors",
+                    "text-muted hover:text-base-content hover:bg-base-200"
+                )}
+                style={{ paddingLeft: `${depth * 12 + 8}px` }}
+                title={node.path}
+            >
+                {expanded ? <ChevronDown size={14} className="flex-shrink-0 text-muted" /> : <ChevronRight size={14} className="flex-shrink-0 text-muted" />}
+                <Folder size={14} className="flex-shrink-0 text-warning" />
+                <span className="truncate font-mono text-xs">{node.name}</span>
+                <span className="ml-auto flex-shrink-0 text-xs text-muted">{node.fileCount}</span>
+            </button>
+        )
+    }
+
+    if (!node.file) {
+        return null
+    }
+
+    const file = node.file
     const FileIcon = file.binary ? FileImage : FileCode
 
     return (
         <button
             type="button"
-            onClick={onClick}
+            onClick={onSelect}
             className={twMerge(
-                "btn w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors",
+                "btn w-full flex items-center gap-1 py-1 pr-2 text-sm text-left transition-colors",
                 selected ? "bg-primary/10 text-base-content" : "text-muted hover:text-base-content hover:bg-base-200"
             )}
+            style={{ paddingLeft: `${depth * 12 + 8}px` }}
             title={file.binary ? `${file.path} (binary)` : file.path}
         >
             <StatusIcon status={file.status} />
-            <FileIcon size="1em" className="flex-shrink-0 text-muted" />
-            <div className="flex-1 min-w-0">
-                <div className="font-medium truncate">{fileName}</div>
-                {fileDir && <div className="text-xs text-muted truncate">{fileDir}</div>}
-            </div>
+            <FileIcon size={14} className="flex-shrink-0 text-muted" />
+            <span className="truncate font-mono text-xs">{node.name}</span>
         </button>
     )
 }
@@ -137,8 +162,9 @@ export const ChangesViewer = observer(function ChangesViewer({
     onRefresh,
 }: ChangesViewerProps) {
     const codeStore = useCodeStore()
-    const [selectedIndex, setSelectedIndex] = useState(0)
+    const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
     const [diffSource, setDiffSource] = useState<DiffSource>("uncommitted")
+    const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
 
     const [filePair, setFilePair] = useState<{ before: string; after: string; tooLarge?: boolean } | null>(null)
     const [fileLoading, setFileLoading] = useState(false)
@@ -192,15 +218,30 @@ export const ChangesViewer = observer(function ChangesViewer({
     }, [gitStatus])
 
     // Current files based on diff source
-    const files = diffSource === "uncommitted" ? uncommittedFiles : (fromBaseFiles ?? [])
+    const files = useMemo(() => (diffSource === "uncommitted" ? uncommittedFiles : (fromBaseFiles ?? [])), [diffSource, uncommittedFiles, fromBaseFiles])
+    const fileTree = useMemo(() => buildFileTree(files), [files])
+    const flatEntries = useMemo(() => flattenFileTree(fileTree, expandedPaths), [fileTree, expandedPaths])
     const isLoading = diffSource === "uncommitted" ? gitStatus === null : fromBaseLoading
 
     // Reset selection when files change
     useEffect(() => {
-        setSelectedIndex(0)
-    }, [diffSource, uncommittedFiles.length, fromBaseFiles?.length])
+        setSelectedFilePath((prev) => {
+            if (files.length === 0) return null
+            if (prev && files.some((file) => file.path === prev)) return prev
+            return files[0].path
+        })
+    }, [files])
 
-    const selectedFile = files[selectedIndex]
+    // Expand all directories by default when file list changes
+    useEffect(() => {
+        setExpandedPaths(collectAllDirPaths(fileTree))
+    }, [fileTree])
+
+    const selectedFile = useMemo(() => {
+        if (files.length === 0) return null
+        if (!selectedFilePath) return files[0]
+        return files.find((file) => file.path === selectedFilePath) ?? files[0]
+    }, [files, selectedFilePath])
 
     // Compute treeish values for file pair fetching
     const fromTreeish = diffSource === "uncommitted" ? "HEAD" : (mergeBaseCommit ?? "HEAD")
@@ -212,8 +253,10 @@ export const ChangesViewer = observer(function ChangesViewer({
             return
         }
 
+        const fileToLoad = selectedFile
+
         // Skip loading for binary files - we'll show a placeholder instead
-        if (selectedFile.binary) {
+        if (fileToLoad.binary) {
             setFilePair(null)
             return
         }
@@ -225,8 +268,8 @@ export const ChangesViewer = observer(function ChangesViewer({
                     workDir,
                     fromTreeish,
                     toTreeish,
-                    filePath: selectedFile.path,
-                    oldPath: selectedFile.oldPath,
+                    filePath: fileToLoad.path,
+                    oldPath: fileToLoad.oldPath,
                 })
                 setFilePair(result)
             } catch (err) {
@@ -259,7 +302,6 @@ export const ChangesViewer = observer(function ChangesViewer({
     // Handle diff source change
     const handleDiffSourceChange = (source: DiffSource) => {
         setDiffSource(source)
-        setSelectedIndex(0)
     }
 
     if (isLoading) {
@@ -312,9 +354,31 @@ export const ChangesViewer = observer(function ChangesViewer({
                     </div>
                 </div>
                 <div className="flex-1 overflow-y-auto">
-                    <div className="flex flex-col">
-                        {files.map((file, index) => (
-                            <FileListItem key={file.path} file={file} selected={index === selectedIndex} onClick={() => setSelectedIndex(index)} />
+                    <div className="flex flex-col py-1">
+                        {flatEntries.map((entry) => (
+                            <ChangesTreeItem
+                                key={entry.node.path}
+                                entry={entry}
+                                expanded={entry.node.isDir && expandedPaths.has(entry.node.path)}
+                                selected={!entry.node.isDir && entry.node.file?.path === selectedFile?.path}
+                                onSelect={() => {
+                                    if (!entry.node.isDir && entry.node.file) {
+                                        setSelectedFilePath(entry.node.file.path)
+                                    }
+                                }}
+                                onToggle={() => {
+                                    if (!entry.node.isDir) return
+                                    setExpandedPaths((prev) => {
+                                        const next = new Set(prev)
+                                        if (next.has(entry.node.path)) {
+                                            next.delete(entry.node.path)
+                                        } else {
+                                            next.add(entry.node.path)
+                                        }
+                                        return next
+                                    })
+                                }}
+                            />
                         ))}
                     </div>
                 </div>

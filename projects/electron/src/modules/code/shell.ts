@@ -27,6 +27,10 @@ interface OpenUrlParams {
     url: string
 }
 
+interface OpenPathParams {
+    path: string
+}
+
 interface CreateDirectoryParams {
     path: string
 }
@@ -99,6 +103,17 @@ async function handleOpenUrl(params: OpenUrlParams): Promise<void> {
 }
 
 /**
+ * Open a path in the native file manager
+ */
+async function handleOpenPath(params: OpenPathParams): Promise<void> {
+    logger.info("[Shell:openPath] Opening path in file manager", JSON.stringify({ path: params.path }))
+    const error = await shell.openPath(params.path)
+    if (error) {
+        logger.error("[Shell:openPath] Failed to open path", JSON.stringify({ path: params.path, error }))
+    }
+}
+
+/**
  * Create a directory (with recursive parent creation)
  */
 async function handleCreateDirectory(params: CreateDirectoryParams): Promise<CreateDirectoryResponse> {
@@ -143,6 +158,11 @@ export const load = () => {
     ipcMain.handle("code:shell:openUrl", async (event, params: OpenUrlParams) => {
         if (!checkAllowed(event)) throw new Error("not allowed")
         return handleOpenUrl(params)
+    })
+
+    ipcMain.handle("code:shell:openPath", async (event, params: OpenPathParams) => {
+        if (!checkAllowed(event)) throw new Error("not allowed")
+        return handleOpenPath(params)
     })
 
     ipcMain.handle("code:shell:createDirectory", async (event, params: CreateDirectoryParams) => {

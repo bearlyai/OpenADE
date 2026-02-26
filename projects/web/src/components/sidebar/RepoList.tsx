@@ -3,6 +3,8 @@ import { Archive, ArchiveRestore, ChevronDown, ChevronRight, FolderOpen, FolderP
 import { observer } from "mobx-react"
 import { useState } from "react"
 import { getWorkspaceLastViewed } from "../../constants"
+import { getFileManagerName } from "../../electronAPI/platform"
+import { openPathInFileManager } from "../../electronAPI/shell"
 import { useCodeNavigate } from "../../routing"
 import { useCodeStore } from "../../store/context"
 import type { Repo } from "../../types"
@@ -22,7 +24,22 @@ const RepoMenuButton = ({
     const [open, setOpen] = useState(false)
     const isTouchDevice = window.matchMedia("(hover: none) and (pointer: coarse)").matches
 
+    const fileManagerName = getFileManagerName()
+
     const menuItems: MenuItem[] = [
+        {
+            id: "open-in-file-manager",
+            label: (
+                <div className="flex items-center gap-2">
+                    <FolderOpen className="w-4 h-4" />
+                    <span>Open in {fileManagerName}</span>
+                </div>
+            ),
+            onSelect: () => {
+                setOpen(false)
+                openPathInFileManager(repo.path)
+            },
+        },
         {
             id: "settings",
             label: (
