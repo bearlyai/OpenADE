@@ -152,7 +152,7 @@ Set at task creation, immutable:
 - **Run Plan** - Execute approved plan
 - **Do** - Direct execution
 - **Ask** - Read-only exploration
-- **Commit** - Git commit
+- **Commit** - Git commit (accepts optional additional instructions from the editor; user instructions take precedence over defaults)
 
 ## Comment System
 

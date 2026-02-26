@@ -200,7 +200,7 @@ const MODE_INSTRUCTIONS = {
 const RETRY_PROMPT =
     "Retry the previous action that failed or was interrupted. Analyze why it failed and address the root cause. If the same approach will fail again, try an alternative. Do not undo work that succeeded before the failure."
 
-const COMMIT_PROMPT = `Review the current git working tree and create a commit for the changes.
+const COMMIT_PROMPT_BASE = `Review the current git working tree and create a commit for the changes.
 
 - Run git status and git diff to understand what changed
 - Write a clear commit message that explains the "why" not just the "what"
@@ -209,6 +209,19 @@ const COMMIT_PROMPT = `Review the current git working tree and create a commit f
 - Show the commit hash, message, and file statistics
 
 This is a one-time commit request. Do not continue committing after this unless explicitly asked.`
+
+function buildCommitPrompt(userInstructions?: string): string {
+    const extra = userInstructions?.trim()
+    if (!extra) return COMMIT_PROMPT_BASE
+
+    return `${COMMIT_PROMPT_BASE}
+
+Additional instructions from the user (these take precedence over the defaults above when there is any conflict):
+
+<user_commit_instructions>
+${extra}
+</user_commit_instructions>`
+}
 
 function buildPushPrompt(hasGhCli: boolean, branch: string): string {
     const ghSection = hasGhCli
@@ -237,7 +250,7 @@ Do not make any code changes, commits, or other git operations beyond pushing an
 
 export const ACTION_PROMPTS = {
     retry: RETRY_PROMPT,
-    commit: COMMIT_PROMPT,
+    commit: buildCommitPrompt,
     push: buildPushPrompt,
 }
 

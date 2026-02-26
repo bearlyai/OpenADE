@@ -284,11 +284,12 @@ export class InputManager {
                 order: 100,
                 style: { variant: "neutral" },
                 show: this.hasGitWorkingChanges && !this.isWorking,
-                enabled: !this.hasFeedback,
+                enabled: true,
                 action: async () => {
+                    const input = this.captureAndClear()
                     await this.store.execution.executeAction({
                         taskId: this.taskId,
-                        input: { userInput: ACTION_PROMPTS.commit, images: [] },
+                        input: { userInput: ACTION_PROMPTS.commit(input.userInput), images: input.images },
                         label: "Commit",
                         includeComments: false,
                     })

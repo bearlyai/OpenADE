@@ -58,7 +58,8 @@ Plans follow this structure:
 
 One-off prompts for specific actions:
 - `RETRY_PROMPT` - Retry failed action, analyze root cause
-- `COMMIT_PROMPT` - Create git commit
+- `buildCommitPrompt(userInstructions?)` - Create git commit; optional user instructions are appended with explicit precedence over defaults
+- `buildPushPrompt(hasGhCli, branch)` - Push and optionally create PR
 
 ## Keeping This Document Updated
 
