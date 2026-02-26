@@ -140,7 +140,7 @@ describe.skipIf(!claudeReady || !codexReady)("Cross-harness integration", () => 
             // Codex capabilities
             const codexCaps = codex.capabilities()
             expect(codexCaps.supportsFork).toBe(false)
-            expect(codexCaps.supportsCostTracking).toBe(false)
+            expect(codexCaps.supportsCostTracking).toBe(true)
             expect(codexCaps.supportsSystemPrompt).toBe(false)
         })
     })

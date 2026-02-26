@@ -145,7 +145,7 @@ describe.skipIf(!ready)("Codex (authenticated)", () => {
                     prompt: "--help me understand this codebase",
                     cwd: tmpDir,
                     mode: "yolo",
-                    signal: trivialSignal(),
+                    signal: standardSignal(),
                 })
             )
 
