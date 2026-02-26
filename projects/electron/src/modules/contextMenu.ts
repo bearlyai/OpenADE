@@ -1,20 +1,27 @@
-import { app, WebContents } from "electron"
-import contextMenu from "electron-context-menu"
+import { app, clipboard, Menu, type ContextMenuParams, type WebContents } from "electron"
+import { buildNativeContextMenuTemplate } from "./contextMenuTemplate"
 
 const addContextMenu = (wc: WebContents) => {
-    contextMenu({
-        window: wc,
-        showSearchWithGoogle: false,
-        // prepend: prependMenu,
+    wc.on("context-menu", (_event, params: ContextMenuParams) => {
+        const template = buildNativeContextMenuTemplate(
+            params,
+            {
+                replaceMisspelling: (word: string) => wc.replaceMisspelling(word),
+                learnSpelling: (word: string) => wc.session.addWordToSpellCheckerDictionary(word),
+                lookUpSelection: () => wc.showDefinitionForSelection(),
+                copyImageAt: (x: number, y: number) => wc.copyImageAt(x, y),
+                copyImageAddress: (url: string) => clipboard.write({ text: url, bookmark: url }),
+                copyVideoAddress: (url: string) => clipboard.write({ text: url, bookmark: url }),
+                copyLink: (url: string, text: string) => clipboard.write({ text: url, bookmark: text || url }),
+            },
+            process.platform
+        )
 
-        // Todo: we can enable these when we implement helpers for them
-        showCopyImageAddress: false,
-        showSaveImage: false,
-        showSaveImageAs: false,
-        showCopyImage: true,
+        if (template.length === 0) {
+            return
+        }
 
-        showInspectElement: false,
-        showLookUpSelection: true,
+        Menu.buildFromTemplate(template).popup()
     })
 }
 
