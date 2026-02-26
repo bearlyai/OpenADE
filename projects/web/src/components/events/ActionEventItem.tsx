@@ -11,6 +11,8 @@ import { type BaseEventItemProps, CollapsibleEvent } from "./shared"
 
 export type DisplayMode = "full" | "compact"
 
+const PUSH_ACTION_LABELS = new Set(["Push", "Commit & Push"])
+
 interface ActionEventItemProps extends BaseEventItemProps {
     event: ActionEvent
     displayMode: DisplayMode
@@ -30,6 +32,7 @@ function getEventIcon(sourceType: ActionEvent["source"]["type"], userLabel?: str
             return { icon: <Zap size="1em" className="flex-shrink-0 text-primary" />, label: "HyperPlan" }
         default:
             if (userLabel === "Commit") return { icon: <GitCommit size="1em" className="flex-shrink-0 text-muted" />, label: "Commit" }
+            if (userLabel === "Commit & Push") return { icon: <ArrowUpFromLine size="1em" className="flex-shrink-0 text-muted" />, label: "Commit & Push" }
             if (userLabel === "Push") return { icon: <ArrowUpFromLine size="1em" className="flex-shrink-0 text-muted" />, label: "Push" }
             return { icon: <Play size="1em" className="flex-shrink-0 text-success" />, label: "Do" }
     }
@@ -64,11 +67,11 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
 
     const hasDefunctSessionError = codeStore.events.hasDefunctSessionError(event)
 
-    const isPushEvent = event.source.userLabel === "Push"
+    const isPushEvent = PUSH_ACTION_LABELS.has(event.source.userLabel)
     const cachedHasGhCli = codeStore.tasks.getTaskModel(taskId)?.hasGhCli ?? true
     const [recheckedGhCli, setRecheckedGhCli] = useState<boolean | null>(null)
 
-    // Re-check gh CLI when a completed Push event shows the banner due to stale cache
+    // Re-check gh CLI when a completed push-capable event shows the banner due to stale cache
     useEffect(() => {
         if (!isPushEvent || event.status !== "completed" || cachedHasGhCli) return
         const repoId = codeStore.tasks.getTaskModel(taskId)?.repoId

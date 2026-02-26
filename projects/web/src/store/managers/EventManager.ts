@@ -21,6 +21,7 @@ import type { CodeStore } from "../store"
 
 // PR URL patterns for GitHub and GitLab
 const PR_URL_PATTERNS = [/https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/, /https:\/\/gitlab\.com\/[^/]+\/[^/]+\/-\/merge_requests\/\d+/]
+const PUSH_ACTION_LABELS = new Set(["Push", "Commit & Push"])
 
 /** Extract a PR URL from LLM execution output */
 function extractPrUrl(events: HarnessStreamEvent[]): string | null {
@@ -258,9 +259,9 @@ export class EventManager {
             draft.result = { success }
         })
 
-        // Extract PR URL from Push action output and save to task metadata
+        // Extract PR URL from push-capable action output and save to task metadata
         const event = taskStore.events.all().find((e) => e.id === eventId)
-        if (event?.type === "action" && event.source.userLabel === "Push" && success) {
+        if (event?.type === "action" && PUSH_ACTION_LABELS.has(event.source.userLabel) && success) {
             const prUrl = extractPrUrl(event.execution.events)
             if (prUrl) {
                 const prInfo = parsePrUrl(prUrl)

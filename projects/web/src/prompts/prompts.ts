@@ -205,7 +205,9 @@ const COMMIT_PROMPT_BASE = `Review the current git working tree and create a com
 - Run git status and git diff to understand what changed
 - Write a clear commit message that explains the "why" not just the "what"
 - Stage only the relevant changes (use git add selectively if needed)
-- Do not undo, revert, or modify any existing changes—commit what's there
+- Do not undo, revert, or modify any existing changes — commit the changes you made.
+- If there are changes unrelated to your work, do not include them. Do not modify those files either.
+- If there are changes you didn't make in the same file you worked on, commit the whole file.
 - Show the commit hash, message, and file statistics
 
 This is a one-time commit request. Do not continue committing after this unless explicitly asked.`
@@ -223,8 +225,8 @@ ${extra}
 </user_commit_instructions>`
 }
 
-function buildPushPrompt(hasGhCli: boolean, branch: string): string {
-    const ghSection = hasGhCli
+function buildPullRequestSection(hasGhCli: boolean): string {
+    return hasGhCli
         ? `After pushing, check for an existing pull request:
 - Run \`gh pr view --json url,number\` to check if a PR already exists for this branch
 - If a PR exists, output its URL
@@ -236,6 +238,10 @@ function buildPushPrompt(hasGhCli: boolean, branch: string): string {
   5. Output the created PR URL
 - Do NOT create a PR if the current branch is main, master, or the repository's default branch`
         : "After pushing, check the output for any pull request URL provided by the remote and output it if present."
+}
+
+function buildPushPrompt(hasGhCli: boolean, branch: string): string {
+    const ghSection = buildPullRequestSection(hasGhCli)
 
     return `Push the current branch (${branch}) to the remote.
 
@@ -248,10 +254,31 @@ ${ghSection}
 Do not make any code changes, commits, or other git operations beyond pushing and PR creation.`
 }
 
+function buildCommitAndPushPrompt(userInstructions: string | undefined, hasGhCli: boolean, branch: string): string {
+    const commitPrompt = buildCommitPrompt(userInstructions)
+    const ghSection = buildPullRequestSection(hasGhCli)
+
+    return `Run one unified git workflow: commit first (if needed), then push.
+
+${commitPrompt}
+
+After the commit step:
+- If there is nothing to commit, continue directly to push existing commits.
+- Push the current branch (${branch}) to the remote.
+- Run \`git push\` to push all commits
+- If push fails because there is no upstream, run \`git push --set-upstream origin ${branch}\`
+- If push fails for any other reason, explain the error clearly and stop
+
+${ghSection}
+
+Do not make any code changes or git operations beyond this commit (if needed), push, and optional PR creation flow.`
+}
+
 export const ACTION_PROMPTS = {
     retry: RETRY_PROMPT,
     commit: buildCommitPrompt,
     push: buildPushPrompt,
+    commitAndPush: buildCommitAndPushPrompt,
 }
 
 // =============================================================================

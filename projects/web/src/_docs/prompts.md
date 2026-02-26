@@ -60,6 +60,7 @@ One-off prompts for specific actions:
 - `RETRY_PROMPT` - Retry failed action, analyze root cause
 - `buildCommitPrompt(userInstructions?)` - Create git commit; optional user instructions are appended with explicit precedence over defaults
 - `buildPushPrompt(hasGhCli, branch)` - Push and optionally create PR
+- `buildCommitAndPushPrompt(userInstructions, hasGhCli, branch)` - Commit (if needed) then push in one flow, with optional PR handling
 
 ## Keeping This Document Updated
 

@@ -10,13 +10,15 @@
  */
 
 import type { LucideIcon } from "lucide-react"
-import { ArrowUpFromLine, CheckCircle, FileText, GitCommit, MessageCircleQuestion, Play, RefreshCcw, RefreshCw, RotateCcw, Square, X } from "lucide-react"
+import { ArrowUpFromLine, CheckCircle, FileText, MessageCircleQuestion, Play, RefreshCcw, RefreshCw, RotateCcw, Square, X } from "lucide-react"
 import { makeAutoObservable } from "mobx"
 import { track } from "../../analytics"
 import { ACTION_PROMPTS } from "../../prompts/prompts"
 import type { ActionEvent, UserInputContext } from "../../types"
 import type { CodeStore } from "../store"
 import type { SmartEditorManager } from "./SmartEditorManager"
+
+const COMMIT_AND_PUSH_LABEL = "Commit & Push"
 
 // Command style customization
 export interface CommandStyle {
@@ -95,6 +97,12 @@ export class InputManager {
 
     private get isClosed(): boolean {
         return this.store.tasks.getTask(this.taskId)?.closed ?? false
+    }
+
+    private get isCommitAndPushInProgress(): boolean {
+        const last = this.lastActionEvent
+        if (!last || last.status !== "in_progress") return false
+        return last.source.userLabel === COMMIT_AND_PUSH_LABEL
     }
 
     /** Whether the input area should be disabled (task is closed) */
@@ -276,36 +284,18 @@ export class InputManager {
                 },
             },
 
-            // Commit - commit working changes (does NOT consume comments)
+            // Commit & Push - commit working changes (if any), then push (does NOT consume comments)
             {
-                id: "commit",
-                label: "Commit",
-                icon: GitCommit,
+                id: "commitAndPush",
+                label: COMMIT_AND_PUSH_LABEL,
+                icon: ArrowUpFromLine,
                 order: 100,
                 style: { variant: "neutral" },
-                show: this.hasGitWorkingChanges && !this.isWorking,
+                show: (this.hasGitWorkingChanges || this.hasUnpushedCommits) && !this.isWorking,
                 enabled: true,
                 action: async () => {
                     const input = this.captureAndClear()
-                    await this.store.execution.executeAction({
-                        taskId: this.taskId,
-                        input: { userInput: ACTION_PROMPTS.commit(input.userInput), images: input.images },
-                        label: "Commit",
-                        includeComments: false,
-                    })
-                },
-            },
 
-            // Push - push unpushed commits to remote (does NOT consume comments)
-            {
-                id: "push",
-                label: `Push ↑${this.taskModel?.aheadCount ?? 0}`,
-                icon: ArrowUpFromLine,
-                order: 101,
-                style: { variant: "neutral" },
-                show: this.hasUnpushedCommits && !this.hasGitWorkingChanges && !this.isWorking,
-                enabled: !this.hasFeedback,
-                action: async () => {
                     // Re-check gh CLI status before push to avoid stale cached value
                     const repoId = this.taskModel?.repoId
                     let hasGhCli = this.taskModel?.hasGhCli ?? false
@@ -315,11 +305,12 @@ export class InputManager {
                             this.taskModel?.invalidateEnvironmentCache()
                         }
                     }
+
                     const branch = this.taskModel?.gitStatus?.branch ?? "HEAD"
                     await this.store.execution.executeAction({
                         taskId: this.taskId,
-                        input: { userInput: ACTION_PROMPTS.push(hasGhCli, branch), images: [] },
-                        label: "Push",
+                        input: { userInput: ACTION_PROMPTS.commitAndPush(input.userInput, hasGhCli, branch), images: input.images },
+                        label: COMMIT_AND_PUSH_LABEL,
                         includeComments: false,
                     })
                 },
@@ -332,7 +323,7 @@ export class InputManager {
                 icon: CheckCircle,
                 order: 200,
                 style: { variant: "neutral" },
-                show: !this.isClosed && !this.isWorking,
+                show: !this.isClosed && (!this.isWorking || this.isCommitAndPushInProgress),
                 enabled: true,
                 spacer: true,
                 action: async () => {
