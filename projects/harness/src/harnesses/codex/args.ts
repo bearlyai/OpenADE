@@ -36,9 +36,6 @@ export async function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessC
 
     // ── Root-level flags (before exec subcommand) ──
 
-    // Skip git repo check — the app manages directory context
-    rootArgs.push("--skip-git-repo-check")
-
     // Permissions / mode
     if (query.mode === "read-only") {
         rootArgs.push("-a", "on-request")
@@ -57,6 +54,9 @@ export async function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessC
 
     // Always JSON output
     execArgs.push("--json")
+
+    // Skip git repo check — the app manages directory context
+    execArgs.push("--skip-git-repo-check")
 
     // `codex exec resume` only accepts: --json [SESSION_ID] [PROMPT]
     // All other exec-level flags are only valid for `codex exec`

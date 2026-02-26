@@ -13,13 +13,12 @@ function makeQuery(overrides: Partial<HarnessQuery> = {}): HarnessQuery {
 }
 
 describe("buildCodexArgs", () => {
-    it("always includes --skip-git-repo-check", async () => {
+    it("--skip-git-repo-check is an exec-level flag (after exec subcommand)", async () => {
         const result = await buildCodexArgs(makeQuery(), {})
         expect(result.args).toContain("--skip-git-repo-check")
-        // Should appear before exec subcommand (root-level flag)
         const skipIdx = result.args.indexOf("--skip-git-repo-check")
         const execIdx = result.args.indexOf("exec")
-        expect(skipIdx).toBeLessThan(execIdx)
+        expect(skipIdx).toBeGreaterThan(execIdx)
     })
 
     it("mode: 'yolo' produces --yolo", async () => {
