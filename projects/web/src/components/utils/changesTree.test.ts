@@ -51,11 +51,7 @@ describe("buildFileTree", () => {
     })
 
     it("computes correct fileCount on folder nodes", () => {
-        const tree = buildFileTree([
-            changedFile("src/components/Button.tsx"),
-            changedFile("src/components/Input.tsx"),
-            changedFile("src/utils/format.ts"),
-        ])
+        const tree = buildFileTree([changedFile("src/components/Button.tsx"), changedFile("src/components/Input.tsx"), changedFile("src/utils/format.ts")])
 
         const src = tree.find((node) => node.path === "src")
         const components = src?.children.find((child) => child.path === "src/components")
@@ -95,22 +91,14 @@ describe("buildFileTree", () => {
 
 describe("flattenFileTree", () => {
     it("returns all nodes when all directories are expanded", () => {
-        const tree = buildFileTree([
-            changedFile("src/nested/b.ts"),
-            changedFile("src/a.ts"),
-            changedFile("README.md"),
-        ])
+        const tree = buildFileTree([changedFile("src/nested/b.ts"), changedFile("src/a.ts"), changedFile("README.md")])
         const flat = flattenFileTree(tree, collectAllDirPaths(tree))
 
         expect(flat.map((entry) => entry.node.path)).toEqual(["src", "src/nested", "src/nested/b.ts", "src/a.ts", "README.md"])
     })
 
     it("hides descendants of collapsed directories", () => {
-        const tree = buildFileTree([
-            changedFile("src/nested/b.ts"),
-            changedFile("src/a.ts"),
-            changedFile("README.md"),
-        ])
+        const tree = buildFileTree([changedFile("src/nested/b.ts"), changedFile("src/a.ts"), changedFile("README.md")])
         const flat = flattenFileTree(tree, new Set(["src"]))
 
         expect(flat.map((entry) => entry.node.path)).toEqual(["src", "src/nested", "src/a.ts", "README.md"])
@@ -131,11 +119,7 @@ describe("flattenFileTree", () => {
 
 describe("collectAllDirPaths", () => {
     it("returns all directory paths in tree", () => {
-        const tree = buildFileTree([
-            changedFile("src/components/Button.tsx"),
-            changedFile("src/utils/format.ts"),
-            changedFile("docs/guide.md"),
-        ])
+        const tree = buildFileTree([changedFile("src/components/Button.tsx"), changedFile("src/utils/format.ts"), changedFile("docs/guide.md")])
 
         expect([...collectAllDirPaths(tree)].sort()).toEqual(["docs", "src", "src/components", "src/utils"])
     })

@@ -508,7 +508,8 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
                                                 entries={fileSelectEntries}
                                                 onSelect={(entry) => setSelectedFilePath(entry.id)}
                                                 className={{
-                                                    trigger: "h-8 px-2 text-xs border border-border bg-base-100 hover:bg-base-200 transition-colors flex-1 min-w-0",
+                                                    trigger:
+                                                        "h-8 px-2 text-xs border border-border bg-base-100 hover:bg-base-200 transition-colors flex-1 min-w-0",
                                                     value: "text-xs truncate",
                                                 }}
                                             />
@@ -541,7 +542,7 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
                                                         {shortCommitPaths.get(selectedFile.path) ?? selectedFile.path}
                                                     </>
                                                 ) : (
-                                                    shortCommitPaths.get(selectedFile.path) ?? selectedFile.path
+                                                    (shortCommitPaths.get(selectedFile.path) ?? selectedFile.path)
                                                 )}
                                             </span>
                                         </div>

@@ -8,6 +8,18 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.60.0",
+        title: "Git Log, Smart Bash Pills & Image Prompts",
+        date: "2026-02-26",
+        highlights: [
+            "New Git Log tray lets you browse commit history, view diffs, and inspect changes without leaving the app",
+            "Bash commands now render as friendly semantic pills — search, read, edit, git — instead of raw shell invocations",
+            "Attach images to prompts via paste, drag-and-drop, or file picker with support across task runs",
+            "Changes viewer rebuilt as a collapsible file tree with Open in Finder support",
+            "Commit and push unified into a single action that accepts custom instructions from the editor",
+        ],
+    },
+    {
         version: "0.55.0",
         title: "Plan Button Fix",
         date: "2026-02-15",
