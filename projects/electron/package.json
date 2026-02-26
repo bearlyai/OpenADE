@@ -5,7 +5,7 @@
     "postinstall": "electron-rebuild -f -w node-pty",
     "build:harness": "cd ../harness && yarn install && yarn build",
     "clean": "rm -rf ./dist",
-    "build": "npm run build:harness && npm install && npm run clean && node ./build.mjs",
+    "build": "npm run build:harness && npm run clean && node ./build.mjs",
     "watch": "yarn && modd",
     "start": "npm run build:harness && npm install && RELEASE=head DEBUG=1 npm run build && npx electron dist/main.js",
     "typecheck": "tsgo --noEmit",

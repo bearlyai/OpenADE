@@ -142,3 +142,5 @@ dist
 .yarn/install-state.gz
 .pnp.*
 
+# Vitest browser screenshot artifacts
+__screenshots__/

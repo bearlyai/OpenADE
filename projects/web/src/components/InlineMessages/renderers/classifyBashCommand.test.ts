@@ -208,6 +208,17 @@ describe("classifyBashCommand", () => {
             expect(result.semanticType).toBe("edit")
             expect(result.label).toBe("Patch file")
         })
+
+        it("classifies plain sed substitution (no -i, no -n) as edit", () => {
+            const result = classifyBashCommand("sed 's/foo/bar/g' file.txt")
+            expect(result.semanticType).toBe("edit")
+            expect(result.label).toBe("Edit file")
+        })
+
+        it("classifies sed with expression flag as edit", () => {
+            const result = classifyBashCommand("sed -e 's/old/new/' file.txt")
+            expect(result.semanticType).toBe("edit")
+        })
     })
 
     describe("fallback", () => {
@@ -217,9 +228,32 @@ describe("classifyBashCommand", () => {
             expect(result.label).toBe("npm install")
         })
 
-        it("falls back to bash for complex pipelines", () => {
+        it("extracts interesting commands from compound, filtering boring ones", () => {
             const result = classifyBashCommand("docker compose up -d && npm run migrate")
             expect(result.semanticType).toBe("bash")
+            expect(result.label).toBe("docker compose, npm run")
+        })
+
+        it("extracts go test from cd && gofmt && go test", () => {
+            const result = classifyBashCommand(
+                "/bin/zsh -lc 'cd /Users/pnegahdar/Projects/bearly/projects/core/testapp && gofmt -w sql_progress_metrics_test.go && go test -count=1 -run TestSQLProgressMetrics_Report -v ./...'"
+            )
+            expect(result.semanticType).toBe("bash")
+            expect(result.label).toBe("gofmt, go test")
+        })
+
+        it("extracts go test from cd && go test", () => {
+            const result = classifyBashCommand(
+                "/bin/zsh -lc 'cd /Users/pnegahdar/Projects/bearly/projects/core/testapp && go test -count=1 -run TestSQLProgressMetrics_Report -v ./...'"
+            )
+            expect(result.semanticType).toBe("bash")
+            expect(result.label).toBe("go test")
+        })
+
+        it("falls back to raw truncation when all commands are boring", () => {
+            const result = classifyBashCommand("cd /tmp && pwd")
+            expect(result.semanticType).toBe("bash")
+            expect(result.label).toBe("cd /tmp && pwd")
         })
 
         it("truncates long fallback labels", () => {
@@ -254,9 +288,10 @@ describe("classifyBashCommand", () => {
             expect(result.semanticType).toBe("edit")
         })
 
-        it("falls back to bash when all segments are unknown", () => {
+        it("falls back to bash with extracted names when all segments are unknown", () => {
             const result = classifyBashCommand("cd /tmp && npm install && npm run build")
             expect(result.semanticType).toBe("bash")
+            expect(result.label).toBe("npm install, npm run")
         })
     })
 
@@ -276,7 +311,7 @@ describe("classifyBashCommand", () => {
         it("unwraps and classifies unknown command", () => {
             const result = classifyBashCommand('/bin/zsh -lc "fooctl do-something"')
             expect(result.semanticType).toBe("bash")
-            expect(result.label).toBe("fooctl do-something")
+            expect(result.label).toBe("fooctl")
         })
     })
 })

@@ -61,7 +61,7 @@ export function classifyBashCommand(rawCommand: string): ClassifiedCommand {
     if (best && best.semanticType !== "bash") {
         return { innerCommand: inner, ...best }
     }
-    return { innerCommand: inner, semanticType: "bash", label: truncate(inner, 40) }
+    return { innerCommand: inner, semanticType: "bash", label: extractFallbackLabel(inner, chains) }
 }
 
 /** Priority for picking the most interesting classification from a compound command */
@@ -102,6 +102,10 @@ function classifySegment(segment: string): { semanticType: BashSemanticType; lab
     // sed -n (print specific lines) without -i
     if (/^sed\s/.test(trimmed) && /\s-n[\s]/.test(` ${trimmed} `)) {
         return { semanticType: "read", label: summarizeRead(trimmed) }
+    }
+    // sed without -n is a substitution/replacement (Codex uses sed for surgical edits)
+    if (/^sed\s/.test(trimmed)) {
+        return { semanticType: "edit", label: "Edit file" }
     }
 
     // --- List patterns ---
@@ -173,6 +177,63 @@ function extractFirstNonFlagArg(cmd: string): string | undefined {
         if (!parts[i].startsWith("-")) return parts[i]
     }
     return undefined
+}
+
+/** Commands that are navigational/environmental — not interesting as a label */
+const BORING_COMMANDS = new Set([
+    "cd",
+    "pwd",
+    "echo",
+    "export",
+    "source",
+    ".",
+    "true",
+    "false",
+    "mkdir",
+    "pushd",
+    "popd",
+    "set",
+    "unset",
+    "env",
+    "test",
+    "[",
+    "printf",
+])
+
+/** Multi-word command prefixes where the subcommand matters (e.g., "go test", "npm run") */
+const MULTI_WORD_PREFIXES = new Set(["go", "npm", "yarn", "pnpm", "bun", "cargo", "docker", "kubectl", "dotnet"])
+
+/**
+ * When no segment classifies to a known type, extract the interesting command
+ * names from the compound command for a more readable fallback label.
+ */
+function extractFallbackLabel(inner: string, chains: string[]): string {
+    const interesting: string[] = []
+    for (const chain of chains) {
+        const segments = splitOutsideQuotes(chain, /\s*\|\s*/)
+        for (const segment of segments) {
+            const name = extractCommandName(segment.trim())
+            if (name && !BORING_COMMANDS.has(name.split(" ")[0])) {
+                interesting.push(name)
+            }
+        }
+    }
+    if (interesting.length > 0) {
+        return truncate(interesting.join(", "), 40)
+    }
+    return truncate(inner, 40)
+}
+
+/** Extract a human-readable command name, including subcommand for multi-word tools */
+function extractCommandName(segment: string): string | null {
+    const trimmed = segment.trimStart()
+    if (!trimmed) return null
+    const parts = trimmed.split(/\s+/)
+    const cmd = parts[0]
+    if (parts.length > 1 && MULTI_WORD_PREFIXES.has(cmd)) {
+        return `${cmd} ${parts[1]}`
+    }
+    return cmd
 }
 
 /**
