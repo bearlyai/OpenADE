@@ -373,6 +373,8 @@ interface MultiFileDiffViewerProps {
     newFile: FileContents
     className?: string
     diffStyle?: DiffStyle
+    expandUnchanged?: boolean
+    expansionLineCount?: number
     disableFileHeader?: boolean
     /** Pass handlers to enable commenting, or null for read-only display */
     commentHandlers: CommentHandlers | null
@@ -383,6 +385,8 @@ export const MultiFileDiffViewer = observer(function MultiFileDiffViewer({
     newFile,
     className,
     diffStyle = "split",
+    expandUnchanged,
+    expansionLineCount,
     disableFileHeader,
     commentHandlers,
 }: MultiFileDiffViewerProps) {
@@ -422,6 +426,8 @@ export const MultiFileDiffViewer = observer(function MultiFileDiffViewer({
                             theme,
                             overflow: "wrap",
                             diffStyle,
+                            expandUnchanged,
+                            expansionLineCount,
                             disableFileHeader,
                             enableLineSelection: false,
                             enableHoverUtility: false,
@@ -439,6 +445,8 @@ export const MultiFileDiffViewer = observer(function MultiFileDiffViewer({
                 newFile={formattedNewFile}
                 className={className}
                 diffStyle={diffStyle}
+                expandUnchanged={expandUnchanged}
+                expansionLineCount={expansionLineCount}
                 disableFileHeader={disableFileHeader}
                 commentHandlers={commentHandlers}
                 theme={theme}
@@ -452,6 +460,8 @@ interface CommentableMultiFileDiffInnerProps {
     newFile: FileContents
     className?: string
     diffStyle: DiffStyle
+    expandUnchanged?: boolean
+    expansionLineCount?: number
     disableFileHeader?: boolean
     commentHandlers: CommentHandlers
     theme: string
@@ -462,6 +472,8 @@ const CommentableMultiFileDiffInner = observer(function CommentableMultiFileDiff
     newFile,
     className,
     diffStyle,
+    expandUnchanged,
+    expansionLineCount,
     disableFileHeader,
     commentHandlers,
     theme,
@@ -498,6 +510,8 @@ const CommentableMultiFileDiffInner = observer(function CommentableMultiFileDiff
                     theme,
                     overflow: "wrap",
                     diffStyle,
+                    expandUnchanged,
+                    expansionLineCount,
                     disableFileHeader,
                     enableLineSelection: !readOnly && !hasOpenForm,
                     enableHoverUtility: !readOnly && !hasOpenForm,

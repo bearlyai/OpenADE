@@ -67,6 +67,8 @@ Stateless functions in `git.ts`. Key operations:
 - `getOrCreateWorkTree()` - Creates isolated worktree for task
 - `getGitStatus()` - Branch, uncommitted changes
 - `workTreeDiffPatch()` - Generate unified diff
+- `getLog()` - Paginated commit history for a branch/ref
+- `getCommitFiles()` - Files changed in a specific commit
 - `getFilePair()` - Before/after file content for diff viewer
 
 ## Adding New IPC

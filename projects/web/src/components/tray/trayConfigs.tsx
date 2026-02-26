@@ -6,11 +6,12 @@
  */
 
 import type { LucideIcon } from "lucide-react"
-import { FolderOpen, GitCompare, Play, Search, TerminalSquare } from "lucide-react"
+import { FolderOpen, GitCommitHorizontal, GitCompare, Play, Search, TerminalSquare } from "lucide-react"
 import type { ReactNode } from "react"
 import { getTaskPtyId } from "../../electronAPI/pty"
 import type { TrayManager, TrayType } from "../../store/managers/TrayManager"
 import { ChangesViewer } from "../ChangesViewer"
+import { GitLogTray } from "../GitLogTray"
 import { ProcessesTray } from "../ProcessesTray"
 import { SearchTray } from "../SearchTray"
 import { Terminal } from "../Terminal"
@@ -76,6 +77,20 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         shortcut: { key: "mod+p", display: "⌘P" },
         onOpen: (tray) => tray.taskModel.fileBrowser.refreshTree(),
         renderContent: (tray) => <FilesTrayContent fileBrowser={tray.taskModel.fileBrowser} taskId={tray.taskId} onClose={() => tray.close()} />,
+    },
+    {
+        id: "gitlog",
+        label: "Git Log",
+        icon: GitCommitHorizontal,
+        shortcut: { key: "mod+shift+l", display: "⌘⇧L" },
+        isVisible: (tray) => tray.taskModel.environment?.hasGit ?? false,
+        renderContent: (tray) => {
+            const env = tray.taskModel.environment
+            if (!env?.taskWorkingDir) {
+                return <NoEnvironment />
+            }
+            return <GitLogTray workDir={env.taskWorkingDir} currentBranch={tray.taskModel.gitStatus?.branch ?? null} className="h-full" />
+        },
     },
     {
         id: "search",

@@ -250,6 +250,37 @@ interface GetFilePairResponse {
     tooLarge?: boolean
 }
 
+interface GetGitLogParams {
+    workDir: string
+    ref?: string
+    limit?: number
+    skip?: number
+}
+
+interface GitLogEntry {
+    sha: string
+    shortSha: string
+    message: string
+    author: string
+    date: string
+    relativeDate: string
+    parentCount: number
+}
+
+interface GetGitLogResponse {
+    commits: GitLogEntry[]
+    hasMore: boolean
+}
+
+interface GetCommitFilesParams {
+    workDir: string
+    commit: string
+}
+
+interface GetCommitFilesResponse {
+    files: ChangedFileInfo[]
+}
+
 // ============================================================================
 // Helper Functions
 // ============================================================================
@@ -337,6 +368,42 @@ async function resolveGitInfo(directory: string): Promise<{ repoRoot: string; re
  */
 async function execGit(args: string[], cwd?: string): Promise<{ stdout: string; stderr: string; success: boolean }> {
     return execCommand("git", args, { cwd, maxBuffer: 50 * 1024 * 1024 })
+}
+
+function parseNameStatusOutput(stdout: string): ChangedFileInfo[] {
+    const files: ChangedFileInfo[] = []
+    const lines = stdout.trim().split("\n").filter(Boolean)
+
+    for (const line of lines) {
+        // Format: STATUS\tPATH or STATUS\tOLDPATH\tNEWPATH (for renames)
+        const parts = line.split("\t")
+        const statusCode = parts[0] ?? ""
+
+        if (statusCode.startsWith("R")) {
+            const oldPath = parts[1]
+            const newPath = parts[2]
+            if (!oldPath || !newPath) continue
+            files.push({
+                path: newPath,
+                oldPath,
+                status: "renamed",
+            })
+            continue
+        }
+
+        const filePath = parts[1]
+        if (!filePath) continue
+
+        if (statusCode === "A") {
+            files.push({ path: filePath, status: "added" })
+        } else if (statusCode === "D") {
+            files.push({ path: filePath, status: "deleted" })
+        } else {
+            files.push({ path: filePath, status: "modified" })
+        }
+    }
+
+    return files
 }
 
 /**
@@ -1429,6 +1496,127 @@ coverage/
 .cache/
 `
 
+const GIT_LOG_DEFAULT_LIMIT = 50
+const GIT_LOG_MAX_LIMIT = 200
+
+async function handleGetGitLog(params: GetGitLogParams): Promise<GetGitLogResponse> {
+    const startTime = Date.now()
+    logger.info("[Git:getLog] Getting commit log", JSON.stringify({
+        workDir: params.workDir,
+        ref: params.ref,
+        limit: params.limit,
+        skip: params.skip,
+    }))
+
+    const requestedLimit = params.limit ?? GIT_LOG_DEFAULT_LIMIT
+    const limit = Math.max(1, Math.min(requestedLimit, GIT_LOG_MAX_LIMIT))
+    const skip = Math.max(0, params.skip ?? 0)
+
+    const FIELD_SEPARATOR = "\x1f"
+    const RECORD_SEPARATOR = "\x1e"
+    const format = ["%H", "%h", "%s", "%an", "%aI", "%ar", "%P"].join(FIELD_SEPARATOR) + RECORD_SEPARATOR
+
+    try {
+        const args = ["log", `--format=${format}`, `--max-count=${limit + 1}`, `--skip=${skip}`]
+        if (params.ref) {
+            args.push(params.ref)
+        }
+
+        const result = await execGit(args, params.workDir)
+        if (!result.success) {
+            throw new Error(`Failed to get git log: ${result.stderr}`)
+        }
+
+        const commits = result.stdout
+            .split(RECORD_SEPARATOR)
+            .map((record) => record.trim())
+            .filter(Boolean)
+            .map((record): GitLogEntry => {
+                const [rawSha = "", rawShortSha = "", message = "", author = "", rawDate = "", rawRelativeDate = "", rawParents = ""] =
+                    record.split(FIELD_SEPARATOR)
+                const sha = rawSha.trim()
+                const shortSha = rawShortSha.trim()
+                const date = rawDate.trim()
+                const relativeDate = rawRelativeDate.trim()
+                const parents = rawParents.trim()
+                const parentCount = parents ? parents.split(/\s+/).length : 0
+                return {
+                    sha,
+                    shortSha,
+                    message,
+                    author,
+                    date,
+                    relativeDate,
+                    parentCount,
+                }
+            })
+
+        const hasMore = commits.length > limit
+
+        logger.info("[Git:getLog] Commit log loaded", JSON.stringify({
+            count: commits.slice(0, limit).length,
+            hasMore,
+            duration: Date.now() - startTime,
+        }))
+
+        return {
+            commits: commits.slice(0, limit),
+            hasMore,
+        }
+    } catch (error: any) {
+        logger.error("[Git:getLog] Error:", JSON.stringify({ error: error.message, duration: Date.now() - startTime }))
+        throw error
+    }
+}
+
+async function handleGetCommitFiles(params: GetCommitFilesParams): Promise<GetCommitFilesResponse> {
+    const startTime = Date.now()
+    const commit = params.commit.trim()
+    logger.info("[Git:getCommitFiles] Getting changed files for commit", JSON.stringify({
+        workDir: params.workDir,
+        commit,
+    }))
+
+    try {
+        if (!commit) {
+            throw new Error("commit must be a non-empty string")
+        }
+
+        const parentResult = await execGit(["show", "--no-patch", "--format=%P", commit], params.workDir)
+        if (!parentResult.success) {
+            throw new Error(`Failed to resolve commit parents: ${parentResult.stderr}`)
+        }
+
+        const parents = parentResult.stdout.trim().split(/\s+/).filter(Boolean)
+        const diffResult = parents.length === 0
+            ? await execGit(
+                  ["diff-tree", "--root", "-r", "--no-commit-id", "--name-status", "-M", commit],
+                  params.workDir
+              )
+            : await execGit(
+                  ["diff", "--name-status", "-M", parents[0], commit],
+                  params.workDir
+              )
+
+        if (!diffResult.success) {
+            throw new Error(`Failed to get commit files: ${diffResult.stderr}`)
+        }
+
+        const files = parseNameStatusOutput(diffResult.stdout)
+
+        logger.info("[Git:getCommitFiles] Commit files loaded", JSON.stringify({
+            count: files.length,
+            isRootCommit: parents.length === 0,
+            duration: Date.now() - startTime,
+        }))
+
+        return { files }
+    } catch (error: any) {
+        logger.error("[Git:getCommitFiles] Error:", JSON.stringify({ error: error.message, duration: Date.now() - startTime }))
+        throw error
+    }
+}
+
 /**
  * Get list of files changed between a commit and the working tree.
  * Uses `git diff <commit>` which compares to working directory (includes uncommitted changes).
@@ -1455,34 +1643,8 @@ async function handleGetChangedFiles(params: GetChangedFilesParams): Promise<Get
             throw new Error(`Failed to get changed files: ${result.stderr}`)
         }
 
-        const files: ChangedFileInfo[] = []
-        const seenPaths = new Set<string>()
-        const lines = result.stdout.trim().split("\n").filter(Boolean)
-
-        for (const line of lines) {
-            // Format: STATUS\tPATH or STATUS\tOLDPATH\tNEWPATH (for renames)
-            const parts = line.split("\t")
-            const statusCode = parts[0]
-
-            if (statusCode.startsWith("R")) {
-                // Renamed file: R100\toldpath\tnewpath
-                files.push({
-                    path: parts[2],
-                    oldPath: parts[1],
-                    status: "renamed",
-                })
-                seenPaths.add(parts[2])
-            } else if (statusCode === "A") {
-                files.push({ path: parts[1], status: "added" })
-                seenPaths.add(parts[1])
-            } else if (statusCode === "D") {
-                files.push({ path: parts[1], status: "deleted" })
-                seenPaths.add(parts[1])
-            } else if (statusCode === "M") {
-                files.push({ path: parts[1], status: "modified" })
-                seenPaths.add(parts[1])
-            }
-        }
+        const files = parseNameStatusOutput(result.stdout)
+        const seenPaths = new Set(files.map((file) => file.path))
 
         // Also include untracked files (new files not yet added to git)
         const untrackedResult = await execGit(
@@ -1862,6 +2024,16 @@ export const load = () => {
     ipcMain.handle("git:initGit", async (event, params: InitGitParams) => {
         if (!checkAllowed(event)) throw new Error("not allowed")
         return handleInitGit(params)
+    })
+
+    ipcMain.handle("git:getLog", async (event, params: GetGitLogParams) => {
+        if (!checkAllowed(event)) throw new Error("not allowed")
+        return handleGetGitLog(params)
+    })
+
+    ipcMain.handle("git:getCommitFiles", async (event, params: GetCommitFilesParams) => {
+        if (!checkAllowed(event)) throw new Error("not allowed")
+        return handleGetCommitFiles(params)
     })
 
     ipcMain.handle("git:getChangedFiles", async (event, params: GetChangedFilesParams) => {

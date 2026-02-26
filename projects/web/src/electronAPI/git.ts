@@ -144,7 +144,7 @@ interface ListWorkTreesParams {
     repoDir: string
 }
 
-interface WorkTreeInfo {
+export interface WorkTreeInfo {
     id: string
     path: string
     branch: string
@@ -245,6 +245,37 @@ export interface GetFilePairResponse {
     before: string
     after: string
     tooLarge?: boolean
+}
+
+interface GetGitLogParams {
+    workDir: string
+    ref?: string
+    limit?: number
+    skip?: number
+}
+
+export interface GitLogEntry {
+    sha: string
+    shortSha: string
+    message: string
+    author: string
+    date: string
+    relativeDate: string
+    parentCount: number
+}
+
+interface GetGitLogResponse {
+    commits: GitLogEntry[]
+    hasMore: boolean
+}
+
+interface GetCommitFilesParams {
+    workDir: string
+    commit: string
+}
+
+interface GetCommitFilesResponse {
+    files: ChangedFileInfo[]
 }
 
 // ============================================================================
@@ -468,6 +499,22 @@ async function getFilePair(params: GetFilePairParams): Promise<GetFilePairRespon
     return (await window.openadeAPI.git.getFilePair(params)) as GetFilePairResponse
 }
 
+async function getLog(params: GetGitLogParams): Promise<GetGitLogResponse> {
+    if (!window.openadeAPI) {
+        throw new Error("Not running in Electron")
+    }
+
+    return (await window.openadeAPI.git.getLog(params)) as GetGitLogResponse
+}
+
+async function getCommitFiles(params: GetCommitFilesParams): Promise<GetCommitFilesResponse> {
+    if (!window.openadeAPI) {
+        throw new Error("Not running in Electron")
+    }
+
+    return (await window.openadeAPI.git.getCommitFiles(params)) as GetCommitFilesResponse
+}
+
 /**
  * Git API namespace for convenient imports
  */
@@ -487,6 +534,8 @@ export const gitApi = {
     listBranches,
     resolvePath,
     initGit,
+    getLog,
+    getCommitFiles,
     getChangedFiles,
     getFileAtTreeish,
     getFilePair,

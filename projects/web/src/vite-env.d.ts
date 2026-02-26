@@ -62,6 +62,8 @@ interface OpenADEAPI {
         listBranches: (params: unknown) => Promise<unknown>
         resolvePath: (params: unknown) => Promise<unknown>
         initGit: (params: unknown) => Promise<unknown>
+        getLog: (params: unknown) => Promise<unknown>
+        getCommitFiles: (params: unknown) => Promise<unknown>
         getChangedFiles: (params: unknown) => Promise<unknown>
         getFileAtTreeish: (params: unknown) => Promise<unknown>
         getFilePair: (params: unknown) => Promise<unknown>

@@ -19,6 +19,89 @@ function gitExec(command: string, cwd: string = TEST_REPO_DIR): string {
     return execSync(command, { cwd, encoding: "utf8" })
 }
 
+const FIELD_SEPARATOR = "\x1f"
+const RECORD_SEPARATOR = "\x1e"
+
+interface ParsedNameStatusFile {
+    path: string
+    status: "added" | "deleted" | "modified" | "renamed"
+    oldPath?: string
+}
+
+interface ParsedLogEntry {
+    sha: string
+    shortSha: string
+    message: string
+    author: string
+    date: string
+    relativeDate: string
+    parentCount: number
+}
+
+function parseNameStatusOutput(stdout: string): ParsedNameStatusFile[] {
+    return stdout
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+            const parts = line.split("\t")
+            const statusCode = parts[0] ?? ""
+
+            if (statusCode.startsWith("R")) {
+                return {
+                    status: "renamed" as const,
+                    oldPath: parts[1],
+                    path: parts[2],
+                }
+            }
+
+            if (statusCode === "A") {
+                return { status: "added" as const, path: parts[1] }
+            }
+
+            if (statusCode === "D") {
+                return { status: "deleted" as const, path: parts[1] }
+            }
+
+            return { status: "modified" as const, path: parts[1] }
+        })
+        .filter((file) => Boolean(file.path)) as ParsedNameStatusFile[]
+}
+
+function getLogLikeHandler(cwd: string, limit: number, skip = 0): { commits: ParsedLogEntry[]; hasMore: boolean } {
+    const format = ["%H", "%h", "%s", "%an", "%aI", "%ar", "%P"].join(FIELD_SEPARATOR) + RECORD_SEPARATOR
+    const output = gitExec(`git log --format='${format}' --max-count=${limit + 1} --skip=${skip}`, cwd)
+
+    const commits = output
+        .split(RECORD_SEPARATOR)
+        .map((record) => record.trim())
+        .filter(Boolean)
+        .map((record): ParsedLogEntry => {
+            const [rawSha = "", rawShortSha = "", message = "", author = "", rawDate = "", rawRelativeDate = "", rawParents = ""] =
+                record.split(FIELD_SEPARATOR)
+            const sha = rawSha.trim()
+            const shortSha = rawShortSha.trim()
+            const date = rawDate.trim()
+            const relativeDate = rawRelativeDate.trim()
+            const parents = rawParents.trim()
+            const parentCount = parents.trim() ? parents.trim().split(/\s+/).length : 0
+            return { sha, shortSha, message, author, date, relativeDate, parentCount }
+        })
+
+    return {
+        commits: commits.slice(0, limit),
+        hasMore: commits.length > limit,
+    }
+}
+
+function getCommitFilesLikeHandler(cwd: string, commit: string): ParsedNameStatusFile[] {
+    const parents = gitExec(`git show --no-patch --format=%P ${commit}`, cwd).trim().split(/\s+/).filter(Boolean)
+    const stdout = parents.length === 0
+        ? gitExec(`git diff-tree --root -r --no-commit-id --name-status -M ${commit}`, cwd)
+        : gitExec(`git diff --name-status -M ${parents[0]} ${commit}`, cwd)
+    return parseNameStatusOutput(stdout)
+}
+
 // Setup test repository with subdirectories
 async function setupTestRepo() {
     await fs.ensureDir(TEST_REPO_DIR)
@@ -353,6 +436,99 @@ describe("Git Module Tests", () => {
 
             expect(relativeFiles.length).toBeGreaterThan(0)
             expect(relativeFiles).toContain("nested-file.txt")
+        })
+    })
+
+    describe("Log and commit file semantics", () => {
+        it("should return paginated log entries with expected fields", async () => {
+            const prefix = `log-pagination-${Date.now()}`
+
+            for (let i = 1; i <= 3; i++) {
+                const fileName = `${prefix}-${i}.txt`
+                await fs.writeFile(path.join(TEST_REPO_DIR, fileName), `content ${i}`)
+                gitExec(`git add ${fileName}`)
+                gitExec(`git commit -m "${prefix} commit ${i}"`)
+            }
+
+            const firstPage = getLogLikeHandler(TEST_REPO_DIR, 2, 0)
+            const secondPage = getLogLikeHandler(TEST_REPO_DIR, 2, 2)
+
+            expect(firstPage.commits.length).toBe(2)
+            expect(firstPage.hasMore).toBe(true)
+            expect(secondPage.commits.length).toBeGreaterThan(0)
+
+            const newest = firstPage.commits[0]
+            expect(newest.sha).toMatch(/^[a-f0-9]{40}$/)
+            expect(newest.shortSha).toMatch(/^[a-f0-9]{7,}$/)
+            expect(newest.message).toContain(prefix)
+            expect(newest.author.length).toBeGreaterThan(0)
+            expect(newest.date).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+            expect(newest.relativeDate.length).toBeGreaterThan(0)
+            expect(newest.parentCount).toBeGreaterThanOrEqual(1)
+        })
+
+        it("should report added files for a root commit", async () => {
+            const rootRepo = path.join(TEST_BASE_DIR, `root-commit-repo-${Date.now()}`)
+            await fs.ensureDir(rootRepo)
+
+            gitExec("git init", rootRepo)
+            gitExec('git config user.email "test@bearly.ai"', rootRepo)
+            gitExec('git config user.name "Test User"', rootRepo)
+
+            await fs.writeFile(path.join(rootRepo, "root.txt"), "root content")
+            gitExec("git add root.txt", rootRepo)
+            gitExec('git commit -m "root commit"', rootRepo)
+
+            const sha = gitExec("git rev-parse HEAD", rootRepo).trim()
+            const files = getCommitFilesLikeHandler(rootRepo, sha)
+
+            expect(files).toEqual([
+                {
+                    path: "root.txt",
+                    status: "added",
+                },
+            ])
+        })
+
+        it("should parse renamed, modified, and deleted files for a commit", async () => {
+            const commitRepo = path.join(TEST_BASE_DIR, `commit-files-repo-${Date.now()}`)
+            await fs.ensureDir(commitRepo)
+
+            gitExec("git init", commitRepo)
+            gitExec('git config user.email "test@bearly.ai"', commitRepo)
+            gitExec('git config user.name "Test User"', commitRepo)
+
+            await fs.writeFile(path.join(commitRepo, "old-name.txt"), "old-name original content")
+            await fs.writeFile(path.join(commitRepo, "modified.txt"), "modified original content")
+            await fs.writeFile(path.join(commitRepo, "deleted.txt"), "deleted original content")
+            gitExec("git add old-name.txt modified.txt deleted.txt", commitRepo)
+            gitExec('git commit -m "initial commit"', commitRepo)
+
+            gitExec("git mv old-name.txt new-name.txt", commitRepo)
+            await fs.writeFile(path.join(commitRepo, "modified.txt"), "after")
+            gitExec("git rm deleted.txt", commitRepo)
+            gitExec("git add modified.txt", commitRepo)
+            gitExec('git commit -m "rename modify delete"', commitRepo)
+
+            const commitSha = gitExec("git rev-parse HEAD", commitRepo).trim()
+            const files = getCommitFilesLikeHandler(commitRepo, commitSha)
+            const renamed = files.find((file) => file.path === "new-name.txt")
+            const modified = files.find((file) => file.path === "modified.txt")
+            const deleted = files.find((file) => file.path === "deleted.txt")
+
+            expect(renamed).toEqual({
+                path: "new-name.txt",
+                oldPath: "old-name.txt",
+                status: "renamed",
+            })
+            expect(modified).toEqual({
+                path: "modified.txt",
+                status: "modified",
+            })
+            expect(deleted).toEqual({
+                path: "deleted.txt",
+                status: "deleted",
+            })
         })
     })
 })

@@ -10,7 +10,7 @@ import { getTrayConfig } from "../../components/tray/trayConfigs"
 import type { TaskModel } from "../TaskModel"
 import type { CodeStore } from "../store"
 
-export type TrayType = "files" | "search" | "changes" | "terminal" | "processes"
+export type TrayType = "files" | "search" | "changes" | "gitlog" | "terminal" | "processes"
 
 export class TrayManager {
     openTray: TrayType | null = null
