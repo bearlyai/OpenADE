@@ -10,7 +10,7 @@ import { observer } from "mobx-react"
 import { useMemo } from "react"
 import type { HyperPlanSubExecution } from "../../hyperplan/types"
 import type { ActionEvent } from "../../types"
-import { InlineMessages, type SessionInfo } from "../InlineMessages"
+import { InlineMessages, type SessionInfo, UserInputMessage } from "../InlineMessages"
 import { type BaseEventItemProps, CollapsibleEvent } from "../events/shared"
 import { getHarnessDisplayName } from "../settings/harnessStatusUtils"
 
@@ -98,6 +98,7 @@ export const HyperPlanEventItem = observer(function HyperPlanEventItem({ event, 
             expanded={expanded}
             onToggle={onToggle}
         >
+            {event.userInput && <UserInputMessage text={event.userInput} />}
             <div className="px-3 py-2">
                 {/* Status bar */}
                 <div className="flex items-center gap-2 text-xs text-muted mb-2">
