@@ -20,12 +20,14 @@ import {
 import { observer } from "mobx-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { HarnessPicker } from "../components/HarnessPicker"
+import { ImageDropOverlay } from "../components/ImageDropOverlay"
 import { ModelPicker } from "../components/ModelPicker"
 import { SmartEditor, type SmartEditorRef } from "../components/SmartEditor"
 import { StrategyPicker } from "../components/hyperplan/StrategyPicker"
 import { TaskMcpSelector } from "../components/mcp/TaskMcpSelector"
 import { Select, Switch } from "../components/ui"
 import type { BranchInfo, GitStatusResponse } from "../electronAPI/git"
+import { useImageDropZone } from "../hooks/useImageDropZone"
 import { usePortalContainer } from "../hooks/usePortalContainer"
 import { useCodeNavigate } from "../routing"
 import { useCodeStore } from "../store/context"
@@ -151,6 +153,9 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
 
     // Get SmartEditorManager for task creation
     const editorManager = codeStore.smartEditors.getManager("task-create", workspaceId)
+
+    // Page-level drop zone for images
+    const { isDragOver, dragHandlers } = useImageDropZone(editorManager)
 
     // SDK capabilities for slash command autocomplete
     const sdkCapabilities = useMemo(() => new SdkCapabilitiesManager(), [])
@@ -304,7 +309,8 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
     }
 
     return (
-        <div className="flex flex-col h-full overflow-hidden">
+        <div className="flex flex-col h-full overflow-hidden relative" {...dragHandlers}>
+            {isDragOver && <ImageDropOverlay />}
             {/* Editor area - takes remaining space with scroll */}
             {/* biome-ignore lint/a11y/useKeyWithClickEvents: clicking anywhere focuses editor */}
             <div className="flex-1 min-h-0 overflow-y-auto p-6 cursor-text" onClick={handleEditorAreaClick}>
