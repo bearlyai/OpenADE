@@ -1,6 +1,28 @@
 import cx from "classnames"
 import { AlertCircle, Wrench } from "lucide-react"
 import type { CommentContext, GroupRenderer, ToolGroup } from "../../events/messageGroups"
+import { getFileName } from "../../utils/paths"
+
+function getToolLabel(group: ToolGroup): string {
+    const input = group.input as Record<string, unknown> | undefined
+    if (input) {
+        // Tools with file_path: Read, Glob, etc.
+        if (typeof input.file_path === "string") {
+            return `${group.toolName}: ${getFileName(input.file_path)}`
+        }
+        // Grep: show search pattern
+        if (group.toolName === "Grep" && typeof input.pattern === "string") {
+            const pattern = input.pattern.length > 30 ? `${input.pattern.slice(0, 30)}…` : input.pattern
+            return `${group.toolName}: ${pattern}`
+        }
+        // Glob: show glob pattern
+        if (group.toolName === "Glob" && typeof input.pattern === "string") {
+            const pattern = input.pattern.length > 30 ? `${input.pattern.slice(0, 30)}…` : input.pattern
+            return `${group.toolName}: ${pattern}`
+        }
+    }
+    return group.toolName
+}
 
 function ToolContent({ group }: { group: ToolGroup; ctx: CommentContext }) {
     return (
@@ -29,7 +51,7 @@ function ToolContent({ group }: { group: ToolGroup; ctx: CommentContext }) {
 }
 
 export const toolRenderer: GroupRenderer<ToolGroup> = {
-    getLabel: (group) => group.toolName,
+    getLabel: getToolLabel,
     getIcon: () => <Wrench size="0.85em" className="text-muted flex-shrink-0" />,
     getStatusIcon: (group) => {
         if (group.isError) return <AlertCircle size="1em" className="text-error flex-shrink-0" />
