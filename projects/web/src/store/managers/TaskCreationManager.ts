@@ -4,6 +4,7 @@ import { track } from "../../analytics"
 import { addTaskPreview, syncTaskPreviewFromStore, taskFromStore, updateTaskPreview } from "../../persistence"
 import { fallbackTitle, generateSlug, generateTitle } from "../../prompts/titleExtractor"
 import type { HarnessId } from "../../electronAPI/harnessEventTypes"
+import type { ThinkingLevel } from "../TaskModel"
 import type { ImageAttachment, IsolationStrategy, SetupEnvironmentEvent, TaskDeviceEnvironment, UserInputContext } from "../../types"
 import { getDeviceId } from "../../utils/deviceId"
 import { ulid } from "../../utils/ulid"
@@ -20,6 +21,7 @@ export interface TaskCreationOptions {
     images?: ImageAttachment[]
     enabledMcpServerIds?: string[]
     harnessId?: HarnessId
+    thinking?: ThinkingLevel
 }
 
 export interface TaskCreation {
@@ -31,6 +33,7 @@ export interface TaskCreation {
     images: ImageAttachment[]
     enabledMcpServerIds?: string[]
     harnessId?: HarnessId
+    thinking?: ThinkingLevel
     phase: CreationPhase | "pending" | "completing"
     error: string | null
     slug: string | null
@@ -66,6 +69,7 @@ export class TaskCreationManager {
             images: options.images ? [...options.images] : [],
             enabledMcpServerIds: options.enabledMcpServerIds,
             harnessId: options.harnessId,
+            thinking: options.thinking,
             phase: "pending",
             error: null,
             slug: null,
@@ -310,11 +314,16 @@ export class TaskCreationManager {
                 hasMcpServers: (creation.enabledMcpServerIds?.length ?? 0) > 0,
             })
 
-            // Set harness on the TaskModel before execution starts
-            if (creation.harnessId) {
+            // Set harness and thinking level on the TaskModel before execution starts
+            {
                 const taskModel = this.store.tasks.getTaskModel(task.id)
                 if (taskModel) {
-                    taskModel.setHarnessId(creation.harnessId)
+                    if (creation.harnessId) {
+                        taskModel.setHarnessId(creation.harnessId)
+                    }
+                    if (creation.thinking) {
+                        taskModel.setThinking(creation.thinking)
+                    }
                 }
             }
 

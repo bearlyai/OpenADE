@@ -2,6 +2,7 @@ import { makeAutoObservable, reaction, runInAction } from "mobx"
 import { analytics, track } from "../analytics"
 import { DEFAULT_MODEL, getDefaultModelForHarness } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
+import type { ThinkingLevel } from "./TaskModel"
 import { crossReviewStrategy, ensembleStrategy, standardStrategy } from "../hyperplan/strategies"
 import type { AgentCouplet, HyperPlanStrategy } from "../hyperplan/types"
 import { getDeviceConfig, setTelemetryDisabled } from "../electronAPI/deviceConfig"
@@ -39,6 +40,7 @@ export interface CodeStoreConfig {
 export class CodeStore {
     readonly config: CodeStoreConfig
     defaultModel: string = DEFAULT_MODEL
+    defaultThinking: ThinkingLevel = "high"
     defaultHarnessId: HarnessId = "claude-code"
     workingTaskIds: Set<string> = new Set()
 
@@ -343,6 +345,10 @@ export class CodeStore {
 
     setDefaultModel(modelId: string): void {
         this.defaultModel = modelId
+    }
+
+    setDefaultThinking(level: ThinkingLevel): void {
+        this.defaultThinking = level
     }
 
     setDefaultHarnessId(harnessId: HarnessId): void {

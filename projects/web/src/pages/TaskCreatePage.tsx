@@ -22,6 +22,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { HarnessPicker } from "../components/HarnessPicker"
 import { ImageDropOverlay } from "../components/ImageDropOverlay"
 import { ModelPicker } from "../components/ModelPicker"
+import { ThinkingPicker } from "../components/ThinkingPicker"
 import { SmartEditor, type SmartEditorRef } from "../components/SmartEditor"
 import { StrategyPicker } from "../components/hyperplan/StrategyPicker"
 import { TaskMcpSelector } from "../components/mcp/TaskMcpSelector"
@@ -267,6 +268,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
             images,
             enabledMcpServerIds: selectedMcpServerIds.length > 0 ? selectedMcpServerIds : undefined,
             harnessId: codeStore.defaultHarnessId,
+            thinking: codeStore.defaultThinking,
         })
 
         editorManager.clear()
@@ -424,6 +426,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                         </button>
                         <HarnessPicker value={codeStore.defaultHarnessId} onChange={(id) => codeStore.setDefaultHarnessId(id)} />
                         <ModelPicker value={codeStore.defaultModel} onChange={(m) => codeStore.setDefaultModel(m)} harnessId={codeStore.defaultHarnessId} />
+                        <ThinkingPicker value={codeStore.defaultThinking} onChange={(t) => codeStore.setDefaultThinking(t)} />
                     </div>
 
                     {/* Center section: Worktree toggle + branch selector */}
