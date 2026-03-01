@@ -126,6 +126,8 @@ interface FileViewerProps {
     commentHandlers: CommentHandlers | null
     /** Optional line range to highlight (e.g., for search results) */
     highlightLines?: { start: number; end: number } | null
+    /** Content for the copy button. Defaults to file.contents. */
+    copyContent?: string
 }
 
 export const FileViewer = observer(function FileViewer({
@@ -135,6 +137,7 @@ export const FileViewer = observer(function FileViewer({
     disableLineNumbers,
     commentHandlers,
     highlightLines,
+    copyContent,
 }: FileViewerProps) {
     const wrapperRef = useRef<HTMLDivElement>(null)
     const theme = useEditorTheme(wrapperRef)
@@ -153,7 +156,7 @@ export const FileViewer = observer(function FileViewer({
     if (commentHandlers === null) {
         return (
             <div ref={wrapperRef}>
-                <CopyOverlay content={file.contents}>
+                <CopyOverlay content={copyContent ?? file.contents}>
                     <PierreFile
                         file={formattedFile}
                         className={className}
