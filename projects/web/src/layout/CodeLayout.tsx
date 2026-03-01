@@ -17,7 +17,7 @@ export interface CodeLayoutProps {
     isCodeModuleAvailable: boolean
     workspaceId?: string
     taskId?: string
-    title: string
+    title: string | ReactNode
     icon: ReactNode
     navbarRight?: ReactNode
 }

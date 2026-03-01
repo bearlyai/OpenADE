@@ -1,5 +1,5 @@
 import type { TaskPreview } from "@/persistence/repoStore"
-import { Code, ListTodo, Loader2, RefreshCw, Settings, Sparkles } from "lucide-react"
+import { Code, ListTodo, Loader2, Settings, Sparkles } from "lucide-react"
 import { observer } from "mobx-react"
 import { useCallback } from "react"
 import { Navigate, useParams } from "react-router"
@@ -224,30 +224,33 @@ export const CodeWorkspaceTaskRoute = observer(() => {
         return <Navigate to={navigate.path("Code")} replace />
     }
 
-    // Determine navbar title and icon
-    const navbarTitle = taskModel?.title || "Task"
-    const navbarIcon = <ListTodo size="1.25rem" className="text-muted" />
     const isRegeneratingTitle = taskId ? codeStore.tasks.regeneratingTitleTaskIds.has(taskId) : false
     const handleRegenerateTitle = useCallback(() => {
         if (taskId) {
             codeStore.tasks.regenerateTitle(taskId)
         }
     }, [codeStore, taskId])
-    const navbarRight = taskModel ? (
-        <div className="flex items-center gap-2">
+    // Determine navbar title and icon
+    const taskTitle = taskModel?.title || "Task"
+    const navbarTitle = taskModel ? (
+        <div className="flex items-center gap-1.5 min-w-0">
+            <span className="font-medium text-base-content truncate min-w-0">{taskTitle}</span>
             <button
                 type="button"
-                className="btn flex items-center justify-center w-7 h-7 text-muted hover:bg-base-200 hover:text-base-content disabled:opacity-50"
+                className="btn flex items-center justify-center w-7 h-7 text-muted hover:bg-base-200 hover:text-base-content disabled:opacity-50 flex-shrink-0"
                 onClick={handleRegenerateTitle}
                 disabled={isRegeneratingTitle}
-                title="Regenerate title"
-                aria-label="Regenerate title"
+                title="Generate new title"
+                aria-label="Generate new title"
             >
-                {isRegeneratingTitle ? <Loader2 size="0.85rem" className="animate-spin" /> : <RefreshCw size="0.85rem" />}
+                {isRegeneratingTitle ? <Loader2 size="0.85rem" className="animate-spin" /> : <Sparkles size="0.85rem" />}
             </button>
-            <TaskStatsBar taskModel={taskModel} />
         </div>
-    ) : undefined
+    ) : (
+        taskTitle
+    )
+    const navbarIcon = <ListTodo size="1.25rem" className="text-muted" />
+    const navbarRight = taskModel ? <TaskStatsBar taskModel={taskModel} /> : undefined
 
     // Workspace not found
     if (!repo) {
