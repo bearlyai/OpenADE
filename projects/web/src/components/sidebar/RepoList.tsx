@@ -1,5 +1,5 @@
 import cx from "classnames"
-import { Archive, ArchiveRestore, ChevronDown, ChevronRight, FolderOpen, FolderPlus, Loader2, MoreHorizontal, Settings, Trash2 } from "lucide-react"
+import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Copy, FolderOpen, FolderPlus, Loader2, MoreHorizontal, Settings, Trash2 } from "lucide-react"
 import { observer } from "mobx-react"
 import { useState } from "react"
 import { getWorkspaceLastViewed } from "../../constants"
@@ -38,6 +38,23 @@ const RepoMenuButton = ({
             onSelect: () => {
                 setOpen(false)
                 openPathInFileManager(repo.path)
+            },
+        },
+        {
+            id: "copy-path",
+            label: (
+                <div className="flex items-center gap-2">
+                    <Copy className="w-4 h-4" />
+                    <span>Copy path</span>
+                </div>
+            ),
+            onSelect: async () => {
+                setOpen(false)
+                try {
+                    await navigator.clipboard.writeText(repo.path)
+                } catch (err) {
+                    console.error("[RepoList] Failed to copy workspace path:", err)
+                }
             },
         },
         {

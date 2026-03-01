@@ -1,13 +1,14 @@
 import type { TaskPreview, TaskPreviewLastEvent } from "@/persistence/repoStore"
 import { ContextMenu } from "@base-ui-components/react/context-menu"
 import cx from "classnames"
-import { CheckCircle, ListTodo, Loader2, Plus, RotateCcw, Square, Trash2, X } from "lucide-react"
+import { CheckCircle, Copy, ListTodo, Loader2, Plus, RotateCcw, Square, Trash2, X } from "lucide-react"
 import { observer } from "mobx-react"
 import { useCodeNavigate } from "../../routing"
 import { usePortalContainer } from "../../hooks/usePortalContainer"
 import { useCodeStore } from "../../store/context"
 import type { TaskCreation } from "../../store/managers/TaskCreationManager"
 import type { CodeEvent } from "../../types"
+import { resolveTaskCopyPath } from "./sidebarPathUtils"
 import { ScrollArea } from "../ui"
 
 function isPlanType(lastEvent: TaskPreviewLastEvent): boolean {
@@ -86,6 +87,7 @@ const TaskItem = ({
     onSelect,
     onDelete,
     onToggleClosed,
+    onCopyPath,
 }: {
     preview: TaskPreview
     isActive: boolean
@@ -94,6 +96,7 @@ const TaskItem = ({
     onSelect: () => void
     onDelete: () => void
     onToggleClosed: () => void
+    onCopyPath: () => void
 }) => {
     const isClosed = preview.closed ?? false
     const displayEvent = inProgressEvent ?? preview.lastEvent
@@ -140,6 +143,10 @@ const TaskItem = ({
             <ContextMenu.Portal container={portalContainer}>
                 <ContextMenu.Positioner className="outline-none z-50" sideOffset={4}>
                     <ContextMenu.Popup className={contextPopupClassName}>
+                        <ContextMenu.Item className={contextItemClassName} onClick={onCopyPath}>
+                            <Copy className="w-4 h-4" />
+                            <span>Copy path</span>
+                        </ContextMenu.Item>
                         <ContextMenu.Item className={contextItemClassName} onClick={onToggleClosed}>
                             {isClosed ? <RotateCcw className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
                             <span>{isClosed ? "Reopen" : "Close"}</span>
@@ -272,6 +279,29 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
         await codeStore.tasks.setTaskClosed(toggledTaskId, !currentClosed)
     }
 
+    const handleCopyTaskPath = async (selectedTaskId: string) => {
+        const repo = codeStore.repos.getRepo(workspaceId)
+        if (!repo) return
+
+        try {
+            await codeStore.getTaskStore(workspaceId, selectedTaskId)
+            const task = codeStore.tasks.getTask(selectedTaskId)
+            const taskModel = codeStore.tasks.getTaskModel(selectedTaskId)
+            const environment = taskModel?.environment ?? (await taskModel?.loadEnvironment())
+            const copyPath = resolveTaskCopyPath({
+                repoPath: repo.path,
+                isolationStrategy: task?.isolationStrategy,
+                environmentPath: environment?.taskWorkingDir ?? null,
+                events: task?.events ?? [],
+            })
+
+            if (!copyPath) return
+            await navigator.clipboard.writeText(copyPath)
+        } catch (err) {
+            console.error("[TaskList] Failed to copy task path:", err)
+        }
+    }
+
     const isEmpty = sortedPreviews.length === 0 && creations.length === 0
 
     return (
@@ -315,6 +345,9 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
                                     onSelect={() => handleSelectTask(preview.id)}
                                     onDelete={() => handleDeleteTask(preview.id)}
                                     onToggleClosed={() => handleToggleClosed(preview.id, preview.closed ?? false)}
+                                    onCopyPath={() => {
+                                        void handleCopyTaskPath(preview.id)
+                                    }}
                                 />
                             ))}
                         </>
