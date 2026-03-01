@@ -8,6 +8,7 @@
 import type { LucideIcon } from "lucide-react"
 import { FolderOpen, GitCommitHorizontal, GitCompare, Play, Search, TerminalSquare } from "lucide-react"
 import type { ReactNode } from "react"
+import type { RunContext } from "../../electronAPI/procs"
 import { getTaskPtyId } from "../../electronAPI/pty"
 import type { TrayManager, TrayType } from "../../store/managers/TrayManager"
 import { ChangesViewer } from "../ChangesViewer"
@@ -34,6 +35,16 @@ export interface TrayConfig {
 
 function NoEnvironment() {
     return <div className="flex items-center justify-center h-full text-muted text-sm">Environment not available</div>
+}
+
+function getProcessContext(tray: TrayManager): RunContext | null {
+    const env = tray.taskModel.environment
+    if (!env?.taskWorkingDir) return null
+    const task = tray.store.tasks.getTask(tray.taskId)
+    const isWorktree = task?.isolationStrategy?.type === "worktree"
+    return isWorktree
+        ? { type: "worktree", root: env.taskWorkingDir }
+        : { type: "repo", root: env.taskWorkingDir }
 }
 
 export const TRAY_CONFIGS: TrayConfig[] = [
@@ -117,18 +128,17 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         label: "Processes",
         icon: Play,
         renderBadge: (tray) => {
-            const count = tray.store.repoProcesses.runningCount
+            const context = getProcessContext(tray)
+            if (!context) return null
+            const count = tray.store.repoProcesses.runningCountForContext(context)
             return count > 0 ? count : null
         },
         renderContent: (tray) => {
-            const env = tray.taskModel.environment
-            if (!env?.taskWorkingDir) {
+            const context = getProcessContext(tray)
+            if (!context) {
                 return <NoEnvironment />
             }
-            const task = tray.store.tasks.getTask(tray.taskId)
-            const isWorktree = task?.isolationStrategy?.type === "worktree"
-            const context = isWorktree ? { type: "worktree" as const, root: env.taskWorkingDir } : { type: "repo" as const }
-            return <ProcessesTray searchPath={env.taskWorkingDir} context={context} workspaceId={tray.workspaceId} isOpen={tray.openTray === "processes"} />
+            return <ProcessesTray searchPath={context.root} context={context} workspaceId={tray.workspaceId} isOpen={tray.openTray === "processes"} />
         },
     },
 ]

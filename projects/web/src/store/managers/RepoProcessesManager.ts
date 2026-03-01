@@ -41,8 +41,7 @@ export interface ProcessInstance {
 
 /** Key for tracking setup completion */
 function makeSetupKey(context: RunContext, configPath: string): string {
-    const contextKey = context.type === "repo" ? "repo" : context.root
-    return `${contextKey}::${configPath}`
+    return `${context.root}::${configPath}`
 }
 
 export class RepoProcessesManager {
@@ -348,14 +347,11 @@ export class RepoProcessesManager {
 
     // ==================== Queries ====================
 
-    /** Get all running processes for a given context */
+    /** Get all running processes for a given context (matched by root path) */
     getProcessesForContext(context: RunContext): ProcessInstance[] {
         const result: ProcessInstance[] = []
-        const contextKey = context.type === "repo" ? "repo" : context.root
-
         for (const instance of this.runningProcesses.values()) {
-            const instanceKey = instance.context.type === "repo" ? "repo" : instance.context.root
-            if (instanceKey === contextKey) {
+            if (instance.context.root === context.root) {
                 result.push(instance)
             }
         }
@@ -370,6 +366,16 @@ export class RepoProcessesManager {
         let count = 0
         for (const instance of this.runningProcesses.values()) {
             if (instance.status === "running") {
+                count++
+            }
+        }
+        return count
+    }
+
+    runningCountForContext(context: RunContext): number {
+        let count = 0
+        for (const instance of this.runningProcesses.values()) {
+            if (instance.context.root === context.root && instance.status === "running") {
                 count++
             }
         }

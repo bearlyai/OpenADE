@@ -70,7 +70,7 @@ export interface ReadProcsResult {
  * Context for running a process - determines which checkout to use
  */
 export type RunContext =
-    | { type: "repo" } // Run from main checkout
+    | { type: "repo"; root: string } // Run from main checkout (root = repo path)
     | { type: "worktree"; root: string } // Run from specific worktree
 
 // ============================================================================

@@ -159,8 +159,10 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
         },
     ]
 
-    const selectedProcessId = repoProcesses.expandedProcessId
-    const selectedProcess = selectedProcessId ? repoProcesses.getProcess(selectedProcessId) : null
+    const rawSelectedId = repoProcesses.expandedProcessId
+    const rawSelectedProcess = rawSelectedId ? repoProcesses.getProcess(rawSelectedId) : null
+    // Only show selected process if it belongs to this context
+    const selectedProcess = rawSelectedProcess && rawSelectedProcess.context.root === context.root ? rawSelectedProcess : null
 
     // Group processes by config file, excluding setup processes from display
     const configGroups: ConfigGroup[] = []
