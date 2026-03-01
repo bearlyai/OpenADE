@@ -76,6 +76,7 @@ interface GitStatusParams {
 interface GitFileInfo {
     path: string
     binary: boolean
+    status?: "added" | "deleted" | "modified" | "renamed"
 }
 
 interface GitStatusResponse {
@@ -968,6 +969,14 @@ function parseNumstatOutput(output: string): GitFileInfo[] {
         .filter((f): f is GitFileInfo => f !== null)
 }
 
+/** Merge status codes from --name-status into GitFileInfo[] from --numstat */
+function mergeFileStatuses(files: GitFileInfo[], statuses: ChangedFileInfo[]): void {
+    const statusMap = new Map(statuses.map((s) => [s.path, s.status]))
+    for (const file of files) {
+        file.status = statusMap.get(file.path) ?? "modified"
+    }
+}
+
 /**
  * Get git status including current branch, HEAD commit, and working tree changes
  * Excludes binary files from patches and truncates large patches
@@ -1040,6 +1049,12 @@ async function handleGetGitStatus(params: GitStatusParams): Promise<GitStatusRes
             ? parseNumstatOutput(stagedNumstatResult.stdout)
             : []
 
+        // Get staged file statuses (added/deleted/modified/renamed) using --name-status
+        const stagedNameStatusResult = await execGit(["diff", "--cached", "--name-status", "-M"], workingDir)
+        if (stagedNameStatusResult.success) {
+            mergeFileStatuses(stagedFiles, parseNameStatusOutput(stagedNameStatusResult.stdout))
+        }
+
         // Get unstaged changes (diff without --cached)
         const unstagedDiffResult = await execGit(["diff"], workingDir)
         const unstagedPatchRaw = unstagedDiffResult.success ? unstagedDiffResult.stdout : ""
@@ -1051,6 +1066,12 @@ async function handleGetGitStatus(params: GitStatusParams): Promise<GitStatusRes
         const unstagedFiles = unstagedNumstatResult.success
             ? parseNumstatOutput(unstagedNumstatResult.stdout)
             : []
+
+        // Get unstaged file statuses (added/deleted/modified/renamed) using --name-status
+        const unstagedNameStatusResult = await execGit(["diff", "--name-status", "-M"], workingDir)
+        if (unstagedNameStatusResult.success) {
+            mergeFileStatuses(unstagedFiles, parseNameStatusOutput(unstagedNameStatusResult.stdout))
+        }
 
         // Get untracked files (use extension-based binary detection since they're not in git yet)
         const untrackedResult = await execGit(["ls-files", "--others", "--exclude-standard"], workingDir)

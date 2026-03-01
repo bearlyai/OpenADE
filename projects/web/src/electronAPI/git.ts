@@ -93,6 +93,7 @@ export interface UncommittedChangesStats {
 export interface GitFileInfo {
     path: string
     binary: boolean
+    status?: "added" | "deleted" | "modified" | "renamed"
 }
 
 export interface GitStatusResponse {

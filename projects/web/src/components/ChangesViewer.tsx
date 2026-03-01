@@ -91,11 +91,11 @@ function deriveUncommittedFiles(status: GitStatusResponse): ChangedFileInfo[] {
     const files: ChangedFileInfo[] = []
     const seen = new Set<string>()
 
-    // Staged and unstaged files are modified (dedupe in case same file appears in both)
+    // Staged and unstaged files (dedupe in case same file appears in both)
     for (const file of [...status.staged.files, ...status.unstaged.files]) {
         if (!seen.has(file.path)) {
             seen.add(file.path)
-            files.push({ path: file.path, status: "modified", binary: file.binary })
+            files.push({ path: file.path, status: file.status ?? "modified", binary: file.binary })
         }
     }
 
