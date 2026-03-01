@@ -153,6 +153,8 @@ interface HarnessInstallStatus {
 }
 ```
 
+For Claude Code, read-only mode automatically allows server-scoped MCP tool patterns (`mcp__<server_name>__*`) when `mcpServers` or `clientTools` are configured.
+
 ---
 
 ## Harnesses

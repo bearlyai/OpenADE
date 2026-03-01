@@ -136,6 +136,47 @@ describe("buildClaudeArgs", () => {
         expect(afterAllowed).toContain("Bash(git diff *)")
         expect(afterAllowed).toContain("Bash(ls *)")
         expect(afterAllowed).toContain("Bash(gh api *)")
+        expect(afterAllowed).not.toContain("mcp__github__*")
+    })
+
+    it("mode: 'read-only' + mcpServers adds MCP patterns to --allowedTools", () => {
+        const result = buildClaudeArgs(
+            makeQuery({
+                mode: "read-only",
+                mcpServers: {
+                    github: {
+                        type: "http",
+                        url: "https://mcp.example.com",
+                    },
+                },
+            }),
+            {}
+        )
+        const allowedIdx = result.args.indexOf("--allowedTools")
+        expect(allowedIdx).toBeGreaterThan(-1)
+        const afterAllowed = result.args.slice(allowedIdx + 1)
+        expect(afterAllowed).toContain("mcp__github__*")
+    })
+
+    it("mode: 'read-only' + clientTools adds MCP patterns to --allowedTools", () => {
+        const result = buildClaudeArgs(
+            makeQuery({
+                mode: "read-only",
+                clientTools: [
+                    {
+                        name: "get_magic_number",
+                        description: "Returns the magic number",
+                        inputSchema: { type: "object", properties: {} },
+                        handler: async () => ({ content: "42" }),
+                    },
+                ],
+            }),
+            {}
+        )
+        const allowedIdx = result.args.indexOf("--allowedTools")
+        expect(allowedIdx).toBeGreaterThan(-1)
+        const afterAllowed = result.args.slice(allowedIdx + 1)
+        expect(afterAllowed).toContain("mcp____harness_client_tools__*")
     })
 
     it("mode: 'read-only' disallows write tools", () => {
@@ -173,6 +214,13 @@ describe("buildClaudeArgs", () => {
         const effortIdx = result.args.indexOf("--effort")
         expect(effortIdx).toBeGreaterThan(-1)
         expect(result.args[effortIdx + 1]).toBe("high")
+    })
+
+    it("thinking: 'max' → --effort max", () => {
+        const result = buildClaudeArgs(makeQuery({ thinking: "max" }), {})
+        const effortIdx = result.args.indexOf("--effort")
+        expect(effortIdx).toBeGreaterThan(-1)
+        expect(result.args[effortIdx + 1]).toBe("max")
     })
 
     it("resumeSessionId produces --resume <id>", () => {

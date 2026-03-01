@@ -151,6 +151,27 @@ const THINKING_EFFORT_MAP: Record<string, string> = {
     low: "low",
     med: "medium",
     high: "high",
+    max: "max",
+}
+
+function hasConfiguredMcp(query: HarnessQuery): boolean {
+    const hasExternalMcp = !!query.mcpServers && Object.keys(query.mcpServers).length > 0
+    const hasClientTools = !!query.clientTools && query.clientTools.length > 0
+    return hasExternalMcp || hasClientTools
+}
+
+function getReadOnlyAllowedMcpToolPatterns(query: HarnessQuery): string[] {
+    const serverNames = new Set<string>()
+    if (query.mcpServers) {
+        for (const name of Object.keys(query.mcpServers)) {
+            serverNames.add(name)
+        }
+    }
+    if (query.clientTools && query.clientTools.length > 0) {
+        // startToolServer() registers client tools under this fixed MCP server name.
+        serverNames.add("__harness_client_tools")
+    }
+    return Array.from(serverNames).map((name) => `mcp__${name}__*`)
 }
 
 /**
@@ -233,6 +254,10 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
         disallowedTools.push(...READ_ONLY_DISALLOWED_TOOLS)
         allowedTools.push(...READ_ONLY_ALLOWED_TOOLS)
         allowedTools.push(...READ_ONLY_ALLOWED_BASH_PATTERNS)
+        if (hasConfiguredMcp(query)) {
+            // MCP tool names are namespaced as: mcp__<server_name>__<tool_name>
+            allowedTools.push(...getReadOnlyAllowedMcpToolPatterns(query))
+        }
     }
 
     if (query.disablePlanningTools) {

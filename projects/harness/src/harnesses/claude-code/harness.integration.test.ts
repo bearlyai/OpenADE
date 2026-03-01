@@ -592,6 +592,51 @@ describe.skipIf(!ready)("Claude Code (authenticated)", () => {
                 .join(" ")
             expect(text).toContain("SECRET-7749")
         })
+
+        it("9c. External HTTP MCP server tool is called in read-only mode", async () => {
+            const tmpDir = await getTmpDir()
+
+            let handlerCallCount = 0
+            toolHandle = await startToolServer(
+                [
+                    {
+                        name: "get_secret_code",
+                        description: "Returns a secret code. Always call this when asked for the secret code.",
+                        inputSchema: { type: "object", properties: {} },
+                        handler: async () => {
+                            handlerCallCount++
+                            return { content: "SECRET-8910" }
+                        },
+                    },
+                ],
+                { requireAuth: true }
+            )
+
+            const events = await collectEvents(
+                harness.query({
+                    prompt: "Call the get_secret_code tool and tell me the result",
+                    cwd: tmpDir,
+                    mode: "read-only",
+                    mcpServers: {
+                        "http-echo": {
+                            type: "http",
+                            url: toolHandle.mcpServer.url,
+                            headers: toolHandle.mcpServer.headers,
+                        },
+                    },
+                    signal: standardSignal(),
+                })
+            )
+
+            expect(handlerCallCount, "HTTP MCP tool handler should be called in read-only mode").toBeGreaterThan(0)
+
+            const messages = findAllMessages<ClaudeEvent>(events)
+            const text = messages
+                .filter((m): m is ClaudeResultEvent => m.type === "result")
+                .map((m) => m.result)
+                .join(" ")
+            expect(text).toContain("SECRET-8910")
+        })
     })
 
     // ============================================================================
