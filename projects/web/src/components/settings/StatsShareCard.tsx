@@ -71,37 +71,22 @@ export function StatsShareCard({ cardRef, stats }: StatsShareCardProps) {
                 {/* Header: branding */}
                 <div className="flex items-start justify-between">
                     <div>
-                        <div className="text-2xl font-bold text-base-content tracking-tight leading-none">
-                            OpenADE
-                        </div>
-                        <div className="text-[11px] text-muted tracking-wide mt-1">
-                            The Agentic Dev Environment
-                        </div>
+                        <div className="text-2xl font-bold text-base-content tracking-tight leading-none">OpenADE</div>
+                        <div className="text-[11px] text-muted tracking-wide mt-1">The Agentic Dev Environment</div>
                     </div>
-                    <div className="text-[11px] text-muted font-medium tracking-wide">
-                        openade.ai
-                    </div>
+                    <div className="text-[11px] text-muted font-medium tracking-wide">openade.ai</div>
                 </div>
 
                 {/* Title + hero task count */}
                 <div>
-                    <div className="text-xs text-muted uppercase tracking-widest font-medium mb-2">
-                        {stats.periodLabel}
-                    </div>
+                    <div className="text-xs text-muted uppercase tracking-widest font-medium mb-2">{stats.periodLabel}</div>
                     <div className="flex items-baseline gap-3">
-                        <span
-                            className="font-bold text-primary leading-none tracking-tight"
-                            style={{ fontSize: 64 }}
-                        >
+                        <span className="font-bold text-primary leading-none tracking-tight" style={{ fontSize: 64 }}>
                             {stats.taskCount.toLocaleString()}
                         </span>
-                        <span className="text-base-content/60 text-lg font-semibold">
-                            {stats.taskCount === 1 ? "task" : "tasks"} completed
-                        </span>
+                        <span className="text-base-content/60 text-lg font-semibold">{stats.taskCount === 1 ? "task" : "tasks"} completed</span>
                     </div>
-                    <div className="text-xl font-bold text-base-content/80 mt-2 tracking-tight">
-                        {formatCost(stats.totalCostUsd)} spent
-                    </div>
+                    <div className="text-xl font-bold text-base-content/80 mt-2 tracking-tight">{formatCost(stats.totalCostUsd)} spent</div>
                 </div>
 
                 {/* Bottom stats row */}
@@ -119,9 +104,7 @@ export function StatsShareCard({ cardRef, stats }: StatsShareCardProps) {
                         <div className="flex flex-col items-end gap-0.5">
                             {topModels.map(([model, cost]) => (
                                 <div key={model} className="text-[10px] text-muted">
-                                    <span className="text-base-content font-medium">{model}</span>
-                                    {" "}
-                                    <span>{formatCost(cost)}</span>
+                                    <span className="text-base-content font-medium">{model}</span> <span>{formatCost(cost)}</span>
                                 </div>
                             ))}
                         </div>

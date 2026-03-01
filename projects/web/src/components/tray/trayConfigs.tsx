@@ -42,9 +42,7 @@ function getProcessContext(tray: TrayManager): RunContext | null {
     if (!env?.taskWorkingDir) return null
     const task = tray.store.tasks.getTask(tray.taskId)
     const isWorktree = task?.isolationStrategy?.type === "worktree"
-    return isWorktree
-        ? { type: "worktree", root: env.taskWorkingDir }
-        : { type: "repo", root: env.taskWorkingDir }
+    return isWorktree ? { type: "worktree", root: env.taskWorkingDir } : { type: "repo", root: env.taskWorkingDir }
 }
 
 export const TRAY_CONFIGS: TrayConfig[] = [

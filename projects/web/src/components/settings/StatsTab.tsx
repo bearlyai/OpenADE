@@ -165,7 +165,16 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     // Stats for the featured section
     const featured = effectiveSelected
         ? monthsMap.get(effectiveSelected)!
-        : { label: "All Time", sortKey: "", taskCount: totalTasks, inputTokens: totalIn, outputTokens: totalOut, totalCostUsd: totalCost, eventCount: totalEvents, costByModel: totalByModel }
+        : {
+              label: "All Time",
+              sortKey: "",
+              taskCount: totalTasks,
+              inputTokens: totalIn,
+              outputTokens: totalOut,
+              totalCostUsd: totalCost,
+              eventCount: totalEvents,
+              costByModel: totalByModel,
+          }
 
     const featuredTokens = featured.inputTokens + featured.outputTokens
 
@@ -207,7 +216,9 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                                 type="button"
                                 className={cx(
                                     "btn px-2.5 py-1 text-xs font-medium transition-colors border",
-                                    !effectiveSelected ? "bg-primary text-primary-content border-primary" : "bg-base-200 text-muted hover:text-base-content border-border"
+                                    !effectiveSelected
+                                        ? "bg-primary text-primary-content border-primary"
+                                        : "bg-base-200 text-muted hover:text-base-content border-border"
                                 )}
                                 onClick={() => setSelectedMonth(null)}
                             >
@@ -219,7 +230,9 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                                     type="button"
                                     className={cx(
                                         "btn px-2.5 py-1 text-xs font-medium transition-colors border",
-                                        effectiveSelected === m.sortKey ? "bg-primary text-primary-content border-primary" : "bg-base-200 text-muted hover:text-base-content border-border"
+                                        effectiveSelected === m.sortKey
+                                            ? "bg-primary text-primary-content border-primary"
+                                            : "bg-base-200 text-muted hover:text-base-content border-border"
                                     )}
                                     onClick={() => setSelectedMonth(m.sortKey)}
                                 >
@@ -256,18 +269,12 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
 
                     {/* Featured stats card */}
                     <div className="bg-base-200 border border-border p-4 flex flex-col gap-3">
-                        <div className="text-[10px] text-muted uppercase tracking-widest font-medium">
-                            {effectiveSelected ? featured.label : "All Time"}
-                        </div>
+                        <div className="text-[10px] text-muted uppercase tracking-widest font-medium">{effectiveSelected ? featured.label : "All Time"}</div>
 
                         {/* Big cost + tokens */}
                         <div className="flex items-baseline gap-3">
-                            <span className="text-3xl font-bold text-primary leading-none tracking-tight">
-                                {formatCost(featured.totalCostUsd)}
-                            </span>
-                            <span className="text-base-content/50 text-sm font-medium">
-                                {formatTokens(featuredTokens)} tokens
-                            </span>
+                            <span className="text-3xl font-bold text-primary leading-none tracking-tight">{formatCost(featured.totalCostUsd)}</span>
+                            <span className="text-base-content/50 text-sm font-medium">{formatTokens(featuredTokens)} tokens</span>
                         </div>
 
                         {/* Stat grid */}
@@ -319,9 +326,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                                             )}
                                             onClick={() => setSelectedMonth(m.sortKey)}
                                         >
-                                            <span className={cx("font-semibold text-left", isActive ? "text-primary" : "text-base-content")}>
-                                                {m.label}
-                                            </span>
+                                            <span className={cx("font-semibold text-left", isActive ? "text-primary" : "text-base-content")}>{m.label}</span>
                                             <span className="text-right text-muted w-10">{m.taskCount}</span>
                                             <span className="text-right text-muted w-10">{m.eventCount}</span>
                                             <span className="text-right text-muted w-14">{formatTokens(tokens)}</span>

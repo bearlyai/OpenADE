@@ -8,6 +8,18 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.62.0",
+        title: "Thinking Controls, Stats Sharing & Sidebar Polish",
+        date: "2026-03-01",
+        highlights: [
+            "New thinking-level picker lets you control how much reasoning effort the AI uses per task",
+            "Share your usage stats as a shareable image card with one-click copy to clipboard",
+            "Drag and drop images directly onto the task creation page to include them in your prompt",
+            "Sidebar now offers copy-path actions for workspaces and tasks, and shows deleted files in the Changes tray",
+            "Tool call pills display file names and patterns for easier scanning of what the AI touched",
+        ],
+    },
+    {
         version: "0.61.0",
         title: "Git Log, Smart Bash Pills & Image Prompts",
         date: "2026-02-26",
