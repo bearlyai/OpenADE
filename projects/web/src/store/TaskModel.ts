@@ -22,9 +22,12 @@ import { SdkCapabilitiesManager } from "./managers/SdkCapabilitiesManager"
 import { TrayManager } from "./managers/TrayManager"
 import type { CodeStore } from "./store"
 
+export type ThinkingLevel = "low" | "med" | "high" | "max"
+
 export class TaskModel {
     gitStatus: GitStatusResponse | null = null
     model: string = DEFAULT_MODEL
+    thinking: ThinkingLevel = "high"
     harnessId: HarnessId = "claude-code"
     private gitStateLoading = false
     private _environmentCache: TaskEnvironment | null = null
@@ -121,6 +124,10 @@ export class TaskModel {
 
     setModel(modelId: string): void {
         this.model = this.normalizeModelForHarness(modelId, this.harnessId)
+    }
+
+    setThinking(level: ThinkingLevel): void {
+        this.thinking = level
     }
 
     setHarnessId(id: HarnessId): void {

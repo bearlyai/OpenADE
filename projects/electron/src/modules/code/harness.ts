@@ -66,7 +66,7 @@ interface HarnessQueryOptions {
     cwd: string
     mode?: "read-only" | "yolo"
     model?: string
-    thinking?: "low" | "med" | "high"
+    thinking?: "low" | "med" | "high" | "max"
     appendSystemPrompt?: string
     resumeSessionId?: string
     forkSession?: boolean

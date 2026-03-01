@@ -165,7 +165,7 @@ Before starting, confirm the harness library covers all features currently used:
 | MCP servers (external) | `Options.mcpServers` | `HarnessQuery.mcpServers` | ✅ |
 | Abort/cancel | `AbortController` | `HarnessQuery.signal: AbortSignal` | ✅ |
 | Env vars | `Options.env` | `HarnessQuery.env` | ✅ |
-| Thinking tokens | `Options.maxThinkingTokens` | `HarnessQuery.thinking` | ⚠️ Different API (enum vs number) |
+| Thinking tokens | `Options.maxThinkingTokens` | `HarnessQuery.thinking` | ✅ Enum: `"low" \| "med" \| "high" \| "max"` |
 | Cost tracking | Result event `total_cost_usd` | `HarnessUsage.costUsd` | ✅ |
 | Session ID extraction | Parse `system:init` for `session_id` | `HarnessEvent.session_started` | ✅ |
 | stderr capture | `Options.stderr` callback | `HarnessEvent.stderr` | ✅ |
@@ -177,7 +177,7 @@ Before starting, confirm the harness library covers all features currently used:
 
 **Items that may need harness library changes:**
 
-1. **`maxThinkingTokens`**: Currently we pass `maxThinkingTokens: 10000`. The harness has `thinking: "low" | "med" | "high"`. Either add numeric support to the harness or map `10000` to an enum value.
+1. ~~**`maxThinkingTokens`**: Migrated to `thinking: "low" | "med" | "high" | "max"` enum. No numeric support needed.~~
 
 2. **`settingSources`**: Currently `["user", "project", "local"]`. The harness `ClaudeCodeHarnessConfig` may already have this. Confirm it's passed through correctly.
 

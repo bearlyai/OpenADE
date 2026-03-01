@@ -144,6 +144,8 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
                 unsubmittedComments={codeStore.comments.getUnsubmittedComments(taskId)}
                 selectedModel={taskModel.model}
                 onModelChange={(m) => taskModel.setModel(m)}
+                thinking={taskModel.thinking}
+                onThinkingChange={(t) => taskModel.setThinking(t)}
                 harnessId={taskModel.harnessId}
                 allowHarnessSwitch={false}
                 hideTray={codeStore.personalSettingsStore?.settings.current.devHideTray}

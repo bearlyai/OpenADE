@@ -10,6 +10,7 @@
  */
 
 import { getModelFullId } from "../constants"
+import type { ThinkingLevel } from "../store/TaskModel"
 import type { HarnessStreamEvent, McpServerConfig } from "../electronAPI/harnessEventTypes"
 import { type ClientHarnessQueryOptions, type HarnessQuery, getHarnessQueryManager, isHarnessApiAvailable } from "../electronAPI/harnessQuery"
 import { mergeAppendSystemPrompt } from "../prompts/executionContext"
@@ -45,6 +46,7 @@ export interface HyperPlanExecutorConfig {
     cwd: string
     additionalDirectories?: string[]
     appendSystemPromptSuffix?: string
+    thinking?: ThinkingLevel
     mcpServerConfigs?: Record<string, McpServerConfig>
     callbacks: HyperPlanCallbacks
     signal: AbortSignal
@@ -315,7 +317,7 @@ export class HyperPlanExecutor {
      * Start a harness query for a step.
      */
     private async startQuery(step: HyperPlanStep, prompt: string, appendSystemPrompt: string, executionId?: string): Promise<HarnessQuery | null> {
-        const { cwd, additionalDirectories, appendSystemPromptSuffix, mcpServerConfigs } = this.config
+        const { cwd, additionalDirectories, appendSystemPromptSuffix, thinking, mcpServerConfigs } = this.config
         const manager = getHarnessQueryManager()
 
         const options: ClientHarnessQueryOptions = {
@@ -323,7 +325,7 @@ export class HyperPlanExecutor {
             cwd,
             additionalDirectories,
             model: getModelFullId(step.agent.modelId, step.agent.harnessId),
-            thinking: "high",
+            thinking: thinking ?? "high",
             mode: "read-only",
             appendSystemPrompt: mergeAppendSystemPrompt(appendSystemPrompt, appendSystemPromptSuffix),
             mcpServerConfigs,

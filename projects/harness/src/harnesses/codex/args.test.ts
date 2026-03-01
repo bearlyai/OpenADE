@@ -60,8 +60,13 @@ describe("buildCodexArgs", () => {
         expect(result.args).toContain("model_reasoning_effort=medium")
     })
 
-    it("thinking: 'high' → -c model_reasoning_effort=xhigh", async () => {
+    it("thinking: 'high' → -c model_reasoning_effort=high", async () => {
         const result = await buildCodexArgs(makeQuery({ thinking: "high" }), {})
+        expect(result.args).toContain("model_reasoning_effort=high")
+    })
+
+    it("thinking: 'max' → -c model_reasoning_effort=xhigh", async () => {
+        const result = await buildCodexArgs(makeQuery({ thinking: "max" }), {})
         expect(result.args).toContain("model_reasoning_effort=xhigh")
     })
 

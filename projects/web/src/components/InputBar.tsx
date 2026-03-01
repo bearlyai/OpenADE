@@ -13,6 +13,8 @@ import type { TrayManager } from "../store/managers/TrayManager"
 import type { Comment } from "../types"
 import { HarnessPicker } from "./HarnessPicker"
 import { ModelPicker } from "./ModelPicker"
+import { ThinkingPicker } from "./ThinkingPicker"
+import type { ThinkingLevel } from "../store/TaskModel"
 import { processImageBlob } from "../utils/imageAttachment"
 import { SmartEditor, type SmartEditorRef } from "./SmartEditor"
 import { CommentsSection } from "./events/CommentsSection"
@@ -79,6 +81,8 @@ export const InputBar = observer(function InputBar({
     unsubmittedComments = [],
     selectedModel,
     onModelChange,
+    thinking,
+    onThinkingChange,
     harnessId,
     onHarnessChange,
     allowHarnessSwitch = true,
@@ -99,6 +103,8 @@ export const InputBar = observer(function InputBar({
     unsubmittedComments?: Comment[]
     selectedModel?: string
     onModelChange?: (model: string) => void
+    thinking?: ThinkingLevel
+    onThinkingChange?: (level: ThinkingLevel) => void
     harnessId?: HarnessId
     onHarnessChange?: (harnessId: HarnessId) => void
     allowHarnessSwitch?: boolean
@@ -160,6 +166,11 @@ export const InputBar = observer(function InputBar({
                         {selectedModel && onModelChange && (
                             <div className={cx("shrink-0", !gitStatus?.branch && !showHarnessPicker && "ml-auto")}>
                                 <ModelPicker value={selectedModel} onChange={onModelChange} harnessId={harnessId} />
+                            </div>
+                        )}
+                        {thinking && onThinkingChange && (
+                            <div className="shrink-0">
+                                <ThinkingPicker value={thinking} onChange={onThinkingChange} />
                             </div>
                         )}
                     </div>

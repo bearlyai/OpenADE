@@ -22,7 +22,8 @@ export interface CodexArgBuildResult {
 const THINKING_EFFORT_MAP: Record<string, string> = {
     low: "low",
     med: "medium",
-    high: "xhigh",
+    high: "high",
+    max: "xhigh",
 }
 
 /**

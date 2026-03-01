@@ -67,7 +67,7 @@ export interface HarnessQuery {
 
     // ── Model ──
     model?: string
-    thinking?: "low" | "med" | "high"
+    thinking?: "low" | "med" | "high" | "max"
 
     // ── Session ──
     resumeSessionId?: string
