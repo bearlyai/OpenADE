@@ -1701,6 +1701,42 @@ async function handleGetChangedFiles(params: GetChangedFilesParams): Promise<Get
 // Max file size for diff display (1MB)
 const MAX_FILE_SIZE_FOR_DIFF = 1024 * 1024
 
+// Max line count for diff display — files with more lines than this freeze the
+// renderer even when they're under the byte-size limit (e.g. package-lock.json).
+const MAX_LINE_COUNT_FOR_DIFF = 10_000
+
+// File basenames whose diffs are never useful to render (generated / lock files).
+const GENERATED_FILE_BASENAMES = new Set([
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "composer.lock",
+    "Gemfile.lock",
+    "Cargo.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+    "go.sum",
+    "flake.lock",
+    "bun.lock",
+    "bun.lockb",
+])
+
+function isGeneratedFile(filePath: string): boolean {
+    const basename = path.basename(filePath)
+    return GENERATED_FILE_BASENAMES.has(basename)
+}
+
+function exceedsLineLimit(content: string): boolean {
+    let count = 0
+    for (let i = 0; i < content.length; i++) {
+        if (content[i] === "\n") {
+            count++
+            if (count > MAX_LINE_COUNT_FOR_DIFF) return true
+        }
+    }
+    return false
+}
+
 /**
  * Get file content at a specific treeish
  */
@@ -1780,6 +1816,13 @@ async function handleGetFilePair(params: GetFilePairParams): Promise<GetFilePair
     }))
 
     try {
+        // Fast-reject generated / lock files — their diffs are never useful
+        // and computing them freezes the renderer.
+        if (isGeneratedFile(params.filePath)) {
+            logger.info("[Git:getFilePair] Skipping generated file", JSON.stringify({ filePath: params.filePath }))
+            return { before: "", after: "", tooLarge: true }
+        }
+
         // Get before content (use oldPath if it's a rename)
         const beforePath = params.oldPath || params.filePath
         const beforeResult = await handleGetFileAtTreeish({
@@ -1819,6 +1862,15 @@ async function handleGetFilePair(params: GetFilePairParams): Promise<GetFilePair
                 after: "",
                 tooLarge: true,
             }
+        }
+
+        // Check line count — files under the byte limit can still have too many
+        // lines for the diff algorithm + DOM renderer to handle without freezing.
+        if (exceedsLineLimit(beforeResult.content) || exceedsLineLimit(afterContent)) {
+            logger.info("[Git:getFilePair] File exceeds line limit for diff", JSON.stringify({
+                filePath: params.filePath,
+            }))
+            return { before: "", after: "", tooLarge: true }
         }
 
         logger.info("[Git:getFilePair] Got file pair", JSON.stringify({

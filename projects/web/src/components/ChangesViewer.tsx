@@ -371,7 +371,7 @@ export const ChangesViewer = observer(function ChangesViewer({
                 ) : selectedFile?.binary ? (
                     <div className="flex items-center justify-center py-12 text-muted text-sm">Binary file — cannot display diff</div>
                 ) : filePair?.tooLarge ? (
-                    <div className="flex items-center justify-center py-12 text-muted text-sm">Too large to display</div>
+                    <div className="flex items-center justify-center py-12 text-muted text-sm">File too large to diff</div>
                 ) : filePair && selectedFile ? (
                     <div className="min-h-full bg-editor-background">
                         {viewMode === "current" ? (

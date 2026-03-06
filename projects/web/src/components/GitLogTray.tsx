@@ -11,6 +11,22 @@ import { getDisambiguatedPaths } from "./utils/paths"
 
 const PAGE_SIZE = 50
 const FILE_CHIP_THRESHOLD = 7
+const MAX_LINE_COUNT_FOR_DIFF = 10_000
+
+const GENERATED_FILE_BASENAMES = new Set([
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "composer.lock",
+    "Gemfile.lock",
+    "Cargo.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+    "go.sum",
+    "flake.lock",
+    "bun.lock",
+    "bun.lockb",
+])
 
 interface GitLogTrayProps {
     workDir: string
@@ -331,6 +347,14 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
 
         async function loadFilePair(scopeValue: ScopeOption, commitValue: GitLogEntry, fileValue: ChangedFileInfo) {
             try {
+                // Fast-reject generated / lock files — their diffs are never
+                // useful and computing them freezes the renderer.
+                const basename = fileValue.path.split("/").pop() ?? fileValue.path
+                if (GENERATED_FILE_BASENAMES.has(basename)) {
+                    setFilePair({ before: "", after: "", tooLarge: true })
+                    return
+                }
+
                 const beforeTreeish = commitValue.parentCount === 0 ? null : `${commitValue.sha}^`
                 const beforePath = fileValue.oldPath ?? fileValue.path
 
@@ -352,6 +376,24 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
                 if (cancelled) return
 
                 if (beforeResult.tooLarge || afterResult.tooLarge) {
+                    setFilePair({ before: "", after: "", tooLarge: true })
+                    return
+                }
+
+                // Check line count — files under the byte limit can still
+                // freeze the diff algorithm + DOM renderer.
+                const exceedsLineLimit = (content: string) => {
+                    let count = 0
+                    for (let i = 0; i < content.length; i++) {
+                        if (content[i] === "\n") {
+                            count++
+                            if (count > MAX_LINE_COUNT_FOR_DIFF) return true
+                        }
+                    }
+                    return false
+                }
+
+                if (exceedsLineLimit(beforeResult.content) || exceedsLineLimit(afterResult.content)) {
                     setFilePair({ before: "", after: "", tooLarge: true })
                     return
                 }
@@ -553,7 +595,7 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
                                         ) : selectedFile?.binary ? (
                                             <div className="flex items-center justify-center py-12 text-muted text-sm">Binary file — cannot display diff</div>
                                         ) : filePair?.tooLarge ? (
-                                            <div className="flex items-center justify-center py-12 text-muted text-sm">Too large to display</div>
+                                            <div className="flex items-center justify-center py-12 text-muted text-sm">File too large to diff</div>
                                         ) : selectedFile && filePair ? (
                                             <div className="min-h-full bg-editor-background">
                                                 {viewMode === "current" ? (
