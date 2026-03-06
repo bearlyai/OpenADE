@@ -249,6 +249,13 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
         editorRef.current?.focus()
     }, [repo?.path, editorManager])
 
+    // Prune favorites that reference deleted files
+    useEffect(() => {
+        if (repo?.path) {
+            editorManager.validateFiles(repo.path)
+        }
+    }, [repo?.path, editorManager])
+
     const handleCreate = (mode: "plan" | "do" | "ask" | "hyperplan") => {
         if (!editorManager.value.trim() || !workspaceId) return
 

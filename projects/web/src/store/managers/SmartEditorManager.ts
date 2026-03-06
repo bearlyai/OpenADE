@@ -11,6 +11,7 @@
  */
 
 import { makeAutoObservable, observable } from "mobx"
+import { filesApi } from "../../electronAPI/files"
 import type { ImageAttachment } from "../../types"
 
 // ============================================================================
@@ -38,7 +39,15 @@ type AllStats = Record<string, NamespaceStats>
 const FILE_USAGE_STATS_KEY = "code:fileUsageStats"
 const MAX_STORED_FILES = 50
 const MAX_FAVORITES = 5
-const MAX_RECENTS = 5
+
+/** Half-life for frecency decay: after this duration, a file's score halves. */
+const FRECENCY_HALF_LIFE_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+
+function frecencyScore(stat: FileUsageStat, now: number): number {
+    const ageMs = Math.max(0, now - stat.lastUsed)
+    const decay = 2 ** (-ageMs / FRECENCY_HALF_LIFE_MS)
+    return stat.count * decay
+}
 
 // ============================================================================
 // SmartEditorManager
@@ -56,6 +65,9 @@ export class SmartEditorManager {
     pendingImages: ImageAttachment[] = []
     // In-memory data URLs for previewing pending images (keyed by image ID)
     pendingImageDataUrls: Map<string, string> = observable.map()
+
+    // Bumped after localStorage mutations to invalidate MobX computed getters
+    private _statsVersion = 0
 
     // Callbacks registered by SmartEditor
     private onInsertFile: ((path: string) => void) | null = null
@@ -149,17 +161,47 @@ export class SmartEditorManager {
         this.onInsertFile?.(path)
     }
 
-    // === Favorites/Recents (computed from localStorage, scoped to workspaceId) ===
+    // === Favorites (computed from localStorage, scoped to workspaceId, ranked by frecency) ===
 
     get favorites(): FileUsageItem[] {
         const paths = this.getFavoritePaths()
         return this.pathsToItems(paths)
     }
 
-    get recents(): FileUsageItem[] {
-        const favoritePaths = this.getFavoritePaths()
-        const paths = this.getRecentPaths(favoritePaths)
-        return this.pathsToItems(paths)
+    /**
+     * Validate that tracked files still exist on disk.
+     * Removes stale entries from localStorage and bumps version to trigger re-render.
+     */
+    async validateFiles(dir: string): Promise<void> {
+        const stats = this.getFileUsageStats()
+        const paths = Object.keys(stats)
+        if (paths.length === 0) return
+
+        const results = await Promise.all(
+            paths.map(async (relPath) => {
+                try {
+                    const fullPath = `${dir}/${relPath}`
+                    const desc = await filesApi.describePath({ path: fullPath })
+                    return { relPath, exists: desc.type !== "not_found" }
+                } catch {
+                    // If the check fails, keep the entry (don't prune on error)
+                    return { relPath, exists: true }
+                }
+            })
+        )
+
+        const stalePaths = results.filter((r) => !r.exists).map((r) => r.relPath)
+        if (stalePaths.length === 0) return
+
+        const all = this.getAllFileUsageStats()
+        const ns = all[this.workspaceId]
+        if (!ns) return
+
+        for (const p of stalePaths) {
+            delete ns[p]
+        }
+        localStorage.setItem(FILE_USAGE_STATS_KEY, JSON.stringify(all))
+        this._statsVersion++
     }
 
     // === Private: localStorage operations (uses workspaceId as namespace) ===
@@ -177,6 +219,8 @@ export class SmartEditorManager {
     }
 
     private getFileUsageStats(): NamespaceStats {
+        // Reference _statsVersion so MobX tracks this dependency
+        void this._statsVersion
         const all = this.getAllFileUsageStats()
         return all[this.workspaceId] ?? {}
     }
@@ -200,27 +244,20 @@ export class SmartEditorManager {
         }
 
         localStorage.setItem(FILE_USAGE_STATS_KEY, JSON.stringify(all))
+        this._statsVersion++
     }
 
     private getFavoritePaths(): string[] {
         const stats = this.getFileUsageStats()
+        const now = Date.now()
         const entries = Object.entries(stats)
-        entries.sort((a, b) => b[1].count - a[1].count)
+        entries.sort((a, b) => frecencyScore(b[1], now) - frecencyScore(a[1], now))
         return entries.slice(0, MAX_FAVORITES).map(([path]) => path)
     }
 
-    private getRecentPaths(excludePaths: string[]): string[] {
-        const stats = this.getFileUsageStats()
-        const excludeSet = new Set(excludePaths)
-        const entries = Object.entries(stats).filter(([path]) => !excludeSet.has(path))
-        entries.sort((a, b) => b[1].lastUsed - a[1].lastUsed)
-        return entries.slice(0, MAX_RECENTS).map(([path]) => path)
-    }
-
     private pathsToItems(paths: string[]): FileUsageItem[] {
-        const allPaths = [...this.getFavoritePaths(), ...this.getRecentPaths([])]
         return paths.map((path) => {
-            const { fileName, parentDir } = this.getDisplayName(path, allPaths)
+            const { fileName, parentDir } = this.getDisplayName(path, paths)
             return { path, fileName, parentDir }
         })
     }
