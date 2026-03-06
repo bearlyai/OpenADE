@@ -7,12 +7,13 @@
 <p align="center">
   <strong>Agentic Development Environment for Devs Who Don't Ship Slop</strong>
   <br />
-  <sub>Free Local Software · Powered by Claude Code & Codex</sub>
+  <sub>100% Free & Open Source · Powered by Claude Code & Codex</sub>
 </p>
 
 <p align="center">
   <a href="https://github.com/bearlyai/OpenADE/releases"><img src="https://img.shields.io/github/v/release/bearlyai/OpenADE?style=flat-square&color=blue" alt="Release"></a>
   <a href="https://github.com/bearlyai/OpenADE/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"></a>
+  <img src="https://img.shields.io/badge/price-free-brightgreen?style=flat-square" alt="Free">
   <a href="https://discord.gg/EE8PHSpryH"><img src="https://img.shields.io/discord/1234567890?style=flat-square&logo=discord&logoColor=white&label=Discord&color=5865F2" alt="Discord"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows%20(experimental)-lightgrey?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/works-offline-orange?style=flat-square" alt="Works Offline">
@@ -105,8 +106,8 @@ Your code never leaves your machine. No cloud. No syncing to someone else's serv
 ### 🗂️ IDE Essentials Built In
 Diff viewer, file browser, fast search, full terminal, and process manager—all without leaving the app.
 
-### 💳 Uses Your Existing Subscriptions
-No separate billing. No per-seat licensing. Works with your existing Claude Code or Codex subscription.
+### 💸 100% Free — No Catch
+No subscription. No per-seat licensing. No payment to us, ever. OpenADE is free, open-source software. You just need your own Claude Code or Codex API access.
 
 ### 🔀 Multi-Harness: Claude Code & Codex
 Switch between Claude Code and OpenAI Codex as your execution engine. Same UI, same workflow, different models under the hood.

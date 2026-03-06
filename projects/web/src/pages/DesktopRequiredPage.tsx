@@ -70,7 +70,7 @@ export function DesktopRequiredPage() {
                     <h1 className="text-4xl font-bold text-base-content">OpenADE</h1>
                 </div>
 
-                <p className="text-xl text-muted mb-4">AI-powered coding that actually understands your codebase.</p>
+                <p className="text-xl text-muted mb-4">AI-powered coding that actually understands your codebase. 100% free.</p>
 
                 <p className="text-muted mb-12">
                     OpenADE runs directly on your machine, giving your AI agent full access to your repositories, git history, and local environment. It's the
@@ -90,9 +90,10 @@ export function DesktopRequiredPage() {
                 </div>
 
                 <div className="bg-base-200 border border-border p-8">
-                    <h2 className="text-lg font-semibold text-base-content mb-2">Desktop App Required</h2>
+                    <h2 className="text-lg font-semibold text-base-content mb-2">Download Free Desktop App</h2>
                     <p className="text-muted mb-6">
-                        OpenADE requires the desktop app to access your local files and run agent capabilities securely on your machine.
+                        OpenADE is 100% free and open source. Download the desktop app to access your local files and run agent capabilities securely on your
+                        machine.
                     </p>
 
                     {detectedPlatform !== "unknown" ? (
