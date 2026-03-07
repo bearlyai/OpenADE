@@ -32,10 +32,11 @@ export const MODEL_REGISTRY: Record<HarnessId, HarnessModelConfig> = {
     },
     codex: {
         models: [
+            { id: "gpt-5.4", fullId: "gpt-5.4", label: "GPT-5.4", displayClass: "Codex" },
             { id: "gpt-5.3-codex", fullId: "gpt-5.3-codex", label: "GPT-5.3 Codex", displayClass: "Codex" },
             { id: "gpt-5.3-codex-spark", fullId: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark", displayClass: "Codex" },
         ],
-        defaultModel: "gpt-5.3-codex",
+        defaultModel: "gpt-5.4",
     },
 }
 
@@ -94,5 +95,6 @@ export function normalizeModelClass(modelId: string): string {
     if (lower.includes("sonnet")) return "Sonnet"
     if (lower.includes("haiku")) return "Haiku"
     if (lower.includes("codex")) return "Codex"
+    if (lower.startsWith("gpt-")) return "Codex"
     return "Other"
 }

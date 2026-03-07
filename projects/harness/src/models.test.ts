@@ -89,8 +89,8 @@ describe("getModelsForHarness", () => {
 
     it("returns models for codex", () => {
         const models = getModelsForHarness("codex")
-        expect(models.length).toBe(2)
-        expect(models.map((m) => m.id)).toEqual(["gpt-5.3-codex", "gpt-5.3-codex-spark"])
+        expect(models.length).toBe(3)
+        expect(models.map((m) => m.id)).toEqual(["gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark"])
     })
 
     it("returns empty array for unknown harness", () => {
@@ -107,8 +107,8 @@ describe("getDefaultModelForHarness", () => {
         expect(getDefaultModelForHarness("claude-code")).toBe("opus")
     })
 
-    it("returns gpt-5.3-codex for codex", () => {
-        expect(getDefaultModelForHarness("codex")).toBe("gpt-5.3-codex")
+    it("returns gpt-5.4 for codex", () => {
+        expect(getDefaultModelForHarness("codex")).toBe("gpt-5.4")
     })
 
     it("falls back to DEFAULT_MODEL for unknown harness", () => {
@@ -148,12 +148,14 @@ describe("normalizeModelClass", () => {
     it("resolves from registry by fullId", () => {
         expect(normalizeModelClass("claude-opus-4-6")).toBe("Opus")
         expect(normalizeModelClass("gpt-5.3-codex")).toBe("Codex")
+        expect(normalizeModelClass("gpt-5.4")).toBe("Codex")
     })
 
     it("falls back to string matching for legacy model IDs", () => {
         expect(normalizeModelClass("claude-opus-4-20250514")).toBe("Opus")
         expect(normalizeModelClass("claude-sonnet-3-5-20241022")).toBe("Sonnet")
         expect(normalizeModelClass("some-codex-variant")).toBe("Codex")
+        expect(normalizeModelClass("gpt-5.4-xhigh")).toBe("Codex")
     })
 
     it("returns Other for unknown models", () => {

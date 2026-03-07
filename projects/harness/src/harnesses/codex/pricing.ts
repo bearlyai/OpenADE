@@ -14,6 +14,7 @@ const CODEX_PRICING: Record<string, ModelPricing> = {
     "gpt-5.2-codex": { inputPerMillion: 1.75, outputPerMillion: 14.0, cacheReadPerMillion: 0.175 },
     "gpt-5.3-codex": { inputPerMillion: 1.75, outputPerMillion: 14.0, cacheReadPerMillion: 0.175 },
     "gpt-5.3-codex-spark": { inputPerMillion: 1.75, outputPerMillion: 14.0, cacheReadPerMillion: 0.175 },
+    "gpt-5.4": { inputPerMillion: 2.50, outputPerMillion: 15.0, cacheReadPerMillion: 1.25 },
 }
 
 // Suffixes appended by model_reasoning_effort config — don't affect per-token pricing
