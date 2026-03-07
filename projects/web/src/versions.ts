@@ -8,6 +8,17 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.63.0",
+        title: "GPT-5.4, Frecency Favorites & Diff Performance",
+        date: "2026-03-06",
+        highlights: [
+            "GPT-5.4 is now the default Codex model, offering improved coding performance",
+            "File favorites now use frecency ranking — recently and frequently used files surface first",
+            "Stale file favorites that reference deleted files are automatically pruned on load",
+            "Large file diffs (lock files, generated files, 10k+ line files) no longer freeze the Changes and Git Log views",
+        ],
+    },
+    {
         version: "0.62.0",
         title: "Thinking Controls, Stats Sharing & Sidebar Polish",
         date: "2026-03-01",
