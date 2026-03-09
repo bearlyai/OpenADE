@@ -7,6 +7,7 @@ import { useParams } from "react-router"
 import { useCodeStore } from "../../store/context"
 import { SettingsModal, type SettingsTab } from "../settings/SettingsModal"
 import { ScrollArea } from "../ui/ScrollArea"
+import { CronsSidebarContent } from "./CronList"
 import { ReposSidebarContent } from "./RepoList"
 import { TasksSidebarContent } from "./TaskList"
 import { codeSidebarManager } from "./sidebarManager"
@@ -60,6 +61,7 @@ const SidebarContent = observer(() => {
             <ScrollArea className="flex-1 mt-2" viewportClassName="h-full">
                 <div className="flex flex-col gap-2">
                     <ReposSidebarContent workspaceId={workspaceId} />
+                    {workspaceId && <CronsSidebarContent workspaceId={workspaceId} />}
                     {workspaceId && <TasksSidebarContent workspaceId={workspaceId} taskId={taskId} creationId={creationId} />}
                 </div>
             </ScrollArea>

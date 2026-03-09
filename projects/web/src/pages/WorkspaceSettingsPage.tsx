@@ -324,16 +324,16 @@ export const WorkspaceSettingsPage = observer(({ workspaceId, repo }: WorkspaceS
                                 <FileText size={20} className="text-muted flex-shrink-0 mt-0.5" />
                                 <div>
                                     <p className="text-sm text-base-content mb-2">
-                                        Processes are configured via <code className="bg-base-200 px-1.5 py-0.5 rounded text-xs">procs.toml</code> files in your
-                                        project.
+                                        Processes are configured via <code className="bg-base-200 px-1.5 py-0.5 rounded text-xs">openade.toml</code> files in
+                                        your project.
                                     </p>
                                     <p className="text-xs text-muted mb-3">
-                                        Create a <code className="bg-base-200 px-1 py-0.5 rounded">procs.toml</code> file in any directory to define processes
-                                        for that directory. Setup processes (with <code className="bg-base-200 px-1 py-0.5 rounded">setup = true</code>) run
-                                        automatically before other processes.
+                                        Create an <code className="bg-base-200 px-1 py-0.5 rounded">openade.toml</code> file in any directory to define
+                                        processes for that directory. Setup processes (with{" "}
+                                        <code className="bg-base-200 px-1 py-0.5 rounded">setup = true</code>) run automatically before other processes.
                                     </p>
                                     <div className="bg-base-200 p-3 rounded font-mono text-xs text-muted">
-                                        <div className="text-base-content/70 mb-2"># procs.toml</div>
+                                        <div className="text-base-content/70 mb-2"># openade.toml</div>
                                         <div>[[process]]</div>
                                         <div>name = "Install"</div>
                                         <div>command = "npm install"</div>

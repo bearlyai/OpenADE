@@ -27,7 +27,7 @@ import { ProcessOutput } from "./ProcessOutput"
 import { type MenuItem, Menu } from "./ui/Menu"
 
 interface ProcessesTrayProps {
-    /** Path to search for procs.toml (repo root or worktree root) */
+    /** Path to search for config files (repo root or worktree root) */
     searchPath: string
     /** Run context for processes */
     context: RunContext
@@ -67,7 +67,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
     const [subdirPath, setSubdirPath] = useState("")
     const [updateDescription, setUpdateDescription] = useState("")
 
-    // Load procs.toml files
+    // Load config files
     const loadProcs = useCallback(
         async (isRefresh = false) => {
             if (isRefresh) {
@@ -78,6 +78,8 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
             try {
                 const result = await readProcs(searchPath)
                 setProcsResult(result)
+                // Keep CronManager in sync with latest config
+                codeStore.crons.updateCronDefs(workspaceId, result)
             } catch (err) {
                 console.error("[ProcessesTray] Failed to read procs:", err)
                 setProcsResult(null)
@@ -142,7 +144,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
             label: (
                 <div className="flex items-center gap-2">
                     <Plus size={14} />
-                    <span>Create procs.toml</span>
+                    <span>Create openade.toml</span>
                 </div>
             ),
             onSelect: () => setFormMode("create"),
@@ -152,7 +154,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
             label: (
                 <div className="flex items-center gap-2">
                     <Pencil size={14} />
-                    <span>Update procs.toml</span>
+                    <span>Update openade.toml</span>
                 </div>
             ),
             onSelect: () => setFormMode("update"),
@@ -425,8 +427,8 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
         }
     }, [runningDaemons, repoProcesses])
 
-    // Extract directory from config path (e.g., "packages/api/procs.toml" -> "packages/api")
-    const configDir = group.config.relativePath.replace(/\/procs\.toml$/, "") || "."
+    // Extract directory from config path (e.g., "packages/api/openade.toml" -> "packages/api")
+    const configDir = group.config.relativePath.replace(/\/(openade|procs)\.toml$/, "") || "."
 
     return (
         <div>

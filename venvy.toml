@@ -6,17 +6,10 @@ type = "tmux-window"
 	name = "frontend"
 
 		[[modules.config.panes]]
-		commands = ["(cd projects/api && npm run start)"]
+		commands = ["(cd projects/electron && npm run start)"]
 
 	    [[modules.config.panes]]
-	    commands = ["(cd projects/electron && npm run start)"]
-
-		[[modules.config.panes]]
-		commands = ["(cd projects/dashboard && npm run start)"]
-
-		# blank as dev scratch pad
-		[[modules.config.panes]]
-		commands = [""]
+	    commands = ["(cd projects/web && npm run start)"]
 
 		[[modules.config.panes]]
 		commands = [""]
@@ -26,7 +19,6 @@ type = "tmux-window"
 
 
 
-
 [[projects]]
-name = "bearly"
+name = "openade"
 modules = ["tmux"]

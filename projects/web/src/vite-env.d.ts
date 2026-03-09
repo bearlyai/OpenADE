@@ -152,6 +152,8 @@ interface OpenADEAPI {
     }
     procs: {
         read: (params: { path: string }) => Promise<unknown>
+        readFile: (params: { filePath: string }) => Promise<string>
+        writeFile: (params: { filePath: string; content: string }) => Promise<void>
     }
 }
 

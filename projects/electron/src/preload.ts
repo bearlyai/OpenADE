@@ -299,10 +299,12 @@ const openadeAPI = {
     },
 
     // ========================================================================
-    // Procs (process file reading)
+    // Procs (config file reading/writing)
     // ========================================================================
     procs: {
         read: (params: { path: string }) => ipcRenderer.invoke("procs:read", params),
+        readFile: (params: { filePath: string }) => ipcRenderer.invoke("procs:readFile", params),
+        writeFile: (params: { filePath: string; content: string }) => ipcRenderer.invoke("procs:writeFile", params),
     },
 }
 

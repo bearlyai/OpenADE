@@ -1,12 +1,12 @@
 /**
- * TOML parser for procs.toml files
+ * TOML parser for openade.toml / procs.toml files
  *
  * Uses Zod for validation with clean error messages.
  */
 
 import { parse as parseToml } from "smol-toml"
 import { z } from "zod"
-import type { ProcessDef, ProcsConfig, ProcsConfigError } from "./types"
+import type { CronDef, ProcessDef, ProcsConfig, ProcsConfigError } from "./types"
 
 /** Zod schema for a single process definition (TOML uses snake_case) */
 const ProcessSchema = z.object({
@@ -17,18 +17,32 @@ const ProcessSchema = z.object({
     type: z.enum(["setup", "daemon", "task", "check"]).default("daemon"),
 })
 
-/** Zod schema for the entire procs.toml file */
-const ProcsFileSchema = z.object({
+/** Zod schema for a single cron definition (TOML uses snake_case) */
+const CronSchema = z.object({
+    name: z.string().min(1, "name is required"),
+    schedule: z.string().min(1, "schedule is required"),
+    type: z.enum(["plan", "do", "ask", "hyperplan"]),
+    prompt: z.string().min(1, "prompt is required"),
+    append_system_prompt: z.string().optional(),
+    images: z.array(z.string()).optional(),
+    isolation: z.enum(["head", "worktree"]).optional(),
+    harness: z.string().optional(),
+    in_task_id: z.string().optional(),
+})
+
+/** Zod schema for the entire config file */
+const ConfigFileSchema = z.object({
     process: z.array(ProcessSchema).default([]),
+    cron: z.array(CronSchema).default([]),
 })
 
 export type ParseResult = { config: ProcsConfig } | { error: ProcsConfigError }
 
 /**
- * Parse a procs.toml file content into a ProcsConfig
+ * Parse an openade.toml / procs.toml file content into a ProcsConfig
  *
  * @param content - Raw TOML file content
- * @param relativePath - Path relative to repo root (used for error messages and process IDs)
+ * @param relativePath - Path relative to repo root (used for error messages and IDs)
  * @returns Parsed config or error
  */
 export function parseProcsFile(content: string, relativePath: string): ParseResult {
@@ -37,9 +51,9 @@ export function parseProcsFile(content: string, relativePath: string): ParseResu
         const raw = parseToml(content)
 
         // Validate with Zod
-        const parsed = ProcsFileSchema.parse(raw)
+        const parsed = ConfigFileSchema.parse(raw)
 
-        // Transform to ProcessDef (snake_case -> camelCase, add id)
+        // Transform processes (snake_case -> camelCase, add id)
         const processes: ProcessDef[] = parsed.process.map((proc) => ({
             id: `${relativePath}::${proc.name}`,
             name: proc.name,
@@ -49,7 +63,21 @@ export function parseProcsFile(content: string, relativePath: string): ParseResu
             type: proc.type,
         }))
 
-        return { config: { relativePath, processes } }
+        // Transform crons (snake_case -> camelCase, add id)
+        const crons: CronDef[] = parsed.cron.map((c) => ({
+            id: `${relativePath}::${c.name}`,
+            name: c.name,
+            schedule: c.schedule,
+            type: c.type,
+            prompt: c.prompt,
+            appendSystemPrompt: c.append_system_prompt,
+            images: c.images,
+            isolation: c.isolation,
+            harness: c.harness,
+            inTaskId: c.in_task_id,
+        }))
+
+        return { config: { relativePath, processes, crons } }
     } catch (e) {
         if (e instanceof z.ZodError) {
             // Format Zod errors nicely

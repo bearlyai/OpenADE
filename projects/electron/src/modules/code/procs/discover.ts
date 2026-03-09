@@ -1,13 +1,19 @@
 /**
- * File discovery for procs.toml files
+ * File discovery for openade.toml / procs.toml files
  *
  * Uses git ls-files for speed when available, falls back to filesystem walk.
+ * Searches for both openade.toml and procs.toml; when both exist in the same
+ * directory, openade.toml takes priority.
+ *
  * Pure Node.js, no Electron dependencies - extractable to standalone library.
  */
 
 import { spawn } from "child_process"
 import * as fs from "fs/promises"
 import * as path from "path"
+
+/** Config filenames in priority order (openade.toml preferred over procs.toml) */
+const CONFIG_FILENAMES = ["openade.toml", "procs.toml"]
 
 export interface GitInfo {
     repoRoot: string
@@ -59,14 +65,45 @@ export async function detectGitInfo(dir: string): Promise<GitInfo | null> {
 }
 
 /**
- * Find all procs.toml files in a directory tree
+ * Deduplicate config files: when both openade.toml and procs.toml exist
+ * in the same directory, keep only openade.toml.
+ */
+function deduplicateConfigFiles(files: string[]): string[] {
+    // Group by directory
+    const byDir = new Map<string, string[]>()
+    for (const filePath of files) {
+        const dir = path.dirname(filePath)
+        const existing = byDir.get(dir) ?? []
+        existing.push(filePath)
+        byDir.set(dir, existing)
+    }
+
+    // For each directory, pick the highest-priority file
+    const result: string[] = []
+    for (const dirFiles of byDir.values()) {
+        // Sort by priority: openade.toml first
+        const sorted = dirFiles.sort((a, b) => {
+            const aIdx = CONFIG_FILENAMES.indexOf(path.basename(a))
+            const bIdx = CONFIG_FILENAMES.indexOf(path.basename(b))
+            return aIdx - bIdx
+        })
+        result.push(sorted[0])
+    }
+
+    return result
+}
+
+/**
+ * Find all openade.toml / procs.toml files in a directory tree
  *
  * Uses git ls-files when available (fast, respects .gitignore),
  * falls back to filesystem walk. Also checks for untracked files.
+ * When both openade.toml and procs.toml exist in the same directory,
+ * only openade.toml is returned.
  *
  * @param searchRoot - Directory to start searching from
  * @param gitInfo - Git info if available (for faster search)
- * @returns Array of absolute paths to procs.toml files
+ * @returns Array of absolute paths to config files
  */
 export async function findProcsFiles(searchRoot: string, gitInfo: GitInfo | null): Promise<string[]> {
     const root = gitInfo?.repoRoot ?? searchRoot
@@ -74,37 +111,40 @@ export async function findProcsFiles(searchRoot: string, gitInfo: GitInfo | null
     // Try git ls-files first (fast, respects .gitignore)
     if (gitInfo) {
         try {
-            // Get tracked files
-            const trackedOutput = await runGit(["ls-files", "**/procs.toml", "procs.toml"], root)
-
-            // Get untracked files (not ignored)
-            const untrackedOutput = await runGit(
-                ["ls-files", "--others", "--exclude-standard", "**/procs.toml", "procs.toml"],
-                root
-            )
-
             const files = new Set<string>()
 
-            if (trackedOutput) {
-                for (const f of trackedOutput.split("\n").filter(Boolean)) {
-                    files.add(path.join(root, f))
+            // Search for both config filenames
+            for (const filename of CONFIG_FILENAMES) {
+                // Get tracked files
+                const trackedOutput = await runGit(["ls-files", `**/${filename}`, filename], root)
+
+                // Get untracked files (not ignored)
+                const untrackedOutput = await runGit(
+                    ["ls-files", "--others", "--exclude-standard", `**/${filename}`, filename],
+                    root
+                )
+
+                if (trackedOutput) {
+                    for (const f of trackedOutput.split("\n").filter(Boolean)) {
+                        files.add(path.join(root, f))
+                    }
+                }
+
+                if (untrackedOutput) {
+                    for (const f of untrackedOutput.split("\n").filter(Boolean)) {
+                        files.add(path.join(root, f))
+                    }
                 }
             }
 
-            if (untrackedOutput) {
-                for (const f of untrackedOutput.split("\n").filter(Boolean)) {
-                    files.add(path.join(root, f))
-                }
-            }
-
-            return Array.from(files)
+            return deduplicateConfigFiles(Array.from(files))
         } catch {
             // Fall through to filesystem search
         }
     }
 
     // Fallback: filesystem walk with sensible ignores
-    return walkForProcsFiles(root)
+    return walkForConfigFiles(root)
 }
 
 const IGNORE_DIRS = new Set([
@@ -123,15 +163,17 @@ const IGNORE_DIRS = new Set([
     ".output",
 ])
 
+const CONFIG_FILENAMES_SET = new Set(CONFIG_FILENAMES)
+
 /**
- * Walk filesystem to find procs.toml files
+ * Walk filesystem to find config files
  *
  * @param dir - Directory to walk
  * @param files - Accumulator for found files
  * @param depth - Current depth (for limiting recursion)
- * @returns Array of absolute paths to procs.toml files
+ * @returns Array of absolute paths to config files
  */
-async function walkForProcsFiles(dir: string, files: string[] = [], depth = 0): Promise<string[]> {
+async function walkForConfigFiles(dir: string, files: string[] = [], depth = 0): Promise<string[]> {
     // Limit depth to avoid runaway recursion
     if (depth > 10) return files
 
@@ -139,15 +181,15 @@ async function walkForProcsFiles(dir: string, files: string[] = [], depth = 0): 
         const entries = await fs.readdir(dir, { withFileTypes: true })
 
         for (const entry of entries) {
-            if (entry.name === "procs.toml" && entry.isFile()) {
+            if (CONFIG_FILENAMES_SET.has(entry.name) && entry.isFile()) {
                 files.push(path.join(dir, entry.name))
             } else if (entry.isDirectory() && !IGNORE_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
-                await walkForProcsFiles(path.join(dir, entry.name), files, depth + 1)
+                await walkForConfigFiles(path.join(dir, entry.name), files, depth + 1)
             }
         }
     } catch {
         // Ignore permission errors etc
     }
 
-    return files
+    return deduplicateConfigFiles(files)
 }

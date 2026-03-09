@@ -1979,6 +1979,11 @@ crelt@^1.0.0:
   resolved "https://registry.npmjs.org/crelt/-/crelt-1.0.6.tgz"
   integrity sha512-VQ2MBenTq1fWZUH9DJNGti7kKv6EeAuYr3cLwxUWhIu1baTaXh4Ib5W2CqHVqib4/MqbYGJqiL3Zb8GJZr3l4g==
 
+croner@^10.0.1:
+  version "10.0.1"
+  resolved "https://registry.yarnpkg.com/croner/-/croner-10.0.1.tgz#4eb92806c99539146dbe2f3ee3907e319cb2847a"
+  integrity sha512-ixNtAJndqh173VQ4KodSdJEI6nuioBWI0V1ITNKhZZsO0pEMoDxz539T4FTTbSZ/xIOSuDnzxLVRqBVSvPNE2g==
+
 css-blank-pseudo@^6.0.2:
   version "6.0.2"
   resolved "https://registry.npmjs.org/css-blank-pseudo/-/css-blank-pseudo-6.0.2.tgz"

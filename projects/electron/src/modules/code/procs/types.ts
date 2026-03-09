@@ -1,5 +1,5 @@
 /**
- * Types for procs.toml configuration
+ * Types for openade.toml / procs.toml configuration
  *
  * These types are designed to be extractable to a standalone library.
  * No Electron or Node-specific dependencies.
@@ -15,13 +15,13 @@
 export type ProcessType = "setup" | "daemon" | "task" | "check"
 
 export interface ProcessDef {
-    /** Unique ID: "{relativePath}::{name}" e.g., "packages/api/procs.toml::Backend" */
+    /** Unique ID: "{relativePath}::{name}" e.g., "packages/api/openade.toml::Backend" */
     id: string
     /** Display name */
     name: string
     /** Shell command to run */
     command: string
-    /** Working directory relative to procs.toml location */
+    /** Working directory relative to config file location */
     workDir?: string
     /** Optional URL for web servers (shown as quick-open link) */
     url?: string
@@ -29,11 +29,46 @@ export interface ProcessDef {
     type: ProcessType
 }
 
+// ============================================================================
+// Cron Types
+// ============================================================================
+
+export type CronTaskType = "plan" | "do" | "ask" | "hyperplan"
+
+export interface CronDef {
+    /** Unique ID: "{relativePath}::{name}" */
+    id: string
+    /** Display name */
+    name: string
+    /** 5-field cron expression (e.g., "0 9 * * 1") */
+    schedule: string
+    /** Execution type */
+    type: CronTaskType
+    /** The prompt to send to the agent */
+    prompt: string
+    /** Additional system prompt appended to execution */
+    appendSystemPrompt?: string
+    /** Image file paths relative to repo root */
+    images?: string[]
+    /** Isolation strategy: "head" (default) or "worktree" */
+    isolation?: "head" | "worktree"
+    /** Harness to use (e.g., "claude-code", "codex") */
+    harness?: string
+    /** If set, run in an existing task instead of creating a new one */
+    inTaskId?: string
+}
+
+// ============================================================================
+// Config Types
+// ============================================================================
+
 export interface ProcsConfig {
-    /** Path relative to repo root, e.g., "packages/api/procs.toml" */
+    /** Path relative to repo root, e.g., "openade.toml" or "packages/api/procs.toml" */
     relativePath: string
     /** Processes defined in this config file */
     processes: ProcessDef[]
+    /** Cron jobs defined in this config file */
+    crons: CronDef[]
 }
 
 export interface ProcsConfigError {

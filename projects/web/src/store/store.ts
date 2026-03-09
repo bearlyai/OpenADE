@@ -18,6 +18,7 @@ import { type TaskStore, syncTaskPreviewFromStore } from "../persistence/taskSto
 import type { User } from "../types"
 
 import { CommentManager } from "./managers/CommentManager"
+import { CronManager } from "./managers/CronManager"
 import { EventManager } from "./managers/EventManager"
 import { ExecutionManager } from "./managers/ExecutionManager"
 import { McpServerManager } from "./managers/McpServerManager"
@@ -25,6 +26,7 @@ import { NotificationManager } from "./managers/NotificationManager"
 import { QueryManager } from "./managers/QueryManager"
 import { RepoManager } from "./managers/RepoManager"
 import { RepoProcessesManager } from "./managers/RepoProcessesManager"
+import { RunCmdManager } from "./managers/RunCmdManager"
 import { SmartEditorManagerStore } from "./managers/SmartEditorManager"
 import { type CreationPhase, type TaskCreation, TaskCreationManager, type TaskCreationOptions } from "./managers/TaskCreationManager"
 import { TaskManager } from "./managers/TaskManager"
@@ -72,6 +74,8 @@ export class CodeStore {
     readonly repoProcesses: RepoProcessesManager
     readonly mcpServers: McpServerManager
     readonly smartEditors: SmartEditorManagerStore
+    readonly runCmd: RunCmdManager
+    readonly crons: CronManager
 
     constructor(config: CodeStoreConfig) {
         this.config = config
@@ -87,6 +91,8 @@ export class CodeStore {
         this.repoProcesses = new RepoProcessesManager()
         this.mcpServers = new McpServerManager(this)
         this.smartEditors = new SmartEditorManagerStore()
+        this.runCmd = new RunCmdManager(this)
+        this.crons = new CronManager(this)
 
         makeAutoObservable(this, {
             workingTaskIds: true,
@@ -107,6 +113,8 @@ export class CodeStore {
             repoProcesses: false,
             mcpServers: false,
             smartEditors: false,
+            runCmd: false,
+            crons: false,
         })
     }
 
@@ -144,6 +152,11 @@ export class CodeStore {
                 this.personalSettingsStore = personalSettingsConnection.store
                 this.storeInitialized = true
                 this.storeInitializing = false
+            })
+
+            // Start cron tracking for all repos (runs in background, doesn't block init)
+            this.crons.startAll().catch((err) => {
+                console.error("[CodeStore] Failed to start cron manager:", err)
             })
 
             const initialEnvVars = personalSettingsConnection.store.settings.get()?.envVars
@@ -319,6 +332,7 @@ export class CodeStore {
             this.focusHandler = null
         }
 
+        this.crons.stop()
         this.mcpServers.dispose()
         this.storeInitialized = false
     }

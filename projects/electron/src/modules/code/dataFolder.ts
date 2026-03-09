@@ -24,7 +24,7 @@ import { isDev } from "../../config"
 const DATA_BASE_DIR = path.join(os.homedir(), ".openade", "data")
 
 /** Allowed folder names — validated on every request */
-const ALLOWED_FOLDERS = ["images", "snapshots"]
+const ALLOWED_FOLDERS = ["images", "snapshots", "cron"]
 
 // ============================================================================
 // Type Definitions

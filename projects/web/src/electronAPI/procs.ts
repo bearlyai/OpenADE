@@ -1,7 +1,7 @@
 /**
  * Procs API Bridge
  *
- * Client-side API for reading procs.toml configuration files.
+ * Client-side API for reading openade.toml / procs.toml configuration files.
  * Communicates with Electron main process via openadeAPI.
  */
 
@@ -20,13 +20,13 @@
 export type ProcessType = "setup" | "daemon" | "task" | "check"
 
 export interface ProcessDef {
-    /** Unique ID: "{relativePath}::{name}" e.g., "packages/api/procs.toml::Backend" */
+    /** Unique ID: "{relativePath}::{name}" e.g., "packages/api/openade.toml::Backend" */
     id: string
     /** Display name */
     name: string
     /** Shell command to run */
     command: string
-    /** Working directory relative to procs.toml location */
+    /** Working directory relative to config file location */
     workDir?: string
     /** Optional URL for web servers (shown as quick-open link) */
     url?: string
@@ -34,11 +34,46 @@ export interface ProcessDef {
     type: ProcessType
 }
 
+// ============================================================================
+// Cron Types
+// ============================================================================
+
+export type CronTaskType = "plan" | "do" | "ask" | "hyperplan"
+
+export interface CronDef {
+    /** Unique ID: "{relativePath}::{name}" */
+    id: string
+    /** Display name */
+    name: string
+    /** 5-field cron expression (e.g., "0 9 * * 1") */
+    schedule: string
+    /** Execution type */
+    type: CronTaskType
+    /** The prompt to send to the agent */
+    prompt: string
+    /** Additional system prompt appended to execution */
+    appendSystemPrompt?: string
+    /** Image file paths relative to repo root */
+    images?: string[]
+    /** Isolation strategy: "head" (default) or "worktree" */
+    isolation?: "head" | "worktree"
+    /** Harness to use (e.g., "claude-code", "codex") */
+    harness?: string
+    /** If set, run in an existing task instead of creating a new one */
+    inTaskId?: string
+}
+
+// ============================================================================
+// Config Types
+// ============================================================================
+
 export interface ProcsConfig {
-    /** Path relative to repo root, e.g., "packages/api/procs.toml" */
+    /** Path relative to repo root, e.g., "openade.toml" or "packages/api/procs.toml" */
     relativePath: string
     /** Processes defined in this config file */
     processes: ProcessDef[]
+    /** Cron jobs defined in this config file */
+    crons: CronDef[]
 }
 
 export interface ProcsConfigError {
@@ -78,7 +113,7 @@ export type RunContext =
 // ============================================================================
 
 /**
- * Read all procs.toml files from a directory tree
+ * Read all config files (openade.toml / procs.toml) from a directory tree
  *
  * @param path - Directory to search from (usually repo root or worktree root)
  * @returns Parsed configs and any errors
@@ -98,6 +133,22 @@ export async function readProcs(path: string): Promise<ReadProcsResult> {
     return window.openadeAPI.procs.read({ path }) as Promise<ReadProcsResult>
 }
 
+/**
+ * Read raw content of a config file (for the editor)
+ */
+export async function readConfigFile(filePath: string): Promise<string> {
+    if (!window.openadeAPI) return ""
+    return window.openadeAPI.procs.readFile({ filePath })
+}
+
+/**
+ * Write raw content to a config file (from the editor)
+ */
+export async function writeConfigFile(filePath: string, content: string): Promise<void> {
+    if (!window.openadeAPI) return
+    await window.openadeAPI.procs.writeFile({ filePath, content })
+}
+
 // ============================================================================
 // Utility Functions
 // ============================================================================
@@ -115,7 +166,7 @@ export function getCwd(config: ProcsConfig, process: ProcessDef, context: RunCon
     // Determine root based on context
     const root = context.type === "repo" ? result.repoRoot : context.root
 
-    // Base directory is where the procs.toml file lives
+    // Base directory is where the config file lives
     const baseDir = dirname(join(root, config.relativePath))
 
     // Apply workDir if specified, otherwise use baseDir
