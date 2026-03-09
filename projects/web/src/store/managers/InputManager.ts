@@ -10,7 +10,7 @@
  */
 
 import type { LucideIcon } from "lucide-react"
-import { ArrowUpFromLine, CheckCircle, FileText, MessageCircleQuestion, Play, RefreshCcw, RefreshCw, RotateCcw, Square, X } from "lucide-react"
+import { ArrowUpFromLine, CheckCircle, FileText, MessageCircleQuestion, Play, RefreshCcw, RefreshCw, Repeat, RotateCcw, Square, X } from "lucide-react"
 import { makeAutoObservable } from "mobx"
 import { track } from "../../analytics"
 import { ACTION_PROMPTS } from "../../prompts/prompts"
@@ -156,9 +156,55 @@ export class InputManager {
         return { userInput, images }
     }
 
+    // === Repeat mode ===
+
+    get repeatState() {
+        const r = this.store.repeat
+        if (r.activeTaskId !== this.taskId || !r.isActive) return null
+        return {
+            stopOnText: r.stopOnText,
+            iterationCount: r.iterationCount,
+            setStopOnText: (v: string) => r.setStopOnText(v),
+        }
+    }
+
     // === Commands ===
 
     get commands(): Command[] {
+        // Repeat mode: show only repeat-specific controls + close/reopen
+        if (this.store.repeat.activeTaskId === this.taskId && this.store.repeat.isActive) {
+            return [
+                {
+                    id: "repeatStop",
+                    label: "Stop",
+                    icon: Square,
+                    order: 0,
+                    style: { variant: "danger" as const },
+                    show: true,
+                    enabled: true,
+                    action: () => {
+                        this.store.repeat.stop()
+                    },
+                },
+                // Close
+                {
+                    id: "close",
+                    label: "Close",
+                    icon: CheckCircle,
+                    order: 200,
+                    style: { variant: "neutral" as const },
+                    show: !this.isClosed,
+                    enabled: true,
+                    spacer: true,
+                    action: async () => {
+                        this.store.repeat.stop()
+                        await this.stopTaskProcesses()
+                        await this.store.tasks.setTaskClosed(this.taskId, true)
+                    },
+                },
+            ].filter((cmd) => cmd.show).sort((a, b) => a.order - b.order)
+        }
+
         const allCommands: Command[] = [
             // Stop - abort current execution
             {
@@ -281,6 +327,20 @@ export class InputManager {
                 action: async () => {
                     const input = this.captureAndClear()
                     await this.store.execution.executeAsk({ taskId: this.taskId, input })
+                },
+            },
+
+            // Repeat - repeatedly send the same prompt
+            {
+                id: "repeat",
+                label: "Repeat",
+                icon: Repeat,
+                order: 22,
+                style: { variant: "neutral" },
+                show: !this.hasActivePlan && !this.isWorking,
+                enabled: this.hasInput,
+                action: () => {
+                    this.store.repeat.start(this.taskId)
                 },
             },
 

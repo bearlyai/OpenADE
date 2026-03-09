@@ -1,4 +1,5 @@
 import type { ActionEvent, ActionEventSource } from "../../types"
+import { REPEAT_LABEL } from "./RepeatManager"
 import type { CodeStore } from "../store"
 
 type NotifiableEventType = Exclude<ActionEventSource["type"], "ask" | "hyperplan">
@@ -69,6 +70,10 @@ export class NotificationManager {
         if (!task) return
 
         const label = eventType === "do" ? this.getActionLabel(taskId) : undefined
+
+        // Suppress notifications for repeat iterations (stop-on-text sends its own notification)
+        if (label === REPEAT_LABEL) return
+
         const message = this.getNotificationMessage(eventType, label)
 
         this.sendNotification(taskId, task.repoId, task.title, message)

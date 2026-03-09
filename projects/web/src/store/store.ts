@@ -19,6 +19,7 @@ import type { User } from "../types"
 
 import { CommentManager } from "./managers/CommentManager"
 import { CronManager } from "./managers/CronManager"
+import { RepeatManager } from "./managers/RepeatManager"
 import { EventManager } from "./managers/EventManager"
 import { ExecutionManager } from "./managers/ExecutionManager"
 import { McpServerManager } from "./managers/McpServerManager"
@@ -76,6 +77,7 @@ export class CodeStore {
     readonly smartEditors: SmartEditorManagerStore
     readonly runCmd: RunCmdManager
     readonly crons: CronManager
+    readonly repeat: RepeatManager
 
     constructor(config: CodeStoreConfig) {
         this.config = config
@@ -93,6 +95,7 @@ export class CodeStore {
         this.smartEditors = new SmartEditorManagerStore()
         this.runCmd = new RunCmdManager(this)
         this.crons = new CronManager(this)
+        this.repeat = new RepeatManager(this)
 
         makeAutoObservable(this, {
             workingTaskIds: true,
@@ -115,6 +118,7 @@ export class CodeStore {
             smartEditors: false,
             runCmd: false,
             crons: false,
+            repeat: false,
         })
     }
 

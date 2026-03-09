@@ -247,6 +247,23 @@ export const InputBar = observer(function InputBar({
                     </div>
                 )}
 
+                {/* Repeat mode: stop-on-text input + iteration counter */}
+                {input.repeatState && (
+                    <div className="flex items-center gap-2 px-3 py-2 border-t border-border text-sm">
+                        <span className="text-muted whitespace-nowrap">Stop on text:</span>
+                        <input
+                            type="text"
+                            value={input.repeatState.stopOnText}
+                            onChange={(e) => input.repeatState!.setStopOnText(e.target.value)}
+                            placeholder="optional"
+                            className="btn flex-1 bg-transparent border border-border px-2 py-1 text-sm text-base-content placeholder:text-muted/50 outline-none focus:border-primary"
+                        />
+                        <span className="text-muted text-xs tabular-nums">
+                            #{input.repeatState.iterationCount}
+                        </span>
+                    </div>
+                )}
+
                 {/* Action buttons row - rendered from centralized commands */}
                 <div className="flex items-center gap-2 px-2 py-2 bg-base-200">
                     {commands.map((cmd) => (

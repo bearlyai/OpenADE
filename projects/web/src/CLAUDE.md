@@ -151,6 +151,7 @@ Set at task creation, immutable:
 - **Revise** - Update plan with feedback
 - **Run Plan** - Execute approved plan
 - **Do** - Direct execution
+- **Repeat** - Repeatedly sends the same prompt until stopped; optional stop-on-text halts on match
 - **Ask** - Read-only exploration
 - **Commit & Push** - Git commit (if needed) and push in one flow (accepts optional additional commit instructions from the editor)
 
