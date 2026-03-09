@@ -8,6 +8,18 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.64.0",
+        title: "Cron Jobs, Repeat Actions & Windows Fix",
+        date: "2026-03-09",
+        highlights: [
+            "Schedule recurring tasks with cron jobs — define schedules in openade.toml and manage them from the sidebar",
+            "New Repeat action lets you loop a prompt repeatedly with an optional stop-on-text condition",
+            "Fixed blank screen on Windows caused by BrowserRouter on file:// protocol",
+            "Tray buttons are now compact icon-only squares with tooltips, reducing input bar overflow",
+            "Session forking disabled by default so follow-up turns continue in-place instead of forking",
+        ],
+    },
+    {
         version: "0.63.0",
         title: "GPT-5.4, Frecency Favorites & Diff Performance",
         date: "2026-03-06",
