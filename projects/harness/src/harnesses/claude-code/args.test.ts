@@ -235,6 +235,13 @@ describe("buildClaudeArgs", () => {
         expect(result.args).toContain("--resume")
     })
 
+    it("resumeSessionId without forkSession does not include --fork-session", () => {
+        const result = buildClaudeArgs(makeQuery({ resumeSessionId: "sess-123" }), {})
+        expect(result.args).toContain("--resume")
+        expect(result.args).toContain("sess-123")
+        expect(result.args).not.toContain("--fork-session")
+    })
+
     it("disablePlanningTools: true adds planning tools to --disallowed-tools", () => {
         const result = buildClaudeArgs(makeQuery({ disablePlanningTools: true }), {})
         const disallowedIdx = result.args.indexOf("--disallowed-tools")

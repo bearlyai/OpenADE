@@ -1,0 +1,32 @@
+[[modules]]
+name = "tmux"
+type = "tmux-window"
+
+	[modules.config]
+	name = "frontend"
+
+		[[modules.config.panes]]
+		commands = ["(cd projects/api && npm run start)"]
+
+	    [[modules.config.panes]]
+	    commands = ["(cd projects/electron && npm run start)"]
+
+		[[modules.config.panes]]
+		commands = ["(cd projects/dashboard && npm run start)"]
+
+		# blank as dev scratch pad
+		[[modules.config.panes]]
+		commands = [""]
+
+		[[modules.config.panes]]
+		commands = [""]
+
+		[[modules.config.panes]]
+		commands = [""] # blank as dev scratch pad
+
+
+
+
+[[projects]]
+name = "bearly"
+modules = ["tmux"]

@@ -42,6 +42,7 @@ interface ActionParams {
     readOnly: boolean
     createSnapshot?: boolean
     includeComments?: boolean
+    extraSystemPrompt?: string
 }
 
 export class ExecutionManager {
@@ -87,7 +88,7 @@ export class ExecutionManager {
     // === Core execution ===
 
     private async runAction(params: ActionParams): Promise<void> {
-        const { taskId, input, source, buildPrompt, readOnly, createSnapshot, includeComments = true } = params
+        const { taskId, input, source, buildPrompt, readOnly, createSnapshot, includeComments = true, extraSystemPrompt } = params
 
         console.debug("[ExecutionManager] runAction called", { taskId, source: source.type, userInput: input.userInput.slice(0, 50) })
 
@@ -143,7 +144,10 @@ export class ExecutionManager {
             additionalDirectories = executionPaths.additionalDirectories
 
             const worktreeInstruction = buildWorktreeExecutionInstruction(task.isolationStrategy, cwd)
-            appendSystemPrompt = mergeAppendSystemPrompt(systemPrompt, worktreeInstruction)
+            appendSystemPrompt = mergeAppendSystemPrompt(
+                mergeAppendSystemPrompt(systemPrompt, worktreeInstruction),
+                extraSystemPrompt
+            )
 
             console.debug("[ExecutionManager] Starting execution", {
                 taskId,
@@ -295,7 +299,8 @@ export class ExecutionManager {
                 model: fullModelId,
                 thinking: taskModel?.thinking ?? "high",
                 resumeSessionId: ctx.parentSessionId,
-                forkSession: !!ctx.parentSessionId,
+                // Forking disabled for now — resume continues the session in-place
+                forkSession: false,
                 mode: ctx.readOnly ? "read-only" : undefined,
                 appendSystemPrompt: ctx.appendSystemPrompt,
                 mcpServerConfigs: ctx.mcpServerConfigs,
@@ -397,13 +402,14 @@ export class ExecutionManager {
 
     // === Public execution methods ===
 
-    async executePlan(taskId: string, input: UserInputContext): Promise<void> {
+    async executePlan(taskId: string, input: UserInputContext, extraSystemPrompt?: string): Promise<void> {
         return this.runAction({
             taskId,
             input,
             source: { type: "plan", userLabel: "Plan" },
             buildPrompt: (ctx) => buildPlanGenerationPrompt(ctx),
             readOnly: true,
+            extraSystemPrompt,
         })
     }
 
@@ -428,11 +434,13 @@ export class ExecutionManager {
         input,
         label,
         includeComments = true,
+        extraSystemPrompt,
     }: {
         taskId: string
         input: UserInputContext
         label?: string
         includeComments?: boolean
+        extraSystemPrompt?: string
     }): Promise<void> {
         return this.runAction({
             taskId,
@@ -442,10 +450,11 @@ export class ExecutionManager {
             readOnly: false,
             createSnapshot: true,
             includeComments,
+            extraSystemPrompt,
         })
     }
 
-    async executeAsk({ taskId, input }: { taskId: string; input: UserInputContext }): Promise<void> {
+    async executeAsk({ taskId, input, extraSystemPrompt }: { taskId: string; input: UserInputContext; extraSystemPrompt?: string }): Promise<void> {
         return this.runAction({
             taskId,
             input: { ...input, userInput: input.userInput.trim() },
@@ -453,6 +462,7 @@ export class ExecutionManager {
             buildPrompt: (ctx) => buildAskPrompt(ctx),
             readOnly: true,
             createSnapshot: true,
+            extraSystemPrompt,
         })
     }
 
