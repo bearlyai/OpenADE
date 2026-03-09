@@ -68,9 +68,9 @@ export class RepeatManager {
         if (!task) return false
 
         const events = task.events
-        const lastAction = [...events].reverse().find(
-            (e) => e.type === "action" && (e.status === "completed" || e.status === "stopped")
-        ) as ActionEvent | undefined
+        const lastAction = [...events].reverse().find((e) => e.type === "action" && (e.status === "completed" || e.status === "stopped")) as
+            | ActionEvent
+            | undefined
         if (!lastAction) return false
 
         const needle = this.stopOnText.trim().toLowerCase()

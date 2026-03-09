@@ -258,9 +258,7 @@ export const InputBar = observer(function InputBar({
                             placeholder="optional"
                             className="btn flex-1 bg-transparent border border-border px-2 py-1 text-sm text-base-content placeholder:text-muted/50 outline-none focus:border-primary"
                         />
-                        <span className="text-muted text-xs tabular-nums">
-                            #{input.repeatState.iterationCount}
-                        </span>
+                        <span className="text-muted text-xs tabular-nums">#{input.repeatState.iterationCount}</span>
                     </div>
                 )}
 

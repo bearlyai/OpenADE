@@ -144,10 +144,7 @@ export class ExecutionManager {
             additionalDirectories = executionPaths.additionalDirectories
 
             const worktreeInstruction = buildWorktreeExecutionInstruction(task.isolationStrategy, cwd)
-            appendSystemPrompt = mergeAppendSystemPrompt(
-                mergeAppendSystemPrompt(systemPrompt, worktreeInstruction),
-                extraSystemPrompt
-            )
+            appendSystemPrompt = mergeAppendSystemPrompt(mergeAppendSystemPrompt(systemPrompt, worktreeInstruction), extraSystemPrompt)
 
             console.debug("[ExecutionManager] Starting execution", {
                 taskId,

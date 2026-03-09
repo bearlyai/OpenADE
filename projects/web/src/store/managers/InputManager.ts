@@ -202,7 +202,9 @@ export class InputManager {
                         await this.store.tasks.setTaskClosed(this.taskId, true)
                     },
                 },
-            ].filter((cmd) => cmd.show).sort((a, b) => a.order - b.order)
+            ]
+                .filter((cmd) => cmd.show)
+                .sort((a, b) => a.order - b.order)
         }
 
         const allCommands: Command[] = [
