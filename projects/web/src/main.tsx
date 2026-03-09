@@ -8,7 +8,7 @@
 import NiceModal from "@ebay/nice-modal-react"
 import { StrictMode, useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
-import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router"
+import { HashRouter, Navigate, Route, Routes, useNavigate } from "react-router"
 import {
     CodeBaseRoute,
     CodeWorkspaceCreateRoute,
@@ -30,7 +30,7 @@ const getDefaultUser = () => ({
     email: "local@openade.dev",
 })
 
-// Lazy-bound router navigate — set by App once inside <BrowserRouter>
+// Lazy-bound router navigate — set by App once inside <HashRouter>
 let routerNavigate: ReturnType<typeof useNavigate> | null = null
 
 // Create store instance
@@ -41,7 +41,7 @@ const storeConfig: CodeStoreConfig = {
         if (routerNavigate) {
             routerNavigate(path)
         } else {
-            window.location.href = path
+            window.location.hash = path
         }
     },
 }
@@ -64,7 +64,7 @@ function App() {
 
     if (!initialized) {
         return (
-            <div className="code-theme-dark h-screen w-screen flex items-center justify-center bg-base-100 text-base-content">
+            <div className="code-theme-black h-screen w-screen flex items-center justify-center bg-base-100 text-base-content">
                 <div className="text-muted">Loading...</div>
             </div>
         )
@@ -96,8 +96,8 @@ function App() {
 
 createRoot(document.getElementById("root")!).render(
     <StrictMode>
-        <BrowserRouter>
+        <HashRouter>
             <App />
-        </BrowserRouter>
+        </HashRouter>
     </StrictMode>
 )

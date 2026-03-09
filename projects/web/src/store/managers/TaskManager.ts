@@ -249,7 +249,7 @@ export class TaskManager {
 
     private markTaskHasNewEvent(taskId: string): void {
         // Skip if user is currently viewing this task (it's already "read")
-        if (window.location.pathname.includes(taskId)) return
+        if (window.location.hash.includes(taskId)) return
 
         const taskStore = this.store.getCachedTaskStore(taskId)
         if (!taskStore) return
