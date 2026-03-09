@@ -32,14 +32,18 @@ export const TrayButtons = observer(function TrayButtons({ tray }: TrayButtonsPr
                         key={config.id}
                         type="button"
                         onClick={() => tray.toggle(config.id)}
+                        title={`${config.label}${config.shortcut ? ` (${config.shortcut.display})` : ""}`}
                         className={cx(
-                            "btn flex items-center gap-1.5 px-2 py-1 text-xs font-medium transition-colors whitespace-nowrap rounded cursor-pointer",
+                            "btn relative flex items-center justify-center w-7 h-7 text-xs transition-colors rounded cursor-pointer",
                             isOpen ? "bg-primary/20 text-primary" : "text-muted hover:text-base-content hover:bg-base-200"
                         )}
                     >
-                        <Icon size={12} />
-                        <span className="hidden sm:inline">{config.label}</span>
-                        {badge !== null && badge !== undefined && <TrayBadge>{badge}</TrayBadge>}
+                        <Icon size={14} />
+                        {badge !== null && badge !== undefined && (
+                            <span className="absolute -top-1 -right-1">
+                                <TrayBadge>{badge}</TrayBadge>
+                            </span>
+                        )}
                     </button>
                 )
             })}
