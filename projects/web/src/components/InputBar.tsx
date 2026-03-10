@@ -247,7 +247,7 @@ export const InputBar = observer(function InputBar({
                     </div>
                 )}
 
-                {/* Repeat mode: stop-on-text input + iteration counter */}
+                {/* Repeat mode: stop-on-text + max runs + iteration counter */}
                 {input.repeatState && (
                     <div className="flex items-center gap-2 px-3 py-2 border-t border-border text-sm">
                         <span className="text-muted whitespace-nowrap">Stop on text:</span>
@@ -257,6 +257,14 @@ export const InputBar = observer(function InputBar({
                             onChange={(e) => input.repeatState!.setStopOnText(e.target.value)}
                             placeholder="optional"
                             className="btn flex-1 bg-transparent border border-border px-2 py-1 text-sm text-base-content placeholder:text-muted/50 outline-none focus:border-primary"
+                        />
+                        <span className="text-muted whitespace-nowrap">Max runs:</span>
+                        <input
+                            type="number"
+                            min={1}
+                            value={input.repeatState.maxRuns}
+                            onChange={(e) => input.repeatState!.setMaxRuns(Number.parseInt(e.target.value) || 1)}
+                            className="btn w-16 bg-transparent border border-border px-2 py-1 text-sm text-base-content outline-none focus:border-primary"
                         />
                         <span className="text-muted text-xs tabular-nums">#{input.repeatState.iterationCount}</span>
                     </div>

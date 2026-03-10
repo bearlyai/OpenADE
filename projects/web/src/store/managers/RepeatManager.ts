@@ -8,6 +8,7 @@ const REPEAT_LABEL = "Repeat"
 export class RepeatManager {
     activeTaskId: string | null = null
     stopOnText = ""
+    maxRuns = 100
     iterationCount = 0
 
     private disposeAfterEvent: (() => void) | null = null
@@ -48,8 +49,17 @@ export class RepeatManager {
         this.stopOnText = value
     }
 
+    setMaxRuns(value: number): void {
+        this.maxRuns = Math.max(1, Math.floor(value))
+    }
+
     private onIterationComplete(): void {
         if (!this.activeTaskId) return
+
+        if (this.iterationCount >= this.maxRuns) {
+            this.cleanup()
+            return
+        }
 
         if (this.stopOnText.trim() && this.shouldStopOnText()) {
             // Notify user that stop text was found

@@ -163,8 +163,10 @@ export class InputManager {
         if (r.activeTaskId !== this.taskId || !r.isActive) return null
         return {
             stopOnText: r.stopOnText,
+            maxRuns: r.maxRuns,
             iterationCount: r.iterationCount,
             setStopOnText: (v: string) => r.setStopOnText(v),
+            setMaxRuns: (v: number) => r.setMaxRuns(v),
         }
     }
 
