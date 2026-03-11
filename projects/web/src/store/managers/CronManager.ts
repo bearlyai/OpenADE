@@ -5,6 +5,11 @@
  * and catch-up execution across ALL workspaces. Uses RunCmdManager.run()
  * to execute cron tasks.
  *
+ * Scheduling: Each enabled cron gets its own setTimeout computed via
+ * croner's nextRun(). When the timer fires it re-enters scheduleCron()
+ * which handles catch-up detection, execution, and chaining to the
+ * next occurrence. No polling interval.
+ *
  * Cron state is persisted in ~/.openade/data/cron/{repoId}.json via the data folder API.
  */
 
@@ -59,14 +64,17 @@ interface RepoState {
     installStates: Map<string, CronInstallState>
 }
 
+// Max safe delay for setTimeout (~24.8 days). Longer delays get chained.
+const MAX_TIMEOUT_DELAY = 0x7fffffff
+
 // ============================================================================
 // CronManager
 // ============================================================================
 
 export class CronManager {
-    private intervalId: ReturnType<typeof setInterval> | null = null
     private runningCrons = new Set<string>()
     private _repos = new Map<string, RepoState>()
+    private _timers = new Map<string, ReturnType<typeof setTimeout>>()
     private _started = false
     private _afterEventDisposer: (() => void) | null = null
     private _focusHandler: (() => void) | null = null
@@ -85,17 +93,12 @@ export class CronManager {
 
         // Refresh config after any task event completes (e.g. a plan that edits openade.toml)
         this._afterEventDisposer = this.store.execution.onAfterEvent(() => {
-            this.refreshAllConfigs()
+            this.refreshAndRescheduleAll()
         })
 
-        // Refresh config when window regains focus
-        this._focusHandler = () => this.refreshAllConfigs()
+        // Refresh config + reschedule when window regains focus (catches sleep/wake misses)
+        this._focusHandler = () => this.refreshAndRescheduleAll()
         window.addEventListener("focus", this._focusHandler)
-
-        // Run catch-up check immediately
-        this.checkAllCrons()
-        // Then check every 60 seconds
-        this.intervalId = setInterval(() => this.checkAllCrons(), 60_000)
     }
 
     /** Add or refresh a single repo */
@@ -112,13 +115,11 @@ export class CronManager {
             await this.loadInstallStates(repoState)
         }
         await this.refreshRepoConfig(repoState)
+        this.rescheduleRepo(repoState)
     }
 
     stop(): void {
-        if (this.intervalId) {
-            clearInterval(this.intervalId)
-            this.intervalId = null
-        }
+        this.cancelAllTimers()
         if (this._afterEventDisposer) {
             this._afterEventDisposer()
             this._afterEventDisposer = null
@@ -141,6 +142,7 @@ export class CronManager {
         const repoState = this._repos.get(repoId)
         if (!repoState) return
         this.applyProcsResult(repoState, result)
+        this.rescheduleRepo(repoState)
     }
 
     /** Get view models for sidebar display for a specific repo */
@@ -189,12 +191,16 @@ export class CronManager {
             repoState.installStates.set(cronId, state)
         })
         await this.saveInstallStates(repoState)
+
+        const entry = repoState.cronDefs.get(cronId)
+        if (entry) this.scheduleCron(repoState, cronId, entry.def)
     }
 
     async uninstallCron(repoId: string, cronId: string): Promise<void> {
         const repoState = this._repos.get(repoId)
         if (!repoState) return
 
+        this.cancelTimer(`${repoId}::${cronId}`)
         runInAction(() => {
             repoState.installStates.delete(cronId)
         })
@@ -212,6 +218,13 @@ export class CronManager {
             state.enabled = enabled
         })
         await this.saveInstallStates(repoState)
+
+        if (enabled) {
+            const entry = repoState.cronDefs.get(cronId)
+            if (entry) this.scheduleCron(repoState, cronId, entry.def)
+        } else {
+            this.cancelTimer(`${repoId}::${cronId}`)
+        }
     }
 
     /** Immediately execute a cron job regardless of schedule */
@@ -229,8 +242,13 @@ export class CronManager {
     // Config refresh
     // ============================================================================
 
-    async refreshAllConfigs(): Promise<void> {
-        await Promise.all(Array.from(this._repos.values()).map((rs) => this.refreshRepoConfig(rs)))
+    private async refreshAndRescheduleAll(): Promise<void> {
+        await Promise.all(
+            Array.from(this._repos.values()).map(async (rs) => {
+                await this.refreshRepoConfig(rs)
+                this.rescheduleRepo(rs)
+            })
+        )
     }
 
     private async refreshRepoConfig(repoState: RepoState): Promise<void> {
@@ -295,30 +313,118 @@ export class CronManager {
     }
 
     // ============================================================================
-    // Scheduler
+    // Scheduler — setTimeout per cron, no polling
     // ============================================================================
 
-    private checkAllCrons(): void {
-        for (const repoState of this._repos.values()) {
-            for (const [cronId, { def }] of repoState.cronDefs) {
-                const state = repoState.installStates.get(cronId)
-                if (!state?.enabled) continue
+    /**
+     * Core scheduling entry point for a single cron.
+     *
+     * 1. Catch-up: if lastRunAt exists and a scheduled time was missed, fire immediately.
+     * 2. Otherwise compute nextRun() and set a setTimeout.
+     * 3. When the timer fires it re-enters here — handles MAX_TIMEOUT chaining
+     *    (re-schedules if clamped) and actual firing (delay <= 0).
+     */
+    private scheduleCron(repoState: RepoState, cronId: string, def: CronDef): void {
+        const key = `${repoState.repoId}::${cronId}`
+        this.cancelTimer(key)
 
-                try {
-                    const job = new Cron(def.schedule)
-                    const prev = job.previousRun()
-                    const lastRun = state.lastRunAt ? new Date(state.lastRunAt) : null
+        const state = repoState.installStates.get(cronId)
+        if (!state?.enabled) return
 
-                    // Run if the previous scheduled time is after the last run
-                    if (prev && (!lastRun || prev > lastRun)) {
-                        this.executeCron(repoState, cronId, def)
-                    }
-                } catch {
-                    // invalid schedule, skip
+        try {
+            const cron = new Cron(def.schedule)
+
+            // Catch-up: was a scheduled run missed since the last execution?
+            if (state.lastRunAt) {
+                const nextAfterLast = cron.nextRun(new Date(state.lastRunAt))
+                if (nextAfterLast && nextAfterLast.getTime() <= Date.now()) {
+                    this.fireCron(repoState, cronId, def)
+                    return
                 }
             }
+
+            // Schedule for the next future occurrence
+            const next = cron.nextRun()
+            if (!next) return
+
+            const delay = next.getTime() - Date.now()
+            if (delay <= 0) {
+                this.fireCron(repoState, cronId, def)
+                return
+            }
+
+            // Clamp to max safe setTimeout delay; re-enters to chain if needed
+            const clampedDelay = Math.min(delay, MAX_TIMEOUT_DELAY)
+
+            this._timers.set(
+                key,
+                setTimeout(() => {
+                    this._timers.delete(key)
+                    this.scheduleCron(repoState, cronId, def)
+                }, clampedDelay)
+            )
+        } catch {
+            // invalid schedule expression
         }
     }
+
+    /**
+     * Execution gatekeeper. Prevents concurrent runs of the same cron.
+     * After execution completes, chains to the next scheduled occurrence.
+     */
+    private fireCron(repoState: RepoState, cronId: string, def: CronDef): void {
+        const key = `${repoState.repoId}::${cronId}`
+
+        if (this.runningCrons.has(key)) {
+            // Previous invocation still running — skip, schedule next
+            this.scheduleCron(repoState, cronId, def)
+            return
+        }
+
+        this.executeCron(repoState, cronId, def).finally(() => {
+            const state = repoState.installStates.get(cronId)
+            if (state?.enabled) {
+                this.scheduleCron(repoState, cronId, def)
+            }
+        })
+    }
+
+    /** Cancel a single cron's timer */
+    private cancelTimer(key: string): void {
+        const timer = this._timers.get(key)
+        if (timer) {
+            clearTimeout(timer)
+            this._timers.delete(key)
+        }
+    }
+
+    /** Cancel all timers */
+    private cancelAllTimers(): void {
+        for (const timer of this._timers.values()) {
+            clearTimeout(timer)
+        }
+        this._timers.clear()
+    }
+
+    /** Cancel all timers for a repo and reschedule all its enabled crons */
+    private rescheduleRepo(repoState: RepoState): void {
+        // Cancel existing timers for this repo
+        const prefix = `${repoState.repoId}::`
+        for (const [key, timer] of this._timers) {
+            if (key.startsWith(prefix)) {
+                clearTimeout(timer)
+                this._timers.delete(key)
+            }
+        }
+        // Schedule all enabled crons
+        for (const [cronId, { def }] of repoState.cronDefs) {
+            this.scheduleCron(repoState, cronId, def)
+        }
+    }
+
+    // ============================================================================
+    // Execution
+    // ============================================================================
 
     private async executeCron(repoState: RepoState, cronId: string, def: CronDef): Promise<void> {
         const runKey = `${repoState.repoId}::${cronId}`
