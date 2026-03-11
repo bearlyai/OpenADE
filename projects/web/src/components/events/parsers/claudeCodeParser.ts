@@ -244,7 +244,7 @@ export function groupClaudeCodeMessages(messages: ClaudeEvent[]): MessageGroup[]
                             activeForm?: string
                         }>
                     }
-                    const todos: TodoItem[] = (input.todos || []).map((t) => ({
+                    const todos: TodoItem[] = (Array.isArray(input.todos) ? input.todos : []).map((t) => ({
                         content: t.content || "",
                         status: t.status || "pending",
                         activeForm: t.activeForm || t.content || "",
