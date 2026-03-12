@@ -8,6 +8,16 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.65.0",
+        title: "Cron Scheduling Fix & Repeat Limits",
+        date: "2026-03-12",
+        highlights: [
+            "Cron jobs now fire reliably on schedule with catch-up for missed runs",
+            "Repeat mode now has a configurable max runs limit (default 100) to prevent runaway loops",
+            "Fixed a crash in the todo list parser when a malformed non-array value was passed",
+        ],
+    },
+    {
         version: "0.64.0",
         title: "Cron Jobs, Repeat Actions & Windows Fix",
         date: "2026-03-09",
