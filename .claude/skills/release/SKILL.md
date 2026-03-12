@@ -159,3 +159,6 @@ After the release is published:
 - Push the commit (`git push`)
 
 Report the final release URL to the user.
+
+
+IMPORTANT: Electron-builder publishes its own github releases. Update that one with the right release notes and set it to the production release. DO NOT Create a new release manually. 
