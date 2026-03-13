@@ -5,10 +5,15 @@
  * and catch-up execution across ALL workspaces. Uses RunCmdManager.run()
  * to execute cron tasks.
  *
- * Scheduling: Each enabled cron gets its own setTimeout computed via
- * croner's nextRun(). When the timer fires it re-enters scheduleCron()
- * which handles catch-up detection, execution, and chaining to the
- * next occurrence. No polling interval.
+ * Scheduling: Each enabled cron gets its own setTimeout targeting a
+ * specific timestamp computed via croner's nextRun(). When the timer
+ * fires it calls fireCron() directly (rather than recomputing nextRun(),
+ * which would skip the current slot). For delays exceeding ~24.8 days,
+ * intermediate timeouts chain via scheduleTimerForTarget(). After
+ * execution, fireCron().finally() chains to the next occurrence.
+ *
+ * Refresh events (task completion, window focus) are debounced to avoid
+ * cancelling/recreating timers on every event.
  *
  * Cron state is persisted in ~/.openade/data/cron/{repoId}.json via the data folder API.
  */
@@ -78,6 +83,9 @@ export class CronManager {
     private _started = false
     private _afterEventDisposer: (() => void) | null = null
     private _focusHandler: (() => void) | null = null
+    private _refreshDebounceTimer: ReturnType<typeof setTimeout> | null = null
+    private _refreshInFlight = false
+    private _refreshPendingAgain = false
 
     constructor(private store: CodeStore) {
         makeAutoObservable<CronManager, "store">(this, { store: false })
@@ -93,11 +101,11 @@ export class CronManager {
 
         // Refresh config after any task event completes (e.g. a plan that edits openade.toml)
         this._afterEventDisposer = this.store.execution.onAfterEvent(() => {
-            this.refreshAndRescheduleAll()
+            this.requestRefresh()
         })
 
         // Refresh config + reschedule when window regains focus (catches sleep/wake misses)
-        this._focusHandler = () => this.refreshAndRescheduleAll()
+        this._focusHandler = () => this.requestRefresh()
         window.addEventListener("focus", this._focusHandler)
     }
 
@@ -120,6 +128,12 @@ export class CronManager {
 
     stop(): void {
         this.cancelAllTimers()
+        if (this._refreshDebounceTimer) {
+            clearTimeout(this._refreshDebounceTimer)
+            this._refreshDebounceTimer = null
+        }
+        this._refreshInFlight = false
+        this._refreshPendingAgain = false
         if (this._afterEventDisposer) {
             this._afterEventDisposer()
             this._afterEventDisposer = null
@@ -242,6 +256,31 @@ export class CronManager {
     // Config refresh
     // ============================================================================
 
+    private requestRefresh(): void {
+        if (this._refreshDebounceTimer) clearTimeout(this._refreshDebounceTimer)
+        this._refreshDebounceTimer = setTimeout(() => {
+            this._refreshDebounceTimer = null
+            this.debouncedRefresh()
+        }, 3_000)
+    }
+
+    private async debouncedRefresh(): Promise<void> {
+        if (this._refreshInFlight) {
+            this._refreshPendingAgain = true
+            return
+        }
+        this._refreshInFlight = true
+        try {
+            await this.refreshAndRescheduleAll()
+        } finally {
+            this._refreshInFlight = false
+            if (this._refreshPendingAgain) {
+                this._refreshPendingAgain = false
+                this.debouncedRefresh()
+            }
+        }
+    }
+
     private async refreshAndRescheduleAll(): Promise<void> {
         await Promise.all(
             Array.from(this._repos.values()).map(async (rs) => {
@@ -320,9 +359,7 @@ export class CronManager {
      * Core scheduling entry point for a single cron.
      *
      * 1. Catch-up: if lastRunAt exists and a scheduled time was missed, fire immediately.
-     * 2. Otherwise compute nextRun() and set a setTimeout.
-     * 3. When the timer fires it re-enters here — handles MAX_TIMEOUT chaining
-     *    (re-schedules if clamped) and actual firing (delay <= 0).
+     * 2. Otherwise compute nextRun() and delegate to scheduleTimerForTarget().
      */
     private scheduleCron(repoState: RepoState, cronId: string, def: CronDef): void {
         const key = `${repoState.repoId}::${cronId}`
@@ -347,25 +384,46 @@ export class CronManager {
             const next = cron.nextRun()
             if (!next) return
 
-            const delay = next.getTime() - Date.now()
-            if (delay <= 0) {
-                this.fireCron(repoState, cronId, def)
-                return
-            }
-
-            // Clamp to max safe setTimeout delay; re-enters to chain if needed
-            const clampedDelay = Math.min(delay, MAX_TIMEOUT_DELAY)
-
-            this._timers.set(
-                key,
-                setTimeout(() => {
-                    this._timers.delete(key)
-                    this.scheduleCron(repoState, cronId, def)
-                }, clampedDelay)
-            )
+            this.scheduleTimerForTarget(repoState, cronId, def, next.getTime())
         } catch {
             // invalid schedule expression
         }
+    }
+
+    /**
+     * Set a setTimeout targeting a specific timestamp. If the delay exceeds
+     * MAX_TIMEOUT_DELAY (~24.8 days), chains intermediate timeouts.
+     * When the target time is reached, fires the cron directly.
+     */
+    private scheduleTimerForTarget(
+        repoState: RepoState,
+        cronId: string,
+        def: CronDef,
+        targetMs: number,
+    ): void {
+        const key = `${repoState.repoId}::${cronId}`
+        this.cancelTimer(key)
+
+        const delay = targetMs - Date.now()
+        if (delay <= 0) {
+            this.fireCron(repoState, cronId, def)
+            return
+        }
+
+        const clampedDelay = Math.min(delay, MAX_TIMEOUT_DELAY)
+
+        this._timers.set(
+            key,
+            setTimeout(() => {
+                this._timers.delete(key)
+                if (Date.now() >= targetMs) {
+                    this.fireCron(repoState, cronId, def)
+                } else {
+                    // MAX_TIMEOUT_DELAY chaining — not yet time to fire
+                    this.scheduleTimerForTarget(repoState, cronId, def, targetMs)
+                }
+            }, clampedDelay),
+        )
     }
 
     /**
@@ -416,8 +474,10 @@ export class CronManager {
                 this._timers.delete(key)
             }
         }
-        // Schedule all enabled crons
+        // Schedule all enabled crons (skip running ones — fireCron.finally() handles their rescheduling)
         for (const [cronId, { def }] of repoState.cronDefs) {
+            const key = `${repoState.repoId}::${cronId}`
+            if (this.runningCrons.has(key)) continue
             this.scheduleCron(repoState, cronId, def)
         }
     }
