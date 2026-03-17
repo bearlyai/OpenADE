@@ -8,6 +8,15 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.65.1",
+        title: "Cron Timer Reliability Fix",
+        date: "2026-03-16",
+        highlights: [
+            "Fixed cron scheduler skipping the current time slot by firing directly on timer instead of recomputing the next run",
+            "Refresh events (task completion, window focus) are now debounced to avoid cancelling and recreating timers on every event",
+        ],
+    },
+    {
         version: "0.65.0",
         title: "Cron Scheduling Fix & Repeat Limits",
         date: "2026-03-12",

@@ -80,7 +80,7 @@ describe("CronManager scheduling", () => {
                 repoId: "repo-1",
                 input: "Run tests",
                 title: "[Cron] Test Cron",
-            }),
+            })
         )
     })
 
@@ -132,7 +132,7 @@ describe("CronManager scheduling", () => {
         vi.mocked(store.runCmd.run).mockReturnValue(
             new Promise((r) => {
                 resolveRun = r
-            }),
+            })
         )
         const manager = new CronManager(store)
 

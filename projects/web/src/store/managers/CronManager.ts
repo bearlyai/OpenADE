@@ -395,12 +395,7 @@ export class CronManager {
      * MAX_TIMEOUT_DELAY (~24.8 days), chains intermediate timeouts.
      * When the target time is reached, fires the cron directly.
      */
-    private scheduleTimerForTarget(
-        repoState: RepoState,
-        cronId: string,
-        def: CronDef,
-        targetMs: number,
-    ): void {
+    private scheduleTimerForTarget(repoState: RepoState, cronId: string, def: CronDef, targetMs: number): void {
         const key = `${repoState.repoId}::${cronId}`
         this.cancelTimer(key)
 
@@ -422,7 +417,7 @@ export class CronManager {
                     // MAX_TIMEOUT_DELAY chaining — not yet time to fire
                     this.scheduleTimerForTarget(repoState, cronId, def, targetMs)
                 }
-            }, clampedDelay),
+            }, clampedDelay)
         )
     }
 
