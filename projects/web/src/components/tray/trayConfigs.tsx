@@ -27,6 +27,8 @@ export interface TrayConfig {
     isVisible?: (tray: TrayManager) => boolean
     /** Called when this tray is opened */
     onOpen?: (tray: TrayManager) => void
+    /** Called when this tray is closed (toggle, explicit close, or switched away) */
+    onClose?: (tray: TrayManager) => void
     /** Render badge content for the tray button (e.g., process count) */
     renderBadge?: (tray: TrayManager) => ReactNode
     /** Render the tray content panel */
@@ -113,6 +115,7 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         label: "Terminal",
         icon: TerminalSquare,
         shortcut: { key: "mod+t", display: "⌘T" },
+        onClose: (tray) => tray.taskModel.refreshGitState(),
         renderContent: (tray) => {
             const env = tray.taskModel.environment
             if (!env?.taskWorkingDir) {

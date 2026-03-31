@@ -34,22 +34,34 @@ export class TrayManager {
     }
 
     toggle(tray: TrayType): void {
-        const wasOpen = this.openTray === tray
-        this.openTray = wasOpen ? null : tray
-        if (!wasOpen) {
+        const previousTray = this.openTray
+        const closing = previousTray === tray
+        this.openTray = closing ? null : tray
+        if (previousTray) {
+            getTrayConfig(previousTray)?.onClose?.(this)
+        }
+        if (!closing) {
             console.debug("[TrayManager] toggle: calling onOpen for", tray)
             getTrayConfig(tray)?.onOpen?.(this)
         }
     }
 
     open(tray: TrayType): void {
+        const previousTray = this.openTray
         this.openTray = tray
+        if (previousTray && previousTray !== tray) {
+            getTrayConfig(previousTray)?.onClose?.(this)
+        }
         console.debug("[TrayManager] open: calling onOpen for", tray)
         getTrayConfig(tray)?.onOpen?.(this)
     }
 
     close(): void {
+        const previousTray = this.openTray
         this.openTray = null
+        if (previousTray) {
+            getTrayConfig(previousTray)?.onClose?.(this)
+        }
     }
 
     get isOpen(): boolean {
