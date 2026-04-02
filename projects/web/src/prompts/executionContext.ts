@@ -37,7 +37,7 @@ const CODEX_RAW_RENDERER_STYLE_HINT = [
  */
 export function buildRawRendererStyleInstruction(harnessId: HarnessId, sourceType: ActionEventSource["type"]): string | undefined {
     if (harnessId !== "codex") return undefined
-    if (sourceType === "do" || sourceType === "ask" || sourceType === "run_plan") {
+    if (sourceType === "do" || sourceType === "ask" || sourceType === "run_plan" || sourceType === "review") {
         return CODEX_RAW_RENDERER_STYLE_HINT
     }
     return undefined

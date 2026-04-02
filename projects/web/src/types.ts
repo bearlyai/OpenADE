@@ -128,7 +128,7 @@ export type ActionEventSource =
     | { type: "revise"; userLabel: string; parentEventId: string }
     | { type: "run_plan"; userLabel: string; planEventId: string }
     | { type: "do"; userLabel: string }
-    | { type: "ask"; userLabel: string }
+    | { type: "ask"; userLabel: string; origin?: "review_follow_up" }
     | { type: "hyperplan"; userLabel: string; strategyId: string }
     | { type: "review"; userLabel: string; reviewType: "plan" | "work" }
 
@@ -156,6 +156,12 @@ export interface SetupEnvironmentEvent extends BaseEvent {
 }
 
 /** Snapshot event - captures code state after an action completes (no execution) */
+export interface SnapshotChangedFile {
+    path: string
+    status: "added" | "deleted" | "modified" | "renamed"
+    oldPath?: string
+}
+
 export interface SnapshotEvent extends BaseEvent {
     type: "snapshot"
     actionEventId: string // The action this snapshot follows
@@ -168,6 +174,7 @@ export interface SnapshotEvent extends BaseEvent {
         insertions: number
         deletions: number
     }
+    files?: SnapshotChangedFile[]
 }
 
 // Discriminated union

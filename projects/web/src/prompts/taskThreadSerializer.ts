@@ -25,8 +25,8 @@ export interface TaskThreadContextResult {
 }
 
 export const DEFAULT_TASK_THREAD_FORMAT: TaskThreadFormat = {
-    includeFunctionInputs: true,
-    includeFunctionOutputs: true,
+    includeFunctionInputs: false,
+    includeFunctionOutputs: false,
     includeThinking: false,
     includeMessages: true,
     maxEvents: undefined,

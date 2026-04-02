@@ -25,6 +25,7 @@ The `tw.css` file contains a complete COLOR REFERENCE section documenting all av
 3. **Use `input` class for inputs**: Always add the `input` class to inputs/textareas, but override `rounded-*` with explicit square styling if needed.
 4. **Square cards**: Comment cards and containers have no border radius
 5. **Floating elements**: Use `fixed` or `absolute` positioning with `shadow-lg` for floating bars
+6. **Use `flex` + `gap` for spacing**: Prefer explicit `flex` layouts with `gap-*` utilities instead of `space-*` utilities. This is especially important with `btn` (which resets browser defaults) so row/column spacing remains predictable.
 
 ## Theme System - DaisyUI-Compatible Colors
 

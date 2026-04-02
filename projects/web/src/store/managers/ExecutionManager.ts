@@ -31,7 +31,7 @@ import {
     buildRevisePrompt,
     buildRunPlanPrompt,
 } from "../../prompts/prompts"
-import type { ActionEvent, ActionEventSource, GitRefs, Repo, UserInputContext } from "../../types"
+import type { ActionEventSource, GitRefs, Repo, Task, UserInputContext } from "../../types"
 import type { TaskModel } from "../TaskModel"
 import type { CodeStore } from "../store"
 
@@ -49,6 +49,12 @@ interface ActionParams {
     freshSession?: boolean
     overrideHarnessId?: HarnessId
     overrideModel?: string
+}
+
+interface RunActionResult {
+    started: boolean
+    eventId?: string
+    success: boolean
 }
 
 const HYPERPLAN_MAIN_THREAD_CONTEXT_MAX_BYTES = 240_000
@@ -95,7 +101,7 @@ export class ExecutionManager {
 
     // === Core execution ===
 
-    private async runAction(params: ActionParams): Promise<void> {
+    private async runAction(params: ActionParams): Promise<RunActionResult> {
         const {
             taskId,
             input,
@@ -125,12 +131,12 @@ export class ExecutionManager {
                 taskId,
                 repoId: task?.repoId,
             })
-            return
+            return { started: false, success: false }
         }
 
         if (this.store.isTaskWorking(taskId)) {
             console.debug("[ExecutionManager] runAction: task already working", { taskId })
-            return
+            return { started: false, success: false }
         }
 
         // When resuming a session, use the harness/model that created it — the
@@ -165,7 +171,7 @@ export class ExecutionManager {
         try {
             if (!isHarnessApiAvailable()) {
                 console.debug("[ExecutionManager] Harness API not available (not in Electron?) - aborting runAction")
-                return
+                return { started: false, success: false }
             }
 
             // Resolve execution paths after environment load (required for worktree correctness).
@@ -207,7 +213,7 @@ export class ExecutionManager {
             })
             if (!eventResult) {
                 console.debug("[ExecutionManager] createActionEvent returned null - aborting", { taskId, executionId })
-                return
+                return { started: false, success: false }
             }
 
             const { eventId } = eventResult
@@ -252,7 +258,15 @@ export class ExecutionManager {
             if (executionId) {
                 getHarnessQueryManager().cleanup(executionId)
             }
-            this.fireAfterEvent(taskId, source.type, executionSuccess)
+            if (actionEventId) {
+                this.fireAfterEvent(taskId, source.type, executionSuccess)
+            }
+        }
+
+        return {
+            started: !!actionEventId,
+            eventId: actionEventId,
+            success: executionSuccess,
         }
     }
 
@@ -269,6 +283,27 @@ export class ExecutionManager {
         }
 
         return { cwd: repo.path }
+    }
+
+    private getRecentSnapshotFiles(task: Task, limit = 40): string[] {
+        const summaries: string[] = []
+        const seen = new Set<string>()
+
+        for (let i = task.events.length - 1; i >= 0 && summaries.length < limit; i--) {
+            const event = task.events[i]
+            if (event.type !== "snapshot") continue
+
+            for (const file of event.files ?? []) {
+                const summary =
+                    file.status === "renamed" && file.oldPath ? `renamed: ${file.oldPath} -> ${file.path}` : `${file.status}: ${file.path}`
+                if (seen.has(summary)) continue
+                seen.add(summary)
+                summaries.push(summary)
+                if (summaries.length >= limit) break
+            }
+        }
+
+        return summaries
     }
 
     /**
@@ -434,7 +469,7 @@ export class ExecutionManager {
     // === Public execution methods ===
 
     async executePlan(taskId: string, input: UserInputContext, extraSystemPrompt?: string): Promise<void> {
-        return this.runAction({
+        await this.runAction({
             taskId,
             input,
             source: { type: "plan", userLabel: "Plan" },
@@ -451,7 +486,7 @@ export class ExecutionManager {
             return this.executePlan(taskId, input)
         }
 
-        return this.runAction({
+        await this.runAction({
             taskId,
             input: { ...input, userInput: input.userInput.trim() },
             source: { type: "revise", userLabel: "Revise Plan", parentEventId: parentPlanEvent.id },
@@ -473,7 +508,7 @@ export class ExecutionManager {
         includeComments?: boolean
         extraSystemPrompt?: string
     }): Promise<void> {
-        return this.runAction({
+        await this.runAction({
             taskId,
             input: { ...input, userInput: input.userInput.trim() },
             source: { type: "do", userLabel: label || "Do" },
@@ -486,7 +521,7 @@ export class ExecutionManager {
     }
 
     async executeAsk({ taskId, input, extraSystemPrompt }: { taskId: string; input: UserInputContext; extraSystemPrompt?: string }): Promise<void> {
-        return this.runAction({
+        await this.runAction({
             taskId,
             input: { ...input, userInput: input.userInput.trim() },
             source: { type: "ask", userLabel: "Ask" },
@@ -502,11 +537,13 @@ export class ExecutionManager {
         reviewType,
         harnessId,
         modelId,
+        customInstructions,
     }: {
         taskId: string
         reviewType: ReviewType
         harnessId: HarnessId
         modelId: string
+        customInstructions?: string
     }): Promise<void> {
         const task = this.store.tasks.getTask(taskId)
         if (!task) return
@@ -514,16 +551,19 @@ export class ExecutionManager {
         const threadContext = buildTaskThreadXmlWithBudget(task, {
             maxBytes: HYPERPLAN_MAIN_THREAD_CONTEXT_MAX_BYTES,
             includeThinking: false,
+            includeFunctionInputs: false,
+            includeFunctionOutputs: false,
         })
         const threadXml = threadContext.xml
+        const changedFiles = this.getRecentSnapshotFiles(task)
 
         let reviewPrompt: PromptResult
         if (reviewType === "plan") {
             const planEvent = this.store.events.getTaskLatestCompletedPlanEvent(taskId)
             const planText = planEvent ? (extractPlanText(planEvent.execution.events, planEvent.execution.harnessId) ?? "") : ""
-            reviewPrompt = buildPlanReviewPrompt({ threadXml, planText })
+            reviewPrompt = buildPlanReviewPrompt({ threadXml, planText, changedFiles, customInstructions })
         } else {
-            reviewPrompt = buildWorkReviewPrompt({ threadXml })
+            reviewPrompt = buildWorkReviewPrompt({ threadXml, changedFiles, customInstructions })
         }
 
         if (typeof reviewPrompt.userMessage !== "string") {
@@ -532,10 +572,11 @@ export class ExecutionManager {
         }
 
         const userLabel = reviewType === "plan" ? "Review Plan" : "Review"
+        const reviewDisplayInput = customInstructions?.trim() ? `${userLabel}: ${customInstructions.trim()}` : userLabel
 
-        await this.runAction({
+        const reviewRun = await this.runAction({
             taskId,
-            input: { userInput: reviewPrompt.userMessage, images: [] },
+            input: { userInput: reviewDisplayInput, images: [] },
             source: { type: "review", userLabel, reviewType },
             buildPrompt: async () => reviewPrompt,
             readOnly: true,
@@ -546,21 +587,22 @@ export class ExecutionManager {
             overrideModel: modelId,
         })
 
-        const updatedTask = this.store.tasks.getTask(taskId)
-        if (!updatedTask) return
+        if (!reviewRun.started || !reviewRun.eventId || !reviewRun.success) return
 
-        const reviewEvent = [...updatedTask.events].reverse().find((evt): evt is ActionEvent => evt.type === "action" && evt.source.type === "review")
+        const reviewEventRaw = this.store.getCachedTaskStore(taskId)?.events.get(reviewRun.eventId)
+        const reviewEvent = reviewEventRaw?.type === "action" && reviewEventRaw.source.type === "review" ? reviewEventRaw : undefined
         if (!reviewEvent || reviewEvent.status !== "completed" || !reviewEvent.result?.success) return
 
         const reviewText = extractPlanText(reviewEvent.execution.events, reviewEvent.execution.harnessId ?? harnessId)
         if (!reviewText) return
 
         const handoffMessage = buildReviewHandoffPrompt({ reviewType, reviewText })
+        const followUpLabel = `${userLabel} Follow-up`
         await this.runAction({
             taskId,
-            input: { userInput: handoffMessage, images: [] },
-            source: { type: "ask", userLabel: `${userLabel} Follow-up` },
-            buildPrompt: (ctx) => buildAskPrompt(ctx),
+            input: { userInput: followUpLabel, images: [] },
+            source: { type: "ask", userLabel: followUpLabel, origin: "review_follow_up" },
+            buildPrompt: (ctx) => buildAskPrompt({ ...ctx, userInput: handoffMessage }),
             readOnly: true,
             createSnapshot: false,
             includeComments: false,
@@ -574,7 +616,7 @@ export class ExecutionManager {
             return
         }
 
-        return this.runAction({
+        await this.runAction({
             taskId,
             input: { ...input, userInput: input.userInput?.trim() || "" },
             source: { type: "run_plan", userLabel: "Run Plan", planEventId: planEvent.id },

@@ -91,6 +91,11 @@ export class InputManager {
         return this.hasInput || this.hasUnsubmittedComments
     }
 
+    private get hasAnyActionHistory(): boolean {
+        const events = this.store.tasks.getTask(this.taskId)?.events ?? []
+        return events.some((event) => event.type === "action")
+    }
+
     private get hasGitWorkingChanges(): boolean {
         return this.taskModel?.hasWorkingChanges ?? false
     }
@@ -283,7 +288,12 @@ export class InputManager {
                 show: this.hasActivePlan && !this.isWorking,
                 enabled: true,
                 action: async () => {
-                    await NiceModal.show(ReviewPickerModal, { taskId: this.taskId, reviewType: "plan" as const })
+                    await NiceModal.show(ReviewPickerModal, {
+                        taskId: this.taskId,
+                        reviewType: "plan" as const,
+                        customInstructions: this.editorManager.value.trim(),
+                        onStart: () => this.clear(),
+                    })
                 },
             },
 
@@ -370,10 +380,15 @@ export class InputManager {
                 icon: ClipboardCheck,
                 order: 19,
                 style: { variant: "neutral" },
-                show: !this.hasActivePlan && !this.isWorking && !!this.lastActionEvent,
+                show: !this.hasActivePlan && !this.isWorking && this.hasAnyActionHistory,
                 enabled: true,
                 action: async () => {
-                    await NiceModal.show(ReviewPickerModal, { taskId: this.taskId, reviewType: "work" as const })
+                    await NiceModal.show(ReviewPickerModal, {
+                        taskId: this.taskId,
+                        reviewType: "work" as const,
+                        customInstructions: this.editorManager.value.trim(),
+                        onStart: () => this.clear(),
+                    })
                 },
             },
 

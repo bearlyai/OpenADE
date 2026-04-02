@@ -1,6 +1,6 @@
 import { exhaustive } from "exhaustive"
 import { type GetFilePairResponse, type GitStatusResponse, gitApi } from "../electronAPI/git"
-import type { IsolationStrategy, Repo, Task, TaskDeviceEnvironment } from "../types"
+import type { IsolationStrategy, Repo, SnapshotChangedFile, Task, TaskDeviceEnvironment } from "../types"
 import { getDeviceId } from "../utils/deviceId"
 import type { GitInfo } from "./managers/RepoManager"
 
@@ -14,6 +14,7 @@ export interface PatchResult {
         insertions: number
         deletions: number
     }
+    files?: SnapshotChangedFile[]
 }
 
 export interface SetupParams {
@@ -114,10 +115,12 @@ export class TaskEnvironment {
             })
 
             const stats = this.parsePatchStats(result.patch)
+            const files = await this.getWorktreeChangedFiles()
 
             return {
                 patch: result.patch,
                 stats,
+                files,
             }
         } catch (err) {
             console.error("[TaskEnvironment] getPatch failed:", err)
@@ -158,11 +161,57 @@ export class TaskEnvironment {
             return {
                 patch: combinedPatch,
                 stats,
+                files: this.collectUncommittedFiles(uncommitted),
             }
         } catch (err) {
             console.error("[TaskEnvironment] getUncommittedPatch failed:", err)
             return null
         }
+    }
+
+    private async getWorktreeChangedFiles(): Promise<SnapshotChangedFile[]> {
+        if (!gitApi.isAvailable()) return []
+        if (!this.mergeBaseCommit) return []
+
+        try {
+            const result = await gitApi.getChangedFiles({
+                workDir: this.taskRootDir,
+                fromTreeish: this.mergeBaseCommit,
+                toTreeish: "HEAD",
+            })
+            return result.files.map((file) => ({
+                path: file.path,
+                status: file.status,
+                ...(file.oldPath ? { oldPath: file.oldPath } : {}),
+            }))
+        } catch (err) {
+            console.warn("[TaskEnvironment] getWorktreeChangedFiles failed:", err)
+            return []
+        }
+    }
+
+    private collectUncommittedFiles(status: GitStatusResponse): SnapshotChangedFile[] {
+        const files: SnapshotChangedFile[] = []
+        const seen = new Set<string>()
+
+        const pushFile = (path: string, fileStatus: SnapshotChangedFile["status"]): void => {
+            const key = `${fileStatus}:${path}`
+            if (seen.has(key)) return
+            seen.add(key)
+            files.push({ path, status: fileStatus })
+        }
+
+        for (const file of status.staged.files) {
+            pushFile(file.path, file.status ?? "modified")
+        }
+        for (const file of status.unstaged.files) {
+            pushFile(file.path, file.status ?? "modified")
+        }
+        for (const file of status.untracked) {
+            pushFile(file.path, "added")
+        }
+
+        return files
     }
 
     async getFilePair(filePath: string, oldPath?: string): Promise<GetFilePairResponse> {

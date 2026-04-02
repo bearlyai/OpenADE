@@ -76,7 +76,7 @@ function createTask(events: ActionEvent[]): Task {
 }
 
 describe("buildTaskThreadJson", () => {
-    it("serializes Claude thread data with message/tool/result items", () => {
+    it("serializes Claude thread data with message/result items by default", () => {
         const executionId = "a1-exec"
         const action = createActionEvent({
             id: "a1",
@@ -132,18 +132,10 @@ describe("buildTaskThreadJson", () => {
         expect(items.find((item) => item.kind === "thinking")).toBeFalsy()
 
         const callItem = items.find((item) => item.kind === "functionCall" && item.name === "Bash")
-        expect(callItem).toBeTruthy()
-        if (callItem && callItem.kind === "functionCall") {
-            expect(callItem.callId).toBe("tool-1")
-            expect(callItem.input).toMatchObject({ command: "yarn test" })
-        }
+        expect(callItem).toBeFalsy()
 
         const outputItem = items.find((item) => item.kind === "functionOutput" && item.name === "Bash")
-        expect(outputItem).toBeTruthy()
-        if (outputItem && outputItem.kind === "functionOutput") {
-            expect(outputItem.output).toBe("ok")
-            expect(outputItem.isError).toBe(false)
-        }
+        expect(outputItem).toBeFalsy()
 
         expect(items.find((item) => item.kind === "result")).toBeTruthy()
     })
@@ -186,8 +178,9 @@ describe("buildTaskThreadJson", () => {
         expect(withoutThinking.events[0].items.some((item) => item.kind === "thinking")).toBe(false)
         expect(withoutThinking.events[0].items.some((item) => item.kind === "functionOutput")).toBe(false)
 
-        const withThinking = buildTaskThreadJson(task, { includeThinking: true })
+        const withThinking = buildTaskThreadJson(task, { includeThinking: true, includeFunctionOutputs: true })
         expect(withThinking.events[0].items.some((item) => item.kind === "thinking")).toBe(true)
+        expect(withThinking.events[0].items.some((item) => item.kind === "functionOutput")).toBe(true)
     })
 
     it("serializes Codex command executions into function call/output items", () => {
@@ -223,7 +216,7 @@ describe("buildTaskThreadJson", () => {
             ],
         })
         const task = createTask([action])
-        const json = buildTaskThreadJson(task)
+        const json = buildTaskThreadJson(task, { includeFunctionInputs: true, includeFunctionOutputs: true })
         const items = json.events[0].items
 
         const call = items.find((item) => item.kind === "functionCall" && item.name === "Bash")
@@ -313,7 +306,7 @@ describe("buildTaskThreadXml", () => {
             ],
         })
 
-        const xml = buildTaskThreadXml(createTask([action]), { includeThinking: true })
+        const xml = buildTaskThreadXml(createTask([action]), { includeThinking: true, includeFunctionInputs: true, includeFunctionOutputs: true })
 
         expect(xml).toContain(`<task id="task-1"`)
         expect(xml).toContain(`<event id="a3"`)

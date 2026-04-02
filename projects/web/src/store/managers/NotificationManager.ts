@@ -2,8 +2,6 @@ import type { ActionEvent, ActionEventSource } from "../../types"
 import { REPEAT_LABEL } from "./RepeatManager"
 import type { CodeStore } from "../store"
 
-type NotifiableEventType = ActionEventSource["type"]
-
 const NOTIFICATION_CLEANUP_MS = 5 * 60 * 1000
 
 export class NotificationManager {
@@ -31,11 +29,7 @@ export class NotificationManager {
         }
     }
 
-    private isNotifiableEvent(_eventType: ActionEventSource["type"]): _eventType is NotifiableEventType {
-        return true
-    }
-
-    private getNotificationMessage(eventType: NotifiableEventType, label?: string): string {
+    private getNotificationMessage(eventType: ActionEventSource["type"], label?: string): string {
         switch (eventType) {
             case "plan":
                 return "Planning complete."
@@ -69,11 +63,21 @@ export class NotificationManager {
         return undefined
     }
 
-    private handleEvent(taskId: string, eventType: ActionEventSource["type"]): void {
-        if (!this.isNotifiableEvent(eventType)) return
+    private getLastActionEvent(taskId: string): ActionEvent | undefined {
+        const task = this.store.tasks.getTask(taskId)
+        if (!task?.events.length) return undefined
+        const lastEvent = task.events[task.events.length - 1]
+        return lastEvent.type === "action" ? (lastEvent as ActionEvent) : undefined
+    }
 
+    private handleEvent(taskId: string, eventType: ActionEventSource["type"]): void {
         const task = this.store.tasks.getTask(taskId)
         if (!task) return
+
+        const lastActionEvent = this.getLastActionEvent(taskId)
+        if (eventType === "ask" && lastActionEvent?.source.type === "ask" && lastActionEvent.source.origin === "review_follow_up") {
+            return
+        }
 
         const label = eventType === "do" ? this.getActionLabel(taskId) : undefined
 

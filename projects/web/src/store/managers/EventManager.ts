@@ -536,6 +536,7 @@ export class EventManager {
                 fullPatch,
                 patchFileId,
                 stats: patchResult.stats,
+                files: patchResult.files,
             }
 
             taskStore.events.push(event)
