@@ -138,7 +138,7 @@ Set at task creation, immutable:
 
 | Type | What It Is |
 |------|------------|
-| `action` | LLM execution (plan/revise/do/ask/run_plan) |
+| `action` | LLM execution (plan/revise/review/do/ask/run_plan) |
 | `setup_environment` | Worktree setup completed |
 | `snapshot` | Frozen code state after action |
 
@@ -149,10 +149,12 @@ Set at task creation, immutable:
 - **Stop** - Abort the current task execution (single-query and HyperPlan multi-agent runs)
 - **Plan** - Generate new plan
 - **Revise** - Update plan with feedback
+- **Review Plan** - Launch external read-only review of the active plan (harness/model picker), then auto-handoff notes back to main thread
 - **Run Plan** - Execute approved plan
 - **Do** - Direct execution
 - **Repeat** - Repeatedly sends the same prompt until stopped; optional stop-on-text halts on match
 - **Ask** - Read-only exploration
+- **Review** - Launch external read-only review of recent work (when no active plan), then auto-handoff notes back to main thread
 - **Commit & Push** - Git commit (if needed) and push in one flow (accepts optional additional commit instructions from the editor)
 
 ## Comment System
@@ -304,7 +306,8 @@ Import from `../components/ui` not `@/funktionalChat/components`.
 |---------|------|
 | Data types, CRUD | `api.ts` |
 | Prompt templates | `prompts/prompts.ts` |
-| Task thread serializer (Task -> JSON/XML) | `prompts/taskThreadSerializer.ts` |
+| Review prompt templates and handoff text | `prompts/reviewPrompts.ts` |
+| Task thread serializer (Task -> JSON/XML, supports bounded export via `maxEvents`) | `prompts/taskThreadSerializer.ts` |
 | XML helpers | `utils/makeXML.ts` |
 | Local routing | `routing.ts` |
 | MCP presets & icons | `constants.ts` |
@@ -327,6 +330,9 @@ Import from `../components/ui` not `@/funktionalChat/components`.
 | Portal container hook | `hooks/usePortalContainer.tsx` |
 | Terminal themes | `themes/terminalThemes.ts` |
 | Terminal theme hook | `hooks/useTerminalTheme.ts` |
+
+HyperPlan planning can pass serialized main-thread context to sub-planners using `prompts/taskThreadSerializer.ts`.
+This context is capped by UTF-8 byte budget (default `240_000`) and includes the newest events that fit.
 
 ## MobX Patterns
 

@@ -27,13 +27,50 @@ After the ## Plan section, include:
 - Assumptions that, if wrong, would change the plan
 </additional_output_section>`
 
+export interface MainThreadContextMeta {
+    truncated: boolean
+    includedEvents: number
+    omittedEvents: number
+    byteLength: number
+}
+
+export interface HyperPlanStepPromptContext {
+    mainThreadContextXml?: string
+    mainThreadContextMeta?: MainThreadContextMeta
+}
+
 export function buildHyperPlanStepPrompt(taskDescription: string): {
     systemPrompt: string
     userMessage: string
+}
+export function buildHyperPlanStepPrompt(taskDescription: string, context: HyperPlanStepPromptContext): {
+    systemPrompt: string
+    userMessage: string
+}
+export function buildHyperPlanStepPrompt(taskDescription: string, context?: HyperPlanStepPromptContext): {
+    systemPrompt: string
+    userMessage: string
 } {
+    if (!context?.mainThreadContextXml) {
+        return {
+            systemPrompt: HYPERPLAN_PLAN_SYSTEM_PROMPT,
+            userMessage: taskDescription,
+        }
+    }
+
+    const attrs: string[] = ['format="task_thread_xml"']
+    if (context.mainThreadContextMeta) {
+        attrs.push(
+            `truncated="${context.mainThreadContextMeta.truncated}"`,
+            `includedEvents="${context.mainThreadContextMeta.includedEvents}"`,
+            `omittedEvents="${context.mainThreadContextMeta.omittedEvents}"`,
+            `byteLength="${context.mainThreadContextMeta.byteLength}"`
+        )
+    }
+
     return {
         systemPrompt: HYPERPLAN_PLAN_SYSTEM_PROMPT,
-        userMessage: taskDescription,
+        userMessage: `${taskDescription}\n\n<main_thread_context ${attrs.join(" ")}>\n${context.mainThreadContextXml}\n</main_thread_context>`,
     }
 }
 

@@ -13,6 +13,26 @@ describe("buildHyperPlanStepPrompt", () => {
         // Should contain planning-related content from PLAN_MODE_INSTRUCTIONS
         expect(result.systemPrompt.length).toBeGreaterThan(100)
     })
+
+    it("embeds main thread context and metadata when provided", () => {
+        const result = buildHyperPlanStepPrompt("Add a dark mode toggle", {
+            mainThreadContextXml: '<task id="task-1"><events /></task>',
+            mainThreadContextMeta: {
+                truncated: true,
+                includedEvents: 8,
+                omittedEvents: 12,
+                byteLength: 12345,
+            },
+        })
+
+        expect(result.userMessage).toContain("<main_thread_context")
+        expect(result.userMessage).toContain('format="task_thread_xml"')
+        expect(result.userMessage).toContain('truncated="true"')
+        expect(result.userMessage).toContain('includedEvents="8"')
+        expect(result.userMessage).toContain('omittedEvents="12"')
+        expect(result.userMessage).toContain('byteLength="12345"')
+        expect(result.userMessage).toContain('<task id="task-1"><events /></task>')
+    })
 })
 
 describe("buildReviewStepPrompt", () => {

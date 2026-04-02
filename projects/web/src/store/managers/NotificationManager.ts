@@ -2,7 +2,7 @@ import type { ActionEvent, ActionEventSource } from "../../types"
 import { REPEAT_LABEL } from "./RepeatManager"
 import type { CodeStore } from "../store"
 
-type NotifiableEventType = Exclude<ActionEventSource["type"], "ask" | "hyperplan">
+type NotifiableEventType = ActionEventSource["type"]
 
 const NOTIFICATION_CLEANUP_MS = 5 * 60 * 1000
 
@@ -31,8 +31,8 @@ export class NotificationManager {
         }
     }
 
-    private isNotifiableEvent(eventType: ActionEventSource["type"]): eventType is NotifiableEventType {
-        return eventType !== "ask" && eventType !== "hyperplan"
+    private isNotifiableEvent(_eventType: ActionEventSource["type"]): _eventType is NotifiableEventType {
+        return true
     }
 
     private getNotificationMessage(eventType: NotifiableEventType, label?: string): string {
@@ -45,6 +45,12 @@ export class NotificationManager {
                 return label ? `${label} complete.` : "Action complete."
             case "run_plan":
                 return "Plan execution complete."
+            case "ask":
+                return "Answer complete."
+            case "hyperplan":
+                return "HyperPlan complete."
+            case "review":
+                return "Review complete."
             default: {
                 const _exhaustive: never = eventType
                 return `${_exhaustive} complete.`

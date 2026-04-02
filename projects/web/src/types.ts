@@ -130,6 +130,7 @@ export type ActionEventSource =
     | { type: "do"; userLabel: string }
     | { type: "ask"; userLabel: string }
     | { type: "hyperplan"; userLabel: string; strategyId: string }
+    | { type: "review"; userLabel: string; reviewType: "plan" | "work" }
 
 /** Action event - all LLM executions (plans, revisions, direct actions, etc.) */
 export interface ActionEvent extends BaseEvent {

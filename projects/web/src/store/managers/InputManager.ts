@@ -9,10 +9,12 @@
  * All commands that execute actions consume pending comments.
  */
 
+import NiceModal from "@ebay/nice-modal-react"
 import type { LucideIcon } from "lucide-react"
-import { ArrowUpFromLine, CheckCircle, FileText, MessageCircleQuestion, Play, RefreshCcw, RefreshCw, Repeat, RotateCcw, Square, X } from "lucide-react"
+import { ArrowUpFromLine, CheckCircle, ClipboardCheck, FileText, MessageCircleQuestion, Play, RefreshCcw, RefreshCw, Repeat, RotateCcw, Square, X } from "lucide-react"
 import { makeAutoObservable } from "mobx"
 import { track } from "../../analytics"
+import { ReviewPickerModal } from "../../components/ReviewPickerModal"
 import { ACTION_PROMPTS } from "../../prompts/prompts"
 import type { ActionEvent, UserInputContext } from "../../types"
 import type { CodeStore } from "../store"
@@ -258,6 +260,20 @@ export class InputManager {
                 },
             },
 
+            // Review Plan - one-off external review of the active plan
+            {
+                id: "reviewPlan",
+                label: "Review Plan",
+                icon: ClipboardCheck,
+                order: 5,
+                style: { variant: "neutral" },
+                show: this.hasActivePlan && !this.isWorking,
+                enabled: true,
+                action: async () => {
+                    await NiceModal.show(ReviewPickerModal, { taskId: this.taskId, reviewType: "plan" as const })
+                },
+            },
+
             // Revise Plan - update plan with feedback (consumes comments)
             {
                 id: "revise",
@@ -331,6 +347,20 @@ export class InputManager {
                 action: async () => {
                     const input = this.captureAndClear()
                     await this.store.execution.executeAsk({ taskId: this.taskId, input })
+                },
+            },
+
+            // Review - one-off external review of recent work when no active plan exists
+            {
+                id: "review",
+                label: "Review",
+                icon: ClipboardCheck,
+                order: 19,
+                style: { variant: "neutral" },
+                show: !this.hasActivePlan && !this.isWorking && !!this.lastActionEvent,
+                enabled: true,
+                action: async () => {
+                    await NiceModal.show(ReviewPickerModal, { taskId: this.taskId, reviewType: "work" as const })
                 },
             },
 
@@ -421,7 +451,7 @@ export class InputManager {
         if (!cmd || !cmd.enabled) return
 
         // Track command execution for execution-related commands
-        const trackableCommands = ["plan", "do", "ask", "revise", "runPlan", "retry"]
+        const trackableCommands = ["plan", "do", "ask", "revise", "runPlan", "retry", "review", "reviewPlan"]
         if (trackableCommands.includes(id)) {
             track("command_run", { commandType: id })
         }

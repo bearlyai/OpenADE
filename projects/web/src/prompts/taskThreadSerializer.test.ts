@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest"
 import type { ActionEvent, Task } from "../types"
 import type { HarnessStreamEvent } from "../electronAPI/harnessEventTypes"
-import { buildTaskThreadJson, buildTaskThreadXml, DEFAULT_TASK_THREAD_FORMAT } from "./taskThreadSerializer"
+import { buildTaskThreadJson, buildTaskThreadXml, buildTaskThreadXmlWithBudget, DEFAULT_TASK_THREAD_FORMAT } from "./taskThreadSerializer"
+
+function getUtf8ByteLength(value: string): number {
+    return new TextEncoder().encode(value).byteLength
+}
 
 function rawMessageEvent({
     executionId,
@@ -235,6 +239,47 @@ describe("buildTaskThreadJson", () => {
             expect(output.output).toContain("/repo")
         }
     })
+
+    it("maxEvents slices to the most recent N action events", () => {
+        const events = [
+            createActionEvent({ id: "m1", userInput: "one", harnessId: "claude-code", events: [] }),
+            createActionEvent({ id: "m2", userInput: "two", harnessId: "claude-code", events: [] }),
+            createActionEvent({ id: "m3", userInput: "three", harnessId: "claude-code", events: [] }),
+            createActionEvent({ id: "m4", userInput: "four", harnessId: "claude-code", events: [] }),
+        ]
+        const task = createTask(events)
+        const json = buildTaskThreadJson(task, { maxEvents: 2 })
+
+        expect(json.events).toHaveLength(2)
+        expect(json.events[0].id).toBe("m3")
+        expect(json.events[1].id).toBe("m4")
+    })
+
+    it("maxEvents undefined preserves current behavior", () => {
+        const events = [
+            createActionEvent({ id: "u1", userInput: "one", harnessId: "claude-code", events: [] }),
+            createActionEvent({ id: "u2", userInput: "two", harnessId: "claude-code", events: [] }),
+        ]
+        const task = createTask(events)
+        const json = buildTaskThreadJson(task, { maxEvents: undefined })
+
+        expect(json.events).toHaveLength(2)
+        expect(json.events[0].id).toBe("u1")
+        expect(json.events[1].id).toBe("u2")
+    })
+
+    it("maxEvents larger than action count returns all action events", () => {
+        const events = [
+            createActionEvent({ id: "l1", userInput: "one", harnessId: "claude-code", events: [] }),
+            createActionEvent({ id: "l2", userInput: "two", harnessId: "claude-code", events: [] }),
+        ]
+        const task = createTask(events)
+        const json = buildTaskThreadJson(task, { maxEvents: 10 })
+
+        expect(json.events).toHaveLength(2)
+        expect(json.events[0].id).toBe("l1")
+        expect(json.events[1].id).toBe("l2")
+    })
 })
 
 describe("buildTaskThreadXml", () => {
@@ -277,5 +322,121 @@ describe("buildTaskThreadXml", () => {
         expect(xml).toContain("<functionInput>")
         expect(xml).toContain(`"command": "yarn lint"`)
         expect(xml).toContain(`<functionOutput name="Bash" callId="tool-3" isError="false">done</functionOutput>`)
+    })
+})
+
+describe("buildTaskThreadXmlWithBudget", () => {
+    it("returns full XML when byte budget is large enough", () => {
+        const events = [
+            createActionEvent({
+                id: "b1",
+                userInput: "Step one",
+                harnessId: "claude-code",
+                events: [rawMessageEvent({ executionId: "b1-exec", harnessId: "claude-code", message: { type: "result", result: "Done one" } })],
+            }),
+            createActionEvent({
+                id: "b2",
+                userInput: "Step two",
+                harnessId: "claude-code",
+                events: [rawMessageEvent({ executionId: "b2-exec", harnessId: "claude-code", message: { type: "result", result: "Done two" } })],
+            }),
+        ]
+        const task = createTask(events)
+
+        const fullXml = buildTaskThreadXml(task)
+        const fullBytes = getUtf8ByteLength(fullXml)
+        const result = buildTaskThreadXmlWithBudget(task, { maxBytes: fullBytes })
+
+        expect(result.xml).toBe(fullXml)
+        expect(result.byteLength).toBe(fullBytes)
+        expect(result.truncated).toBe(false)
+        expect(result.includedEvents).toBe(2)
+        expect(result.omittedEvents).toBe(0)
+    })
+
+    it("truncates to the most recent events when over budget", () => {
+        const older = createActionEvent({
+            id: "a1",
+            userInput: "older",
+            harnessId: "claude-code",
+            events: [rawMessageEvent({ executionId: "a1-exec", harnessId: "claude-code", message: { type: "result", result: "older-result" } })],
+        })
+        const middle = createActionEvent({
+            id: "a2",
+            userInput: "middle",
+            harnessId: "claude-code",
+            events: [rawMessageEvent({ executionId: "a2-exec", harnessId: "claude-code", message: { type: "result", result: "middle-result" } })],
+        })
+        const newer = createActionEvent({
+            id: "a3",
+            userInput: "newer",
+            harnessId: "claude-code",
+            events: [rawMessageEvent({ executionId: "a3-exec", harnessId: "claude-code", message: { type: "result", result: "newer-result" } })],
+        })
+
+        const fullTask = createTask([older, middle, newer])
+        const suffixTask = createTask([middle, newer])
+        const budget = getUtf8ByteLength(buildTaskThreadXml(suffixTask))
+        const result = buildTaskThreadXmlWithBudget(fullTask, { maxBytes: budget })
+
+        expect(result.byteLength).toBeLessThanOrEqual(budget)
+        expect(result.truncated).toBe(true)
+        expect(result.includedEvents).toBe(2)
+        expect(result.omittedEvents).toBe(1)
+        expect(result.xml).toContain(`<event id="a2"`)
+        expect(result.xml).toContain(`<event id="a3"`)
+        expect(result.xml).not.toContain(`<event id="a1"`)
+    })
+
+    it("includes more recent events when the budget increases", () => {
+        const older = createActionEvent({
+            id: "c1",
+            userInput: "older",
+            harnessId: "claude-code",
+            events: [rawMessageEvent({ executionId: "c1-exec", harnessId: "claude-code", message: { type: "result", result: "older-result" } })],
+        })
+        const middle = createActionEvent({
+            id: "c2",
+            userInput: "middle",
+            harnessId: "claude-code",
+            events: [rawMessageEvent({ executionId: "c2-exec", harnessId: "claude-code", message: { type: "result", result: "middle-result" } })],
+        })
+        const newer = createActionEvent({
+            id: "c3",
+            userInput: "newer",
+            harnessId: "claude-code",
+            events: [rawMessageEvent({ executionId: "c3-exec", harnessId: "claude-code", message: { type: "result", result: "newer-result" } })],
+        })
+
+        const fullTask = createTask([older, middle, newer])
+        const newestOnlyBudget = getUtf8ByteLength(buildTaskThreadXml(createTask([newer])))
+        const newestAndMiddleBudget = getUtf8ByteLength(buildTaskThreadXml(createTask([middle, newer])))
+
+        const smallResult = buildTaskThreadXmlWithBudget(fullTask, { maxBytes: newestOnlyBudget })
+        const largeResult = buildTaskThreadXmlWithBudget(fullTask, { maxBytes: newestAndMiddleBudget })
+
+        expect(smallResult.includedEvents).toBe(1)
+        expect(largeResult.includedEvents).toBe(2)
+        expect(largeResult.includedEvents).toBeGreaterThan(smallResult.includedEvents)
+    })
+
+    it("uses UTF-8 bytes instead of JS character length for budgeting", () => {
+        const emojiEvent = createActionEvent({
+            id: "u1",
+            userInput: "😀".repeat(1500),
+            harnessId: "claude-code",
+            events: [rawMessageEvent({ executionId: "u1-exec", harnessId: "claude-code", message: { type: "result", result: "ok" } })],
+        })
+        const task = createTask([emojiEvent])
+        const fullXml = buildTaskThreadXml(task)
+        const fullBytes = getUtf8ByteLength(fullXml)
+        const budget = fullBytes - 1
+        const result = buildTaskThreadXmlWithBudget(task, { maxBytes: budget })
+
+        expect(fullBytes).toBeGreaterThan(fullXml.length)
+        expect(result.truncated).toBe(true)
+        expect(result.includedEvents).toBe(0)
+        expect(result.omittedEvents).toBe(1)
+        expect(result.byteLength).toBeLessThanOrEqual(budget)
     })
 })

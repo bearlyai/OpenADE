@@ -15,7 +15,7 @@ import type { HarnessStreamEvent, McpServerConfig } from "../electronAPI/harness
 import { type ClientHarnessQueryOptions, type HarnessQuery, getHarnessQueryManager, isHarnessApiAvailable } from "../electronAPI/harnessQuery"
 import { mergeAppendSystemPrompt } from "../prompts/executionContext"
 import { extractPlanText } from "./extractPlanText"
-import { type ReconcileInput, buildHyperPlanStepPrompt, buildReconcileStepPrompt, buildReviewStepPrompt } from "./prompts"
+import { type MainThreadContextMeta, type ReconcileInput, buildHyperPlanStepPrompt, buildReconcileStepPrompt, buildReviewStepPrompt } from "./prompts"
 import { groupByDepth, isStandardStrategy, validateStrategy } from "./strategies"
 import type { HyperPlanStep, HyperPlanStrategy, SubPlanState } from "./types"
 
@@ -43,6 +43,8 @@ export interface HyperPlanCallbacks {
 export interface HyperPlanExecutorConfig {
     strategy: HyperPlanStrategy
     taskDescription: string
+    mainThreadContextXml?: string
+    mainThreadContextMeta?: MainThreadContextMeta
     cwd: string
     additionalDirectories?: string[]
     appendSystemPromptSuffix?: string
@@ -132,8 +134,11 @@ export class HyperPlanExecutor {
      * terminal event callbacks so the output goes to the main execution.
      */
     private async executeSinglePlan(step: HyperPlanStep): Promise<{ sessionId?: string; success: boolean }> {
-        const { taskDescription, callbacks } = this.config
-        const { systemPrompt, userMessage } = buildHyperPlanStepPrompt(taskDescription)
+        const { taskDescription, callbacks, mainThreadContextXml, mainThreadContextMeta } = this.config
+        const { systemPrompt, userMessage } = buildHyperPlanStepPrompt(taskDescription, {
+            mainThreadContextXml,
+            mainThreadContextMeta,
+        })
 
         const query = await this.startQuery(step, userMessage, systemPrompt)
         if (!query) {
@@ -176,7 +181,7 @@ export class HyperPlanExecutor {
      * For the terminal step, events go to terminal callbacks.
      */
     private async executeStep(step: HyperPlanStep): Promise<{ text: string; sessionId?: string } | null> {
-        const { strategy, taskDescription, callbacks } = this.config
+        const { strategy, taskDescription, callbacks, mainThreadContextXml, mainThreadContextMeta } = this.config
         const isTerminal = step.id === strategy.terminalStepId
 
         // Build prompt based on primitive type
@@ -185,7 +190,10 @@ export class HyperPlanExecutor {
 
         switch (step.primitive) {
             case "plan": {
-                const result = buildHyperPlanStepPrompt(taskDescription)
+                const result = buildHyperPlanStepPrompt(taskDescription, {
+                    mainThreadContextXml,
+                    mainThreadContextMeta,
+                })
                 userMessage = result.userMessage
                 systemPrompt = result.systemPrompt
                 break

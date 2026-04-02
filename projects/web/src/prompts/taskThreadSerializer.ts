@@ -8,6 +8,20 @@ export interface TaskThreadFormat {
     includeFunctionOutputs: boolean
     includeThinking: boolean
     includeMessages: boolean
+    /** If set, only serialize the last N action events */
+    maxEvents?: number
+}
+
+export interface TaskThreadContextBudgetOptions extends Partial<TaskThreadFormat> {
+    maxBytes?: number
+}
+
+export interface TaskThreadContextResult {
+    xml: string
+    byteLength: number
+    truncated: boolean
+    includedEvents: number
+    omittedEvents: number
 }
 
 export const DEFAULT_TASK_THREAD_FORMAT: TaskThreadFormat = {
@@ -15,7 +29,11 @@ export const DEFAULT_TASK_THREAD_FORMAT: TaskThreadFormat = {
     includeFunctionOutputs: true,
     includeThinking: false,
     includeMessages: true,
+    maxEvents: undefined,
 }
+
+export const DEFAULT_TASK_THREAD_CONTEXT_MAX_BYTES = 240_000
+const UTF8_ENCODER = new TextEncoder()
 
 export interface TaskThreadJson {
     task: {
@@ -78,7 +96,10 @@ export type TaskThreadItemJson =
 
 export function buildTaskThreadJson(task: Task, format: Partial<TaskThreadFormat> = {}): TaskThreadJson {
     const resolvedFormat = resolveFormat(format)
-    const actionEvents = task.events.filter((event): event is ActionEvent => event.type === "action")
+    let actionEvents = task.events.filter((event): event is ActionEvent => event.type === "action")
+    if (resolvedFormat.maxEvents != null) {
+        actionEvents = actionEvents.slice(-resolvedFormat.maxEvents)
+    }
 
     return {
         task: {
@@ -112,6 +133,7 @@ export function taskThreadJsonToXml(thread: TaskThreadJson): string {
                     includeFunctionOutputs: thread.format.includeFunctionOutputs,
                     includeThinking: thread.format.includeThinking,
                     includeMessages: thread.format.includeMessages,
+                    maxEvents: thread.format.maxEvents,
                 },
             },
             {
@@ -129,12 +151,66 @@ export function buildTaskThreadXml(task: Task, format: Partial<TaskThreadFormat>
     return taskThreadJsonToXml(threadJson)
 }
 
+export function buildTaskThreadXmlWithBudget(task: Task, options: TaskThreadContextBudgetOptions = {}): TaskThreadContextResult {
+    const resolvedFormat = resolveFormat(options)
+    const maxBytes = Math.max(0, options.maxBytes ?? DEFAULT_TASK_THREAD_CONTEXT_MAX_BYTES)
+    let actionEvents = task.events.filter((event): event is ActionEvent => event.type === "action")
+    if (resolvedFormat.maxEvents != null) {
+        actionEvents = actionEvents.slice(-resolvedFormat.maxEvents)
+    }
+
+    const threadTask = {
+        id: task.id,
+        repoId: task.repoId,
+        title: task.title,
+        description: task.description,
+    }
+
+    const allThreadEvents = actionEvents.map((event) => actionEventToThreadEvent(event, resolvedFormat))
+    const selectedEvents: TaskThreadEventJson[] = []
+
+    let xml = taskThreadJsonToXml({
+        task: threadTask,
+        format: resolvedFormat,
+        events: selectedEvents,
+    })
+    let byteLength = getUtf8ByteLength(xml)
+
+    for (let i = allThreadEvents.length - 1; i >= 0; i--) {
+        const candidateEvents = [allThreadEvents[i], ...selectedEvents]
+        const candidateXml = taskThreadJsonToXml({
+            task: threadTask,
+            format: resolvedFormat,
+            events: candidateEvents,
+        })
+        const candidateBytes = getUtf8ByteLength(candidateXml)
+        if (candidateBytes > maxBytes) {
+            break
+        }
+        selectedEvents.unshift(allThreadEvents[i])
+        xml = candidateXml
+        byteLength = candidateBytes
+    }
+
+    const includedEvents = selectedEvents.length
+    const omittedEvents = allThreadEvents.length - includedEvents
+
+    return {
+        xml,
+        byteLength,
+        truncated: omittedEvents > 0,
+        includedEvents,
+        omittedEvents,
+    }
+}
+
 function resolveFormat(format: Partial<TaskThreadFormat>): TaskThreadFormat {
     return {
         includeFunctionInputs: format.includeFunctionInputs ?? DEFAULT_TASK_THREAD_FORMAT.includeFunctionInputs,
         includeFunctionOutputs: format.includeFunctionOutputs ?? DEFAULT_TASK_THREAD_FORMAT.includeFunctionOutputs,
         includeThinking: format.includeThinking ?? DEFAULT_TASK_THREAD_FORMAT.includeThinking,
         includeMessages: format.includeMessages ?? DEFAULT_TASK_THREAD_FORMAT.includeMessages,
+        maxEvents: format.maxEvents,
     }
 }
 
@@ -431,4 +507,8 @@ function serializeUnknown(value: unknown): string {
     } catch {
         return String(value)
     }
+}
+
+function getUtf8ByteLength(value: string): number {
+    return UTF8_ENCODER.encode(value).byteLength
 }

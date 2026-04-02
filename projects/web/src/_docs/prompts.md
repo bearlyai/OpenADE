@@ -28,9 +28,16 @@ interface PromptResult {
 
 Builders: `buildPlanGenerationPrompt`, `buildRevisePrompt`, `buildRunPlanPrompt`, `buildAskPrompt`, `buildDoPrompt`
 
+Review-specific helpers live in `reviewPrompts.ts`:
+- `buildPlanReviewPrompt(...)` - one-off external review of active plan
+- `buildWorkReviewPrompt(...)` - one-off external review of recent work
+- `buildReviewHandoffPrompt(...)` - asks main thread to agree/disagree and request user approval
+
 Execution-context helpers:
 - `buildWorktreeExecutionInstruction(...)` - Appends a worktree safety instruction when isolation type is `worktree`
 - `mergeAppendSystemPrompt(...)` - Combines mode prompts with execution-context prompts
+- HyperPlan plan prompts may include `<main_thread_context ...>` containing serialized task thread XML from `taskThreadSerializer.ts`
+- Main-thread context is budgeted by UTF-8 bytes (default `240_000`) and keeps the most recent events that fit
 
 ## Comment Formatting
 
