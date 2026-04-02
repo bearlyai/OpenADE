@@ -149,8 +149,26 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     const weekEnd = new Date(weekStart)
     weekEnd.setDate(weekEnd.getDate() + 7)
 
-    const todayStats: MonthStats = { label: "Today", sortKey: "today", taskCount: 0, inputTokens: 0, outputTokens: 0, totalCostUsd: 0, eventCount: 0, costByModel: {} }
-    const weekStats: MonthStats = { label: "This Week", sortKey: "this-week", taskCount: 0, inputTokens: 0, outputTokens: 0, totalCostUsd: 0, eventCount: 0, costByModel: {} }
+    const todayStats: MonthStats = {
+        label: "Today",
+        sortKey: "today",
+        taskCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalCostUsd: 0,
+        eventCount: 0,
+        costByModel: {},
+    }
+    const weekStats: MonthStats = {
+        label: "This Week",
+        sortKey: "this-week",
+        taskCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalCostUsd: 0,
+        eventCount: 0,
+        costByModel: {},
+    }
 
     for (const repo of repos) {
         for (const task of repo.tasks) {

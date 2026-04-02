@@ -294,8 +294,7 @@ export class ExecutionManager {
             if (event.type !== "snapshot") continue
 
             for (const file of event.files ?? []) {
-                const summary =
-                    file.status === "renamed" && file.oldPath ? `renamed: ${file.oldPath} -> ${file.path}` : `${file.status}: ${file.path}`
+                const summary = file.status === "renamed" && file.oldPath ? `renamed: ${file.oldPath} -> ${file.path}` : `${file.status}: ${file.path}`
                 if (seen.has(summary)) continue
                 seen.add(summary)
                 summaries.push(summary)

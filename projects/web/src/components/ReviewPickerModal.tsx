@@ -93,9 +93,7 @@ export const ReviewPickerModal = NiceModal.create(
         const orderedOptions = [...topOptions, ...otherOptions]
         const hasOtherHarness = taskModel ? options.some((option) => option.harnessId !== taskModel.harnessId) : false
         const currentOption =
-            taskModel && hasOtherHarness
-                ? options.find((option) => option.harnessId === taskModel.harnessId && option.modelId === taskModel.model)
-                : undefined
+            taskModel && hasOtherHarness ? options.find((option) => option.harnessId === taskModel.harnessId && option.modelId === taskModel.model) : undefined
         const reviewOptions = currentOption ? orderedOptions.filter((option) => option.id !== currentOption.id) : orderedOptions
 
         return (
@@ -120,9 +118,7 @@ export const ReviewPickerModal = NiceModal.create(
                                     key={option.id}
                                     type="button"
                                     className={`btn flex w-full items-center justify-between px-3 py-2.5 border text-base-content ${
-                                        option.isTop
-                                            ? "border-primary/35 bg-primary/10 hover:bg-primary/20"
-                                            : "border-border bg-base-200 hover:bg-base-300"
+                                        option.isTop ? "border-primary/35 bg-primary/10 hover:bg-primary/20" : "border-border bg-base-200 hover:bg-base-300"
                                     }`}
                                     onClick={() => startReview(option.harnessId, option.modelId)}
                                 >
@@ -166,9 +162,7 @@ export const ReviewPickerModal = NiceModal.create(
                         </div>
                     )}
 
-                    {options.length === 0 && (
-                        <div className="text-xs text-warning">No review agents are configured.</div>
-                    )}
+                    {options.length === 0 && <div className="text-xs text-warning">No review agents are configured.</div>}
                 </div>
             </Modal>
         )

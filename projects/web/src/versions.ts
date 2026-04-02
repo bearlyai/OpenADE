@@ -8,6 +8,17 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.67.0",
+        title: "Refined Reviews",
+        date: "2026-04-02",
+        highlights: [
+            "Reviews are less aggressive — findings now distinguish real bugs from potentially intentional behavior with a confirmation section",
+            "Review picker redesigned as a single-click agent list with top models highlighted",
+            "Review handoff context is now compact, preventing bloated follow-up prompts",
+            "Task thread serializer no longer includes function-call inputs by default, reducing noise",
+        ],
+    },
+    {
         version: "0.66.0",
         title: "Isolated Reviews & HyperPlan Reliability",
         date: "2026-04-02",
