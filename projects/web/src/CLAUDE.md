@@ -69,7 +69,7 @@ electronAPI/        → IPC wrappers for Electron main process
 components/         → UI components
 routing.ts          → Local typesafe routing (isolated from @/state/routing)
 api.ts              → Data types, localStorage CRUD
-prompts.ts          → Claude prompt templates
+prompts/            → Prompt builders and serialization helpers
 ```
 
 ### Route/Page Separation
@@ -303,7 +303,9 @@ Import from `../components/ui` not `@/funktionalChat/components`.
 | Purpose | File |
 |---------|------|
 | Data types, CRUD | `api.ts` |
-| Prompt templates | `prompts.ts` |
+| Prompt templates | `prompts/prompts.ts` |
+| Task thread serializer (Task -> JSON/XML) | `prompts/taskThreadSerializer.ts` |
+| XML helpers | `utils/makeXML.ts` |
 | Local routing | `routing.ts` |
 | MCP presets & icons | `constants.ts` |
 | Model catalog (from harness) | `constants.ts` (re-exports from `@openade/harness`) |

@@ -11,6 +11,7 @@ import { extractRawMessageEvents } from "../electronAPI/harnessEventTypes"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import type { GitStatusResponse } from "../electronAPI/git"
 import { computeTaskUsage } from "../persistence/taskStatsUtils"
+import { buildTaskThreadJson, buildTaskThreadXml, type TaskThreadFormat, type TaskThreadJson } from "../prompts/taskThreadSerializer"
 import type { ActionEvent, CodeEvent, IsolationStrategy, Task, TaskDeviceEnvironment } from "../types"
 import { getDeviceId } from "../utils/deviceId"
 import { ActionEventModel, type EventModel, SetupEnvironmentEventModel, SnapshotEventModel } from "./EventModel"
@@ -327,6 +328,16 @@ export class TaskModel {
 
     get pullRequest(): { url: string; number?: number; provider: "github" | "gitlab" | "other" } | undefined {
         return this.task?.pullRequest
+    }
+
+    getThreadJson(format: Partial<TaskThreadFormat> = {}): TaskThreadJson | null {
+        if (!this.task) return null
+        return buildTaskThreadJson(this.task, format)
+    }
+
+    getThreadXml(format: Partial<TaskThreadFormat> = {}): string {
+        if (!this.task) return ""
+        return buildTaskThreadXml(this.task, format)
     }
 
     // === Event models ===

@@ -166,6 +166,20 @@ describe("TaskModel harness lock", () => {
         expect(model.harnessId).toBe("claude-code")
         expect(model.model).toBe("opus")
     })
+
+    it("serializes task threads as JSON and XML", () => {
+        const task = createTask([createActionEvent({ id: "a1", harnessId: "claude-code", modelId: "opus" })])
+
+        const model = new TaskModel(createStore(task), task.id)
+
+        const threadJson = model.getThreadJson()
+        expect(threadJson?.task.id).toBe(task.id)
+        expect(threadJson?.events).toHaveLength(1)
+
+        const threadXml = model.getThreadXml()
+        expect(threadXml).toContain(`<task id="${task.id}"`)
+        expect(threadXml).toContain(`<event id="a1"`)
+    })
 })
 
 describe("TaskModel environment loading", () => {
