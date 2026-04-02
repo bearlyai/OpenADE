@@ -29,6 +29,7 @@ export interface SpawnJsonlOptions<M> {
  */
 export async function* spawnJsonl<M>(options: SpawnJsonlOptions<M>): AsyncGenerator<HarnessEvent<M>> {
     const { command, args, cwd, env, signal, parseLine, onExit } = options
+    const useProcessGroup = process.platform !== "win32"
 
     // Check if already aborted
     if (signal.aborted) {
@@ -40,6 +41,7 @@ export async function* spawnJsonl<M>(options: SpawnJsonlOptions<M>): AsyncGenera
         cwd,
         env: env ? { ...process.env, ...env } : undefined,
         stdio: [options.stdinLines ? "pipe" : "ignore", "pipe", "pipe"],
+        detached: useProcessGroup,
     })
 
     // Write stdin lines and close
@@ -52,16 +54,36 @@ export async function* spawnJsonl<M>(options: SpawnJsonlOptions<M>): AsyncGenera
 
     let stderrBuf = ""
     let killed = false
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined
+
+    const sendSignal = (killSignal: NodeJS.Signals): void => {
+        if (!proc.pid) return
+
+        try {
+            if (useProcessGroup) {
+                process.kill(-proc.pid, killSignal)
+            } else {
+                proc.kill(killSignal)
+            }
+        } catch {
+            // Fallback to direct child kill if group kill fails
+            try {
+                proc.kill(killSignal)
+            } catch {
+                // Process already exited
+            }
+        }
+    }
 
     const killProcess = () => {
         if (killed || !proc.pid) return
         killed = true
         try {
-            proc.kill("SIGTERM")
+            sendSignal("SIGTERM")
             // Force kill after 5 seconds if still alive
-            const forceKillTimer = setTimeout(() => {
+            forceKillTimer = setTimeout(() => {
                 try {
-                    proc.kill("SIGKILL")
+                    sendSignal("SIGKILL")
                 } catch {
                     // Already dead
                 }
@@ -149,6 +171,10 @@ export async function* spawnJsonl<M>(options: SpawnJsonlOptions<M>): AsyncGenera
 
         // Process exit handler
         exitPromise.then(({ code }) => {
+            if (forceKillTimer) {
+                clearTimeout(forceKillTimer)
+                forceKillTimer = undefined
+            }
             if (signal.aborted) {
                 pushEvent({ type: "error", error: "Aborted", code: "aborted" })
             } else if (onExit) {
@@ -188,6 +214,10 @@ export async function* spawnJsonl<M>(options: SpawnJsonlOptions<M>): AsyncGenera
         }
     } finally {
         signal.removeEventListener("abort", onAbort)
+        if (forceKillTimer) {
+            clearTimeout(forceKillTimer)
+            forceKillTimer = undefined
+        }
         killProcess()
     }
 }

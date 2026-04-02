@@ -1,8 +1,8 @@
 /**
  * QueryManager
  *
- * Manages active harness queries for abort functionality.
- * Tracks queries per task and handles abort operations.
+ * Manages active task runs for abort functionality.
+ * Tracks harness queries and custom run handles (for HyperPlan, etc.) per task.
  *
  * Uses the unified HarnessStreamEvent system.
  */
@@ -12,33 +12,69 @@ import { hasOnlyInitMessage } from "../../electronAPI/harnessEventTypes"
 import { type HarnessQuery, getHarnessQueryManager } from "../../electronAPI/harnessQuery"
 import type { CodeStore } from "../store"
 
+interface ActiveHarnessRun {
+    kind: "harness"
+    query: HarnessQuery
+    eventId: string | null
+    parentSessionId?: string
+}
+
+interface ActiveCustomRun {
+    kind: "custom"
+    eventId: string | null
+    parentSessionId?: string
+    abort: () => Promise<void> | void
+    sessionId?: () => string | undefined
+    cleanup?: () => void
+}
+
+type ActiveTaskRun = ActiveHarnessRun | ActiveCustomRun
+
 export class QueryManager {
-    private activeQueries: Map<string, { query: HarnessQuery; eventId: string | null; parentSessionId?: string }> = new Map()
+    private activeRuns: Map<string, ActiveTaskRun> = new Map()
 
     constructor(private store: CodeStore) {
         makeAutoObservable(this, {
-            // activeQueries is private, no need to annotate
+            // activeRuns is private, no need to annotate
         })
     }
 
     // ==================== Query tracking ====================
 
     setActiveQuery(taskId: string, query: HarnessQuery, eventId: string | null, parentSessionId?: string): void {
-        this.activeQueries.set(taskId, { query, eventId, parentSessionId })
+        this.activeRuns.set(taskId, { kind: "harness", query, eventId, parentSessionId })
+    }
+
+    setActiveCustomRun(taskId: string, run: Omit<ActiveCustomRun, "kind">): void {
+        this.activeRuns.set(taskId, {
+            kind: "custom",
+            ...run,
+        })
+    }
+
+    updateActiveRunEvent(taskId: string, eventId: string, parentSessionId?: string): void {
+        const active = this.activeRuns.get(taskId)
+        if (!active) return
+        active.eventId = eventId
+        if (parentSessionId !== undefined) {
+            active.parentSessionId = parentSessionId
+        }
     }
 
     clearActiveQuery(taskId: string): void {
-        this.activeQueries.delete(taskId)
+        this.activeRuns.delete(taskId)
     }
 
     getActiveQuery(taskId: string): { query: HarnessQuery; eventId: string | null; parentSessionId?: string } | null {
-        return this.activeQueries.get(taskId) || null
+        const active = this.activeRuns.get(taskId)
+        if (!active || active.kind !== "harness") return null
+        return { query: active.query, eventId: active.eventId, parentSessionId: active.parentSessionId }
     }
 
     // ==================== Abort ====================
 
     async abortTask(taskId: string): Promise<void> {
-        const active = this.activeQueries.get(taskId)
+        const active = this.activeRuns.get(taskId)
         if (!active) {
             console.debug("[QueryManager] abortTask: No active query for task", taskId)
             return
@@ -47,10 +83,14 @@ export class QueryManager {
         console.debug("[QueryManager] Aborting task", taskId, "event", active.eventId)
 
         // Capture session ID before aborting so we can resume from it
-        const sessionId = active.query.sessionId
+        const sessionId = active.kind === "harness" ? active.query.sessionId : active.sessionId?.()
 
         try {
-            await active.query.abort()
+            if (active.kind === "harness") {
+                await active.query.abort()
+            } else {
+                await active.abort()
+            }
         } catch (err) {
             console.error("[QueryManager] Error aborting query:", err)
         }
@@ -75,8 +115,12 @@ export class QueryManager {
         this.store.setTaskWorking(taskId, false)
 
         // Cleanup manager reference
-        const executionId = active.query.id
-        getHarnessQueryManager().cleanup(executionId)
+        if (active.kind === "harness") {
+            const executionId = active.query.id
+            getHarnessQueryManager().cleanup(executionId)
+        } else {
+            active.cleanup?.()
+        }
 
         console.debug("[QueryManager] Task stopped successfully", taskId, { sessionId })
     }

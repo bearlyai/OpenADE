@@ -208,6 +208,12 @@ export class HarnessQuery {
                 break
 
             case "error":
+                if (event.code === "aborted" || this._isAborted) {
+                    this._executionState.status = "aborted"
+                    this._executionState.completedAt = new Date().toISOString()
+                    this.emit("complete")
+                    break
+                }
                 console.error("[HarnessQuery] Execution error:", event.error)
                 this._executionState.status = "error"
                 this._executionState.completedAt = new Date().toISOString()

@@ -64,6 +64,7 @@ export class HyperPlanExecutor {
 
     constructor(config: HyperPlanExecutorConfig) {
         this.config = config
+        this.aborted = config.signal.aborted
 
         // Listen for abort
         config.signal.addEventListener("abort", () => {

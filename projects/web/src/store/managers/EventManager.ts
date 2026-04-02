@@ -254,6 +254,7 @@ export class EventManager {
         const now = new Date().toISOString()
         taskStore.events.update(eventId, (draft) => {
             if (draft.type !== "action") return
+            if (draft.status === "stopped") return
             draft.status = "completed"
             draft.completedAt = now
             draft.result = { success }

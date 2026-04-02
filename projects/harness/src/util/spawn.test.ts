@@ -66,6 +66,7 @@ describe("spawnJsonl", () => {
       }, 100);
     `
         const ac = new AbortController()
+        const startedAt = Date.now()
 
         // Abort after a short delay
         setTimeout(() => ac.abort(), 300)
@@ -85,6 +86,7 @@ describe("spawnJsonl", () => {
         // Should have received some ticks but then been aborted
         const abortEvents = events.filter((e) => e.type === "error" && (e as { code?: string }).code === "aborted")
         expect(abortEvents.length).toBeGreaterThan(0)
+        expect(Date.now() - startedAt).toBeLessThan(5000)
     })
 
     it("handles process crash (non-zero exit)", async () => {

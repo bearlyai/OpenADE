@@ -127,6 +127,7 @@ export class ExecutionManager {
 
         this.store.setTaskWorking(taskId, true)
         let executionId: string | undefined
+        let actionEventId: string | undefined
         let executionSuccess = false
         let cwd = repo.path
         let additionalDirectories: string[] | undefined
@@ -181,6 +182,7 @@ export class ExecutionManager {
             }
 
             const { eventId } = eventResult
+            actionEventId = eventId
             this.store.tasks.getTaskUIState(taskId).expandOnlyEvent(eventId)
 
             const parentSessionId = this.store.events.getLastEventSessionId(taskId)
@@ -203,7 +205,8 @@ export class ExecutionManager {
                 createSnapshot,
                 mcpServerConfigs,
             })
-            executionSuccess = true
+            const actionEvent = actionEventId ? this.store.getCachedTaskStore(taskId)?.events.get(actionEventId) : undefined
+            executionSuccess = actionEvent?.type === "action" ? (actionEvent.result?.success ?? false) : false
         } catch (err) {
             console.error(`[ExecutionManager] ${source.type} failed:`, err)
             track("execution_error", { eventType: source.type })
@@ -515,10 +518,20 @@ export class ExecutionManager {
         let additionalDirectories: string[] | undefined
         let worktreeInstruction: string | undefined
         const mcpServerConfigs = this.buildMcpServerConfigs(task.enabledMcpServerIds)
+        const abortController = new AbortController()
+        let executor: HyperPlanExecutor | null = null
 
         // The terminal step's executionId becomes the main execution ID
         const executionId = crypto.randomUUID()
         let executionSuccess = false
+
+        this.store.queries.setActiveCustomRun(taskId, {
+            eventId: null,
+            abort: async () => {
+                abortController.abort()
+                executor?.abort()
+            },
+        })
 
         try {
             if (!isHarnessApiAvailable()) {
@@ -530,8 +543,10 @@ export class ExecutionManager {
             cwd = executionPaths.cwd
             additionalDirectories = executionPaths.additionalDirectories
             worktreeInstruction = buildWorktreeExecutionInstruction(task.isolationStrategy, cwd)
+            if (abortController.signal.aborted) return
 
             const gitRefsBefore = await this.getGitRefs(cwd)
+            if (abortController.signal.aborted) return
 
             // Find the terminal step to get the harness/model for the main execution record
             const terminalStep = strategy.steps.find((s) => s.id === strategy.terminalStepId)!
@@ -555,7 +570,12 @@ export class ExecutionManager {
             }
 
             const { eventId } = eventResult
+            this.store.queries.updateActiveRunEvent(taskId, eventId)
             this.store.tasks.getTaskUIState(taskId).expandOnlyEvent(eventId)
+            if (abortController.signal.aborted) {
+                this.store.events.stoppedEvent({ taskId, eventId })
+                return
+            }
 
             // Create sub-execution records for all non-terminal steps
             for (const step of strategy.steps) {
@@ -574,9 +594,6 @@ export class ExecutionManager {
                     },
                 })
             }
-
-            // Set up an AbortController for the executor
-            const abortController = new AbortController()
 
             // Build callbacks that persist to YJS
             const callbacks: HyperPlanCallbacks = {
@@ -636,7 +653,7 @@ export class ExecutionManager {
             }
 
             // Create and run the executor
-            const executor = new HyperPlanExecutor({
+            executor = new HyperPlanExecutor({
                 strategy,
                 taskDescription: input.userInput,
                 cwd,

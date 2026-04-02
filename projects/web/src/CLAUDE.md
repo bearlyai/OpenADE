@@ -146,7 +146,7 @@ Set at task creation, immutable:
 
 `InputManager` computes available commands based on task state:
 
-- **Stop** - Abort current execution
+- **Stop** - Abort the current task execution (single-query and HyperPlan multi-agent runs)
 - **Plan** - Generate new plan
 - **Revise** - Update plan with feedback
 - **Run Plan** - Execute approved plan
