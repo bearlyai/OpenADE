@@ -139,6 +139,15 @@ export class TaskModel {
         this.model = getDefaultModelForHarness(id)
     }
 
+    /**
+     * Re-sync harness/model from the latest action event.
+     * Called after HyperPlan completes so the TaskModel reflects
+     * the reconciler's agent rather than stale pre-HyperPlan defaults.
+     */
+    syncHarnessFromHistory(): void {
+        this.initializeExecutionSelectionFromHistory()
+    }
+
     private get hasActionHistory(): boolean {
         const events = this.task?.events ?? []
         return events.some((event) => event.type === "action")
@@ -149,6 +158,7 @@ export class TaskModel {
         for (let i = events.length - 1; i >= 0; i--) {
             const event = events[i]
             if (event.type !== "action") continue
+            if (event.source.type === "review") continue
 
             // v1 compat: pre-harness tasks stored `type` instead of `harnessId`
             const harnessId: HarnessId =

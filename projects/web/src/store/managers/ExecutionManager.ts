@@ -15,9 +15,12 @@ import { getHarnessQueryManager, isHarnessApiAvailable } from "../../electronAPI
 import { getGitStatus, isGitApiAvailable } from "../../electronAPI/git"
 import { buildMcpServerConfigs } from "../../electronAPI/mcp"
 import { HyperPlanExecutor, type HyperPlanCallbacks } from "../../hyperplan/HyperPlanExecutor"
+import { extractPlanText } from "../../hyperplan/extractPlanText"
 import type { HyperPlanStrategy } from "../../hyperplan/types"
 import { isStandardStrategy } from "../../hyperplan/strategies"
 import { buildRawRendererStyleInstruction, buildWorktreeExecutionInstruction, mergeAppendSystemPrompt } from "../../prompts/executionContext"
+import { buildPlanReviewPrompt, buildReviewHandoffPrompt, buildWorkReviewPrompt, type ReviewType } from "../../prompts/reviewPrompts"
+import { buildTaskThreadXmlWithBudget } from "../../prompts/taskThreadSerializer"
 import {
     type ContentBlock,
     type PromptBuildContext,
@@ -28,7 +31,7 @@ import {
     buildRevisePrompt,
     buildRunPlanPrompt,
 } from "../../prompts/prompts"
-import type { ActionEventSource, GitRefs, Repo, UserInputContext } from "../../types"
+import type { ActionEvent, ActionEventSource, GitRefs, Repo, UserInputContext } from "../../types"
 import type { TaskModel } from "../TaskModel"
 import type { CodeStore } from "../store"
 
@@ -43,7 +46,12 @@ interface ActionParams {
     createSnapshot?: boolean
     includeComments?: boolean
     extraSystemPrompt?: string
+    freshSession?: boolean
+    overrideHarnessId?: HarnessId
+    overrideModel?: string
 }
+
+const HYPERPLAN_MAIN_THREAD_CONTEXT_MAX_BYTES = 240_000
 
 export class ExecutionManager {
     private afterEventCallbacks: AfterEventCallback[] = []
@@ -88,7 +96,19 @@ export class ExecutionManager {
     // === Core execution ===
 
     private async runAction(params: ActionParams): Promise<void> {
-        const { taskId, input, source, buildPrompt, readOnly, createSnapshot, includeComments = true, extraSystemPrompt } = params
+        const {
+            taskId,
+            input,
+            source,
+            buildPrompt,
+            readOnly,
+            createSnapshot,
+            includeComments = true,
+            extraSystemPrompt,
+            freshSession = false,
+            overrideHarnessId,
+            overrideModel,
+        } = params
 
         console.debug("[ExecutionManager] runAction called", { taskId, source: source.type, userInput: input.userInput.slice(0, 50) })
 
@@ -112,6 +132,15 @@ export class ExecutionManager {
             console.debug("[ExecutionManager] runAction: task already working", { taskId })
             return
         }
+
+        // When resuming a session, use the harness/model that created it — the
+        // session and its creator must stay consistent (e.g., don't resume a
+        // codex session with claude-code).  Falls back to TaskModel defaults
+        // for fresh sessions or when no prior session exists.
+        const sessionContext = freshSession ? undefined : this.store.events.getLastEventSessionContext(taskId)
+        const parentSessionId = sessionContext?.sessionId
+        const effectiveHarnessId = overrideHarnessId ?? (parentSessionId ? sessionContext.harnessId : taskModel.harnessId)
+        const effectiveModel = overrideModel ?? (parentSessionId ? (sessionContext.modelId ?? taskModel.model) : taskModel.model)
 
         // Get pending comments - the prompt builder decides which to consume
         const pendingComments = includeComments ? this.store.comments.getUnsubmittedComments(taskId) : []
@@ -146,7 +175,7 @@ export class ExecutionManager {
 
             const worktreeInstruction = buildWorktreeExecutionInstruction(task.isolationStrategy, cwd)
             appendSystemPrompt = mergeAppendSystemPrompt(mergeAppendSystemPrompt(systemPrompt, worktreeInstruction), extraSystemPrompt)
-            const rawRendererStyleInstruction = buildRawRendererStyleInstruction(taskModel.harnessId, source.type)
+            const rawRendererStyleInstruction = buildRawRendererStyleInstruction(effectiveHarnessId, source.type)
             appendSystemPrompt = mergeAppendSystemPrompt(appendSystemPrompt, rawRendererStyleInstruction)
 
             console.debug("[ExecutionManager] Starting execution", {
@@ -172,8 +201,8 @@ export class ExecutionManager {
                 executionId,
                 source,
                 includesCommentIds: consumedCommentIds,
-                modelId: taskModel.model,
-                harnessId: taskModel.harnessId,
+                modelId: effectiveModel,
+                harnessId: effectiveHarnessId,
                 gitRefsBefore,
             })
             if (!eventResult) {
@@ -185,8 +214,6 @@ export class ExecutionManager {
             actionEventId = eventId
             this.store.tasks.getTaskUIState(taskId).expandOnlyEvent(eventId)
 
-            const parentSessionId = this.store.events.getLastEventSessionId(taskId)
-
             // Build MCP server configs from enabled servers
             const mcpServerConfigs = this.buildMcpServerConfigs(task.enabledMcpServerIds)
 
@@ -195,7 +222,8 @@ export class ExecutionManager {
                 taskId,
                 eventId,
                 executionId,
-                harnessId: taskModel.harnessId,
+                harnessId: effectiveHarnessId,
+                modelId: effectiveModel,
                 prompt: userMessage,
                 appendSystemPrompt,
                 cwd,
@@ -265,6 +293,7 @@ export class ExecutionManager {
         eventId: string
         executionId: string
         harnessId: HarnessId
+        modelId?: string
         prompt: string | ContentBlock[]
         appendSystemPrompt?: string
         cwd: string
@@ -290,7 +319,7 @@ export class ExecutionManager {
 
         console.debug("[ExecutionManager] runExecutionLoop: calling manager.startExecution")
         const taskModel = this.store.tasks.getTaskModel(ctx.taskId)
-        const selectedModel = taskModel?.model ?? this.store.defaultModel
+        const selectedModel = ctx.modelId ?? taskModel?.model ?? this.store.defaultModel
         const fullModelId = getModelFullId(selectedModel, ctx.harnessId)
         const query = await manager.startExecution(
             ctx.prompt,
@@ -468,6 +497,78 @@ export class ExecutionManager {
         })
     }
 
+    async executeReview({
+        taskId,
+        reviewType,
+        harnessId,
+        modelId,
+    }: {
+        taskId: string
+        reviewType: ReviewType
+        harnessId: HarnessId
+        modelId: string
+    }): Promise<void> {
+        const task = this.store.tasks.getTask(taskId)
+        if (!task) return
+
+        const threadContext = buildTaskThreadXmlWithBudget(task, {
+            maxBytes: HYPERPLAN_MAIN_THREAD_CONTEXT_MAX_BYTES,
+            includeThinking: false,
+        })
+        const threadXml = threadContext.xml
+
+        let reviewPrompt: PromptResult
+        if (reviewType === "plan") {
+            const planEvent = this.store.events.getTaskLatestCompletedPlanEvent(taskId)
+            const planText = planEvent ? (extractPlanText(planEvent.execution.events, planEvent.execution.harnessId) ?? "") : ""
+            reviewPrompt = buildPlanReviewPrompt({ threadXml, planText })
+        } else {
+            reviewPrompt = buildWorkReviewPrompt({ threadXml })
+        }
+
+        if (typeof reviewPrompt.userMessage !== "string") {
+            console.error("[ExecutionManager] executeReview expected string review prompt")
+            return
+        }
+
+        const userLabel = reviewType === "plan" ? "Review Plan" : "Review"
+
+        await this.runAction({
+            taskId,
+            input: { userInput: reviewPrompt.userMessage, images: [] },
+            source: { type: "review", userLabel, reviewType },
+            buildPrompt: async () => reviewPrompt,
+            readOnly: true,
+            createSnapshot: false,
+            includeComments: false,
+            freshSession: true,
+            overrideHarnessId: harnessId,
+            overrideModel: modelId,
+        })
+
+        const updatedTask = this.store.tasks.getTask(taskId)
+        if (!updatedTask) return
+
+        const reviewEvent = [...updatedTask.events]
+            .reverse()
+            .find((evt): evt is ActionEvent => evt.type === "action" && evt.source.type === "review")
+        if (!reviewEvent || reviewEvent.status !== "completed" || !reviewEvent.result?.success) return
+
+        const reviewText = extractPlanText(reviewEvent.execution.events, reviewEvent.execution.harnessId ?? harnessId)
+        if (!reviewText) return
+
+        const handoffMessage = buildReviewHandoffPrompt({ reviewType, reviewText })
+        await this.runAction({
+            taskId,
+            input: { userInput: handoffMessage, images: [] },
+            source: { type: "ask", userLabel: `${userLabel} Follow-up` },
+            buildPrompt: (ctx) => buildAskPrompt(ctx),
+            readOnly: true,
+            createSnapshot: false,
+            includeComments: false,
+        })
+    }
+
     async executeRunPlan(taskId: string, input: UserInputContext): Promise<void> {
         const planEvent = this.store.events.getTaskLatestCompletedPlanEvent(taskId)
         if (!planEvent) {
@@ -517,6 +618,8 @@ export class ExecutionManager {
         let cwd = repo.path
         let additionalDirectories: string[] | undefined
         let worktreeInstruction: string | undefined
+        let mainThreadContextXml: string | undefined
+        let mainThreadContextMeta: { truncated: boolean; includedEvents: number; omittedEvents: number; byteLength: number } | undefined
         const mcpServerConfigs = this.buildMcpServerConfigs(task.enabledMcpServerIds)
         const abortController = new AbortController()
         let executor: HyperPlanExecutor | null = null
@@ -543,6 +646,16 @@ export class ExecutionManager {
             cwd = executionPaths.cwd
             additionalDirectories = executionPaths.additionalDirectories
             worktreeInstruction = buildWorktreeExecutionInstruction(task.isolationStrategy, cwd)
+            const threadContext = buildTaskThreadXmlWithBudget(task, { maxBytes: HYPERPLAN_MAIN_THREAD_CONTEXT_MAX_BYTES })
+            if (threadContext.includedEvents > 0) {
+                mainThreadContextXml = threadContext.xml
+                mainThreadContextMeta = {
+                    truncated: threadContext.truncated,
+                    includedEvents: threadContext.includedEvents,
+                    omittedEvents: threadContext.omittedEvents,
+                    byteLength: threadContext.byteLength,
+                }
+            }
             if (abortController.signal.aborted) return
 
             const gitRefsBefore = await this.getGitRefs(cwd)
@@ -656,6 +769,8 @@ export class ExecutionManager {
             executor = new HyperPlanExecutor({
                 strategy,
                 taskDescription: input.userInput,
+                mainThreadContextXml,
+                mainThreadContextMeta,
                 cwd,
                 additionalDirectories,
                 appendSystemPromptSuffix: worktreeInstruction,
@@ -673,6 +788,10 @@ export class ExecutionManager {
                 eventId,
                 success: result.success,
             })
+
+            // Sync TaskModel to the reconciler's harness/model so follow-up
+            // actions and the UI reflect the terminal step's agent.
+            taskModel.syncHarnessFromHistory()
 
             // Capture git refs after execution completes
             const gitRefsAfter = await this.getGitRefs(cwd)

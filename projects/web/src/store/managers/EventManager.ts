@@ -132,6 +132,17 @@ export class EventManager {
 
     /** Get the session ID from the last event with an execution, skipping defunct sessions */
     getLastEventSessionId(taskId: string): string | undefined {
+        return this.getLastEventSessionContext(taskId)?.sessionId
+    }
+
+    /**
+     * Get the full session context (session ID + harness + model) from the last
+     * event with an execution, skipping review events and defunct sessions.
+     *
+     * When resuming a session, the harness/model must match the ones that created
+     * it — otherwise we'd try to resume e.g. a codex session with claude-code.
+     */
+    getLastEventSessionContext(taskId: string): { sessionId: string; harnessId: HarnessId; modelId?: string } | undefined {
         const taskStore = this.store.getCachedTaskStore(taskId)
         if (!taskStore) return undefined
 
@@ -142,6 +153,7 @@ export class EventManager {
         for (let i = events.length - 1; i >= 0; i--) {
             const event = events[i]
             if (event.type !== "action") continue
+            if (event.source.type === "review") continue
 
             // If this event has defunct session error, extract and mark the defunct session ID
             const defunctSessionId = this.getDefunctSessionId(event)
@@ -155,7 +167,11 @@ export class EventManager {
 
             // Return first valid session we find
             if (event.execution.sessionId && !defunctSessionIds.has(event.execution.sessionId)) {
-                return event.execution.sessionId
+                return {
+                    sessionId: event.execution.sessionId,
+                    harnessId: event.execution.harnessId,
+                    modelId: event.execution.modelId,
+                }
             }
         }
         return undefined
