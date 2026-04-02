@@ -17,6 +17,12 @@ const REVIEW_MODE_INSTRUCTIONS = `<current_operating_mode mode="review">
 </constraints>
 </current_operating_mode>`
 
+const REVIEW_SENSITIVITY_GUIDANCE = [
+    "Avoid overzealous reviews: prioritize real bugs, regressions, and clear risks over stylistic preferences.",
+    "If something may be intentional, do not label it as a bug outright; flag it as a confirmation item.",
+    "After your findings, add a short section titled 'Things that might be intentional (confirm)' with up to 3 items.",
+].join("\n")
+
 function buildCustomInstructionsBlock(customInstructions?: string): string {
     const text = customInstructions?.trim()
     if (!text) return ""
@@ -46,7 +52,8 @@ export function buildPlanReviewPrompt({
             `<plan_to_review>\n${planText}\n</plan_to_review>\n\n` +
             "Review this plan. For each finding, provide: Location, Issue, Suggestion.\n" +
             "Prioritize correctness gaps and blockers first.\n" +
-            "If relevant, verify assumptions against the current code and recent diffs/commits." +
+            "If relevant, verify assumptions against the current code and recent diffs/commits.\n" +
+            `${REVIEW_SENSITIVITY_GUIDANCE}` +
             buildChangedFilesBlock(changedFiles) +
             buildCustomInstructionsBlock(customInstructions),
         consumedCommentIds: [],
@@ -69,7 +76,8 @@ export function buildWorkReviewPrompt({
             "Review the recent work. Use read-only exploration as needed.\n" +
             "Inspect relevant git status/diff, recent commits, and touched files before writing conclusions.\n" +
             "For each finding, provide: Location, Issue, Suggestion.\n" +
-            "Prioritize bugs, regressions, and risky complexity." +
+            "Prioritize bugs, regressions, and risky complexity.\n" +
+            `${REVIEW_SENSITIVITY_GUIDANCE}` +
             buildChangedFilesBlock(changedFiles) +
             buildCustomInstructionsBlock(customInstructions),
         consumedCommentIds: [],

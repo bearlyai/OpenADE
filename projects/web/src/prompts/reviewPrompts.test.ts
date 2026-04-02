@@ -32,6 +32,8 @@ describe("reviewPrompts", () => {
         expect(result.userMessage).toContain("Review the recent work")
         expect(result.userMessage).toContain("Location")
         expect(result.userMessage).toContain("Suggestion")
+        expect(result.userMessage).toContain("Avoid overzealous reviews")
+        expect(result.userMessage).toContain("Things that might be intentional (confirm)")
         expect(result.userMessage).toContain("<recent_changed_files>")
         expect(result.userMessage).toContain("modified: src/a.ts")
         expect(result.userMessage).toContain("<additional_instructions>")

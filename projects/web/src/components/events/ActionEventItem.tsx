@@ -44,6 +44,11 @@ function isPlanOrRevise(event: ActionEvent): boolean {
     return event.source.type === "plan" || event.source.type === "revise" || event.source.type === "hyperplan"
 }
 
+function shouldHideUserInput(event: ActionEvent): boolean {
+    if (event.source.type === "review") return true
+    return event.source.type === "ask" && event.source.origin === "review_follow_up"
+}
+
 export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: ActionEventItemProps) => {
     const codeStore = useCodeStore()
     const isPlan = isPlanOrRevise(event)
@@ -66,6 +71,8 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
     }, [taskId, event.includesCommentIds])
 
     const useLabel = isPlan ? label : event.source.userLabel
+    const hideUserInput = shouldHideUserInput(event)
+    const queryText = hideUserInput ? undefined : event.userInput
 
     const hasDefunctSessionError = codeStore.events.hasDefunctSessionError(event)
 
@@ -94,13 +101,13 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
     const showGhCliBanner = isPushEvent && !hasGhCli && event.status === "completed"
 
     return (
-        <CollapsibleEvent icon={icon} label={useLabel} query={event.userInput} event={event} expanded={expanded} onToggle={onToggle}>
+        <CollapsibleEvent icon={icon} label={useLabel} query={queryText} event={event} expanded={expanded} onToggle={onToggle}>
             {event.images && event.images.length > 0 && (
                 <div className="px-3">
                     <ImageAttachments images={event.images} />
                 </div>
             )}
-            {event.userInput && <UserInputMessage text={event.userInput} />}
+            {!hideUserInput && event.userInput && <UserInputMessage text={event.userInput} />}
             {includedComments.length > 0 && <CommentsSection comments={includedComments} variant="submitted" />}
 
             {event.execution.events.length > 0 && (
