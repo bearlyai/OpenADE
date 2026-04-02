@@ -52,11 +52,7 @@ export const ReviewPickerModal = NiceModal.create(
                         <button type="button" className="btn px-4 h-9 text-sm text-muted hover:text-base-content" onClick={() => modal.remove()}>
                             Cancel
                         </button>
-                        <button
-                            type="button"
-                            className="btn px-4 h-9 text-sm bg-primary text-primary-content hover:bg-primary/80"
-                            onClick={onStartReview}
-                        >
+                        <button type="button" className="btn px-4 h-9 text-sm bg-primary text-primary-content hover:bg-primary/80" onClick={onStartReview}>
                             Start Review
                         </button>
                     </div>

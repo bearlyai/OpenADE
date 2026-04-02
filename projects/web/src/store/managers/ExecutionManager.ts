@@ -549,9 +549,7 @@ export class ExecutionManager {
         const updatedTask = this.store.tasks.getTask(taskId)
         if (!updatedTask) return
 
-        const reviewEvent = [...updatedTask.events]
-            .reverse()
-            .find((evt): evt is ActionEvent => evt.type === "action" && evt.source.type === "review")
+        const reviewEvent = [...updatedTask.events].reverse().find((evt): evt is ActionEvent => evt.type === "action" && evt.source.type === "review")
         if (!reviewEvent || reviewEvent.status !== "completed" || !reviewEvent.result?.success) return
 
         const reviewText = extractPlanText(reviewEvent.execution.events, reviewEvent.execution.harnessId ?? harnessId)

@@ -43,11 +43,17 @@ export function buildHyperPlanStepPrompt(taskDescription: string): {
     systemPrompt: string
     userMessage: string
 }
-export function buildHyperPlanStepPrompt(taskDescription: string, context: HyperPlanStepPromptContext): {
+export function buildHyperPlanStepPrompt(
+    taskDescription: string,
+    context: HyperPlanStepPromptContext
+): {
     systemPrompt: string
     userMessage: string
 }
-export function buildHyperPlanStepPrompt(taskDescription: string, context?: HyperPlanStepPromptContext): {
+export function buildHyperPlanStepPrompt(
+    taskDescription: string,
+    context?: HyperPlanStepPromptContext
+): {
     systemPrompt: string
     userMessage: string
 } {
