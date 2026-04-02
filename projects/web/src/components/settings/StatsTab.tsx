@@ -48,6 +48,19 @@ function expandPeriodLabel(label: string): string {
     return `${label} Stats`
 }
 
+function getStartOfToday(): Date {
+    const d = new Date()
+    d.setHours(0, 0, 0, 0)
+    return d
+}
+
+function getStartOfWeek(): Date {
+    const d = new Date()
+    d.setHours(0, 0, 0, 0)
+    d.setDate(d.getDate() - d.getDay()) // getDay() 0=Sunday
+    return d
+}
+
 function formatCost(cost: number): string {
     if (cost === 0) return "$0.00"
     if (cost < 0.01) return `$${cost.toFixed(4)}`
@@ -64,7 +77,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     const cardRef = useRef<HTMLDivElement>(null)
     const [backfillProgress, setBackfillProgress] = useState<{ loaded: number; total: number } | null>(null)
     const [copyState, setCopyState] = useState<"idle" | "copying" | "copied" | "error">("idle")
-    const [selectedMonth, setSelectedMonth] = useState<string | null>(null)
+    const [selectedPeriod, setSelectedPeriod] = useState<string | null>(null)
 
     // Backfill task stores missing usage data
     useEffect(() => {
@@ -128,6 +141,17 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     let totalEvents = 0
     const totalByModel: Record<string, number> = {}
 
+    const todayStart = getStartOfToday()
+    const todayEnd = new Date(todayStart)
+    todayEnd.setDate(todayEnd.getDate() + 1)
+
+    const weekStart = getStartOfWeek()
+    const weekEnd = new Date(weekStart)
+    weekEnd.setDate(weekEnd.getDate() + 7)
+
+    const todayStats: MonthStats = { label: "Today", sortKey: "today", taskCount: 0, inputTokens: 0, outputTokens: 0, totalCostUsd: 0, eventCount: 0, costByModel: {} }
+    const weekStats: MonthStats = { label: "This Week", sortKey: "this-week", taskCount: 0, inputTokens: 0, outputTokens: 0, totalCostUsd: 0, eventCount: 0, costByModel: {} }
+
     for (const repo of repos) {
         for (const task of repo.tasks) {
             totalTasks++
@@ -156,25 +180,55 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                 const cls = normalizeModelClass(m)
                 month.costByModel[cls] = (month.costByModel[cls] ?? 0) + c
             }
+
+            const createdAt = new Date(task.createdAt)
+            if (!Number.isNaN(createdAt.getTime())) {
+                const buckets: MonthStats[] = []
+                if (createdAt >= todayStart && createdAt < todayEnd) buckets.push(todayStats)
+                if (createdAt >= weekStart && createdAt < weekEnd) buckets.push(weekStats)
+                for (const bucket of buckets) {
+                    bucket.taskCount++
+                    bucket.inputTokens += u.inputTokens
+                    bucket.outputTokens += u.outputTokens
+                    bucket.totalCostUsd += u.totalCostUsd
+                    bucket.eventCount += u.eventCount
+                    for (const [m, c] of Object.entries(u.costByModel)) {
+                        const cls = normalizeModelClass(m)
+                        bucket.costByModel[cls] = (bucket.costByModel[cls] ?? 0) + c
+                    }
+                }
+            }
         }
     }
 
     const months = [...monthsMap.values()].sort((a, b) => b.sortKey.localeCompare(a.sortKey))
-    const effectiveSelected = selectedMonth && monthsMap.has(selectedMonth) ? selectedMonth : null
+    const effectiveSelected =
+        selectedPeriod === "today"
+            ? "today"
+            : selectedPeriod === "this-week"
+              ? "this-week"
+              : selectedPeriod && monthsMap.has(selectedPeriod)
+                ? selectedPeriod
+                : null
 
     // Stats for the featured section
-    const featured = effectiveSelected
-        ? monthsMap.get(effectiveSelected)!
-        : {
-              label: "All Time",
-              sortKey: "",
-              taskCount: totalTasks,
-              inputTokens: totalIn,
-              outputTokens: totalOut,
-              totalCostUsd: totalCost,
-              eventCount: totalEvents,
-              costByModel: totalByModel,
-          }
+    const featured =
+        effectiveSelected === "today"
+            ? todayStats
+            : effectiveSelected === "this-week"
+              ? weekStats
+              : effectiveSelected
+                ? monthsMap.get(effectiveSelected)!
+                : {
+                      label: "All Time",
+                      sortKey: "",
+                      taskCount: totalTasks,
+                      inputTokens: totalIn,
+                      outputTokens: totalOut,
+                      totalCostUsd: totalCost,
+                      eventCount: totalEvents,
+                      costByModel: totalByModel,
+                  }
 
     const featuredTokens = featured.inputTokens + featured.outputTokens
 
@@ -220,10 +274,28 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                                         ? "bg-primary text-primary-content border-primary"
                                         : "bg-base-200 text-muted hover:text-base-content border-border"
                                 )}
-                                onClick={() => setSelectedMonth(null)}
+                                onClick={() => setSelectedPeriod(null)}
                             >
                                 All
                             </button>
+                            {(["today", "this-week"] as const).map((key) => {
+                                const label = key === "today" ? "Today" : "This Week"
+                                return (
+                                    <button
+                                        key={key}
+                                        type="button"
+                                        className={cx(
+                                            "btn px-2.5 py-1 text-xs font-medium transition-colors border",
+                                            effectiveSelected === key
+                                                ? "bg-primary text-primary-content border-primary"
+                                                : "bg-base-200 text-muted hover:text-base-content border-border"
+                                        )}
+                                        onClick={() => setSelectedPeriod(key)}
+                                    >
+                                        {label}
+                                    </button>
+                                )
+                            })}
                             {months.map((m) => (
                                 <button
                                     key={m.sortKey}
@@ -234,7 +306,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                                             ? "bg-primary text-primary-content border-primary"
                                             : "bg-base-200 text-muted hover:text-base-content border-border"
                                     )}
-                                    onClick={() => setSelectedMonth(m.sortKey)}
+                                    onClick={() => setSelectedPeriod(m.sortKey)}
                                 >
                                     {m.label}
                                 </button>
@@ -324,7 +396,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                                                 "btn grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 w-full px-3 py-1.5 text-xs transition-colors border-b border-border/40 last:border-b-0",
                                                 isActive ? "bg-primary/8" : "hover:bg-base-200/60"
                                             )}
-                                            onClick={() => setSelectedMonth(m.sortKey)}
+                                            onClick={() => setSelectedPeriod(m.sortKey)}
                                         >
                                             <span className={cx("font-semibold text-left", isActive ? "text-primary" : "text-base-content")}>{m.label}</span>
                                             <span className="text-right text-muted w-10">{m.taskCount}</span>
