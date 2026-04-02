@@ -8,6 +8,18 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.66.0",
+        title: "Isolated Reviews & HyperPlan Reliability",
+        date: "2026-04-02",
+        highlights: [
+            "New Review commands let you launch an independent read-only review of your plan or recent work with a dedicated harness and model picker",
+            "Stop reliably cancels in-progress HyperPlan runs and cleans up all sub-sessions",
+            "Fixed HyperPlan session resume using the wrong harness and model after handoff",
+            "Stats page now includes Today and This Week period filters for quick access to recent usage",
+            "Git state now refreshes automatically when the terminal tray closes",
+        ],
+    },
+    {
         version: "0.65.1",
         title: "Cron Timer Reliability Fix",
         date: "2026-03-16",
