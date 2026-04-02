@@ -17,7 +17,7 @@ import { buildMcpServerConfigs } from "../../electronAPI/mcp"
 import { HyperPlanExecutor, type HyperPlanCallbacks } from "../../hyperplan/HyperPlanExecutor"
 import type { HyperPlanStrategy } from "../../hyperplan/types"
 import { isStandardStrategy } from "../../hyperplan/strategies"
-import { buildWorktreeExecutionInstruction, mergeAppendSystemPrompt } from "../../prompts/executionContext"
+import { buildRawRendererStyleInstruction, buildWorktreeExecutionInstruction, mergeAppendSystemPrompt } from "../../prompts/executionContext"
 import {
     type ContentBlock,
     type PromptBuildContext,
@@ -145,6 +145,8 @@ export class ExecutionManager {
 
             const worktreeInstruction = buildWorktreeExecutionInstruction(task.isolationStrategy, cwd)
             appendSystemPrompt = mergeAppendSystemPrompt(mergeAppendSystemPrompt(systemPrompt, worktreeInstruction), extraSystemPrompt)
+            const rawRendererStyleInstruction = buildRawRendererStyleInstruction(taskModel.harnessId, source.type)
+            appendSystemPrompt = mergeAppendSystemPrompt(appendSystemPrompt, rawRendererStyleInstruction)
 
             console.debug("[ExecutionManager] Starting execution", {
                 taskId,

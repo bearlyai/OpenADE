@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { buildWorktreeExecutionInstruction, mergeAppendSystemPrompt } from "./executionContext"
+import { buildRawRendererStyleInstruction, buildWorktreeExecutionInstruction, mergeAppendSystemPrompt } from "./executionContext"
 
 describe("buildWorktreeExecutionInstruction", () => {
     it("returns undefined for head isolation", () => {
@@ -30,5 +30,33 @@ describe("mergeAppendSystemPrompt", () => {
 
     it("joins base and extra with spacing", () => {
         expect(mergeAppendSystemPrompt("base", "extra")).toBe("base\n\nextra")
+    })
+})
+
+describe("buildRawRendererStyleInstruction", () => {
+    it("returns undefined for claude-code", () => {
+        expect(buildRawRendererStyleInstruction("claude-code", "do")).toBeUndefined()
+    })
+
+    it("returns hint for codex do", () => {
+        const hint = buildRawRendererStyleInstruction("codex", "do")
+        expect(hint).toContain("<raw_renderer_response_style>")
+        expect(hint).toContain("Do not use markdown links for local files.")
+    })
+
+    it("returns hint for codex ask", () => {
+        const hint = buildRawRendererStyleInstruction("codex", "ask")
+        expect(hint).toContain("Do not include absolute filesystem paths.")
+    })
+
+    it("returns hint for codex run_plan", () => {
+        const hint = buildRawRendererStyleInstruction("codex", "run_plan")
+        expect(hint).toContain("Keep it compact")
+    })
+
+    it("returns undefined for codex plan/revise/hyperplan", () => {
+        expect(buildRawRendererStyleInstruction("codex", "plan")).toBeUndefined()
+        expect(buildRawRendererStyleInstruction("codex", "revise")).toBeUndefined()
+        expect(buildRawRendererStyleInstruction("codex", "hyperplan")).toBeUndefined()
     })
 })

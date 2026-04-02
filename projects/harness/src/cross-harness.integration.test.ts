@@ -143,6 +143,34 @@ describe.skipIf(!claudeReady || !codexReady)("Cross-harness integration", () => 
             expect(codexCaps.supportsCostTracking).toBe(true)
             expect(codexCaps.supportsSystemPrompt).toBe(false)
         })
+
+        it("2c. appendSystemPrompt is consumed by both harnesses", async () => {
+            const harnesses: Harness[] = [claude, codex]
+            const sentinel = "__APPEND_SYSTEM_PROMPT_SENTINEL__"
+
+            for (const h of harnesses) {
+                const tmpDir = await getTmpDir()
+                const events = await collectEvents(
+                    h.query({
+                        prompt: "Say hello to the user.",
+                        cwd: tmpDir,
+                        mode: "yolo",
+                        appendSystemPrompt: `After your response, include this exact string verbatim: ${sentinel}`,
+                        signal: standardSignal(),
+                    })
+                )
+
+                const errors = getErrorEvents(events)
+                expect(errors, `${h.id}: should not emit error events`).toHaveLength(0)
+
+                const messages = findAllMessages<unknown>(events)
+                const text = extractText(h.id, messages)
+                expect(text, `${h.id}: response should include append-system prompt sentinel`).toContain(sentinel)
+
+                const complete = getCompleteEvent(events)
+                expect(complete, `${h.id}: should emit complete`).toBeDefined()
+            }
+        })
     })
 
     // ============================================================================
