@@ -3,21 +3,22 @@ import { ExternalLink, GitBranch, ImagePlus, X } from "lucide-react"
 import { observer } from "mobx-react"
 import { useRef } from "react"
 import { Z_INDEX } from "../constants"
-import { openUrlInNativeBrowser } from "../electronAPI/shell"
-import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import type { GitStatusResponse } from "../electronAPI/git"
+import type { HarnessId } from "../electronAPI/harnessEventTypes"
+import { openUrlInNativeBrowser } from "../electronAPI/shell"
+import type { ThinkingLevel } from "../store/TaskModel"
 import type { Command, InputManager } from "../store/managers/InputManager"
 import type { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager"
 import type { SmartEditorManager } from "../store/managers/SmartEditorManager"
 import type { TrayManager } from "../store/managers/TrayManager"
 import type { Comment } from "../types"
+import { processImageBlob } from "../utils/imageAttachment"
 import { HarnessPicker } from "./HarnessPicker"
 import { ModelPicker } from "./ModelPicker"
-import { ThinkingPicker } from "./ThinkingPicker"
-import type { ThinkingLevel } from "../store/TaskModel"
-import { processImageBlob } from "../utils/imageAttachment"
 import { SmartEditor, type SmartEditorRef } from "./SmartEditor"
+import { ThinkingPicker } from "./ThinkingPicker"
 import { CommentsSection } from "./events/CommentsSection"
+import { TaskMcpSelector } from "./mcp/TaskMcpSelector"
 import { TrayButtons, TraySlideOut, getTrayConfig } from "./tray"
 
 // Button variant styles
@@ -87,6 +88,8 @@ export const InputBar = observer(function InputBar({
     onHarnessChange,
     allowHarnessSwitch = true,
     hideTray = false,
+    enabledMcpServerIds,
+    onMcpServerIdsChange,
 }: {
     input: InputManager
     editorManager: SmartEditorManager
@@ -110,6 +113,8 @@ export const InputBar = observer(function InputBar({
     allowHarnessSwitch?: boolean
     /** Dev: Hide tray buttons and slide-out */
     hideTray?: boolean
+    enabledMcpServerIds?: string[]
+    onMcpServerIdsChange?: (serverIds: string[]) => void
 }) {
     const editorRef = useRef<SmartEditorRef>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
@@ -172,6 +177,9 @@ export const InputBar = observer(function InputBar({
                             <div className="shrink-0">
                                 <ThinkingPicker value={thinking} onChange={onThinkingChange} />
                             </div>
+                        )}
+                        {enabledMcpServerIds && onMcpServerIdsChange && (
+                            <TaskMcpSelector selectedServerIds={enabledMcpServerIds} onSelectionChange={onMcpServerIdsChange} compact iconOnly />
                         )}
                     </div>
                 )}

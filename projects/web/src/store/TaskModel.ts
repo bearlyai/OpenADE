@@ -7,11 +7,11 @@
 
 import { makeAutoObservable, runInAction } from "mobx"
 import { DEFAULT_MODEL, MODEL_REGISTRY, getDefaultModelForHarness, resolveModelForHarness } from "../constants"
+import type { GitStatusResponse } from "../electronAPI/git"
 import { extractRawMessageEvents } from "../electronAPI/harnessEventTypes"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
-import type { GitStatusResponse } from "../electronAPI/git"
 import { computeTaskUsage } from "../persistence/taskStatsUtils"
-import { buildTaskThreadJson, buildTaskThreadXml, type TaskThreadFormat, type TaskThreadJson } from "../prompts/taskThreadSerializer"
+import { type TaskThreadFormat, type TaskThreadJson, buildTaskThreadJson, buildTaskThreadXml } from "../prompts/taskThreadSerializer"
 import type { ActionEvent, CodeEvent, IsolationStrategy, Task, TaskDeviceEnvironment } from "../types"
 import { getDeviceId } from "../utils/deviceId"
 import { ActionEventModel, type EventModel, SetupEnvironmentEventModel, SnapshotEventModel } from "./EventModel"
@@ -229,6 +229,14 @@ export class TaskModel {
 
     get isolationStrategy(): IsolationStrategy | undefined {
         return this.task?.isolationStrategy
+    }
+
+    get enabledMcpServerIds(): string[] {
+        return this.task?.enabledMcpServerIds ?? []
+    }
+
+    setEnabledMcpServerIds(serverIds: string[]): void {
+        this.store.tasks.setEnabledMcpServerIds(this.taskId, serverIds)
     }
 
     get deviceEnvironments(): TaskDeviceEnvironment[] {

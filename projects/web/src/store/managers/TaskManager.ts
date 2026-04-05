@@ -286,6 +286,16 @@ export class TaskManager {
         }
     }
 
+    setEnabledMcpServerIds(taskId: string, serverIds: string[]): void {
+        const taskStore = this.store.getCachedTaskStore(taskId)
+        if (!taskStore) return
+
+        taskStore.meta.update((draft) => {
+            draft.enabledMcpServerIds = serverIds.length > 0 ? serverIds : undefined
+            draft.updatedAt = new Date().toISOString()
+        })
+    }
+
     async regenerateTitle(taskId: string): Promise<void> {
         const task = this.getTask(taskId)
         if (!task) return

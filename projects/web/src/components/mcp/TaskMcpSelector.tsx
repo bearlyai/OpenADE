@@ -92,8 +92,8 @@ export const TaskMcpSelector = observer(({ selectedServerIds, onSelectionChange,
             return
         }
 
-        // HTTP connector - check auth and initiate OAuth if needed
-        if (server.transportType === "http") {
+        // HTTP connector - check auth and initiate OAuth if needed (skip for healthy servers with valid tokens)
+        if (server.transportType === "http" && (server.healthStatus !== "healthy" || !store.mcpServers.hasValidOAuthTokens(server.id))) {
             try {
                 const result = await store.mcpServers.testConnection(server.id)
                 if (result.requiresAuth) {

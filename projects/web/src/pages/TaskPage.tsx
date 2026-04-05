@@ -149,6 +149,8 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
                 harnessId={taskModel.harnessId}
                 allowHarnessSwitch={false}
                 hideTray={codeStore.personalSettingsStore?.settings.current.devHideTray}
+                enabledMcpServerIds={taskModel.enabledMcpServerIds}
+                onMcpServerIdsChange={(ids) => taskModel.setEnabledMcpServerIds(ids)}
             />
         </div>
     )
