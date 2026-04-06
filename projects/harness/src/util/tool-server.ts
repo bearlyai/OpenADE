@@ -50,7 +50,7 @@ export async function startToolServer(tools: ClientToolDefinition[], options?: T
 
     function createMcpServer() {
         const server = new Server(
-            { name: "__harness_client_tools", version: "1.0.0" },
+            { name: "harness_client_tools", version: "1.0.0" },
             {
                 capabilities: {
                     tools: {},
@@ -218,7 +218,7 @@ export async function startToolServer(tools: ClientToolDefinition[], options?: T
     }
 
     return {
-        serverName: "__harness_client_tools",
+        serverName: "harness_client_tools",
         mcpServer: {
             type: "http",
             url,

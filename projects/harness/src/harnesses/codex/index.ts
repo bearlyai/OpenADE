@@ -17,6 +17,7 @@ import { HarnessNotInstalledError } from "../../errors.js"
 import { resolveExecutable } from "../../util/which.js"
 import { spawnJsonl } from "../../util/spawn.js"
 import { startToolServer, type ToolServerHandle } from "../../util/tool-server.js"
+import { buildUserPromptTool, USER_PROMPT_SYSTEM_HINT } from "../../util/user-prompt.js"
 import { buildCodexArgs, type CodexHarnessConfig } from "./args.js"
 import { buildCodexMcpConfigOverrides } from "./config-overrides.js"
 import { calculateCostUsd } from "./pricing.js"
@@ -132,13 +133,19 @@ export class CodexHarness implements Harness<CodexEvent> {
         const cleanup: Array<{ path: string; type: "file" | "dir" }> = []
 
         try {
+            // ── Build effective client tools (inject user prompt tool if handler provided) ──
+            const effectiveClientTools = [...(q.clientTools ?? [])]
+            if (q.userPromptHandler) {
+                effectiveClientTools.push(buildUserPromptTool(q.userPromptHandler))
+            }
+
             // ── Build effective MCP server map ──
             const effectiveMcpServers: Record<string, McpServerConfig> = {
                 ...(q.mcpServers ?? {}),
             }
 
-            if (q.clientTools && q.clientTools.length > 0) {
-                toolServerHandle = await startToolServer(q.clientTools)
+            if (effectiveClientTools.length > 0) {
+                toolServerHandle = await startToolServer(effectiveClientTools)
                 effectiveMcpServers[toolServerHandle.serverName] = toolServerHandle.mcpServer
             }
 
@@ -156,8 +163,11 @@ export class CodexHarness implements Harness<CodexEvent> {
                 Object.assign(env, toolServerHandle.env)
             }
 
-            // ── Build args ──
-            const buildResult = await buildCodexArgs(q, this.config, mcpConfigArgs)
+            // ── Build args (inject user prompt system hint if handler is provided) ──
+            const effectiveQuery = q.userPromptHandler
+                ? { ...q, appendSystemPrompt: [q.appendSystemPrompt, USER_PROMPT_SYSTEM_HINT].filter(Boolean).join("\n\n") }
+                : q
+            const buildResult = await buildCodexArgs(effectiveQuery, this.config, mcpConfigArgs)
             Object.assign(env, buildResult.env)
             cleanup.push(...buildResult.cleanup)
 

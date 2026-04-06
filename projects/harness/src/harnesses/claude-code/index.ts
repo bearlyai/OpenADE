@@ -20,6 +20,7 @@ import { HarnessNotInstalledError } from "../../errors.js"
 import { resolveExecutable } from "../../util/which.js"
 import { spawnJsonl } from "../../util/spawn.js"
 import { startToolServer, type ToolServerHandle } from "../../util/tool-server.js"
+import { buildUserPromptTool, USER_PROMPT_SYSTEM_HINT } from "../../util/user-prompt.js"
 import { buildClaudeArgs, type ClaudeCodeHarnessConfig } from "./args.js"
 import { writeMcpConfigJson } from "./mcp-config.js"
 import { parseClaudeEvent, type ClaudeEvent, type ClaudeResultEvent, type ClaudeSystemInitEvent } from "./types.js"
@@ -198,20 +199,29 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
             throw new HarnessNotInstalledError("claude-code", "Install Claude Code: npm install -g @anthropic-ai/claude-code")
         }
 
-        // Build base args
-        const buildResult = buildClaudeArgs(q, this.config)
+        // Build base args (inject user prompt system hint if handler is provided)
+        const effectiveQuery = q.userPromptHandler
+            ? { ...q, appendSystemPrompt: [q.appendSystemPrompt, USER_PROMPT_SYSTEM_HINT].filter(Boolean).join("\n\n") }
+            : q
+        const buildResult = buildClaudeArgs(effectiveQuery, this.config)
         const { args, promptText, env, cwd, cleanup, stdinLines } = buildResult
 
         let toolServerHandle: ToolServerHandle | undefined
 
         try {
+            // ── Build effective client tools (inject user prompt tool if handler provided) ──
+            const effectiveClientTools = [...(q.clientTools ?? [])]
+            if (q.userPromptHandler) {
+                effectiveClientTools.push(buildUserPromptTool(q.userPromptHandler))
+            }
+
             // ── Client tools → start MCP tool server ──
             const effectiveMcpServers: Record<string, McpServerConfig> = {
                 ...(q.mcpServers ?? {}),
             }
 
-            if (q.clientTools && q.clientTools.length > 0) {
-                toolServerHandle = await startToolServer(q.clientTools)
+            if (effectiveClientTools.length > 0) {
+                toolServerHandle = await startToolServer(effectiveClientTools)
                 effectiveMcpServers[toolServerHandle.serverName] = toolServerHandle.mcpServer
                 if (toolServerHandle.env) {
                     Object.assign(env, toolServerHandle.env)

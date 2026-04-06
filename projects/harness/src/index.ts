@@ -9,6 +9,11 @@ export type {
     JsonSchema,
     ClientToolDefinition,
     ClientToolResult,
+    UserPromptOption,
+    UserPromptQuestion,
+    UserPromptRequest,
+    UserPromptResponse,
+    UserPromptHandler,
     HarnessQuery,
     HarnessEvent,
     HarnessUsage,
@@ -54,6 +59,7 @@ export type { CodexHarnessConfig, CodexEvent } from "./harnesses/codex/index.js"
 // ── Utilities ──
 export { startToolServer } from "./util/tool-server.js"
 export type { ToolServerHandle, ToolServerOptions } from "./util/tool-server.js"
+export { buildUserPromptTool, USER_PROMPT_TOOL_NAME, USER_PROMPT_SYSTEM_HINT } from "./util/user-prompt.js"
 export { resolveExecutable } from "./util/which.js"
 export { detectShellEnvironment, clearShellEnvironmentCache } from "./util/env.js"
 export { spawnJsonl } from "./util/spawn.js"

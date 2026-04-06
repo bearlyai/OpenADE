@@ -717,6 +717,114 @@ describe.skipIf(!ready)("Claude Code (authenticated)", () => {
     })
 
     // ============================================================================
+    // 10c. User prompt handler
+    // ============================================================================
+
+    describe("10c. User prompt handler", () => {
+        it("10c. userPromptHandler receives questions and response is used by the model", async () => {
+            const tmpDir = await getTmpDir()
+
+            let receivedRequest: import("../../types.js").UserPromptRequest | undefined
+            const events = await collectEvents(
+                harness.query({
+                    prompt: "Call the ask_user tool to ask me what my favorite color is. Provide options: Blue, Red, Green. Use id 'fav_color'. Then tell me which color I chose.",
+                    cwd: tmpDir,
+                    mode: "yolo",
+                    userPromptHandler: async (request) => {
+                        receivedRequest = request
+                        return { answers: { fav_color: "Blue" } }
+                    },
+                    signal: standardSignal(),
+                })
+            )
+
+            expect(receivedRequest, "userPromptHandler should have been called").toBeDefined()
+            expect(receivedRequest!.questions.length).toBeGreaterThan(0)
+            expect(receivedRequest!.questions[0].options.length).toBeGreaterThan(0)
+
+            const messages = findAllMessages<ClaudeEvent>(events)
+            const text = extractAssistantText(messages)
+            expect(text, "response should reference the chosen color").toContain("Blue")
+
+            const complete = getCompleteEvent(events)
+            expect(complete).toBeDefined()
+        })
+
+        it("10d. userPromptHandler works in read-only mode (non-yolo, permission-gated)", async () => {
+            const tmpDir = await getTmpDir()
+
+            let receivedRequest: import("../../types.js").UserPromptRequest | undefined
+            const events = await collectEvents(
+                harness.query({
+                    prompt: "Call the ask_user tool to ask me what my favorite color is. Provide options: Blue, Red, Green. Use id 'fav_color'. Then tell me which color I chose.",
+                    cwd: tmpDir,
+                    mode: "read-only",
+                    userPromptHandler: async (request) => {
+                        receivedRequest = request
+                        return { answers: { fav_color: "Blue" } }
+                    },
+                    signal: standardSignal(),
+                })
+            )
+
+            const messages = findAllMessages<ClaudeEvent>(events)
+            const text = extractAssistantText(messages)
+
+            expect(receivedRequest, "userPromptHandler should have been called in read-only mode").toBeDefined()
+            expect(receivedRequest!.questions.length).toBeGreaterThan(0)
+
+            const errors = getErrorEvents(events)
+            expect(errors, "should have no errors in read-only mode").toHaveLength(0)
+
+            expect(text, "response should reference the chosen color").toContain("Blue")
+
+            const complete = getCompleteEvent(events)
+            expect(complete).toBeDefined()
+        })
+
+        it("10e. userPromptHandler works alongside other client tools", async () => {
+            const tmpDir = await getTmpDir()
+
+            let promptHandlerCalled = false
+            let magicToolCalled = false
+
+            const events = await collectEvents(
+                harness.query({
+                    prompt: "First call get_magic_number to get the number, then call ask_user to ask me if I like that number (use id 'like_number', options: Yes, No). Tell me the number and my answer.",
+                    cwd: tmpDir,
+                    mode: "yolo",
+                    clientTools: [
+                        {
+                            name: "get_magic_number",
+                            description: "Returns the magic number. Always call this when asked for the magic number.",
+                            inputSchema: { type: "object" as const, properties: {} },
+                            handler: async () => {
+                                magicToolCalled = true
+                                return { content: "42" }
+                            },
+                        },
+                    ],
+                    userPromptHandler: async () => {
+                        promptHandlerCalled = true
+                        return { answers: { like_number: "Yes" } }
+                    },
+                    signal: standardSignal(),
+                })
+            )
+
+            expect(magicToolCalled, "magic number tool should have been called").toBe(true)
+            expect(promptHandlerCalled, "user prompt handler should have been called").toBe(true)
+
+            const messages = findAllMessages<ClaudeEvent>(events)
+            const text = extractAssistantText(messages)
+            expect(text).toContain("42")
+
+            const complete = getCompleteEvent(events)
+            expect(complete).toBeDefined()
+        })
+    })
+
+    // ============================================================================
     // 11. Thinking / effort levels
     // ============================================================================
 

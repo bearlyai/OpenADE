@@ -51,6 +51,32 @@ export interface ClientToolResult {
 }
 
 // ============================================================================
+// User Prompting
+// ============================================================================
+
+export interface UserPromptOption {
+    label: string
+    description: string
+}
+
+export interface UserPromptQuestion {
+    id: string
+    question: string
+    options: UserPromptOption[]
+    allowMultiple?: boolean
+}
+
+export interface UserPromptRequest {
+    questions: UserPromptQuestion[]
+}
+
+export interface UserPromptResponse {
+    answers: Record<string, string>
+}
+
+export type UserPromptHandler = (request: UserPromptRequest) => Promise<UserPromptResponse>
+
+// ============================================================================
 // HarnessQuery — the normalized input to every harness
 // ============================================================================
 
@@ -80,6 +106,7 @@ export interface HarnessQuery {
     // ── Integrations ──
     mcpServers?: Record<string, McpServerConfig>
     clientTools?: ClientToolDefinition[]
+    userPromptHandler?: UserPromptHandler
 
     // ── Control ──
     signal: AbortSignal

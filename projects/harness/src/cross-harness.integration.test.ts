@@ -260,10 +260,82 @@ describe.skipIf(!claudeReady || !codexReady)("Cross-harness integration", () => 
     })
 
     // ============================================================================
-    // 3c. HTTP MCP server injection
+    // 3c. User prompt handler
     // ============================================================================
 
-    describe("3c. HTTP MCP server injection", () => {
+    describe("3c. User prompt handler", () => {
+        it("3c. Both harnesses invoke userPromptHandler and use the response", async () => {
+            const harnesses: Harness[] = [claude, codex]
+
+            for (const h of harnesses) {
+                const tmpDir = await getTmpDir()
+
+                let receivedRequest: import("./types.js").UserPromptRequest | undefined
+                const events = await collectEvents(
+                    h.query({
+                        prompt: "Call the ask_user tool to ask me what my favorite color is. Provide options: Blue, Red, Green. Use id 'fav_color'. Then tell me which color I chose.",
+                        cwd: tmpDir,
+                        mode: "yolo",
+                        userPromptHandler: async (request) => {
+                            receivedRequest = request
+                            return { answers: { fav_color: "Blue" } }
+                        },
+                        signal: standardSignal(),
+                    })
+                )
+
+                expect(receivedRequest, `${h.id}: userPromptHandler should have been called`).toBeDefined()
+                expect(receivedRequest!.questions.length, `${h.id}: should have at least one question`).toBeGreaterThan(0)
+
+                const messages = findAllMessages<unknown>(events)
+                const text = extractText(h.id, messages)
+                expect(text, `${h.id}: response should contain the user's answer`).toContain("Blue")
+
+                const complete = getCompleteEvent(events)
+                expect(complete, `${h.id}: should complete`).toBeDefined()
+            }
+        })
+    })
+
+    describe("3c-ro. User prompt handler in read-only mode (non-yolo)", () => {
+        it("3c-ro. Both harnesses invoke userPromptHandler in read-only mode", async () => {
+            const harnesses: Harness[] = [claude, codex]
+
+            for (const h of harnesses) {
+                const tmpDir = await getTmpDir()
+
+                let receivedRequest: import("./types.js").UserPromptRequest | undefined
+                const events = await collectEvents(
+                    h.query({
+                        prompt: "Call the ask_user tool to ask me what my favorite color is. Provide options: Blue, Red, Green. Use id 'fav_color'. Then tell me which color I chose.",
+                        cwd: tmpDir,
+                        mode: "read-only",
+                        userPromptHandler: async (request) => {
+                            receivedRequest = request
+                            return { answers: { fav_color: "Blue" } }
+                        },
+                        signal: standardSignal(),
+                    })
+                )
+
+                expect(receivedRequest, `${h.id}: userPromptHandler should be called in read-only mode`).toBeDefined()
+                expect(receivedRequest!.questions.length, `${h.id}: should have at least one question`).toBeGreaterThan(0)
+
+                const messages = findAllMessages<unknown>(events)
+                const text = extractText(h.id, messages)
+                expect(text, `${h.id}: response should contain the user's answer in read-only mode`).toContain("Blue")
+
+                const complete = getCompleteEvent(events)
+                expect(complete, `${h.id}: should complete in read-only mode`).toBeDefined()
+            }
+        })
+    })
+
+    // ============================================================================
+    // 3d. HTTP MCP server injection
+    // ============================================================================
+
+    describe("3d. HTTP MCP server injection", () => {
         let toolHandle: ToolServerHandle | undefined
 
         afterEach(async () => {
@@ -273,7 +345,7 @@ describe.skipIf(!claudeReady || !codexReady)("Cross-harness integration", () => 
             }
         })
 
-        it("3c. Both harnesses call an HTTP MCP server tool and use its result", async () => {
+        it("3d. Both harnesses call an HTTP MCP server tool and use its result", async () => {
             const harnesses: Harness[] = [claude, codex]
 
             for (const h of harnesses) {

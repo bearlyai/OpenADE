@@ -176,7 +176,21 @@ describe("buildClaudeArgs", () => {
         const allowedIdx = result.args.indexOf("--allowedTools")
         expect(allowedIdx).toBeGreaterThan(-1)
         const afterAllowed = result.args.slice(allowedIdx + 1)
-        expect(afterAllowed).toContain("mcp____harness_client_tools__*")
+        expect(afterAllowed).toContain("mcp__harness_client_tools__*")
+    })
+
+    it("mode: 'read-only' + userPromptHandler adds MCP patterns to --allowedTools", () => {
+        const result = buildClaudeArgs(
+            makeQuery({
+                mode: "read-only",
+                userPromptHandler: async () => ({ answers: {} }),
+            }),
+            {}
+        )
+        const allowedIdx = result.args.indexOf("--allowedTools")
+        expect(allowedIdx).toBeGreaterThan(-1)
+        const afterAllowed = result.args.slice(allowedIdx + 1)
+        expect(afterAllowed).toContain("mcp__harness_client_tools__*")
     })
 
     it("mode: 'read-only' disallows write tools", () => {
@@ -272,7 +286,23 @@ describe("buildClaudeArgs", () => {
         expect(disallowedValue).toContain("ExitPlanMode")
     })
 
-    it("mode: 'yolo' without disablePlanningTools produces no tool lists", () => {
+    it("userPromptHandler disables built-in AskUserQuestion via --disallowed-tools", () => {
+        const result = buildClaudeArgs(
+            makeQuery({ mode: "yolo", userPromptHandler: async () => ({ answers: {} }) }),
+            {}
+        )
+        const disallowedIdx = result.args.indexOf("--disallowed-tools")
+        expect(disallowedIdx).toBeGreaterThan(-1)
+        const disallowedValue = result.args[disallowedIdx + 1]
+        expect(disallowedValue).toContain("AskUserQuestion")
+    })
+
+    it("no userPromptHandler does not disable AskUserQuestion", () => {
+        const result = buildClaudeArgs(makeQuery({ mode: "yolo" }), {})
+        expect(result.args).not.toContain("--disallowed-tools")
+    })
+
+    it("mode: 'yolo' without disablePlanningTools or userPromptHandler produces no tool lists", () => {
         const result = buildClaudeArgs(makeQuery({ mode: "yolo" }), {})
         expect(result.args).not.toContain("--allowedTools")
         expect(result.args).not.toContain("--disallowed-tools")

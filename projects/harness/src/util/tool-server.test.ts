@@ -37,7 +37,7 @@ describe("startToolServer", () => {
             },
         ])
 
-        expect(handle.serverName).toBe("__harness_client_tools")
+        expect(handle.serverName).toBe("harness_client_tools")
         expect(handle.mcpServer.type).toBe("http")
         expect(handle.mcpServer.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
     })

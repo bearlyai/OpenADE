@@ -157,7 +157,8 @@ const THINKING_EFFORT_MAP: Record<string, string> = {
 function hasConfiguredMcp(query: HarnessQuery): boolean {
     const hasExternalMcp = !!query.mcpServers && Object.keys(query.mcpServers).length > 0
     const hasClientTools = !!query.clientTools && query.clientTools.length > 0
-    return hasExternalMcp || hasClientTools
+    const hasUserPromptHandler = !!query.userPromptHandler
+    return hasExternalMcp || hasClientTools || hasUserPromptHandler
 }
 
 function getReadOnlyAllowedMcpToolPatterns(query: HarnessQuery): string[] {
@@ -167,9 +168,10 @@ function getReadOnlyAllowedMcpToolPatterns(query: HarnessQuery): string[] {
             serverNames.add(name)
         }
     }
-    if (query.clientTools && query.clientTools.length > 0) {
-        // startToolServer() registers client tools under this fixed MCP server name.
-        serverNames.add("__harness_client_tools")
+    if ((query.clientTools && query.clientTools.length > 0) || query.userPromptHandler) {
+        // startToolServer() registers client tools (including the injected user prompt tool)
+        // under this fixed MCP server name.
+        serverNames.add("harness_client_tools")
     }
     return Array.from(serverNames).map((name) => `mcp__${name}__*`)
 }
@@ -262,6 +264,13 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
 
     if (query.disablePlanningTools) {
         disallowedTools.push(...PLANNING_TOOLS)
+    }
+
+    if (query.userPromptHandler) {
+        // Disable built-in AskUserQuestion so it doesn't compete with the MCP ask_user tool.
+        // In non-interactive -p mode, AskUserQuestion is auto-denied, but the model still
+        // prefers it over the MCP tool. Disabling it forces the model to use our handler.
+        disallowedTools.push("AskUserQuestion")
     }
 
     if (allowedTools.length > 0) {
