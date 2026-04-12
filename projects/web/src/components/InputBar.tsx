@@ -1,11 +1,13 @@
+import { Popover } from "@base-ui-components/react/popover"
 import cx from "classnames"
-import { ExternalLink, GitBranch, ImagePlus, X } from "lucide-react"
+import { ExternalLink, GitBranch, ImagePlus, Plug, X } from "lucide-react"
 import { observer } from "mobx-react"
 import { useRef } from "react"
 import { Z_INDEX } from "../constants"
 import type { GitStatusResponse } from "../electronAPI/git"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { openUrlInNativeBrowser } from "../electronAPI/shell"
+import { usePortalContainer } from "../hooks/usePortalContainer"
 import type { ThinkingLevel } from "../store/TaskModel"
 import type { Command, InputManager } from "../store/managers/InputManager"
 import type { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager"
@@ -116,6 +118,7 @@ export const InputBar = observer(function InputBar({
     enabledMcpServerIds?: string[]
     onMcpServerIdsChange?: (serverIds: string[]) => void
 }) {
+    const portalContainer = usePortalContainer()
     const editorRef = useRef<SmartEditorRef>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -179,7 +182,24 @@ export const InputBar = observer(function InputBar({
                             </div>
                         )}
                         {enabledMcpServerIds && onMcpServerIdsChange && (
-                            <TaskMcpSelector selectedServerIds={enabledMcpServerIds} onSelectionChange={onMcpServerIdsChange} compact iconOnly />
+                            <Popover.Root>
+                                <Popover.Trigger
+                                    className={cx(
+                                        "btn h-7 px-2 flex items-center gap-1.5 text-xs font-mono border-0 bg-transparent hover:bg-base-200 shrink-0",
+                                        enabledMcpServerIds.length > 0 ? "text-primary" : "text-muted"
+                                    )}
+                                >
+                                    <Plug size={12} />
+                                    {enabledMcpServerIds.length > 0 && <span>{enabledMcpServerIds.length}</span>}
+                                </Popover.Trigger>
+                                <Popover.Portal container={portalContainer}>
+                                    <Popover.Positioner sideOffset={8} side="top" align="end">
+                                        <Popover.Popup className="z-50 bg-base-100 border border-border shadow-lg p-3 outline-none">
+                                            <TaskMcpSelector selectedServerIds={enabledMcpServerIds} onSelectionChange={onMcpServerIdsChange} vertical />
+                                        </Popover.Popup>
+                                    </Popover.Positioner>
+                                </Popover.Portal>
+                            </Popover.Root>
                         )}
                     </div>
                 )}

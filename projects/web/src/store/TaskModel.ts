@@ -16,6 +16,7 @@ import type { ActionEvent, CodeEvent, IsolationStrategy, Task, TaskDeviceEnviron
 import { getDeviceId } from "../utils/deviceId"
 import { ActionEventModel, type EventModel, SetupEnvironmentEventModel, SnapshotEventModel } from "./EventModel"
 import { TaskEnvironment } from "./TaskEnvironment"
+import { ChangesManager } from "./managers/ChangesManager"
 import { ContentSearchManager } from "./managers/ContentSearchManager"
 import { FileBrowserManager } from "./managers/FileBrowserManager"
 import { InputManager } from "./managers/InputManager"
@@ -39,6 +40,7 @@ export class TaskModel {
     private _fileBrowser: FileBrowserManager | null = null
     private _contentSearch: ContentSearchManager | null = null
     private _sdkCapabilities: SdkCapabilitiesManager | null = null
+    private _changes: ChangesManager | null = null
     private disposers: Array<() => void> = []
 
     constructor(
@@ -69,6 +71,7 @@ export class TaskModel {
             disposer()
         }
         this.disposers = []
+        this._changes?.dispose()
     }
 
     // === Input manager ===
@@ -119,6 +122,15 @@ export class TaskModel {
             this._sdkCapabilities = new SdkCapabilitiesManager()
         }
         return this._sdkCapabilities
+    }
+
+    // === Changes ===
+
+    get changes(): ChangesManager {
+        if (!this._changes) {
+            this._changes = new ChangesManager(this)
+        }
+        return this._changes
     }
 
     // === Model & Harness ===

@@ -304,6 +304,25 @@ export class TaskManager {
         })
     }
 
+    setTaskTitle(taskId: string, title: string): void {
+        const trimmed = title.trim()
+        if (!trimmed) return
+
+        const task = this.getTask(taskId)
+        if (!task) return
+
+        const taskStore = this.store.getCachedTaskStore(taskId)
+        if (!taskStore) return
+
+        if (this.store.repoStore) {
+            updateTaskPreview(this.store.repoStore, task.repoId, taskId, { title: trimmed })
+        }
+        taskStore.meta.update((draft) => {
+            draft.title = trimmed
+            draft.updatedAt = new Date().toISOString()
+        })
+    }
+
     toggleTaskPinned(taskId: string): void {
         const store = this.store.personalSettingsStore
         if (!store) return
@@ -327,25 +346,15 @@ export class TaskManager {
         const taskModel = this.getTaskModel(taskId)
         const harnessId = taskModel?.harnessId
 
-        const updateTitle = (title: string) => {
-            if (this.store.repoStore) {
-                updateTaskPreview(this.store.repoStore, task.repoId, taskId, { title })
-            }
-            taskStore.meta.update((draft) => {
-                draft.title = title
-                draft.updatedAt = new Date().toISOString()
-            })
-        }
-
         runInAction(() => this.regeneratingTitleTaskIds.add(taskId))
         try {
             const abortController = new AbortController()
             const events = taskStore.events.all()
             const generatedTitle = await generateTitle(description, abortController, harnessId, events)
-            updateTitle(generatedTitle ?? fallbackTitle(description))
+            this.setTaskTitle(taskId, generatedTitle ?? fallbackTitle(description))
         } catch (err) {
             console.error("[TaskManager] Title regeneration failed:", err)
-            updateTitle(fallbackTitle(description))
+            this.setTaskTitle(taskId, fallbackTitle(description))
         } finally {
             runInAction(() => this.regeneratingTitleTaskIds.delete(taskId))
         }
