@@ -23,12 +23,13 @@ Evaluate through these lenses:
 
 1. **Bugs & correctness** — Logic errors, off-by-one mistakes, wrong assumptions, broken edge cases, regressions. If it would break in production, flag it.
 2. **Security** — Injection vectors (command, SQL, XSS), unsafe deserialization, secrets in code, missing input validation at trust boundaries, and other OWASP-class vulnerabilities.
-3. **Better approaches** — Is there a materially better way to do this? A simpler algorithm, an existing utility that already does this, an approach that avoids an entire class of bugs, or a design that's meaningfully clearer. Don't flag "could also do it this way" alternatives — only flag approaches that are clearly superior.
+3. **Better approaches** — Actively look for materially better ways to do this. Can it unify with an existing pattern in the codebase? Is there already a utility, helper, or convention that does this? Would a different strategy avoid an entire class of bugs or simplify the code significantly? The best review comments are "we already do this over in X, you can reuse that" or "this whole thing collapses if you use Y instead." Don't flag "could also do it this way" alternatives — only flag approaches that are clearly superior.
 4. **Test quality** — Tests that don't actually catch regressions: excessive mocking that hides real behavior, assertions on trivial/tautological conditions, tests that mirror the implementation, and missing coverage of edge cases that matter.
 5. **Robustness** — Will this code behave correctly under unexpected inputs, concurrency, partial failures, or edge cases? Unhandled errors, race conditions, missing guards at system boundaries, and assumptions that could silently break.`
 
 const REVIEW_SENSITIVITY_GUIDANCE = [
     "Do NOT comment on style, formatting, naming, or conventions unless it causes a real bug. Linters handle that.",
+    "Actively explore the surrounding codebase to find existing patterns, utilities, or conventions the author may not know about. The highest-value review finding is showing someone a better way that already exists.",
     "If something may be intentional, do not label it as a bug; flag it as a confirmation item.",
     "Other agents or threads may be working concurrently in the same worktree. If you see unrelated changes in the diff or file tree, ignore them and focus only on the work described in the task thread context.",
     "If you have no blocking findings, say so clearly and briefly. An empty review is better than a padded one.",
