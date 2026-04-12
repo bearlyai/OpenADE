@@ -9,9 +9,8 @@ export interface ClaudeCodeHarnessConfig {
 
 export interface ClaudeArgBuildResult {
     args: string[]
-    /** Raw prompt text — must be appended after all flags as a positional arg (after `--`).
-     *  Undefined when using stream-json transport (prompt is sent via stdin). */
-    promptText?: string
+    /** Raw prompt text to write to stdin (text-only prompt transport). */
+    stdinData?: string
     env: Record<string, string>
     cwd: string
     /** Temp files/dirs that need cleanup after the process exits */
@@ -186,9 +185,7 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
 
     // ── Prompt ──
     // -p is a boolean flag (non-interactive / print mode).
-    // For text-only prompts, the prompt is returned separately as `promptText`
-    // so the caller can append it after all flags using `-- <prompt>` to prevent
-    // prompts starting with `-` from being parsed as CLI flags.
+    // For text-only prompts, the prompt is sent through stdin.
     // For multimodal prompts (with images), we use --input-format stream-json
     // and send the content via stdin as NDJSON.
     const transport = resolvePromptTransport(query.prompt)
@@ -205,14 +202,6 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
     // ── Setting sources ──
     const settingSources = config.settingSources ?? ["user", "project", "local"]
     args.push("--setting-sources", settingSources.join(","))
-
-    // ── System prompt ──
-    if (query.systemPrompt) {
-        args.push("--system-prompt", query.systemPrompt)
-    }
-    if (query.appendSystemPrompt) {
-        args.push("--append-system-prompt", query.appendSystemPrompt)
-    }
 
     // ── Model ──
     if (query.model) {
@@ -327,7 +316,7 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
 
     return {
         args,
-        promptText: transport.kind === "text" ? transport.promptText : undefined,
+        stdinData: transport.kind === "stdin-text" ? transport.stdinData : undefined,
         env,
         cwd: query.cwd,
         cleanup,
@@ -335,22 +324,22 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
     }
 }
 
-type PromptTransport = { kind: "text"; promptText: string } | { kind: "stream-json"; stdinLines: string[] }
+type PromptTransport = { kind: "stdin-text"; stdinData: string } | { kind: "stream-json"; stdinLines: string[] }
 
 function resolvePromptTransport(prompt: string | PromptPart[]): PromptTransport {
     if (typeof prompt === "string") {
-        return { kind: "text", promptText: prompt }
+        return { kind: "stdin-text", stdinData: prompt }
     }
 
     const hasImages = prompt.some((p) => p.type === "image")
 
     if (!hasImages) {
-        // Text-only: use simple positional arg as before
+        // Text-only: use raw stdin text
         const text = prompt
             .filter((p): p is Extract<PromptPart, { type: "text" }> => p.type === "text")
             .map((p) => p.text)
             .join("\n")
-        return { kind: "text", promptText: text }
+        return { kind: "stdin-text", stdinData: text }
     }
 
     // Build Anthropic-format content blocks for stream-json input

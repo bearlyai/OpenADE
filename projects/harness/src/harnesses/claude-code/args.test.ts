@@ -13,15 +13,22 @@ function makeQuery(overrides: Partial<HarnessQuery> = {}): HarnessQuery {
 }
 
 describe("buildClaudeArgs", () => {
-    it("returns promptText separately (never in args array)", () => {
+    it("returns stdinData separately (never in args array)", () => {
         const result = buildClaudeArgs(makeQuery({ prompt: "hello world" }), {})
         expect(result.args).toContain("-p")
-        // Prompt is NOT in args — it's returned separately for safe positional placement
+        // Prompt is NOT in args — it's sent via stdin
         expect(result.args).not.toContain("hello world")
-        expect(result.promptText).toBe("hello world")
+        expect(result.stdinData).toBe("hello world")
     })
 
-    it("handles PromptPart[] by joining text parts into promptText", () => {
+    it("does not leak prompt text into argv", () => {
+        const sentinel = "PROMPT_SENTINEL_argv_should_not_contain_me"
+        const result = buildClaudeArgs(makeQuery({ prompt: sentinel }), {})
+        expect(result.args.join(" ")).not.toContain(sentinel)
+        expect(result.stdinData).toBe(sentinel)
+    })
+
+    it("handles PromptPart[] by joining text parts into stdinData", () => {
         const result = buildClaudeArgs(
             makeQuery({
                 prompt: [
@@ -32,7 +39,7 @@ describe("buildClaudeArgs", () => {
             {}
         )
         expect(result.args).toContain("-p")
-        expect(result.promptText).toBe("line 1\nline 2")
+        expect(result.stdinData).toBe("line 1\nline 2")
         expect(result.stdinLines).toBeUndefined()
         expect(result.args).not.toContain("--input-format")
     })
@@ -49,7 +56,7 @@ describe("buildClaudeArgs", () => {
         )
         expect(result.args).toContain("--input-format")
         expect(result.args).toContain("stream-json")
-        expect(result.promptText).toBeUndefined()
+        expect(result.stdinData).toBeUndefined()
         expect(result.stdinLines).toBeDefined()
         expect(result.stdinLines).toHaveLength(1)
         const parsed = JSON.parse(result.stdinLines![0])
@@ -87,21 +94,21 @@ describe("buildClaudeArgs", () => {
 
     it("prompt starting with '-' is not included in args (prevents flag parsing)", () => {
         const result = buildClaudeArgs(makeQuery({ prompt: "- Files should have a download button" }), {})
-        expect(result.promptText).toBe("- Files should have a download button")
+        expect(result.stdinData).toBe("- Files should have a download button")
         // Prompt must not be in args where it could be parsed as a flag
         expect(result.args).not.toContain("- Files should have a download button")
     })
 
-    it("prompt starting with '--' is safely returned as promptText", () => {
+    it("prompt starting with '--' is safely returned as stdinData", () => {
         const result = buildClaudeArgs(makeQuery({ prompt: "--help" }), {})
-        expect(result.promptText).toBe("--help")
+        expect(result.stdinData).toBe("--help")
         expect(result.args).not.toContain("--help")
     })
 
-    it("multi-line prompt with dash-prefixed lines is safely returned as promptText", () => {
+    it("multi-line prompt with dash-prefixed lines is safely returned as stdinData", () => {
         const prompt = "- Files should have a download button\n- We should show some of the metadata"
         const result = buildClaudeArgs(makeQuery({ prompt }), {})
-        expect(result.promptText).toBe(prompt)
+        expect(result.stdinData).toBe(prompt)
         expect(result.args).not.toContain(prompt)
     })
 
@@ -334,16 +341,16 @@ describe("buildClaudeArgs", () => {
         expect(result.args[addDirIndices[1] + 1]).toBe("/b")
     })
 
-    it("systemPrompt produces --system-prompt", () => {
+    it("systemPrompt is not inlined into argv", () => {
         const result = buildClaudeArgs(makeQuery({ systemPrompt: "You are helpful" }), {})
-        expect(result.args).toContain("--system-prompt")
-        expect(result.args).toContain("You are helpful")
+        expect(result.args).not.toContain("--system-prompt")
+        expect(result.args).not.toContain("You are helpful")
     })
 
-    it("appendSystemPrompt produces --append-system-prompt", () => {
+    it("appendSystemPrompt is not inlined into argv", () => {
         const result = buildClaudeArgs(makeQuery({ appendSystemPrompt: "Be concise" }), {})
-        expect(result.args).toContain("--append-system-prompt")
-        expect(result.args).toContain("Be concise")
+        expect(result.args).not.toContain("--append-system-prompt")
+        expect(result.args).not.toContain("Be concise")
     })
 
     it("disableTelemetry: true (default) sets DISABLE_TELEMETRY=1 in env", () => {

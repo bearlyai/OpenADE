@@ -1,7 +1,7 @@
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
-import { unlink, rm } from "node:fs/promises"
+import { unlink, rm, writeFile } from "node:fs/promises"
 import { execFileSync, spawnSync } from "node:child_process"
 
 import type { Harness } from "../../harness.js"
@@ -214,7 +214,7 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
             ? { ...q, appendSystemPrompt: [q.appendSystemPrompt, USER_PROMPT_SYSTEM_HINT].filter(Boolean).join("\n\n") }
             : q
         const buildResult = buildClaudeArgs(effectiveQuery, this.config)
-        const { args, promptText, env, cwd, cleanup, stdinLines } = buildResult
+        const { args, env, cwd, cleanup, stdinLines, stdinData } = buildResult
 
         let toolServerHandle: ToolServerHandle | undefined
 
@@ -247,12 +247,19 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
                 cleanup.push({ path: mcpConfigPath, type: "file" })
             }
 
-            // ── Append prompt as positional arg after all flags (text mode only) ──
-            // The `--` end-of-options separator ensures the prompt is never parsed
-            // as a CLI flag, even if it starts with `-` (e.g. markdown bullet lists).
-            // When using stream-json transport, the prompt is sent via stdin instead.
-            if (promptText !== undefined) {
-                args.push("--", promptText)
+            // ── System prompts via temp files ──
+            // Keep potentially large/sensitive prompt text off argv.
+            if (effectiveQuery.systemPrompt) {
+                const systemPromptPath = join(tmpdir(), `harness-claude-system-prompt-${randomUUID()}.txt`)
+                await writeFile(systemPromptPath, effectiveQuery.systemPrompt, { encoding: "utf-8", mode: 0o600 })
+                args.push("--system-prompt-file", systemPromptPath)
+                cleanup.push({ path: systemPromptPath, type: "file" })
+            }
+            if (effectiveQuery.appendSystemPrompt) {
+                const appendSystemPromptPath = join(tmpdir(), `harness-claude-append-system-prompt-${randomUUID()}.txt`)
+                await writeFile(appendSystemPromptPath, effectiveQuery.appendSystemPrompt, { encoding: "utf-8", mode: 0o600 })
+                args.push("--append-system-prompt-file", appendSystemPromptPath)
+                cleanup.push({ path: appendSystemPromptPath, type: "file" })
             }
 
             // ── Spawn and stream ──
@@ -264,6 +271,8 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
                 cwd,
                 env,
                 signal: q.signal,
+                argv0: q.processLabel,
+                stdinData,
                 stdinLines,
                 parseLine: (line) => {
                     let parsed: unknown

@@ -111,6 +111,10 @@ export interface HarnessQuery {
     // ── Structured output ──
     outputSchema?: JsonSchema
 
+    // ── Process visibility ──
+    /** Optional process label used for ps/pgrep visibility (best effort, platform-dependent). */
+    processLabel?: string
+
     // ── Control ──
     signal: AbortSignal
 }
@@ -155,6 +159,7 @@ export type StructuredQueryBase = Pick<
     | "mode"
     | "mcpServers"
     | "clientTools"
+    | "processLabel"
     | "signal"
 >
 

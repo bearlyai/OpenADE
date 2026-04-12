@@ -15,6 +15,7 @@ export interface CodexArgBuildResult {
     args: string[]
     env: Record<string, string>
     cwd?: string
+    stdinData?: string
     structuredOutputPath?: string
     /** Temp files/dirs that need cleanup */
     cleanup: Array<{ path: string; type: "file" | "dir" }>
@@ -138,13 +139,13 @@ export async function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessC
         promptText = `<system-instructions>\n${systemPrompt}\n</system-instructions>\n\n${promptText}`
     }
 
-    // ── Session ID (for resume) or prompt as positional args ──
-    // The `--` end-of-options separator ensures the prompt is never parsed
-    // as a CLI flag, even if it starts with `-` (e.g. markdown bullet lists).
+    // ── Session ID (for resume) + stdin prompt placeholder ──
+    // Codex exec reads prompt text from stdin when positional prompt is omitted
+    // or explicitly set to "-". We use "-" to keep argv free of prompt text.
     if (query.resumeSessionId) {
-        execArgs.push("--", query.resumeSessionId, promptText)
+        execArgs.push("--", query.resumeSessionId, "-")
     } else {
-        execArgs.push("--", promptText)
+        execArgs.push("--", "-")
     }
 
     // Merge query env
@@ -159,6 +160,7 @@ export async function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessC
         args: [...rootArgs, ...execArgs],
         env,
         cwd: query.cwd,
+        stdinData: promptText,
         structuredOutputPath,
         cleanup,
     }

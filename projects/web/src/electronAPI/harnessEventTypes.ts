@@ -57,6 +57,7 @@ export interface HarnessQueryOptions {
     appendSystemPrompt?: string
     resumeSessionId?: string
     forkSession?: boolean
+    processLabel?: string
     additionalDirectories?: string[]
     env?: Record<string, string>
     disablePlanningTools?: boolean

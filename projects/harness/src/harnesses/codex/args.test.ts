@@ -75,8 +75,10 @@ describe("buildCodexArgs", () => {
         const execIdx = result.args.indexOf("exec")
         expect(execIdx).toBeGreaterThanOrEqual(0)
         expect(result.args[execIdx + 1]).toBe("resume")
-        // Session ID and prompt should be positional args
+        // Session ID is positional and prompt comes from stdin via "-"
         expect(result.args).toContain("abc-123")
+        const dashDashIdx = result.args.indexOf("--")
+        expect(result.args[dashDashIdx + 2]).toBe("-")
     })
 
     it("resume preserves root mode flags", async () => {
@@ -194,23 +196,22 @@ describe("buildCodexArgs", () => {
         expect(result.args).not.toContain("--disallowed-tools")
     })
 
-    it("system prompt is prepended to the prompt text", async () => {
+    it("system prompt is prepended to stdinData", async () => {
         const result = await buildCodexArgs(makeQuery({ prompt: "do something", systemPrompt: "Be helpful" }), {})
-        // The last arg should be the prompt with system instructions prepended (after --)
-        const lastArg = result.args[result.args.length - 1]
-        expect(lastArg).toContain("<system-instructions>")
-        expect(lastArg).toContain("Be helpful")
-        expect(lastArg).toContain("do something")
+        expect(result.stdinData).toContain("<system-instructions>")
+        expect(result.stdinData).toContain("Be helpful")
+        expect(result.stdinData).toContain("do something")
+        expect(result.args).not.toContain("Be helpful")
     })
 
-    it("appendSystemPrompt is treated same as systemPrompt", async () => {
+    it("appendSystemPrompt is treated same as systemPrompt in stdinData", async () => {
         const result = await buildCodexArgs(makeQuery({ prompt: "do stuff", appendSystemPrompt: "Extra instructions" }), {})
-        const lastArg = result.args[result.args.length - 1]
-        expect(lastArg).toContain("<system-instructions>")
-        expect(lastArg).toContain("Extra instructions")
+        expect(result.stdinData).toContain("<system-instructions>")
+        expect(result.stdinData).toContain("Extra instructions")
+        expect(result.args).not.toContain("Extra instructions")
     })
 
-    it("prompt as PromptPart[] joins text parts", async () => {
+    it("prompt as PromptPart[] joins text parts into stdinData", async () => {
         const result = await buildCodexArgs(
             makeQuery({
                 prompt: [
@@ -220,39 +221,42 @@ describe("buildCodexArgs", () => {
             }),
             {}
         )
-        const lastArg = result.args[result.args.length - 1]
-        expect(lastArg).toBe("part 1\npart 2")
+        expect(result.stdinData).toBe("part 1\npart 2")
     })
 
-    it("prompt starting with '-' is placed after '--' separator to avoid flag parsing", async () => {
+    it("prompt starting with '-' is sent via stdin and not positional argv", async () => {
         const result = await buildCodexArgs(makeQuery({ prompt: "- Fix the download button" }), {})
         const dashDashIdx = result.args.indexOf("--")
         expect(dashDashIdx).toBeGreaterThan(-1)
-        expect(result.args[dashDashIdx + 1]).toBe("- Fix the download button")
+        expect(result.args[dashDashIdx + 1]).toBe("-")
+        expect(result.stdinData).toBe("- Fix the download button")
     })
 
-    it("prompt starting with '--' is safely placed after '--' separator", async () => {
+    it("prompt starting with '--' is safely sent via stdin", async () => {
         const result = await buildCodexArgs(makeQuery({ prompt: "--help" }), {})
         const dashDashIdx = result.args.indexOf("--")
         expect(dashDashIdx).toBeGreaterThan(-1)
-        expect(result.args[dashDashIdx + 1]).toBe("--help")
+        expect(result.args[dashDashIdx + 1]).toBe("-")
+        expect(result.stdinData).toBe("--help")
     })
 
-    it("resume with dash-prefixed prompt uses '--' separator", async () => {
+    it("resume with dash-prefixed prompt uses stdin placeholder", async () => {
         const result = await buildCodexArgs(makeQuery({ prompt: "- Continue fixing", resumeSessionId: "abc-123" }), {})
         const dashDashIdx = result.args.indexOf("--")
         expect(dashDashIdx).toBeGreaterThan(-1)
-        // After --, positional args: session ID then prompt
+        // After --, positional args: session ID then stdin placeholder
         expect(result.args[dashDashIdx + 1]).toBe("abc-123")
-        expect(result.args[dashDashIdx + 2]).toBe("- Continue fixing")
+        expect(result.args[dashDashIdx + 2]).toBe("-")
+        expect(result.stdinData).toBe("- Continue fixing")
     })
 
-    it("multi-line prompt with dash-prefixed lines is placed after '--' separator", async () => {
+    it("multi-line prompt with dash-prefixed lines is sent via stdin", async () => {
         const prompt = "- Files should have a download button\n- We should show some metadata"
         const result = await buildCodexArgs(makeQuery({ prompt }), {})
         const dashDashIdx = result.args.indexOf("--")
         expect(dashDashIdx).toBeGreaterThan(-1)
-        expect(result.args[dashDashIdx + 1]).toBe(prompt)
+        expect(result.args[dashDashIdx + 1]).toBe("-")
+        expect(result.stdinData).toBe(prompt)
     })
 
     it("query env is merged into result env", async () => {
@@ -276,9 +280,10 @@ describe("buildCodexArgs", () => {
         expect(iIdx).toBeGreaterThan(-1)
         expect(result.args[iIdx + 1]).toMatch(/harness-img-.*\.png$/)
         expect(result.cleanup.some((c) => c.type === "file")).toBe(true)
-        // Prompt text after -- should be just the text part
+        // Prompt is passed via stdin
         const dashDashIdx = result.args.indexOf("--")
-        expect(result.args[dashDashIdx + 1]).toBe("describe this")
+        expect(result.args[dashDashIdx + 1]).toBe("-")
+        expect(result.stdinData).toBe("describe this")
     })
 
     it("prompt with path image passes path directly via -i without cleanup", async () => {
@@ -340,5 +345,12 @@ describe("buildCodexArgs", () => {
         expect(iIndices).toHaveLength(2)
         expect(result.args[iIndices[0] + 1]).toBe("/data/images/a.png")
         expect(result.args[iIndices[1] + 1]).toBe("/data/images/b.jpg")
+    })
+
+    it("does not leak prompt text into argv", async () => {
+        const sentinel = "PROMPT_SENTINEL_argv_should_not_contain_me"
+        const result = await buildCodexArgs(makeQuery({ prompt: sentinel }), {})
+        expect(result.args.join(" ")).not.toContain(sentinel)
+        expect(result.stdinData).toBe(sentinel)
     })
 })

@@ -70,6 +70,7 @@ interface HarnessQueryOptions {
     appendSystemPrompt?: string
     resumeSessionId?: string
     forkSession?: boolean
+    processLabel?: string
     additionalDirectories?: string[]
     env?: Record<string, string>
     disablePlanningTools?: boolean
@@ -534,6 +535,7 @@ async function handleStartQuery(
         appendSystemPrompt: options.appendSystemPrompt,
         resumeSessionId: options.resumeSessionId,
         forkSession: options.forkSession,
+        processLabel: options.processLabel,
         additionalDirectories: options.additionalDirectories,
         env: options.env,
         disablePlanningTools: options.disablePlanningTools,

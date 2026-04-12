@@ -11,6 +11,12 @@ export interface SpawnJsonlOptions<M> {
 
     /** Optional lines to write to stdin before closing. When set, stdin is piped instead of ignored. */
     stdinLines?: string[]
+    /** Optional raw stdin text to write before closing. Mutually exclusive with stdinLines. */
+    stdinData?: string
+    /** Optional argv[0] override for ps/pgrep-friendly labeling. */
+    argv0?: string
+    /** Called after spawn with the child PID (when available). */
+    onSpawn?: (pid: number) => void
 
     /**
      * Called for each line of stdout. Return event(s) to yield, or null to skip.
@@ -30,6 +36,13 @@ export interface SpawnJsonlOptions<M> {
 export async function* spawnJsonl<M>(options: SpawnJsonlOptions<M>): AsyncGenerator<HarnessEvent<M>> {
     const { command, args, cwd, env, signal, parseLine, onExit } = options
     const useProcessGroup = process.platform !== "win32"
+    const hasStdinLines = !!options.stdinLines
+    const hasStdinData = options.stdinData !== undefined
+    const useStdin = hasStdinLines || hasStdinData
+
+    if (hasStdinLines && hasStdinData) {
+        throw new Error("spawnJsonl options stdinLines and stdinData are mutually exclusive")
+    }
 
     // Check if already aborted
     if (signal.aborted) {
@@ -40,14 +53,27 @@ export async function* spawnJsonl<M>(options: SpawnJsonlOptions<M>): AsyncGenera
     const proc = nodeSpawn(command, args, {
         cwd,
         env: env ? { ...process.env, ...env } : undefined,
-        stdio: [options.stdinLines ? "pipe" : "ignore", "pipe", "pipe"],
+        stdio: [useStdin ? "pipe" : "ignore", "pipe", "pipe"],
+        argv0: options.argv0,
         detached: useProcessGroup,
     })
 
-    // Write stdin lines and close
-    if (options.stdinLines && proc.stdin) {
-        for (const line of options.stdinLines) {
-            proc.stdin.write(line + "\n")
+    if (proc.pid && options.onSpawn) {
+        try {
+            options.onSpawn(proc.pid)
+        } catch {
+            // Ignore observer callback errors
+        }
+    }
+
+    // Write stdin payload and close
+    if (proc.stdin && useStdin) {
+        if (options.stdinLines) {
+            for (const line of options.stdinLines) {
+                proc.stdin.write(line + "\n")
+            }
+        } else if (options.stdinData !== undefined) {
+            proc.stdin.write(options.stdinData)
         }
         proc.stdin.end()
     }

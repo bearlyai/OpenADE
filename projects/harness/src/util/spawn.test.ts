@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest"
+import { execFileSync } from "node:child_process"
 import { spawnJsonl } from "./spawn.js"
 import type { HarnessEvent } from "../types.js"
 
@@ -229,5 +230,84 @@ describe("spawnJsonl", () => {
 
         const messages = events.filter((e) => e.type === "message")
         expect(messages).toHaveLength(2)
+    })
+
+    it("writes raw stdinData to child stdin", async () => {
+        const script = `
+      let body = "";
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", (chunk) => { body += chunk; });
+      process.stdin.on("end", () => {
+        console.log(JSON.stringify({ type: "stdin", body }));
+      });
+    `
+        const ac = new AbortController()
+
+        const events = await collectEvents(
+            spawnJsonl<Record<string, unknown>>({
+                command: "node",
+                args: ["-e", script],
+                signal: ac.signal,
+                stdinData: "alpha\nbeta\n--gamma",
+                parseLine: (line) => ({ type: "message", message: JSON.parse(line) }),
+            })
+        )
+
+        const stdinMsg = events.find((e) => e.type === "message") as
+            | { type: "message"; message: { body: string } }
+            | undefined
+        expect(stdinMsg).toBeDefined()
+        expect(stdinMsg!.message.body).toBe("alpha\nbeta\n--gamma")
+    })
+
+    it("rejects when stdinLines and stdinData are both provided", async () => {
+        const ac = new AbortController()
+        await expect(
+            collectEvents(
+                spawnJsonl<Record<string, unknown>>({
+                    command: "node",
+                    args: ["-e", "console.log(JSON.stringify({ok:true}))"],
+                    signal: ac.signal,
+                    stdinLines: ["a"],
+                    stdinData: "b",
+                    parseLine: (line) => ({ type: "message", message: JSON.parse(line) }),
+                })
+            )
+        ).rejects.toThrow("stdinLines and stdinData are mutually exclusive")
+    })
+
+    it.skipIf(process.platform === "win32")("supports argv0 labeling without leaking stdin prompt to ps", async () => {
+        const ac = new AbortController()
+        const promptSentinel = `PROMPT_SENTINEL_${Date.now()}`
+        const label = `openade-spawn-test-${Date.now()}`
+        let pid: number | undefined
+
+        const eventsPromise = collectEvents(
+            spawnJsonl<Record<string, unknown>>({
+                command: "sleep",
+                args: ["30"],
+                signal: ac.signal,
+                stdinData: promptSentinel,
+                argv0: label,
+                onSpawn: (childPid) => {
+                    pid = childPid
+                },
+                parseLine: () => null,
+            })
+        )
+
+        const deadline = Date.now() + 5000
+        while (!pid && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 25))
+        }
+        expect(pid, "spawn should expose child pid").toBeDefined()
+
+        const commandLine = execFileSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf-8" }).trim()
+        expect(commandLine).toContain(label)
+        expect(commandLine).not.toContain(promptSentinel)
+
+        ac.abort()
+        const events = await eventsPromise
+        expect(events.some((e) => e.type === "error" && (e as { code?: string }).code === "aborted")).toBe(true)
     })
 })

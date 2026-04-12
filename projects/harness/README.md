@@ -89,16 +89,17 @@ Normalized input accepted by every harness.
 | `systemPrompt?` | `string` | System prompt (prepended) |
 | `appendSystemPrompt?` | `string` | System prompt (appended) |
 | `model?` | `string` | Model ID override |
-| `thinking?` | `"low" \| "med" \| "high"` | Thinking/reasoning effort |
+| `thinking?` | `"low" \| "med" \| "high" \| "max"` | Thinking/reasoning effort |
 | `resumeSessionId?` | `string` | Resume a previous session |
 | `forkSession?` | `boolean` | Fork instead of resume |
 | `additionalDirectories?` | `string[]` | Extra directories to include |
 | `env?` | `Record<string, string>` | Extra env vars for the CLI process |
-| `allowedTools?` | `string[]` | Tool allow-list (Claude Code only) |
-| `disallowedTools?` | `string[]` | Tool deny-list (Claude Code only) |
 | `mcpServers?` | `Record<string, McpServerConfig>` | MCP servers to connect |
 | `clientTools?` | `ClientToolDefinition[]` | In-process tools exposed via MCP |
 | `outputSchema?` | `JsonSchema` | Low-level structured output schema passthrough (advanced) |
+| `processLabel?` | `string` | Optional process label for ps/pgrep visibility (best effort) |
+
+Text prompts are sent via stdin for both harnesses; large prompt text is kept out of argv/process listings.
 
 ### `HarnessEvent<M>`
 
@@ -132,6 +133,7 @@ type StructuredQueryBase = Pick<
     | "mode"
     | "mcpServers"
     | "clientTools"
+    | "processLabel"
     | "signal"
 >
 

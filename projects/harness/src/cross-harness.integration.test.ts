@@ -72,6 +72,16 @@ function extractText(harnessId: string, messages: unknown[]): string {
     return texts.join(" ")
 }
 
+async function waitForCondition(check: () => boolean, timeoutMs = 15_000, intervalMs = 50): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (!check()) {
+        if (Date.now() >= deadline) {
+            throw new Error(`Condition not met within ${timeoutMs}ms`)
+        }
+        await new Promise((resolve) => setTimeout(resolve, intervalMs))
+    }
+}
+
 describe.skipIf(!claudeReady || !codexReady)("Cross-harness integration", () => {
     // ============================================================================
     // 1. Registry integration
@@ -362,11 +372,42 @@ describe.skipIf(!claudeReady || !codexReady)("Cross-harness integration", () => 
         })
     })
 
+    describe("3d. Planning controls", () => {
+        it("3d. disablePlanningTools does not break ask_user flows", async () => {
+            const harnesses: Harness[] = [claude, codex]
+
+            for (const h of harnesses) {
+                const tmpDir = await getTmpDir()
+                let receivedRequest: import("./types.js").UserPromptRequest | undefined
+
+                const events = await collectEvents(
+                    h.query({
+                        prompt: "Call the ask_user tool once with id 'approval' and options Yes/No, then answer with the selected value.",
+                        cwd: tmpDir,
+                        mode: "yolo",
+                        disablePlanningTools: true,
+                        userPromptHandler: async (request) => {
+                            receivedRequest = request
+                            return { answers: { approval: "Yes" } }
+                        },
+                        signal: standardSignal(),
+                    })
+                )
+
+                expect(receivedRequest, `${h.id}: ask_user should still be callable with disablePlanningTools`).toBeDefined()
+                const errors = getErrorEvents(events)
+                expect(errors, `${h.id}: should complete without planning-related errors`).toHaveLength(0)
+                const complete = getCompleteEvent(events)
+                expect(complete, `${h.id}: should complete`).toBeDefined()
+            }
+        })
+    })
+
     // ============================================================================
-    // 3d. HTTP MCP server injection
+    // 3e. HTTP MCP server injection
     // ============================================================================
 
-    describe("3d. HTTP MCP server injection", () => {
+    describe("3e. HTTP MCP server injection", () => {
         let toolHandle: ToolServerHandle | undefined
 
         afterEach(async () => {
@@ -376,7 +417,7 @@ describe.skipIf(!claudeReady || !codexReady)("Cross-harness integration", () => 
             }
         })
 
-        it("3d. Both harnesses call an HTTP MCP server tool and use its result", async () => {
+        it("3e. Both harnesses call an HTTP MCP server tool and use its result", async () => {
             const harnesses: Harness[] = [claude, codex]
 
             for (const h of harnesses) {
@@ -522,6 +563,59 @@ describe.skipIf(!claudeReady || !codexReady)("Cross-harness integration", () => 
                 const messages = findAllMessages<unknown>(events)
                 const text = extractText(h.id, messages).toLowerCase()
                 expect(text, `${h.id}: should read text from the image`).toContain("igloo")
+            }
+        })
+    })
+
+    // ============================================================================
+    // 6. Process visibility
+    // ============================================================================
+
+    describe.skipIf(process.platform === "win32")("6. Process visibility", () => {
+        it("6a. Prompt/system text stay out of ps while optional processLabel is greppable", async () => {
+            const harnesses: Harness[] = [claude, codex]
+
+            for (const h of harnesses) {
+                const tmpDir = await getTmpDir()
+                const promptSentinel = `PROMPT_SENTINEL_${h.id}_${Date.now()}`
+                const systemSentinel = `SYSTEM_SENTINEL_${h.id}_${Date.now()}`
+                const processLabel = `openade:${h.id}:ps:${Date.now()}`
+                const controller = new AbortController()
+                const eventsPromise = collectEvents(
+                    h.query({
+                        prompt: `${promptSentinel}\nWrite a detailed 1200-word explanation about this repository.`,
+                        appendSystemPrompt: `When answering, preserve behavior. ${systemSentinel}`,
+                        cwd: tmpDir,
+                        mode: "yolo",
+                        processLabel,
+                        signal: controller.signal,
+                    })
+                )
+
+                let matchingLine: string | undefined
+                try {
+                    await waitForCondition(() => {
+                        const psOutput = execFileSync("ps", ["ax", "-o", "command="], { encoding: "utf-8" })
+                        const line = psOutput
+                            .split("\n")
+                            .map((entry) => entry.trim())
+                            .find((entry) => entry.includes(processLabel))
+                        if (!line) return false
+                        matchingLine = line
+                        return true
+                    })
+                } finally {
+                    controller.abort()
+                }
+
+                expect(matchingLine, `${h.id}: process label should be visible in ps`).toBeDefined()
+                expect(matchingLine!, `${h.id}: prompt sentinel should not be visible in ps`).not.toContain(promptSentinel)
+                expect(matchingLine!, `${h.id}: system sentinel should not be visible in ps`).not.toContain(systemSentinel)
+
+                const events = await eventsPromise
+                const errors = getErrorEvents(events)
+                const nonAbortErrors = errors.filter((e) => e.code !== "aborted")
+                expect(nonAbortErrors, `${h.id}: should not emit non-abort errors`).toHaveLength(0)
             }
         })
     })

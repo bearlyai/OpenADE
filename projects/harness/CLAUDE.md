@@ -84,7 +84,7 @@ src/
 | Concept | Description |
 |---|---|
 | `Harness<M>` | Interface every harness implements. `M` is the harness-specific event type. Includes `models()` for declaring supported models |
-| `HarnessQuery` | Normalized input: prompt, model, mode, MCP servers, client tools, signal |
+| `HarnessQuery` | Normalized input: prompt, model, mode, MCP servers, client tools, processLabel, signal |
 | `structuredQuery()` | High-level harness method for schema-constrained output |
 | `HarnessEvent<M>` | Stream envelope: `message`, `session_started`, `complete`, `error`, `stderr` |
 | `ClaudeEvent` | Discriminated union of all Claude CLI `--output-format stream-json` line types |
@@ -98,7 +98,7 @@ src/
 2. If `clientTools` are present, a local HTTP MCP server starts (`tool-server.ts`)
 3. The MCP server config is merged with any user-provided `mcpServers`
 4. Harness-specific arg builder translates `HarnessQuery` → CLI flags
-5. `spawnJsonl()` launches the CLI, reads JSONL from stdout line-by-line
+5. `spawnJsonl()` launches the CLI (supports stdin text/lines + optional argv0 label), reads JSONL from stdout line-by-line
 6. Each line is parsed by the harness-specific parser (`parseClaudeEvent` / `parseCodexEvent`)
 7. Parsed events are wrapped in `HarnessEvent<M>` and yielded to the caller
 8. For structured queries, `complete.structuredOutput` is normalized and parsed by `structured.ts`
