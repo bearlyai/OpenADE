@@ -34,6 +34,8 @@ export interface HyperPlanCallbacks {
     onTerminalEvent(event: HarnessStreamEvent): void
     /** Called when the terminal step's session ID is known */
     onTerminalSessionId(sessionId: string): void
+    /** Called when reconciliation assigns anonymous labels to inputs */
+    onLabelMapping?(mapping: Array<{ stepId: string; label: string }>): void
 }
 
 // ============================================================================
@@ -241,6 +243,7 @@ export class HyperPlanExecutor {
                 const result = buildReconcileStepPrompt(taskDescription, inputs)
                 userMessage = result.userMessage
                 systemPrompt = result.systemPrompt
+                callbacks.onLabelMapping?.(result.labelMapping)
                 break
             }
         }

@@ -76,4 +76,6 @@ export interface HyperPlanSubExecution {
     /** Extracted plan/review text. Set on completion. */
     resultText?: string
     error?: string
+    /** Anonymous label assigned during reconciliation (e.g. "A", "B"). Only set for inputs that were included in reconciliation. */
+    reconcileLabel?: string
 }

@@ -629,6 +629,30 @@ export class EventManager {
         })
     }
 
+    /** Set reconciliation labels on sub-executions */
+    setHyperPlanReconcileLabels({
+        taskId,
+        eventId,
+        mapping,
+    }: {
+        taskId: string
+        eventId: string
+        mapping: Array<{ stepId: string; label: string }>
+    }): void {
+        const taskStore = this.store.getCachedTaskStore(taskId)
+        if (!taskStore) return
+
+        taskStore.events.update(eventId, (draft) => {
+            if (draft.type !== "action") return
+            const subs = draft.hyperplanSubExecutions
+            if (!subs) return
+            for (const { stepId, label } of mapping) {
+                const sub = subs.find((s) => s.stepId === stepId)
+                if (sub) sub.reconcileLabel = label
+            }
+        })
+    }
+
     // ==================== Plan Cancellation ====================
 
     cancelPlan(taskId: string, planEventId: string): boolean {

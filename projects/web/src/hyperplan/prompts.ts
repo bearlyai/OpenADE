@@ -10,11 +10,8 @@
  * - Reconcile prompts randomly order inputs to avoid anchoring bias.
  */
 
-import {
-  PLAN_MODE_INSTRUCTIONS,
-  PLANNING_GUIDELINES,
-} from "../prompts/prompts";
-import { REVIEW_DIMENSIONS } from "../prompts/reviewPrompts";
+import { PLAN_MODE_INSTRUCTIONS, PLANNING_GUIDELINES } from "../prompts/prompts"
+import { REVIEW_DIMENSIONS } from "../prompts/reviewPrompts"
 
 // ============================================================================
 // Plan Step Prompt — same as standard plan but with Risks & Alternatives
@@ -29,59 +26,59 @@ After the ## Plan section, include:
 - Key risks with this approach and how they're mitigated
 - Alternatives you considered and why you rejected them
 - Assumptions that, if wrong, would change the plan
-</additional_output_section>`;
+</additional_output_section>`
 
 export interface MainThreadContextMeta {
-  truncated: boolean;
-  includedEvents: number;
-  omittedEvents: number;
-  byteLength: number;
+    truncated: boolean
+    includedEvents: number
+    omittedEvents: number
+    byteLength: number
 }
 
 export interface HyperPlanStepPromptContext {
-  mainThreadContextXml?: string;
-  mainThreadContextMeta?: MainThreadContextMeta;
+    mainThreadContextXml?: string
+    mainThreadContextMeta?: MainThreadContextMeta
 }
 
 export function buildHyperPlanStepPrompt(taskDescription: string): {
-  systemPrompt: string;
-  userMessage: string;
-};
+    systemPrompt: string
+    userMessage: string
+}
 export function buildHyperPlanStepPrompt(
-  taskDescription: string,
-  context: HyperPlanStepPromptContext,
+    taskDescription: string,
+    context: HyperPlanStepPromptContext
 ): {
-  systemPrompt: string;
-  userMessage: string;
-};
+    systemPrompt: string
+    userMessage: string
+}
 export function buildHyperPlanStepPrompt(
-  taskDescription: string,
-  context?: HyperPlanStepPromptContext,
+    taskDescription: string,
+    context?: HyperPlanStepPromptContext
 ): {
-  systemPrompt: string;
-  userMessage: string;
+    systemPrompt: string
+    userMessage: string
 } {
-  if (!context?.mainThreadContextXml) {
+    if (!context?.mainThreadContextXml) {
+        return {
+            systemPrompt: HYPERPLAN_PLAN_SYSTEM_PROMPT,
+            userMessage: taskDescription,
+        }
+    }
+
+    const attrs: string[] = ['format="task_thread_xml"']
+    if (context.mainThreadContextMeta) {
+        attrs.push(
+            `truncated="${context.mainThreadContextMeta.truncated}"`,
+            `includedEvents="${context.mainThreadContextMeta.includedEvents}"`,
+            `omittedEvents="${context.mainThreadContextMeta.omittedEvents}"`,
+            `byteLength="${context.mainThreadContextMeta.byteLength}"`
+        )
+    }
+
     return {
-      systemPrompt: HYPERPLAN_PLAN_SYSTEM_PROMPT,
-      userMessage: taskDescription,
-    };
-  }
-
-  const attrs: string[] = ['format="task_thread_xml"'];
-  if (context.mainThreadContextMeta) {
-    attrs.push(
-      `truncated="${context.mainThreadContextMeta.truncated}"`,
-      `includedEvents="${context.mainThreadContextMeta.includedEvents}"`,
-      `omittedEvents="${context.mainThreadContextMeta.omittedEvents}"`,
-      `byteLength="${context.mainThreadContextMeta.byteLength}"`,
-    );
-  }
-
-  return {
-    systemPrompt: HYPERPLAN_PLAN_SYSTEM_PROMPT,
-    userMessage: `${taskDescription}\n\n<main_thread_context ${attrs.join(" ")}>\n${context.mainThreadContextXml}\n</main_thread_context>`,
-  };
+        systemPrompt: HYPERPLAN_PLAN_SYSTEM_PROMPT,
+        userMessage: `${taskDescription}\n\n<main_thread_context ${attrs.join(" ")}>\n${context.mainThreadContextXml}\n</main_thread_context>`,
+    }
 }
 
 // ============================================================================
@@ -127,20 +124,20 @@ Potential failure modes, edge cases, or assumptions that could break.
 ## Suggestions
 Specific, actionable improvements. For each suggestion, reference the plan section it applies to.
 </output_format>
-</current_operating_mode>`;
+</current_operating_mode>`
 
 export function buildReviewStepPrompt(
-  taskDescription: string,
-  planText: string,
-  planStepId: string,
+    taskDescription: string,
+    planText: string,
+    planStepId: string
 ): {
-  systemPrompt: string;
-  userMessage: string;
+    systemPrompt: string
+    userMessage: string
 } {
-  return {
-    systemPrompt: REVIEW_SYSTEM_PROMPT,
-    userMessage: `<task_description>\n${taskDescription}\n</task_description>\n\n<plan_to_review id="${planStepId}">\n${planText}\n</plan_to_review>`,
-  };
+    return {
+        systemPrompt: REVIEW_SYSTEM_PROMPT,
+        userMessage: `<task_description>\n${taskDescription}\n</task_description>\n\n<plan_to_review id="${planStepId}">\n${planText}\n</plan_to_review>`,
+    }
 }
 
 // ============================================================================
@@ -202,54 +199,57 @@ Implementation steps with code blocks for key interfaces and signatures.
 - What was adopted from each input
 - What was rejected and why
 </output_format>
-</current_operating_mode>`;
+</current_operating_mode>`
 
 /** Letters for anonymous plan/review IDs */
-const PLAN_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const PLAN_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 export interface ReconcileInput {
-  stepId: string;
-  primitive: "plan" | "review";
-  text: string;
-  /** For reviews: which plan step this reviews */
-  reviewsStepId?: string;
+    stepId: string
+    primitive: "plan" | "review"
+    text: string
+    /** For reviews: which plan step this reviews */
+    reviewsStepId?: string
 }
 
 export function buildReconcileStepPrompt(
-  taskDescription: string,
-  inputs: ReconcileInput[],
+    taskDescription: string,
+    inputs: ReconcileInput[]
 ): {
-  systemPrompt: string;
-  userMessage: string;
+    systemPrompt: string
+    userMessage: string
+    /** Maps each input stepId to its anonymous label (A, B, C, ...) */
+    labelMapping: Array<{ stepId: string; label: string }>
 } {
-  // Randomly shuffle inputs to avoid ordering bias
-  const shuffled = [...inputs].sort(() => Math.random() - 0.5);
+    // Randomly shuffle inputs to avoid ordering bias
+    const shuffled = [...inputs].sort(() => Math.random() - 0.5)
 
-  // Assign anonymous labels
-  const inputBlocks = shuffled.map((input, i) => {
-    const label = PLAN_LABELS[i] || `${i}`;
-    const tag = input.primitive === "plan" ? "plan" : "review";
+    const labelMapping: Array<{ stepId: string; label: string }> = []
 
-    // For reviews, indicate which plan they review (using the anonymous label of that plan)
-    let reviewsAttr = "";
-    if (input.primitive === "review" && input.reviewsStepId) {
-      const reviewedPlanIndex = shuffled.findIndex(
-        (s) => s.stepId === input.reviewsStepId,
-      );
-      if (reviewedPlanIndex >= 0) {
-        const reviewedLabel =
-          PLAN_LABELS[reviewedPlanIndex] || `${reviewedPlanIndex}`;
-        reviewsAttr = ` reviews="Plan ${reviewedLabel}"`;
-      }
+    // Assign anonymous labels
+    const inputBlocks = shuffled.map((input, i) => {
+        const label = PLAN_LABELS[i] || `${i}`
+        labelMapping.push({ stepId: input.stepId, label })
+        const tag = input.primitive === "plan" ? "plan" : "review"
+
+        // For reviews, indicate which plan they review (using the anonymous label of that plan)
+        let reviewsAttr = ""
+        if (input.primitive === "review" && input.reviewsStepId) {
+            const reviewedPlanIndex = shuffled.findIndex((s) => s.stepId === input.reviewsStepId)
+            if (reviewedPlanIndex >= 0) {
+                const reviewedLabel = PLAN_LABELS[reviewedPlanIndex] || `${reviewedPlanIndex}`
+                reviewsAttr = ` reviews="Plan ${reviewedLabel}"`
+            }
+        }
+
+        return `<${tag} id="${label}"${reviewsAttr}>\n${input.text}\n</${tag}>`
+    })
+
+    const userMessage = `<task_description>\n${taskDescription}\n</task_description>\n\n<inputs randomly_ordered="true">\n${inputBlocks.join("\n\n")}\n</inputs>`
+
+    return {
+        systemPrompt: RECONCILE_SYSTEM_PROMPT,
+        userMessage,
+        labelMapping,
     }
-
-    return `<${tag} id="${label}"${reviewsAttr}>\n${input.text}\n</${tag}>`;
-  });
-
-  const userMessage = `<task_description>\n${taskDescription}\n</task_description>\n\n<inputs randomly_ordered="true">\n${inputBlocks.join("\n\n")}\n</inputs>`;
-
-  return {
-    systemPrompt: RECONCILE_SYSTEM_PROMPT,
-    userMessage,
-  };
 }

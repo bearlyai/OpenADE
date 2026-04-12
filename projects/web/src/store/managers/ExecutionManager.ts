@@ -802,6 +802,14 @@ export class ExecutionManager {
                         sessionId,
                     })
                 },
+
+                onLabelMapping: (mapping) => {
+                    this.store.events.setHyperPlanReconcileLabels({
+                        taskId,
+                        eventId,
+                        mapping,
+                    })
+                },
             }
 
             // Create and run the executor
