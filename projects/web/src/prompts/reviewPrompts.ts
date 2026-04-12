@@ -28,6 +28,7 @@ export const REVIEW_DIMENSIONS = `Evaluate through these lenses (only surface fi
 const REVIEW_SENSITIVITY_GUIDANCE = [
   "Avoid overzealous reviews: prioritize real bugs, regressions, and clear risks over stylistic preferences.",
   "If something may be intentional, do not label it as a bug outright; flag it as a confirmation item.",
+  "Other agents or threads may be working concurrently in the same worktree. If you see unrelated changes in the diff or file tree, ignore them and focus only on the work described in the task thread context.",
   "After your findings, add a short section titled 'Things that might be intentional (confirm)' with up to 3 items.",
 ].join("\n");
 
