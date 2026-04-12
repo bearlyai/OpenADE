@@ -6,6 +6,7 @@ import { normalizeModelClass } from "../../constants"
 import type { RepoItem, TaskPreviewUsage } from "../../persistence/repoStore"
 import type { CodeStore } from "../../store/store"
 import { StatsShareCard } from "./StatsShareCard"
+import { getRelativePeriodRanges, type RelativePeriodKey } from "./statsPeriodUtils"
 import { copyCardToClipboard } from "./statsShare"
 
 /** The earliest real month in the project — legacy "Unknown" dates get folded into this. */
@@ -21,6 +22,31 @@ interface MonthStats {
     totalCostUsd: number
     eventCount: number
     costByModel: Record<string, number>
+}
+
+function createEmptyStats(label: string, sortKey: string): MonthStats {
+    return {
+        label,
+        sortKey,
+        taskCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalCostUsd: 0,
+        eventCount: 0,
+        costByModel: {},
+    }
+}
+
+function addUsage(stats: MonthStats, usage: TaskPreviewUsage): void {
+    stats.taskCount++
+    stats.inputTokens += usage.inputTokens
+    stats.outputTokens += usage.outputTokens
+    stats.totalCostUsd += usage.totalCostUsd
+    stats.eventCount += usage.eventCount
+    for (const [model, cost] of Object.entries(usage.costByModel)) {
+        const cls = normalizeModelClass(model)
+        stats.costByModel[cls] = (stats.costByModel[cls] ?? 0) + cost
+    }
 }
 
 function formatMonthLabel(dateStr: string): { label: string; sortKey: string } {
@@ -46,19 +72,6 @@ function expandPeriodLabel(label: string): string {
         }
     }
     return `${label} Stats`
-}
-
-function getStartOfToday(): Date {
-    const d = new Date()
-    d.setHours(0, 0, 0, 0)
-    return d
-}
-
-function getStartOfWeek(): Date {
-    const d = new Date()
-    d.setHours(0, 0, 0, 0)
-    d.setDate(d.getDate() - d.getDay()) // getDay() 0=Sunday
-    return d
 }
 
 function formatCost(cost: number): string {
@@ -141,34 +154,8 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     let totalEvents = 0
     const totalByModel: Record<string, number> = {}
 
-    const todayStart = getStartOfToday()
-    const todayEnd = new Date(todayStart)
-    todayEnd.setDate(todayEnd.getDate() + 1)
-
-    const weekStart = getStartOfWeek()
-    const weekEnd = new Date(weekStart)
-    weekEnd.setDate(weekEnd.getDate() + 7)
-
-    const todayStats: MonthStats = {
-        label: "Today",
-        sortKey: "today",
-        taskCount: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        totalCostUsd: 0,
-        eventCount: 0,
-        costByModel: {},
-    }
-    const weekStats: MonthStats = {
-        label: "This Week",
-        sortKey: "this-week",
-        taskCount: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        totalCostUsd: 0,
-        eventCount: 0,
-        costByModel: {},
-    }
+    const relativePeriods = getRelativePeriodRanges()
+    const relativeStats = new Map<RelativePeriodKey, MonthStats>(relativePeriods.map(({ key, label }) => [key, createEmptyStats(label, key)]))
 
     for (const repo of repos) {
         for (const task of repo.tasks) {
@@ -186,67 +173,45 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
             const { label, sortKey } = formatMonthLabel(task.createdAt)
             let month = monthsMap.get(sortKey)
             if (!month) {
-                month = { label, sortKey, taskCount: 0, inputTokens: 0, outputTokens: 0, totalCostUsd: 0, eventCount: 0, costByModel: {} }
+                month = createEmptyStats(label, sortKey)
                 monthsMap.set(sortKey, month)
             }
-            month.taskCount++
-            month.inputTokens += u.inputTokens
-            month.outputTokens += u.outputTokens
-            month.totalCostUsd += u.totalCostUsd
-            month.eventCount += u.eventCount
-            for (const [m, c] of Object.entries(u.costByModel)) {
-                const cls = normalizeModelClass(m)
-                month.costByModel[cls] = (month.costByModel[cls] ?? 0) + c
-            }
+            addUsage(month, u)
 
             const createdAt = new Date(task.createdAt)
             if (!Number.isNaN(createdAt.getTime())) {
-                const buckets: MonthStats[] = []
-                if (createdAt >= todayStart && createdAt < todayEnd) buckets.push(todayStats)
-                if (createdAt >= weekStart && createdAt < weekEnd) buckets.push(weekStats)
-                for (const bucket of buckets) {
-                    bucket.taskCount++
-                    bucket.inputTokens += u.inputTokens
-                    bucket.outputTokens += u.outputTokens
-                    bucket.totalCostUsd += u.totalCostUsd
-                    bucket.eventCount += u.eventCount
-                    for (const [m, c] of Object.entries(u.costByModel)) {
-                        const cls = normalizeModelClass(m)
-                        bucket.costByModel[cls] = (bucket.costByModel[cls] ?? 0) + c
+                for (const period of relativePeriods) {
+                    if (createdAt >= period.start && createdAt < period.end) {
+                        const bucket = relativeStats.get(period.key)
+                        if (!bucket) continue
+                        addUsage(bucket, u)
                     }
                 }
             }
         }
     }
 
+    const isRelativePeriod = (value: string | null): value is RelativePeriodKey => value === "today" || value === "this-week" || value === "last-week"
+
     const months = [...monthsMap.values()].sort((a, b) => b.sortKey.localeCompare(a.sortKey))
-    const effectiveSelected =
-        selectedPeriod === "today"
-            ? "today"
-            : selectedPeriod === "this-week"
-              ? "this-week"
-              : selectedPeriod && monthsMap.has(selectedPeriod)
-                ? selectedPeriod
-                : null
+    const effectiveSelected = isRelativePeriod(selectedPeriod) ? selectedPeriod : selectedPeriod && monthsMap.has(selectedPeriod) ? selectedPeriod : null
 
     // Stats for the featured section
     const featured =
-        effectiveSelected === "today"
-            ? todayStats
-            : effectiveSelected === "this-week"
-              ? weekStats
-              : effectiveSelected
-                ? monthsMap.get(effectiveSelected)!
-                : {
-                      label: "All Time",
-                      sortKey: "",
-                      taskCount: totalTasks,
-                      inputTokens: totalIn,
-                      outputTokens: totalOut,
-                      totalCostUsd: totalCost,
-                      eventCount: totalEvents,
-                      costByModel: totalByModel,
-                  }
+        effectiveSelected && isRelativePeriod(effectiveSelected)
+            ? relativeStats.get(effectiveSelected)!
+            : effectiveSelected
+              ? monthsMap.get(effectiveSelected)!
+              : {
+                    label: "All Time",
+                    sortKey: "",
+                    taskCount: totalTasks,
+                    inputTokens: totalIn,
+                    outputTokens: totalOut,
+                    totalCostUsd: totalCost,
+                    eventCount: totalEvents,
+                    costByModel: totalByModel,
+                }
 
     const featuredTokens = featured.inputTokens + featured.outputTokens
 
@@ -296,8 +261,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                             >
                                 All
                             </button>
-                            {(["today", "this-week"] as const).map((key) => {
-                                const label = key === "today" ? "Today" : "This Week"
+                            {relativePeriods.map(({ key, label }) => {
                                 return (
                                     <button
                                         key={key}

@@ -18,12 +18,14 @@ export const Modal = ({
     footer,
     onClose,
     hideSeparator = false,
+    size = "md",
 }: {
     title: string
     children: ReactNode
     footer?: ReactNode
     onClose?: () => void
     hideSeparator?: boolean
+    size?: "md" | "lg" | "xl"
 }) => {
     const modal = useModal()
 
@@ -50,6 +52,8 @@ export const Modal = ({
         }
     }
 
+    const sizeClassName = size === "xl" ? "max-w-5xl" : size === "lg" ? "max-w-4xl" : "max-w-2xl"
+
     return (
         <div
             className="absolute inset-0 bg-black/50 flex items-start justify-center p-4"
@@ -62,7 +66,7 @@ export const Modal = ({
             onClick={handleBackdropClick}
         >
             <div
-                className="bg-base-100 shadow-2xl w-full max-w-2xl flex flex-col border border-border"
+                className={`bg-base-100 shadow-2xl w-full ${sizeClassName} flex flex-col border border-border`}
                 style={{
                     maxHeight: "calc(100% - max(min(100px, 10%), 1rem) - 1rem)",
                     minHeight: "200px",

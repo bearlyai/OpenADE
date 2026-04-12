@@ -1,5 +1,1 @@
-[[cron]]
-name = "Weekly Code Review"
-schedule = "0 9 * * 3"
-type = "plan"
-prompt = "Review the code we shipped this week. Look at all commits since last Wednesday using `git log --since='7 days ago'`, then review the diffs for code quality, potential bugs, and areas for improvement. Summarize what was shipped and flag anything noteworthy."
+
