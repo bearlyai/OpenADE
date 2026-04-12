@@ -20,27 +20,18 @@ export function buildWorktreeExecutionInstruction(isolationStrategy: IsolationSt
 
 const CODEX_RAW_RENDERER_STYLE_HINT = [
     "<raw_renderer_response_style>",
-    "Important: this UI shows your response as raw markdown text.",
-    "For final summaries:",
-    "- Do not use markdown links for local files.",
-    "- Do not include absolute filesystem paths.",
-    "- Use plain relative file paths with optional :line (example: src/store/TaskModel.ts:333).",
+    "Important: this UI renders your response as plain text. There is no markdown rendering, no link support, and no citation viewer.",
+    "- Never use markdown links (`[text](path)`) for local files — they render as raw noisy syntax.",
+    "- Never include absolute filesystem paths.",
+    "- Reference files as plain relative paths with optional :line, e.g. src/store/TaskModel.ts:333",
+    "- Do not wrap file paths in backticks inside plan steps — just use the bare path.",
     '- Keep it compact; avoid section-heavy templates like "What changed" and "Verification run" unless requested.',
     "</raw_renderer_response_style>",
 ].join("\n")
 
-/**
- * Codex-specific output style hint for raw markdown rendering in execution output.
- *
- * This is intentionally scoped to execution-like modes so plan/revise formatting
- * remains fully controlled by the planning mode prompts.
- */
-export function buildRawRendererStyleInstruction(harnessId: HarnessId, sourceType: ActionEventSource["type"]): string | undefined {
+export function buildRawRendererStyleInstruction(harnessId: HarnessId, _sourceType: ActionEventSource["type"]): string | undefined {
     if (harnessId !== "codex") return undefined
-    if (sourceType === "do" || sourceType === "ask" || sourceType === "run_plan" || sourceType === "review") {
-        return CODEX_RAW_RENDERER_STYLE_HINT
-    }
-    return undefined
+    return CODEX_RAW_RENDERER_STYLE_HINT
 }
 
 /** Merge two appendSystemPrompt fragments, preserving undefined when both are empty. */

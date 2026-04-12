@@ -33,15 +33,12 @@ describe("buildRawRendererStyleInstruction", () => {
         expect(buildRawRendererStyleInstruction("claude-code", "do")).toBeUndefined()
     })
 
-    it("returns defined hint for codex action modes", () => {
+    it("returns defined hint for all codex modes", () => {
         expect(buildRawRendererStyleInstruction("codex", "do")).toBeDefined()
         expect(buildRawRendererStyleInstruction("codex", "ask")).toBeDefined()
         expect(buildRawRendererStyleInstruction("codex", "run_plan")).toBeDefined()
-    })
-
-    it("returns undefined for codex plan/revise/hyperplan", () => {
-        expect(buildRawRendererStyleInstruction("codex", "plan")).toBeUndefined()
-        expect(buildRawRendererStyleInstruction("codex", "revise")).toBeUndefined()
-        expect(buildRawRendererStyleInstruction("codex", "hyperplan")).toBeUndefined()
+        expect(buildRawRendererStyleInstruction("codex", "plan")).toBeDefined()
+        expect(buildRawRendererStyleInstruction("codex", "revise")).toBeDefined()
+        expect(buildRawRendererStyleInstruction("codex", "hyperplan")).toBeDefined()
     })
 })
