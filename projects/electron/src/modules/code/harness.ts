@@ -105,6 +105,14 @@ type HarnessCommandEvent =
           prompt: string | ContentBlock[]
           options: HarnessQueryOptions
       }
+    | {
+          id: string
+          type: "structured_query"
+          executionId: string
+          prompt: string | ContentBlock[]
+          options: HarnessQueryOptions
+          outputSchema: Record<string, unknown>
+      }
     | { id: string; type: "tool_response"; executionId: string; callId: string; result?: ToolResult; error?: string }
     | { id: string; type: "abort"; executionId: string }
     | { id: string; type: "reconnect"; executionId: string }
@@ -246,6 +254,26 @@ function recordCommandEvent(executionId: string, event: Omit<HarnessCommandEvent
 
     execution.events.push(fullEvent)
     resetCleanupTimer(executionId)
+}
+
+function toHarnessPrompt(prompt: string | ContentBlock[]): HarnessQuery["prompt"] {
+    if (typeof prompt === "string") {
+        return prompt
+    }
+
+    return prompt.map((block) => {
+        if (block.type === "text") {
+            return { type: "text" as const, text: block.text }
+        }
+        return {
+            type: "image" as const,
+            source: {
+                kind: "base64" as const,
+                data: block.source.data,
+                mediaType: block.source.media_type,
+            },
+        }
+    })
 }
 
 // ============================================================================
@@ -511,23 +539,7 @@ async function handleStartQuery(
 
     // Build HarnessQuery
     const harnessQuery: HarnessQuery = {
-        prompt:
-            typeof prompt === "string"
-                ? prompt
-                : prompt.map((block) => {
-                      if (block.type === "text") {
-                          return { type: "text" as const, text: block.text }
-                      }
-                      // Image block
-                      return {
-                          type: "image" as const,
-                          source: {
-                              kind: "base64" as const,
-                              data: block.source.data,
-                              mediaType: block.source.media_type,
-                          },
-                      }
-                  }),
+        prompt: toHarnessPrompt(prompt),
         cwd: options.cwd,
         mode: options.mode ?? "yolo",
         model: options.model,
@@ -586,6 +598,57 @@ async function handleStartQuery(
     streamToRenderer(executionId, harnessId, generator)
 
     return { ok: true }
+}
+
+async function handleStructuredQuery(
+    _event: IpcMainInvokeEvent,
+    command: HarnessCommandEvent & { type: "structured_query" }
+): Promise<{
+    ok: boolean
+    output?: unknown
+    usage?: unknown
+    sessionId?: string
+    error?: string
+}> {
+    const { prompt, options, outputSchema } = command
+    const harnessId = options.harnessId || "claude-code"
+    const harness = registry.get(harnessId)
+
+    if (!harness) {
+        return { ok: false, error: `Unknown harness: ${harnessId}` }
+    }
+
+    const abortController = new AbortController()
+
+    try {
+        const result = await harness.structuredQuery({
+            prompt: toHarnessPrompt(prompt),
+            cwd: options.cwd,
+            mode: options.mode ?? "read-only",
+            model: options.model,
+            thinking: options.thinking,
+            appendSystemPrompt: options.appendSystemPrompt,
+            resumeSessionId: options.resumeSessionId,
+            processLabel: options.processLabel,
+            additionalDirectories: options.additionalDirectories,
+            env: options.env,
+            mcpServers: options.mcpServerConfigs,
+            output: { schema: outputSchema },
+            signal: abortController.signal,
+        })
+
+        return {
+            ok: true,
+            output: result.output,
+            usage: result.usage,
+            sessionId: result.sessionId,
+        }
+    } catch (err) {
+        return {
+            ok: false,
+            error: err instanceof Error ? err.message : "Structured query failed",
+        }
+    }
 }
 
 function handleToolResponse(
@@ -709,6 +772,9 @@ export const load = () => {
             ok: boolean
             found?: boolean
             events?: HarnessStreamEvent[]
+            output?: unknown
+            usage?: unknown
+            sessionId?: string
             error?: string
         }> => {
             if (!checkAllowed(event)) throw new Error("not allowed")
@@ -716,6 +782,8 @@ export const load = () => {
             switch (command.type) {
                 case "start_query":
                     return handleStartQuery(event, command)
+                case "structured_query":
+                    return handleStructuredQuery(event, command)
                 case "tool_response":
                     return handleToolResponse(command)
                 case "abort":
@@ -740,6 +808,9 @@ export const load = () => {
             ok: boolean
             found?: boolean
             events?: HarnessStreamEvent[]
+            output?: unknown
+            usage?: unknown
+            sessionId?: string
             error?: string
         }> => {
             if (!checkAllowed(event)) throw new Error("not allowed")
@@ -752,6 +823,8 @@ export const load = () => {
             switch (command.type) {
                 case "start_query":
                     return handleStartQuery(event, command)
+                case "structured_query":
+                    return handleStructuredQuery(event, command)
                 case "tool_response":
                     return handleToolResponse(command)
                 case "abort":

@@ -149,7 +149,7 @@ export const RELEASE_NOTES: ReleaseNote[] = [
             "Paste, drag-and-drop, or pick images to attach to any message",
             "New 3-way workspace creation: open an existing directory, create a new one, or start from a prototype",
             "File browser, content search, and model selection are now scoped per task",
-            "Edit menu in process tray for creating and updating procs.toml directly",
+            "Edit menu in process tray for creating and updating openade.toml directly",
             "Unread and running indicators on workspace sidebar items with last-viewed-page memory",
         ],
     },

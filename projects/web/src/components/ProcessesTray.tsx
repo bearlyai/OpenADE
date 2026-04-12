@@ -1,28 +1,13 @@
+import NiceModal from "@ebay/nice-modal-react"
 import cx from "classnames"
-import {
-    AlertTriangle,
-    CheckCircle,
-    ExternalLink,
-    FileText,
-    Folder,
-    FolderOpen,
-    Pencil,
-    Play,
-    Plus,
-    RefreshCw,
-    RotateCcw,
-    Server,
-    Square,
-    Wrench,
-} from "lucide-react"
+import { AlertTriangle, CheckCircle, ExternalLink, FileText, Folder, Pencil, Play, RefreshCw, RotateCcw, Server, Square, Wrench } from "lucide-react"
 import { observer } from "mobx-react"
 import { useCallback, useEffect, useState } from "react"
 import { type ProcessDef, type ProcessType, type ProcsConfig, type ReadProcsResult, type RunContext, readProcs } from "../electronAPI/procs"
-import { openUrlInNativeBrowser, selectDirectory } from "../electronAPI/shell"
-import { getProcsCreationPrompt, getProcsUpdatePrompt } from "../prompts/procsSpec"
-import { useCodeNavigate } from "../routing"
+import { openUrlInNativeBrowser } from "../electronAPI/shell"
 import { useCodeStore } from "../store/context"
 import type { ProcessInstance, ProcessStatus } from "../store/managers/RepoProcessesManager"
+import { ProcsEditorModal } from "./procs/ProcsEditorModal"
 import { ProcessOutput } from "./ProcessOutput"
 import { type MenuItem, Menu } from "./ui/Menu"
 
@@ -55,17 +40,20 @@ const TYPE_INFO: Record<ProcessType, { label: string; icon: typeof Server }> = {
     check: { label: "Checks", icon: CheckCircle },
 }
 
+function joinPath(root: string, relativePath: string): string {
+    const separator = root.includes("\\") ? "\\" : "/"
+    if (root.endsWith("/") || root.endsWith("\\")) {
+        return `${root}${relativePath}`
+    }
+    return `${root}${separator}${relativePath}`
+}
+
 export const ProcessesTray = observer(function ProcessesTray({ searchPath, context, workspaceId, isOpen }: ProcessesTrayProps) {
     const codeStore = useCodeStore()
     const { repoProcesses } = codeStore
-    const navigate = useCodeNavigate()
     const [procsResult, setProcsResult] = useState<ReadProcsResult | null>(null)
     const [loading, setLoading] = useState(true)
     const [refreshing, setRefreshing] = useState(false)
-
-    const [formMode, setFormMode] = useState<"create" | "update" | null>(null)
-    const [subdirPath, setSubdirPath] = useState("")
-    const [updateDescription, setUpdateDescription] = useState("")
 
     // Load config files
     const loadProcs = useCallback(
@@ -88,7 +76,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                 setRefreshing(false)
             }
         },
-        [searchPath]
+        [searchPath, codeStore.crons, workspaceId]
     )
 
     // Load when panel opens or path changes
@@ -102,62 +90,42 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
         loadProcs(true)
     }, [loadProcs])
 
-    const handleCreateProcs = useCallback(() => {
-        const targetDir = subdirPath.trim() || "."
-        const prompt = getProcsCreationPrompt(targetDir)
-        const creationId = codeStore.creation.newTask({
-            repoId: workspaceId,
-            description: prompt,
-            mode: "plan",
-            isolationStrategy: { type: "head" },
-        })
-        navigate.go("CodeWorkspaceTaskCreating", { workspaceId, creationId })
-        setFormMode(null)
-        setSubdirPath("")
-    }, [subdirPath, workspaceId, navigate])
-
-    const handleUpdateProcs = useCallback(() => {
-        const desc = updateDescription.trim()
-        if (!desc) return
-        const prompt = getProcsUpdatePrompt(desc)
-        const creationId = codeStore.creation.newTask({
-            repoId: workspaceId,
-            description: prompt,
-            mode: "plan",
-            isolationStrategy: { type: "head" },
-        })
-        navigate.go("CodeWorkspaceTaskCreating", { workspaceId, creationId })
-        setFormMode(null)
-        setUpdateDescription("")
-    }, [updateDescription, workspaceId, navigate])
-
-    const handleBrowse = useCallback(async () => {
-        const selected = await selectDirectory(searchPath)
-        if (selected) {
-            setSubdirPath(selected)
-        }
-    }, [searchPath])
+    const openEditor = useCallback(
+        (initialTab: "processes" | "crons" | "suggestions" | "raw" = "processes", initialFilePath?: string) => {
+            NiceModal.show(ProcsEditorModal, {
+                workspaceId,
+                searchPath,
+                context,
+                initialTab,
+                initialFilePath,
+                onSaved: (result: ReadProcsResult) => {
+                    setProcsResult(result)
+                },
+            })
+        },
+        [workspaceId, searchPath, context]
+    )
 
     const editMenuItems: MenuItem[] = [
         {
-            id: "create",
-            label: (
-                <div className="flex items-center gap-2">
-                    <Plus size={14} />
-                    <span>Create openade.toml</span>
-                </div>
-            ),
-            onSelect: () => setFormMode("create"),
-        },
-        {
-            id: "update",
+            id: "edit",
             label: (
                 <div className="flex items-center gap-2">
                     <Pencil size={14} />
-                    <span>Update openade.toml</span>
+                    <span>Edit config</span>
                 </div>
             ),
-            onSelect: () => setFormMode("update"),
+            onSelect: () => openEditor("processes"),
+        },
+        {
+            id: "suggest",
+            label: (
+                <div className="flex items-center gap-2">
+                    <Wrench size={14} />
+                    <span>Scan suggestions</span>
+                </div>
+            ),
+            onSelect: () => openEditor("suggestions"),
         },
     ]
 
@@ -221,45 +189,14 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
             <div className="flex flex-col items-center justify-center h-full text-center p-8">
                 <FileText size={32} className="text-muted mb-3" />
                 <div className="text-muted mb-3">No processes configured</div>
-
-                {formMode === null ? (
-                    <Menu
-                        trigger={
-                            <button
-                                type="button"
-                                className="btn flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-content text-sm hover:bg-primary/90 transition-colors"
-                            >
-                                <Pencil size={14} />
-                                Edit
-                            </button>
-                        }
-                        sections={[{ items: editMenuItems }]}
-                        side="bottom"
-                        align="center"
-                        className={{ trigger: "!h-auto !border-0 !bg-transparent hover:!bg-transparent active:!bg-transparent" }}
-                    />
-                ) : formMode === "create" ? (
-                    <CreateProcsForm
-                        subdirPath={subdirPath}
-                        onSubdirChange={setSubdirPath}
-                        onBrowse={handleBrowse}
-                        onCreate={handleCreateProcs}
-                        onCancel={() => {
-                            setFormMode(null)
-                            setSubdirPath("")
-                        }}
-                    />
-                ) : (
-                    <UpdateProcsForm
-                        description={updateDescription}
-                        onDescriptionChange={setUpdateDescription}
-                        onUpdate={handleUpdateProcs}
-                        onCancel={() => {
-                            setFormMode(null)
-                            setUpdateDescription("")
-                        }}
-                    />
-                )}
+                <button
+                    type="button"
+                    className="btn flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-content text-sm hover:bg-primary/90 transition-colors"
+                    onClick={() => openEditor("processes")}
+                >
+                    <Pencil size={14} />
+                    Edit
+                </button>
             </div>
         )
     }
@@ -318,35 +255,6 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                     </div>
                 </div>
 
-                {/* Inline create/update form */}
-                {formMode === "create" && (
-                    <div className="flex-shrink-0 p-2 border-b border-border bg-base-200/30">
-                        <CreateProcsForm
-                            subdirPath={subdirPath}
-                            onSubdirChange={setSubdirPath}
-                            onBrowse={handleBrowse}
-                            onCreate={handleCreateProcs}
-                            onCancel={() => {
-                                setFormMode(null)
-                                setSubdirPath("")
-                            }}
-                        />
-                    </div>
-                )}
-                {formMode === "update" && (
-                    <div className="flex-shrink-0 p-2 border-b border-border bg-base-200/30">
-                        <UpdateProcsForm
-                            description={updateDescription}
-                            onDescriptionChange={setUpdateDescription}
-                            onUpdate={handleUpdateProcs}
-                            onCancel={() => {
-                                setFormMode(null)
-                                setUpdateDescription("")
-                            }}
-                        />
-                    </div>
-                )}
-
                 {/* Errors banner */}
                 {hasErrors && (
                     <div className="flex-shrink-0 px-2.5 py-2 bg-error/10 border-b border-error/20">
@@ -369,7 +277,13 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                 {/* Process list */}
                 <div className="flex-1 overflow-auto">
                     {configGroups.map((group) => (
-                        <ConfigGroupView key={group.config.relativePath} group={group} context={context} procsResult={procsResult!} />
+                        <ConfigGroupView
+                            key={group.config.relativePath}
+                            group={group}
+                            context={context}
+                            procsResult={procsResult!}
+                            onEditConfig={() => openEditor("processes", joinPath(procsResult!.repoRoot, group.config.relativePath))}
+                        />
                     ))}
                 </div>
             </div>
@@ -392,9 +306,10 @@ interface ConfigGroupViewProps {
     group: ConfigGroup
     context: RunContext
     procsResult: ReadProcsResult
+    onEditConfig: () => void
 }
 
-const ConfigGroupView = observer(function ConfigGroupView({ group, context, procsResult }: ConfigGroupViewProps) {
+const ConfigGroupView = observer(function ConfigGroupView({ group, context, procsResult, onEditConfig }: ConfigGroupViewProps) {
     const codeStore = useCodeStore()
     const { repoProcesses } = codeStore
     const selectedProcessId = repoProcesses.expandedProcessId
@@ -428,7 +343,7 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
     }, [runningDaemons, repoProcesses])
 
     // Extract directory from config path (e.g., "packages/api/openade.toml" -> "packages/api")
-    const configDir = group.config.relativePath.replace(/\/(openade|procs)\.toml$/, "") || "."
+    const configDir = group.config.relativePath.replace(/\/openade\.toml$/, "") || "."
 
     return (
         <div>
@@ -438,6 +353,14 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
                     <Folder size={12} className="text-muted flex-shrink-0" />
                     <span className="flex-1 text-xs text-muted font-mono truncate">{configDir}</span>
                     <div className="flex items-center opacity-0 group-hover/header:opacity-100 transition-opacity">
+                        <button
+                            type="button"
+                            onClick={onEditConfig}
+                            className="btn p-1 text-muted hover:text-base-content transition-colors"
+                            title="Edit config"
+                        >
+                            <Pencil size={12} />
+                        </button>
                         {stoppedDaemons.length > 0 && (
                             <button
                                 type="button"
@@ -485,111 +408,6 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
         </div>
     )
 })
-
-// ==================== CreateProcsForm ====================
-
-function CreateProcsForm({
-    subdirPath,
-    onSubdirChange,
-    onBrowse,
-    onCreate,
-    onCancel,
-}: {
-    subdirPath: string
-    onSubdirChange: (v: string) => void
-    onBrowse: () => void
-    onCreate: () => void
-    onCancel: () => void
-}) {
-    return (
-        <div className="w-full max-w-xs">
-            <div className="text-xs text-muted mb-2 text-left">Subdirectory (optional):</div>
-            <div className="flex gap-2">
-                <input
-                    type="text"
-                    value={subdirPath}
-                    onChange={(e) => onSubdirChange(e.target.value)}
-                    placeholder="e.g., packages/api (leave empty for root)"
-                    className="flex-1 px-3 py-2 text-sm bg-input text-base-content border border-border focus:outline-none focus:border-primary transition-all placeholder:text-muted/50"
-                    onKeyDown={(e) => {
-                        if (e.key === "Enter") onCreate()
-                        else if (e.key === "Escape") onCancel()
-                    }}
-                    autoFocus
-                />
-                <button
-                    type="button"
-                    onClick={onBrowse}
-                    className="btn px-3 py-2 bg-base-200 text-base-content border border-border hover:bg-base-300 transition-colors flex items-center gap-1.5"
-                >
-                    <FolderOpen size={14} />
-                </button>
-            </div>
-            <div className="flex items-center gap-2 mt-3">
-                <button
-                    type="button"
-                    onClick={onCreate}
-                    className="btn flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-primary text-primary-content text-sm hover:bg-primary/90 transition-colors"
-                >
-                    <Plus size={14} />
-                    Create
-                </button>
-                <button type="button" onClick={onCancel} className="btn px-3 py-1.5 text-sm text-muted hover:text-base-content transition-colors">
-                    Cancel
-                </button>
-            </div>
-        </div>
-    )
-}
-
-// ==================== UpdateProcsForm ====================
-
-function UpdateProcsForm({
-    description,
-    onDescriptionChange,
-    onUpdate,
-    onCancel,
-}: {
-    description: string
-    onDescriptionChange: (v: string) => void
-    onUpdate: () => void
-    onCancel: () => void
-}) {
-    return (
-        <div className="w-full max-w-xs">
-            <div className="text-xs text-muted mb-2 text-left">Describe the change:</div>
-            <input
-                type="text"
-                value={description}
-                onChange={(e) => onDescriptionChange(e.target.value)}
-                placeholder="e.g., Add a lint check process"
-                className="w-full px-3 py-2 text-sm bg-input text-base-content border border-border focus:outline-none focus:border-primary transition-all placeholder:text-muted/50"
-                onKeyDown={(e) => {
-                    if (e.key === "Enter") onUpdate()
-                    else if (e.key === "Escape") onCancel()
-                }}
-                autoFocus
-            />
-            <div className="flex items-center gap-2 mt-3">
-                <button
-                    type="button"
-                    onClick={onUpdate}
-                    disabled={!description.trim()}
-                    className={cx(
-                        "btn flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm transition-colors",
-                        description.trim() ? "bg-primary text-primary-content hover:bg-primary/90" : "bg-primary/50 text-primary-content/50 cursor-not-allowed"
-                    )}
-                >
-                    <Pencil size={14} />
-                    Update
-                </button>
-                <button type="button" onClick={onCancel} className="btn px-3 py-1.5 text-sm text-muted hover:text-base-content transition-colors">
-                    Cancel
-                </button>
-            </div>
-        </div>
-    )
-}
 
 // ==================== ProcessRowView ====================
 

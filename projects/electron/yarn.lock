@@ -1431,6 +1431,11 @@ crc@^3.8.0:
   dependencies:
     buffer "^5.1.0"
 
+croner@^10.0.1:
+  version "10.0.1"
+  resolved "https://registry.npmjs.org/croner/-/croner-10.0.1.tgz"
+  integrity sha512-ixNtAJndqh173VQ4KodSdJEI6nuioBWI0V1ITNKhZZsO0pEMoDxz539T4FTTbSZ/xIOSuDnzxLVRqBVSvPNE2g==
+
 cross-dirname@^0.1.0:
   version "0.1.0"
   resolved "https://registry.npmjs.org/cross-dirname/-/cross-dirname-0.1.0.tgz"

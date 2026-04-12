@@ -170,6 +170,8 @@ const openadeAPI = {
             ipcRenderer.invoke("harness:command", { id: crypto.randomUUID(), type: "abort", ...args }),
         reconnect: (args: { executionId: string }) =>
             ipcRenderer.invoke("harness:command", { id: crypto.randomUUID(), type: "reconnect", ...args }),
+        structuredQuery: (args: { prompt: unknown; options: unknown; outputSchema: unknown }) =>
+            ipcRenderer.invoke("harness:command", { id: crypto.randomUUID(), executionId: crypto.randomUUID(), type: "structured_query", ...args }),
         // Check install status of all registered harnesses
         checkStatus: () => ipcRenderer.invoke("harness:check-status"),
         deleteSession: (args: { harnessId: string; sessionId: string; cwd?: string }) =>
@@ -309,6 +311,11 @@ const openadeAPI = {
         read: (params: { path: string }) => ipcRenderer.invoke("procs:read", params),
         readFile: (params: { filePath: string }) => ipcRenderer.invoke("procs:readFile", params),
         writeFile: (params: { filePath: string; content: string }) => ipcRenderer.invoke("procs:writeFile", params),
+        loadEditable: (params: { filePath: string; searchPath?: string }) => ipcRenderer.invoke("procs:loadEditable", params),
+        parseRaw: (params: { content: string; relativePath: string }) => ipcRenderer.invoke("procs:parseRaw", params),
+        serializeEditable: (params: { processes: unknown[]; crons: unknown[] }) => ipcRenderer.invoke("procs:serializeEditable", params),
+        saveEditable: (params: { filePath: string; relativePath: string; processes: unknown[]; crons: unknown[]; searchPath?: string }) =>
+            ipcRenderer.invoke("procs:saveEditable", params),
     },
 }
 

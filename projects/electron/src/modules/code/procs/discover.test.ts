@@ -23,17 +23,16 @@ describe("findProcsFiles", () => {
 		expect(path.basename(files[0])).toBe("openade.toml")
 	})
 
-	it("finds procs.toml in root", async () => {
-		fs.writeFileSync(path.join(tmpDir, "procs.toml"), "[[process]]\nname = 'test'\ncommand = 'echo'\n")
+	it("ignores non-openade config files in root", async () => {
+		fs.writeFileSync(path.join(tmpDir, "legacy-openade-config.toml"), "[[process]]\nname = 'test'\ncommand = 'echo'\n")
 
 		const files = await findProcsFiles(tmpDir, null)
-		expect(files).toHaveLength(1)
-		expect(path.basename(files[0])).toBe("procs.toml")
+		expect(files).toHaveLength(0)
 	})
 
-	it("prefers openade.toml over procs.toml in same directory", async () => {
+	it("finds openade.toml when other config-like files exist", async () => {
 		fs.writeFileSync(path.join(tmpDir, "openade.toml"), "[[process]]\nname = 'ade'\ncommand = 'echo'\n")
-		fs.writeFileSync(path.join(tmpDir, "procs.toml"), "[[process]]\nname = 'procs'\ncommand = 'echo'\n")
+		fs.writeFileSync(path.join(tmpDir, "legacy-openade-config.toml"), "[[process]]\nname = 'procs'\ncommand = 'echo'\n")
 
 		const files = await findProcsFiles(tmpDir, null)
 		expect(files).toHaveLength(1)
@@ -50,19 +49,16 @@ describe("findProcsFiles", () => {
 		expect(files[0]).toContain("packages/api/openade.toml")
 	})
 
-	it("deduplicates per-directory in subdirectories", async () => {
-		// Root has openade.toml, subdir has both
+	it("returns multiple openade.toml files from different directories", async () => {
 		fs.writeFileSync(path.join(tmpDir, "openade.toml"), "")
 
 		const subDir = path.join(tmpDir, "packages", "web")
 		fs.mkdirSync(subDir, { recursive: true })
 		fs.writeFileSync(path.join(subDir, "openade.toml"), "")
-		fs.writeFileSync(path.join(subDir, "procs.toml"), "")
+		fs.writeFileSync(path.join(subDir, "legacy-openade-config.toml"), "")
 
 		const files = await findProcsFiles(tmpDir, null)
 		expect(files).toHaveLength(2)
-
-		// Both should be openade.toml
 		for (const f of files) {
 			expect(path.basename(f)).toBe("openade.toml")
 		}

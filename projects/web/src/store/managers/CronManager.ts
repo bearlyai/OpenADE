@@ -311,6 +311,23 @@ export class CronManager {
                 }
             }
         })
+        this.pruneStaleInstallStates(repoState)
+    }
+
+    private pruneStaleInstallStates(repoState: RepoState): void {
+        let removed = false
+        runInAction(() => {
+            for (const cronId of repoState.installStates.keys()) {
+                if (!repoState.cronDefs.has(cronId)) {
+                    repoState.installStates.delete(cronId)
+                    removed = true
+                }
+            }
+        })
+
+        if (removed) {
+            void this.saveInstallStates(repoState)
+        }
     }
 
     // ============================================================================

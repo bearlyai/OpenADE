@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { parseProcsFile } from "./parse"
+import { parseEditableProcsFile, parseProcsFile } from "./parse"
+import { serializeProcsFile } from "./serialize"
 
 describe("parseProcsFile", () => {
 	// ========================================================================
@@ -202,5 +203,119 @@ name = "Bad"
 `
 		const result = parseProcsFile(content, "openade.toml")
 		expect("error" in result).toBe(true)
+	})
+
+	// ========================================================================
+	// Editable parser + serializer
+	// ========================================================================
+
+	it("parses editable shape without ids", () => {
+		const content = `
+[[process]]
+name = "Dev"
+type = "daemon"
+command = "npm run dev"
+
+[[cron]]
+name = "Weekly"
+schedule = "0 9 * * 1"
+type = "plan"
+prompt = "Review"
+`
+		const result = parseEditableProcsFile(content, "openade.toml")
+		expect("error" in result).toBe(false)
+		if ("error" in result) return
+
+		expect(result.processes[0]).toEqual({
+			name: "Dev",
+			type: "daemon",
+			command: "npm run dev",
+			workDir: undefined,
+			url: undefined,
+		})
+		expect(result.crons[0]).toEqual({
+			name: "Weekly",
+			schedule: "0 9 * * 1",
+			type: "plan",
+			prompt: "Review",
+			appendSystemPrompt: undefined,
+			images: undefined,
+			isolation: undefined,
+			harness: undefined,
+			inTaskId: undefined,
+		})
+	})
+
+	it("serializes editable entries with snake_case optional fields", () => {
+		const toml = serializeProcsFile({
+			processes: [
+				{
+					name: "Dev Server",
+					type: "daemon",
+					command: "npm run dev",
+					workDir: "apps/web",
+					url: "http://localhost:3000",
+				},
+			],
+			crons: [
+				{
+					name: "Full Cron",
+					schedule: "0 9 * * 1",
+					type: "do",
+					prompt: "Ship it",
+					appendSystemPrompt: "Be careful",
+					images: ["a.png", "b.png"],
+					isolation: "worktree",
+					harness: "codex",
+					inTaskId: "task-1",
+				},
+			],
+		})
+
+		expect(toml).toContain("work_dir")
+		expect(toml).toContain("append_system_prompt")
+		expect(toml).toContain("in_task_id")
+
+		const parsed = parseEditableProcsFile(toml, "openade.toml")
+		expect("error" in parsed).toBe(false)
+		if ("error" in parsed) return
+		expect(parsed.processes).toHaveLength(1)
+		expect(parsed.crons).toHaveLength(1)
+		expect(parsed.processes[0].workDir).toBe("apps/web")
+		expect(parsed.crons[0].appendSystemPrompt).toBe("Be careful")
+		expect(parsed.crons[0].inTaskId).toBe("task-1")
+	})
+
+	it("rejects duplicate process names during serialization", () => {
+		expect(() =>
+			serializeProcsFile({
+				processes: [
+					{ name: "Dev", type: "daemon", command: "npm run dev" },
+					{ name: "dev", type: "check", command: "npm run lint" },
+				],
+				crons: [],
+			})
+		).toThrow(/Duplicate process name/)
+	})
+
+	it("rejects invalid cron schedule during serialization", () => {
+		expect(() =>
+			serializeProcsFile({
+				processes: [],
+				crons: [{ name: "Bad", schedule: "0 9 * *", type: "plan", prompt: "x" }],
+			})
+		).toThrow(/Invalid cron schedule/)
+	})
+
+	it("serializes empty config and parses back to empty arrays", () => {
+		const toml = serializeProcsFile({
+			processes: [],
+			crons: [],
+		})
+		const parsed = parseEditableProcsFile(toml, "openade.toml")
+		expect("error" in parsed).toBe(false)
+		if ("error" in parsed) return
+		expect(parsed.processes).toEqual([])
+		expect(parsed.crons).toEqual([])
 	})
 })

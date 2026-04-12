@@ -2,12 +2,10 @@ import NiceModal from "@ebay/nice-modal-react"
 import cx from "classnames"
 import { Clock, Loader2, Pause, Play, Plus, RotateCw } from "lucide-react"
 import { observer } from "mobx-react"
-import { useCallback, useState } from "react"
-import { getCronCreationPrompt } from "../../prompts/procsSpec"
-import { useCodeNavigate } from "../../routing"
+import { useCallback } from "react"
 import { useCodeStore } from "../../store/context"
 import type { CronViewModel } from "../../store/managers/CronManager"
-import { CronEditModal } from "./CronEditModal"
+import { ProcsEditorModal } from "../procs/ProcsEditorModal"
 
 function formatNextRun(date: Date | null): string {
     if (!date) return "—"
@@ -88,69 +86,6 @@ const CronItem = observer(({ cron, onEditConfig }: { cron: CronViewModel; onEdit
 })
 
 // ============================================================================
-// NewCronForm — inline form for describing a new cron job
-// ============================================================================
-
-function NewCronForm({ workspaceId, onDone }: { workspaceId: string; onDone: () => void }) {
-    const codeStore = useCodeStore()
-    const navigate = useCodeNavigate()
-    const [description, setDescription] = useState("")
-
-    const handleCreate = useCallback(() => {
-        const desc = description.trim()
-        if (!desc) return
-
-        const prompt = getCronCreationPrompt(desc)
-        const creationId = codeStore.creation.newTask({
-            repoId: workspaceId,
-            description: prompt,
-            mode: "plan",
-            isolationStrategy: { type: "head" },
-        })
-        navigate.go("CodeWorkspaceTaskCreating", { workspaceId, creationId })
-        onDone()
-    }, [description, workspaceId, codeStore.creation, navigate, onDone])
-
-    return (
-        <div className="px-2.5 pb-2">
-            <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Every Monday morning review our dependencies and make sure there are no security issues or perform any upgrades we can"
-                className="w-full px-2.5 py-2 text-xs bg-input text-base-content border border-border focus:outline-none focus:border-primary transition-all placeholder:text-muted/40 resize-none"
-                rows={3}
-                onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault()
-                        handleCreate()
-                    } else if (e.key === "Escape") {
-                        onDone()
-                    }
-                }}
-                autoFocus
-            />
-            <div className="flex items-center gap-2 mt-1.5">
-                <button
-                    type="button"
-                    onClick={handleCreate}
-                    disabled={!description.trim()}
-                    className={cx(
-                        "btn flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1 text-xs transition-colors",
-                        description.trim() ? "bg-primary text-primary-content hover:bg-primary/90" : "bg-primary/50 text-primary-content/50 cursor-not-allowed"
-                    )}
-                >
-                    <Plus size={12} />
-                    Create
-                </button>
-                <button type="button" onClick={onDone} className="btn px-2.5 py-1 text-xs text-muted hover:text-base-content transition-colors">
-                    Cancel
-                </button>
-            </div>
-        </div>
-    )
-}
-
-// ============================================================================
 // CronsSidebarContent
 // ============================================================================
 
@@ -161,18 +96,27 @@ interface CronsSidebarContentProps {
 export const CronsSidebarContent = observer(({ workspaceId }: CronsSidebarContentProps) => {
     const codeStore = useCodeStore()
     const crons = codeStore.crons.getCronsForRepo(workspaceId)
-    const [showForm, setShowForm] = useState(false)
+    const repoPath = codeStore.repos.getRepo(workspaceId)?.path ?? "."
 
-    const handleEditConfig = useCallback((filePath: string) => {
-        NiceModal.show(CronEditModal, { filePath })
-    }, [])
+    const handleEditConfig = useCallback(
+        (filePath?: string) => {
+            NiceModal.show(ProcsEditorModal, {
+                workspaceId,
+                searchPath: repoPath,
+                context: { type: "repo", root: repoPath },
+                initialTab: "crons",
+                initialFilePath: filePath,
+            })
+        },
+        [workspaceId, repoPath]
+    )
 
-    if (crons.length === 0 && !showForm) {
+    if (crons.length === 0) {
         return (
             <button
                 type="button"
                 className="btn flex items-center gap-1.5 px-3 py-1 mt-2 text-[11px] text-muted hover:text-base-content transition-colors cursor-pointer w-full"
-                onClick={() => setShowForm(true)}
+                onClick={() => handleEditConfig()}
             >
                 <Plus className="w-3 h-3" />
                 <span>Add a cron job</span>
@@ -190,7 +134,7 @@ export const CronsSidebarContent = observer(({ workspaceId }: CronsSidebarConten
                 <button
                     type="button"
                     className="btn p-1 text-muted hover:text-base-content transition-colors cursor-pointer"
-                    onClick={() => setShowForm(true)}
+                    onClick={() => handleEditConfig()}
                     title="New cron"
                 >
                     <Plus className="w-3 h-3" />
@@ -203,7 +147,6 @@ export const CronsSidebarContent = observer(({ workspaceId }: CronsSidebarConten
                     ))}
                 </div>
             )}
-            {showForm && <NewCronForm workspaceId={workspaceId} onDone={() => setShowForm(false)} />}
         </div>
     )
 })

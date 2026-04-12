@@ -1,7 +1,7 @@
 /**
  * Procs API Bridge
  *
- * Client-side API for reading openade.toml / procs.toml configuration files.
+ * Client-side API for reading openade.toml configuration files.
  * Communicates with Electron main process via openadeAPI.
  */
 
@@ -34,6 +34,8 @@ export interface ProcessDef {
     type: ProcessType
 }
 
+export type ProcessInput = Omit<ProcessDef, "id">
+
 // ============================================================================
 // Cron Types
 // ============================================================================
@@ -63,12 +65,14 @@ export interface CronDef {
     inTaskId?: string
 }
 
+export type CronInput = Omit<CronDef, "id">
+
 // ============================================================================
 // Config Types
 // ============================================================================
 
 export interface ProcsConfig {
-    /** Path relative to repo root, e.g., "openade.toml" or "packages/api/procs.toml" */
+    /** Path relative to repo root, e.g., "openade.toml" */
     relativePath: string
     /** Processes defined in this config file */
     processes: ProcessDef[]
@@ -101,6 +105,21 @@ export interface ReadProcsResult {
     errors: ProcsConfigError[]
 }
 
+export interface EditableProcsFile {
+    filePath: string
+    relativePath: string
+    processes: ProcessInput[]
+    crons: CronInput[]
+    rawContent: string
+}
+
+export interface SaveEditableProcsResult {
+    filePath: string
+    relativePath: string
+    rawContent: string
+    readResult?: ReadProcsResult
+}
+
 /**
  * Context for running a process - determines which checkout to use
  */
@@ -113,7 +132,7 @@ export type RunContext =
 // ============================================================================
 
 /**
- * Read all config files (openade.toml / procs.toml) from a directory tree
+ * Read all config files (openade.toml) from a directory tree
  *
  * @param path - Directory to search from (usually repo root or worktree root)
  * @returns Parsed configs and any errors
@@ -147,6 +166,53 @@ export async function readConfigFile(filePath: string): Promise<string> {
 export async function writeConfigFile(filePath: string, content: string): Promise<void> {
     if (!window.openadeAPI) return
     await window.openadeAPI.procs.writeFile({ filePath, content })
+}
+
+export async function loadEditableProcsFile(filePath: string, searchPath?: string): Promise<EditableProcsFile> {
+    if (!window.openadeAPI) {
+        return {
+            filePath,
+            relativePath: filePath,
+            processes: [],
+            crons: [],
+            rawContent: "",
+        }
+    }
+    return window.openadeAPI.procs.loadEditable({ filePath, searchPath }) as Promise<EditableProcsFile>
+}
+
+export async function parseEditableRaw(content: string, relativePath: string): Promise<{ processes: ProcessInput[]; crons: CronInput[] }> {
+    if (!window.openadeAPI) {
+        return { processes: [], crons: [] }
+    }
+    return window.openadeAPI.procs.parseRaw({ content, relativePath }) as Promise<{ processes: ProcessInput[]; crons: CronInput[] }>
+}
+
+export async function serializeEditableProcs(input: {
+    processes: ProcessInput[]
+    crons: CronInput[]
+}): Promise<string> {
+    if (!window.openadeAPI) return ""
+    const result = (await window.openadeAPI.procs.serializeEditable(input)) as { rawContent: string }
+    return result.rawContent
+}
+
+export async function saveEditableProcsFile(input: {
+    filePath: string
+    relativePath: string
+    processes: ProcessInput[]
+    crons: CronInput[]
+    searchPath?: string
+}): Promise<SaveEditableProcsResult> {
+    if (!window.openadeAPI) {
+        return {
+            filePath: input.filePath,
+            relativePath: input.relativePath,
+            rawContent: "",
+        }
+    }
+
+    return window.openadeAPI.procs.saveEditable(input) as Promise<SaveEditableProcsResult>
 }
 
 // ============================================================================

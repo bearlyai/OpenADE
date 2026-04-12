@@ -1,12 +1,12 @@
 /**
- * TOML parser for openade.toml / procs.toml files
+ * TOML parser for openade.toml files
  *
  * Uses Zod for validation with clean error messages.
  */
 
 import { parse as parseToml } from "smol-toml"
 import { z } from "zod"
-import type { CronDef, ProcessDef, ProcsConfig, ProcsConfigError } from "./types"
+import type { CronDef, CronInput, ProcessDef, ProcsConfig, ProcsConfigError, ProcessInput } from "./types"
 
 /** Zod schema for a single process definition (TOML uses snake_case) */
 const ProcessSchema = z.object({
@@ -37,9 +37,10 @@ const ConfigFileSchema = z.object({
 })
 
 export type ParseResult = { config: ProcsConfig } | { error: ProcsConfigError }
+export type ParseEditableResult = { processes: ProcessInput[]; crons: CronInput[] } | { error: ProcsConfigError }
 
 /**
- * Parse an openade.toml / procs.toml file content into a ProcsConfig
+ * Parse an openade.toml file content into a ProcsConfig
  *
  * @param content - Raw TOML file content
  * @param relativePath - Path relative to repo root (used for error messages and IDs)
@@ -101,5 +102,31 @@ export function parseProcsFile(content: string, relativePath: string): ParseResu
                 line: lineMatch ? parseInt(lineMatch[1], 10) : undefined,
             },
         }
+    }
+}
+
+export function parseEditableProcsFile(content: string, relativePath: string): ParseEditableResult {
+    const result = parseProcsFile(content, relativePath)
+    if ("error" in result) return result
+
+    return {
+        processes: result.config.processes.map((process) => ({
+            name: process.name,
+            command: process.command,
+            workDir: process.workDir,
+            url: process.url,
+            type: process.type,
+        })),
+        crons: result.config.crons.map((cron) => ({
+            name: cron.name,
+            schedule: cron.schedule,
+            type: cron.type,
+            prompt: cron.prompt,
+            appendSystemPrompt: cron.appendSystemPrompt,
+            images: cron.images,
+            isolation: cron.isolation,
+            harness: cron.harness,
+            inTaskId: cron.inTaskId,
+        })),
     }
 }

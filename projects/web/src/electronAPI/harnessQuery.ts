@@ -614,6 +614,37 @@ export function getHarnessQueryManager(): HarnessQueryManagerImpl {
     return managerInstance
 }
 
+export async function runStructuredHarnessQuery<T>(args: {
+    prompt: string | ContentBlock[]
+    options: ClientHarnessQueryOptions
+    schema: Record<string, unknown>
+    parse?: (value: unknown) => T
+}): Promise<T> {
+    if (!window.openadeAPI?.harness?.structuredQuery) {
+        throw new Error("Harness structured query API not available")
+    }
+
+    const result = (await window.openadeAPI.harness.structuredQuery({
+        prompt: args.prompt,
+        options: args.options,
+        outputSchema: args.schema,
+    })) as {
+        ok: boolean
+        output?: unknown
+        error?: string
+    }
+
+    if (!result.ok) {
+        throw new Error(result.error ?? "Structured query failed")
+    }
+
+    if (result.output === undefined) {
+        throw new Error("Structured query returned no output")
+    }
+
+    return args.parse ? args.parse(result.output) : (result.output as T)
+}
+
 /**
  * Delete a harness session's on-disk files (JSONL, subagents, debug logs).
  * Best-effort — returns false if the session wasn't found or couldn't be deleted.

@@ -82,7 +82,7 @@ ${changeDescription}
 
 ${PROCS_SPEC}
 
-Read the existing openade.toml (or procs.toml) file(s), apply the requested changes, and write the updated file(s). Keep changes minimal and preserve existing processes that aren't affected by the request.`
+Read the existing openade.toml file(s), apply the requested changes, and write the updated file(s). Keep changes minimal and preserve existing processes that aren't affected by the request.`
 }
 
 export function getProcsCreationPrompt(targetDir: string): string {
@@ -107,5 +107,5 @@ ${description}
 
 ${PROCS_SPEC}
 
-Read the existing openade.toml (or procs.toml) file. If neither exists, create an openade.toml in the project root. Add a new [[cron]] entry that matches what the user described. Pick an appropriate cron schedule, type (plan/do/ask), and prompt. Preserve all existing content in the file.`
+Read the existing openade.toml file. If it doesn't exist, create an openade.toml in the project root. Add a new [[cron]] entry that matches what the user described. Pick an appropriate cron schedule, type (plan/do/ask), and prompt. Preserve all existing content in the file.`
 }

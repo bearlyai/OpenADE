@@ -9,9 +9,8 @@ import { useModal } from "@ebay/nice-modal-react"
 import { X } from "lucide-react"
 import type { ReactNode } from "react"
 import { useHotkeys } from "react-hotkeys-hook"
+import { Z_INDEX } from "../../constants"
 import { ScrollArea } from "./ScrollArea"
-
-const Z_INDEX_MODAL = "z-50"
 
 export const Modal = ({
     title,
@@ -53,8 +52,9 @@ export const Modal = ({
 
     return (
         <div
-            className={`absolute inset-0 bg-black/50 flex items-start justify-center ${Z_INDEX_MODAL} p-4`}
+            className="absolute inset-0 bg-black/50 flex items-start justify-center p-4"
             style={{
+                zIndex: Z_INDEX.PORTAL_CONTAINER,
                 backdropFilter: "blur(5px)",
                 WebkitBackdropFilter: "blur(5px)",
                 paddingTop: "max(min(100px, 20%), 1rem)",

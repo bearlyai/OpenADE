@@ -219,4 +219,21 @@ describe("CronManager scheduling", () => {
         await vi.advanceTimersByTimeAsync(30_000)
         expect(store.runCmd.run).toHaveBeenCalledTimes(1)
     })
+
+    it("prunes install state for removed cron definitions", async () => {
+        vi.setSystemTime(new Date("2026-01-01T10:00:00.000Z"))
+
+        const cronDef = makeCronDef()
+        const store = makeMockStore()
+        const manager = new CronManager(store)
+
+        vi.mocked(readProcs).mockResolvedValue(makeReadProcsResult([cronDef]))
+
+        await manager.addRepo("repo-1", "/repo")
+        await manager.installCron("repo-1", cronDef.id)
+        expect(manager.getCronsForRepo("repo-1")[0].installed).toBe(true)
+
+        manager.updateCronDefs("repo-1", makeReadProcsResult([]))
+        expect(manager.getCronsForRepo("repo-1")).toHaveLength(0)
+    })
 })

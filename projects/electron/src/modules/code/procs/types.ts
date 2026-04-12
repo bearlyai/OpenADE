@@ -1,5 +1,5 @@
 /**
- * Types for openade.toml / procs.toml configuration
+ * Types for openade.toml configuration
  *
  * These types are designed to be extractable to a standalone library.
  * No Electron or Node-specific dependencies.
@@ -28,6 +28,9 @@ export interface ProcessDef {
     /** Process type - defaults to "daemon" */
     type: ProcessType
 }
+
+/** Editable process shape used by the config editor (id is derived from file + name) */
+export type ProcessInput = Omit<ProcessDef, "id">
 
 // ============================================================================
 // Cron Types
@@ -58,12 +61,15 @@ export interface CronDef {
     inTaskId?: string
 }
 
+/** Editable cron shape used by the config editor (id is derived from file + name) */
+export type CronInput = Omit<CronDef, "id">
+
 // ============================================================================
 // Config Types
 // ============================================================================
 
 export interface ProcsConfig {
-    /** Path relative to repo root, e.g., "openade.toml" or "packages/api/procs.toml" */
+    /** Path relative to repo root, e.g., "openade.toml" */
     relativePath: string
     /** Processes defined in this config file */
     processes: ProcessDef[]
@@ -96,3 +102,17 @@ export interface ReadProcsResult {
     errors: ProcsConfigError[]
 }
 
+export interface EditableProcsFile {
+    filePath: string
+    relativePath: string
+    processes: ProcessInput[]
+    crons: CronInput[]
+    rawContent: string
+}
+
+export interface SaveEditableProcsResult {
+    filePath: string
+    relativePath: string
+    rawContent: string
+    readResult?: ReadProcsResult
+}

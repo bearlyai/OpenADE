@@ -116,7 +116,9 @@ Dashboard (`electronAPI/`) ↔ Electron (`projects/electron/src/modules/code/`)
 
 **All Electron APIs used in the code module must go through `electronAPI/`.** Do not import from `@/electronWindowApi` or other shared Electron utilities. This keeps the code module's dependencies isolated for easier migration.
 
-Main modules: harness (execution via `@openade/harness`), git (worktrees, diffs), process (scripts), pty (terminal), files (search), shell (directory picker, open URL)
+Main modules: harness (execution via `@openade/harness`), git (worktrees, diffs), process (scripts), pty (terminal), files (search), shell (directory picker, open URL), procs (typed read/edit/save for `openade.toml`)
+
+`harness:command` supports both streaming (`start_query`) and non-streaming structured helpers (`structured_query`). Use `runStructuredHarnessQuery()` for small JSON-constrained helpers (cron generation, config suggestions) instead of spinning up a full task flow.
 
 ## Task Lifecycle
 

@@ -13,6 +13,7 @@ IPC wrappers in `electronAPI/` communicate with Electron main process handlers i
 | `files.ts` | Fuzzy file search. Uses git ls-files, ripgrep, or fs walk. |
 | `shell.ts` | Shell/OS operations (directory picker, open URL, open path in file manager). Stateless functions. |
 | `platform.ts` | Platform info (OS, path separator, home dir) and utilities (file manager name). Cached after first fetch. |
+| `procs.ts` | Read/edit `openade.toml` via typed helpers used by the shared Procs editor modal. |
 
 ## Harness Execution
 
@@ -39,6 +40,16 @@ const query = await manager.attachExecution(executionId)
 
 Client tools are registered at the IPC layer via `harness:tool_call` / `harness:tool_response` channels.
 
+Structured helpers (non-streaming JSON output) use the same `harness:command` dispatcher:
+
+```typescript
+const output = await runStructuredHarnessQuery({
+    prompt: "Convert Every Tuesday 2pm to cron",
+    options: { harnessId: "claude-code", cwd: repoPath, mode: "read-only" },
+    schema: { type: "object", properties: { schedule: { type: "string" } }, required: ["schedule"] },
+})
+```
+
 ## Event Types
 
 `harnessEventTypes.ts` defines the unified event stream. Events have a `direction`:
@@ -60,6 +71,16 @@ handle.cleanup()
 ```
 
 Reconnection supported for both - handles persist across renderer refreshes.
+
+## Procs Config Editing
+
+`electronAPI/procs.ts` now exposes typed editor helpers used by `ProcsEditorModal`:
+- `loadEditableProcsFile(filePath, searchPath?)`
+- `parseEditableRaw(content, relativePath)`
+- `serializeEditableProcs({ processes, crons })`
+- `saveEditableProcsFile({ filePath, relativePath, processes, crons, searchPath? })`
+
+The parser/serializer source of truth lives in Electron (`modules/code/procs`), including snake_case TOML mapping.
 
 ## Git Operations
 

@@ -8,7 +8,7 @@
  * - Cleaning up processes when tasks close
  *
  * Uses ProcessHandle (not PTY) for better lifecycle tracking.
- * Processes are defined in procs.toml files, not stored in database.
+ * Processes are defined in openade.toml files, not stored in database.
  */
 
 import { makeAutoObservable, runInAction } from "mobx"
@@ -19,7 +19,7 @@ import { getCwd } from "../../electronAPI/procs"
 export type ProcessStatus = "running" | "stopped" | "error" | "starting"
 
 export interface ProcessInstance {
-    /** Process ID from procs.toml: "{relativePath}::{name}" */
+    /** Process ID from openade.toml: "{relativePath}::{name}" */
     id: string
     /** Run context (repo or worktree) */
     context: RunContext
@@ -394,6 +394,24 @@ export class RepoProcessesManager {
             }
 
             if (this.expandedProcessId && processes.some((p) => p.id === this.expandedProcessId)) {
+                this.expandedProcessId = null
+            }
+        })
+    }
+
+    async stopProcessesMissingFromConfig(args: {
+        context: RunContext
+        validProcessIds: Set<string>
+    }): Promise<void> {
+        const stale = this.getProcessesForContext(args.context).filter((instance) => !args.validProcessIds.has(instance.id))
+        await Promise.all(stale.map((instance) => this.stopProcess(instance.id)))
+
+        runInAction(() => {
+            for (const instance of stale) {
+                this.runningProcesses.delete(instance.id)
+            }
+
+            if (this.expandedProcessId && stale.some((instance) => instance.id === this.expandedProcessId)) {
                 this.expandedProcessId = null
             }
         })

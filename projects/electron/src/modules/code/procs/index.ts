@@ -1,5 +1,5 @@
 /**
- * Procs module - openade.toml / procs.toml configuration system
+ * Procs module - openade.toml configuration system
  *
  * Provides discovery, parsing, and utilities for config files.
  * The parsing and utility code is designed to be extractable to a standalone library.
@@ -9,20 +9,22 @@ import { ipcMain, type IpcMainInvokeEvent } from "electron"
 import log from "electron-log"
 import * as fs from "fs/promises"
 import * as path from "path"
-import { parseProcsFile } from "./parse"
+import { parseEditableProcsFile, parseProcsFile } from "./parse"
 import { detectGitInfo, findProcsFiles } from "./discover"
-import type { ReadProcsResult, ProcsConfig, ProcsConfigError } from "./types"
+import { serializeProcsFile } from "./serialize"
+import type { CronInput, EditableProcsFile, ProcessInput, ProcsConfig, ProcsConfigError, ReadProcsResult, SaveEditableProcsResult } from "./types"
 import { isDev } from "../../../config"
 
 const logger = log.scope("procs")
 
 /** Config filenames that can be read/written via IPC */
-const ALLOWED_CONFIG_FILENAMES = new Set(["openade.toml", "procs.toml"])
+const ALLOWED_CONFIG_FILENAMES = new Set(["openade.toml"])
 
 // Re-export everything for library use
 export * from "./types"
 export * from "./parse"
 export * from "./discover"
+export * from "./serialize"
 
 /**
  * Check if caller is allowed
@@ -47,7 +49,7 @@ function checkAllowed(e: IpcMainInvokeEvent): boolean {
 function validateConfigFilePath(filePath: string): void {
     const basename = path.basename(filePath)
     if (!ALLOWED_CONFIG_FILENAMES.has(basename)) {
-        throw new Error(`Can only access openade.toml or procs.toml files, got: ${basename}`)
+        throw new Error(`Can only access openade.toml files, got: ${basename}`)
     }
 }
 
@@ -62,7 +64,7 @@ async function handleReadProcs(params: { path: string }): Promise<ReadProcsResul
     const gitInfo = await detectGitInfo(searchRoot)
     logger.debug(`[Procs] Git info:`, JSON.stringify(gitInfo))
 
-    // Find all config files (openade.toml / procs.toml)
+    // Find all config files (openade.toml)
     const configFiles = await findProcsFiles(searchRoot, gitInfo)
     logger.info(`[Procs] Found ${configFiles.length} config files`)
 
@@ -102,6 +104,81 @@ async function handleReadProcs(params: { path: string }): Promise<ReadProcsResul
     }
 }
 
+async function getRepoRootForPath(filePath: string, searchPath?: string): Promise<string> {
+    if (searchPath) {
+        const gitInfo = await detectGitInfo(searchPath)
+        return gitInfo?.repoRoot ?? searchPath
+    }
+
+    const parentDir = path.dirname(filePath)
+    const gitInfo = await detectGitInfo(parentDir)
+    return gitInfo?.repoRoot ?? parentDir
+}
+
+async function handleLoadEditable(params: { filePath: string; searchPath?: string }): Promise<EditableProcsFile> {
+    validateConfigFilePath(params.filePath)
+    const rawContent = await fs.readFile(params.filePath, "utf-8")
+    const repoRoot = await getRepoRootForPath(params.filePath, params.searchPath)
+    const relativePath = path.relative(repoRoot, params.filePath)
+    const parsed = parseEditableProcsFile(rawContent, relativePath)
+
+    if ("error" in parsed) {
+        throw new Error(parsed.error.error)
+    }
+
+    return {
+        filePath: params.filePath,
+        relativePath,
+        processes: parsed.processes,
+        crons: parsed.crons,
+        rawContent,
+    }
+}
+
+function handleParseRaw(params: { content: string; relativePath: string }): { processes: ProcessInput[]; crons: CronInput[] } {
+    const parsed = parseEditableProcsFile(params.content, params.relativePath)
+    if ("error" in parsed) {
+        throw new Error(parsed.error.error)
+    }
+    return parsed
+}
+
+function handleSerialize(params: { processes: ProcessInput[]; crons: CronInput[] }): { rawContent: string } {
+    return {
+        rawContent: serializeProcsFile({
+            processes: params.processes,
+            crons: params.crons,
+        }),
+    }
+}
+
+async function handleSaveEditable(params: {
+    filePath: string
+    relativePath: string
+    processes: ProcessInput[]
+    crons: CronInput[]
+    searchPath?: string
+}): Promise<SaveEditableProcsResult> {
+    validateConfigFilePath(params.filePath)
+
+    const rawContent = serializeProcsFile({
+        processes: params.processes,
+        crons: params.crons,
+    })
+
+    await fs.mkdir(path.dirname(params.filePath), { recursive: true })
+    await fs.writeFile(params.filePath, rawContent, "utf-8")
+
+    const readResult = params.searchPath ? await handleReadProcs({ path: params.searchPath }) : undefined
+
+    return {
+        filePath: params.filePath,
+        relativePath: params.relativePath,
+        rawContent,
+        readResult,
+    }
+}
+
 /**
  * Load procs module - register IPC handlers
  */
@@ -126,6 +203,44 @@ export const load = () => {
         validateConfigFilePath(params.filePath)
         await fs.writeFile(params.filePath, params.content, "utf-8")
     })
+
+    ipcMain.handle("procs:loadEditable", async (event, params: { filePath: string; searchPath?: string }): Promise<EditableProcsFile> => {
+        if (!checkAllowed(event)) throw new Error("not allowed")
+        return handleLoadEditable(params)
+    })
+
+    ipcMain.handle(
+        "procs:parseRaw",
+        async (event, params: { content: string; relativePath: string }): Promise<{ processes: ProcessInput[]; crons: CronInput[] }> => {
+            if (!checkAllowed(event)) throw new Error("not allowed")
+            return handleParseRaw(params)
+        }
+    )
+
+    ipcMain.handle(
+        "procs:serializeEditable",
+        async (event, params: { processes: ProcessInput[]; crons: CronInput[] }): Promise<{ rawContent: string }> => {
+            if (!checkAllowed(event)) throw new Error("not allowed")
+            return handleSerialize(params)
+        }
+    )
+
+    ipcMain.handle(
+        "procs:saveEditable",
+        async (
+            event,
+            params: {
+                filePath: string
+                relativePath: string
+                processes: ProcessInput[]
+                crons: CronInput[]
+                searchPath?: string
+            }
+        ): Promise<SaveEditableProcsResult> => {
+            if (!checkAllowed(event)) throw new Error("not allowed")
+            return handleSaveEditable(params)
+        }
+    )
 
     logger.info("[Procs] IPC handlers registered successfully")
 }

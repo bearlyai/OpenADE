@@ -102,6 +102,7 @@ interface OpenADEAPI {
         toolResponse: (args: { executionId: string; callId: string; result?: unknown; error?: string }) => Promise<unknown>
         reconnect: (args: { executionId: string }) => Promise<unknown>
         abort: (args: { executionId: string }) => Promise<unknown>
+        structuredQuery: (args: { prompt: unknown; options: unknown; outputSchema: unknown }) => Promise<unknown>
         checkStatus: () => Promise<unknown>
         deleteSession: (args: { harnessId: string; sessionId: string; cwd?: string }) => Promise<unknown>
         onEvent: (cb: (event: unknown) => void) => () => void
@@ -157,6 +158,10 @@ interface OpenADEAPI {
         read: (params: { path: string }) => Promise<unknown>
         readFile: (params: { filePath: string }) => Promise<string>
         writeFile: (params: { filePath: string; content: string }) => Promise<void>
+        loadEditable: (params: { filePath: string; searchPath?: string }) => Promise<unknown>
+        parseRaw: (params: { content: string; relativePath: string }) => Promise<unknown>
+        serializeEditable: (params: { processes: unknown[]; crons: unknown[] }) => Promise<unknown>
+        saveEditable: (params: { filePath: string; relativePath: string; processes: unknown[]; crons: unknown[]; searchPath?: string }) => Promise<unknown>
     }
 }
 

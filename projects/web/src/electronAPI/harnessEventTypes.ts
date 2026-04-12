@@ -91,6 +91,14 @@ export type HarnessExecutionEvent =
 
 export type HarnessCommandEvent =
     | { id: string; type: "start_query"; executionId: string; prompt: string | ContentBlock[]; options: HarnessQueryOptions }
+    | {
+          id: string
+          type: "structured_query"
+          executionId: string
+          prompt: string | ContentBlock[]
+          options: HarnessQueryOptions
+          outputSchema: Record<string, unknown>
+      }
     | { id: string; type: "tool_response"; executionId: string; callId: string; result?: ToolResult; error?: string }
     | { id: string; type: "abort"; executionId: string }
     | { id: string; type: "reconnect"; executionId: string }
