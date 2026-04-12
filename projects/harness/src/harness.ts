@@ -7,6 +7,8 @@ import type {
     SlashCommand,
     HarnessQuery,
     HarnessEvent,
+    StructuredQueryInput,
+    StructuredQueryResult,
     SessionMeta,
     ListSessionsOptions,
     GetSessionEventsOptions,
@@ -30,6 +32,7 @@ export interface Harness<M = unknown> {
 
     // ── Execution ──
     query(q: HarnessQuery): AsyncGenerator<HarnessEvent<M>>
+    structuredQuery<T = unknown>(q: StructuredQueryInput<T>): Promise<StructuredQueryResult<T, M>>
 
     // ── Session management (async, reads/writes disk) ──
     listSessions(options?: ListSessionsOptions): Promise<SessionMeta[]>

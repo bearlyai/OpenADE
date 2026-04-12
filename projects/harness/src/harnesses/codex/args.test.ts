@@ -86,6 +86,42 @@ describe("buildCodexArgs", () => {
         expect(result.args).toContain("resume")
     })
 
+    it("outputSchema adds --output-schema and --output-last-message for exec", async () => {
+        const schema = {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+                answer: { type: "string" },
+            },
+            required: ["answer"],
+        }
+
+        const result = await buildCodexArgs(makeQuery({ outputSchema: schema }), {})
+        const outputSchemaIdx = result.args.indexOf("--output-schema")
+        const outputLastMessageIdx = result.args.indexOf("--output-last-message")
+
+        expect(outputSchemaIdx).toBeGreaterThan(-1)
+        expect(result.args[outputSchemaIdx + 1]).toMatch(/harness-schema-.*\.json$/)
+        expect(outputLastMessageIdx).toBeGreaterThan(-1)
+        expect(result.args[outputLastMessageIdx + 1]).toMatch(/harness-output-.*\.json$/)
+        expect(result.structuredOutputPath).toBe(result.args[outputLastMessageIdx + 1])
+    })
+
+    it("outputSchema also adds schema flags for resume", async () => {
+        const schema = {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+                answer: { type: "string" },
+            },
+            required: ["answer"],
+        }
+
+        const result = await buildCodexArgs(makeQuery({ resumeSessionId: "abc-123", outputSchema: schema }), {})
+        expect(result.args).toContain("--output-schema")
+        expect(result.args).toContain("--output-last-message")
+    })
+
     it("forkSession: true logs a warning", async () => {
         const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
         await buildCodexArgs(makeQuery({ forkSession: true }), {})

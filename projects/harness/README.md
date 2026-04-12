@@ -65,6 +65,7 @@ interface Harness<M = unknown> {
     checkInstallStatus(): Promise<HarnessInstallStatus>
     discoverSlashCommands(cwd: string, signal?: AbortSignal): Promise<SlashCommand[]>
     query(q: HarnessQuery): AsyncGenerator<HarnessEvent<M>>
+    structuredQuery<T>(q: StructuredQueryInput<T>): Promise<StructuredQueryResult<T, M>>
 
     // Session management (check capabilities().supportsSessionReplay)
     listSessions(options?): Promise<SessionMeta[]>
@@ -97,6 +98,7 @@ Normalized input accepted by every harness.
 | `disallowedTools?` | `string[]` | Tool deny-list (Claude Code only) |
 | `mcpServers?` | `Record<string, McpServerConfig>` | MCP servers to connect |
 | `clientTools?` | `ClientToolDefinition[]` | In-process tools exposed via MCP |
+| `outputSchema?` | `JsonSchema` | Low-level structured output schema passthrough (advanced) |
 
 ### `HarnessEvent<M>`
 
@@ -106,9 +108,66 @@ Stream envelope yielded by `query()`.
 type HarnessEvent<M> =
     | { type: "message"; message: M }        // Raw harness-specific event
     | { type: "session_started"; sessionId: string }
-    | { type: "complete"; usage?: HarnessUsage }
+    | { type: "complete"; usage?: HarnessUsage; structuredOutput?: unknown }
     | { type: "error"; error: string; code?: HarnessErrorCode }
     | { type: "stderr"; data: string }
+```
+
+### `harness.structuredQuery()`
+
+High-level method for schema-constrained final output with normalized metadata.
+
+```typescript
+type StructuredQueryBase = Pick<
+    HarnessQuery,
+    | "prompt"
+    | "systemPrompt"
+    | "appendSystemPrompt"
+    | "cwd"
+    | "additionalDirectories"
+    | "env"
+    | "model"
+    | "thinking"
+    | "resumeSessionId"
+    | "mode"
+    | "mcpServers"
+    | "clientTools"
+    | "signal"
+>
+
+interface StructuredQueryInput<T> extends StructuredQueryBase {
+    output: {
+        schema: JsonSchema
+        parse?: (value: unknown) => T
+    }
+}
+
+interface StructuredQueryResult<T, M = unknown> {
+    output: T
+    sessionId?: string
+    usage?: HarnessUsage
+    events: HarnessEvent<M>[]
+}
+```
+
+```typescript
+const result = await harness.structuredQuery({
+    prompt: "Return a JSON object with sentinel='structured-output-smoke' and sum=4.",
+    cwd: process.cwd(),
+    mode: "yolo",
+    signal: AbortSignal.timeout(60_000),
+    output: {
+        schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+                sentinel: { type: "string" },
+                sum: { type: "number" },
+            },
+            required: ["sentinel", "sum"],
+        },
+    },
+})
 ```
 
 ### `HarnessUsage`

@@ -244,6 +244,34 @@ describe.skipIf(!ready)("Claude Code (authenticated)", () => {
             expect(typeof initEvent!.session_id).toBe("string")
             expect(initEvent!.session_id).toBeTruthy()
         })
+
+        it("2d. structuredQuery returns validated structured output", async () => {
+            const tmpDir = await getTmpDir()
+            const schema = {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                    sentinel: { type: "string" },
+                    sum: { type: "number" },
+                },
+                required: ["sentinel", "sum"],
+            } as const
+
+            const result = await harness.structuredQuery({
+                prompt: "Return a JSON object with sentinel exactly \"structured-output-smoke\" and sum exactly 4.",
+                cwd: tmpDir,
+                mode: "yolo",
+                signal: standardSignal(),
+                output: { schema },
+            })
+
+            expect(result.output).toEqual({
+                sentinel: "structured-output-smoke",
+                sum: 4,
+            })
+            expect(result.events.some((e) => e.type === "error")).toBe(false)
+            expect(result.usage).toBeDefined()
+        })
     })
 
     // ============================================================================

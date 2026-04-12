@@ -126,9 +126,16 @@ export type ClaudeUserContentBlock = { type: "tool_result"; tool_use_id: string;
 // ── result ──
 export interface ClaudeResultEvent {
     type: "result"
-    subtype: "success" | "error_during_execution" | "error_max_turns" | "error_tool_use"
+    subtype:
+        | "success"
+        | "error_during_execution"
+        | "error_max_turns"
+        | "error_tool_use"
+        | "error_max_budget_usd"
+        | "error_max_structured_output_retries"
     is_error: boolean
     result?: string
+    errors?: string[]
     duration_ms: number
     duration_api_ms: number
     total_cost_usd: number

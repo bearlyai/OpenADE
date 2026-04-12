@@ -227,6 +227,11 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
         }
     }
 
+    // ── Structured output ──
+    if (query.outputSchema) {
+        args.push("--json-schema", JSON.stringify(query.outputSchema))
+    }
+
     // ── Session ──
     if (query.resumeSessionId) {
         args.push("--resume", query.resumeSessionId)

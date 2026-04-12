@@ -108,6 +108,9 @@ export interface HarnessQuery {
     clientTools?: ClientToolDefinition[]
     userPromptHandler?: UserPromptHandler
 
+    // ── Structured output ──
+    outputSchema?: JsonSchema
+
     // ── Control ──
     signal: AbortSignal
 }
@@ -119,7 +122,7 @@ export interface HarnessQuery {
 export type HarnessEvent<M> =
     | { type: "message"; message: M }
     | { type: "session_started"; sessionId: string }
-    | { type: "complete"; usage?: HarnessUsage }
+    | { type: "complete"; usage?: HarnessUsage; structuredOutput?: unknown }
     | { type: "error"; error: string; code?: HarnessErrorCode }
     | { type: "stderr"; data: string }
 
@@ -133,6 +136,43 @@ export interface HarnessUsage {
 }
 
 export type HarnessErrorCode = "auth_failed" | "not_installed" | "rate_limited" | "context_overflow" | "process_crashed" | "aborted" | "timeout" | "unknown"
+
+// ============================================================================
+// Structured query
+// ============================================================================
+
+export type StructuredQueryBase = Pick<
+    HarnessQuery,
+    | "prompt"
+    | "systemPrompt"
+    | "appendSystemPrompt"
+    | "cwd"
+    | "additionalDirectories"
+    | "env"
+    | "model"
+    | "thinking"
+    | "resumeSessionId"
+    | "mode"
+    | "mcpServers"
+    | "clientTools"
+    | "signal"
+>
+
+export interface StructuredOutputSpec<T> {
+    schema: JsonSchema
+    parse?: (value: unknown) => T
+}
+
+export interface StructuredQueryInput<T> extends StructuredQueryBase {
+    output: StructuredOutputSpec<T>
+}
+
+export interface StructuredQueryResult<T, M = unknown> {
+    output: T
+    sessionId?: string
+    usage?: HarnessUsage
+    events: HarnessEvent<M>[]
+}
 
 // ============================================================================
 // Meta & Capabilities

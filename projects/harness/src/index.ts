@@ -18,6 +18,10 @@ export type {
     HarnessEvent,
     HarnessUsage,
     HarnessErrorCode,
+    StructuredQueryBase,
+    StructuredOutputSpec,
+    StructuredQueryInput,
+    StructuredQueryResult,
     HarnessMeta,
     HarnessInstallStatus,
     HarnessCapabilities,
@@ -49,7 +53,7 @@ export type { HarnessMetaEntry } from "./models.js"
 export type { Harness } from "./harness.js"
 
 // ── Errors ──
-export { HarnessError, HarnessNotInstalledError, HarnessAuthError } from "./errors.js"
+export { HarnessError, HarnessNotInstalledError, HarnessAuthError, HarnessStructuredOutputError } from "./errors.js"
 
 // ── Registry ──
 export { HarnessRegistry } from "./registry.js"

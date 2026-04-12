@@ -1,4 +1,5 @@
 import { unlink, rm } from "node:fs/promises"
+import { readFileSync } from "node:fs"
 import { execFileSync, spawnSync } from "node:child_process"
 
 import type { Harness } from "../../harness.js"
@@ -12,6 +13,8 @@ import type {
     HarnessEvent,
     McpServerConfig,
     HarnessUsage,
+    StructuredQueryInput,
+    StructuredQueryResult,
     SessionMeta,
     ListSessionsOptions,
     GetSessionEventsOptions,
@@ -19,6 +22,7 @@ import type {
     DeleteSessionOptions,
 } from "../../types.js"
 import { HarnessNotInstalledError } from "../../errors.js"
+import { runStructuredQuery } from "../../structured.js"
 import { resolveExecutable } from "../../util/which.js"
 import { spawnJsonl } from "../../util/spawn.js"
 import { startToolServer, type ToolServerHandle } from "../../util/tool-server.js"
@@ -181,6 +185,7 @@ export class CodexHarness implements Harness<CodexEvent> {
             // ── Track wall-clock time ──
             const startTime = Date.now()
             let lastUsage: CodexTurnCompletedEvent["usage"] | undefined
+            let lastAgentMessageText: string | undefined
 
             // ── Spawn and stream ──
             yield* spawnJsonl<CodexEvent>({
@@ -222,6 +227,10 @@ export class CodexHarness implements Harness<CodexEvent> {
                         lastUsage = event.usage
                     }
 
+                    if (event.type === "item.completed" && event.item.type === "agent_message" && typeof event.item.text === "string") {
+                        lastAgentMessageText = event.item.text
+                    }
+
                     // Map failure events
                     if (event.type === "turn.failed") {
                         events.push({
@@ -250,6 +259,46 @@ export class CodexHarness implements Harness<CodexEvent> {
                     if (q.signal.aborted) return null
 
                     const durationMs = Date.now() - startTime
+                    let structuredOutput: unknown
+
+                    if (buildResult.structuredOutputPath) {
+                        let rawStructured = ""
+                        try {
+                            rawStructured = readFileSync(buildResult.structuredOutputPath, "utf-8").trim()
+                        } catch (error) {
+                            if (!isErrnoException(error) || error.code !== "ENOENT") {
+                                return {
+                                    type: "error",
+                                    error: `Failed to parse Codex structured output: ${error instanceof Error ? error.message : String(error)}`,
+                                    code: "unknown",
+                                }
+                            }
+                        }
+
+                        // Resume flows may not always materialize output-last-message files.
+                        // Fall back to the final streamed agent message if available.
+                        if (!rawStructured && lastAgentMessageText) {
+                            rawStructured = lastAgentMessageText.trim()
+                        }
+
+                        if (rawStructured) {
+                            try {
+                                structuredOutput = JSON.parse(rawStructured)
+                            } catch (error) {
+                                return {
+                                    type: "error",
+                                    error: `Failed to parse Codex structured output: ${error instanceof Error ? error.message : String(error)}`,
+                                    code: "unknown",
+                                }
+                            }
+                        } else if (q.outputSchema) {
+                            return {
+                                type: "error",
+                                error: "Codex completed without structured output",
+                                code: "unknown",
+                            }
+                        }
+                    }
 
                     if (code === 0 || lastUsage) {
                         const inputTokens = lastUsage?.input_tokens ?? 0
@@ -262,7 +311,7 @@ export class CodexHarness implements Harness<CodexEvent> {
                             costUsd: calculateCostUsd(q.model, inputTokens, outputTokens, cacheReadTokens),
                             durationMs,
                         }
-                        return { type: "complete", usage }
+                        return { type: "complete", usage, structuredOutput }
                     }
 
                     if (code !== null && code !== 0) {
@@ -300,6 +349,10 @@ export class CodexHarness implements Harness<CodexEvent> {
         }
     }
 
+    async structuredQuery<T = unknown>(q: StructuredQueryInput<T>): Promise<StructuredQueryResult<T, CodexEvent>> {
+        return runStructuredQuery(this, q)
+    }
+
     // ── Session management ──
 
     async listSessions(options?: ListSessionsOptions): Promise<SessionMeta[]> {
@@ -332,4 +385,8 @@ export class CodexHarness implements Harness<CodexEvent> {
         if (this.config.binaryPath) return this.config.binaryPath
         return resolveExecutable("codex")
     }
+}
+
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+    return !!error && typeof error === "object" && "code" in error
 }

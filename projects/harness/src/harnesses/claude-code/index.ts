@@ -15,6 +15,8 @@ import type {
     HarnessEvent,
     McpServerConfig,
     HarnessUsage,
+    StructuredQueryInput,
+    StructuredQueryResult,
     SessionMeta,
     ListSessionsOptions,
     GetSessionEventsOptions,
@@ -22,6 +24,7 @@ import type {
     DeleteSessionOptions,
 } from "../../types.js"
 import { HarnessNotInstalledError } from "../../errors.js"
+import { runStructuredQuery } from "../../structured.js"
 import { resolveExecutable } from "../../util/which.js"
 import { spawnJsonl } from "../../util/spawn.js"
 import { startToolServer, type ToolServerHandle } from "../../util/tool-server.js"
@@ -298,6 +301,16 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
                             if (typeof u.cache_read_input_tokens === "number") lastUsage.cacheReadTokens = u.cache_read_input_tokens
                             if (typeof u.cache_creation_input_tokens === "number") lastUsage.cacheWriteTokens = u.cache_creation_input_tokens
                         }
+
+                        if (result.is_error) {
+                            const providerErrors = result.errors?.filter((err): err is string => typeof err === "string") ?? []
+                            const fallbackMessage = result.result || `Claude result ended with subtype ${result.subtype}`
+                            events.push({
+                                type: "error",
+                                error: providerErrors.length > 0 ? providerErrors.join("; ") : fallbackMessage,
+                                code: "unknown",
+                            })
+                        }
                     }
 
                     // Always yield the raw message
@@ -305,7 +318,12 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
 
                     // Yield complete after result
                     if (event.type === "result") {
-                        events.push({ type: "complete", usage: lastUsage })
+                        const result = event as ClaudeResultEvent
+                        events.push({
+                            type: "complete",
+                            usage: lastUsage,
+                            structuredOutput: result.structured_output,
+                        })
                     }
 
                     return events
@@ -345,6 +363,10 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
                 }
             }
         }
+    }
+
+    async structuredQuery<T = unknown>(q: StructuredQueryInput<T>): Promise<StructuredQueryResult<T, ClaudeEvent>> {
+        return runStructuredQuery(this, q)
     }
 
     // ── Session management ──

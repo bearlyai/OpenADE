@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest"
 import { HarnessRegistry } from "./registry.js"
 import { HarnessError } from "./errors.js"
 import type { Harness } from "./harness.js"
-import type { HarnessMeta, HarnessCapabilities, HarnessInstallStatus, SlashCommand, HarnessQuery, HarnessEvent, SessionMeta } from "./types.js"
+import type { HarnessMeta, HarnessCapabilities, HarnessInstallStatus, SlashCommand, HarnessQuery, HarnessEvent, SessionMeta, StructuredQueryInput, StructuredQueryResult } from "./types.js"
 
 function makeFakeHarness(id: string, installStatus?: Partial<HarnessInstallStatus>): Harness {
     return {
@@ -40,6 +40,9 @@ function makeFakeHarness(id: string, installStatus?: Partial<HarnessInstallStatu
         },
         async *query(_q: HarnessQuery): AsyncGenerator<HarnessEvent<unknown>> {
             yield { type: "complete" }
+        },
+        async structuredQuery<T>(_q: StructuredQueryInput<T>): Promise<StructuredQueryResult<T>> {
+            return { output: {} as T, events: [{ type: "complete" }] }
         },
         async listSessions(): Promise<SessionMeta[]> {
             return []

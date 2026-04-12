@@ -15,6 +15,7 @@ export interface CodexArgBuildResult {
     args: string[]
     env: Record<string, string>
     cwd?: string
+    structuredOutputPath?: string
     /** Temp files/dirs that need cleanup */
     cleanup: Array<{ path: string; type: "file" | "dir" }>
 }
@@ -34,6 +35,7 @@ export async function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessC
     const execArgs: string[] = []
     const env: Record<string, string> = {}
     const cleanup: Array<{ path: string; type: "file" | "dir" }> = []
+    let structuredOutputPath: string | undefined
 
     // ── Root-level flags (before exec subcommand) ──
 
@@ -105,6 +107,17 @@ export async function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessC
         console.warn("[codex-harness] forkSession is not supported in Codex JSON mode. Ignoring.")
     }
 
+    // ── Structured output ──
+    if (query.outputSchema) {
+        const schemaPath = join(tmpdir(), `harness-schema-${randomUUID()}.json`)
+        structuredOutputPath = join(tmpdir(), `harness-output-${randomUUID()}.json`)
+        await writeFile(schemaPath, JSON.stringify(query.outputSchema), "utf-8")
+        execArgs.push("--output-schema", schemaPath)
+        execArgs.push("--output-last-message", structuredOutputPath)
+        cleanup.push({ path: schemaPath, type: "file" })
+        cleanup.push({ path: structuredOutputPath, type: "file" })
+    }
+
     // ── Build prompt and extract images ──
     const { promptText: rawPromptText, imagePaths, imageCleanup } = await resolveCodexPrompt(query.prompt)
     cleanup.push(...imageCleanup)
@@ -146,6 +159,7 @@ export async function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessC
         args: [...rootArgs, ...execArgs],
         env,
         cwd: query.cwd,
+        structuredOutputPath,
         cleanup,
     }
 }

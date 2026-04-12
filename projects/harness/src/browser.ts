@@ -25,6 +25,10 @@ export type {
     HarnessEvent,
     HarnessUsage,
     HarnessErrorCode,
+    StructuredQueryBase,
+    StructuredOutputSpec,
+    StructuredQueryInput,
+    StructuredQueryResult,
     HarnessMeta,
     HarnessInstallStatus,
     HarnessCapabilities,
@@ -56,7 +60,7 @@ export type { HarnessMetaEntry } from "./models.js"
 export type { Harness } from "./harness.js"
 
 // ── Errors (pure JS classes, no Node I/O) ──
-export { HarnessError, HarnessNotInstalledError, HarnessAuthError } from "./errors.js"
+export { HarnessError, HarnessNotInstalledError, HarnessAuthError, HarnessStructuredOutputError } from "./errors.js"
 
 // ── Claude Code config & event types (from leaf modules, NOT index.ts) ──
 export type { ClaudeCodeHarnessConfig } from "./harnesses/claude-code/args.js"

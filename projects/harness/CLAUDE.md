@@ -40,6 +40,7 @@ npx @biomejs/biome lint --write --diagnostic-level=error src/  # lint
 src/
 ├── types.ts                    # All shared types (HarnessQuery, HarnessEvent, ModelEntry, etc.)
 ├── harness.ts                  # Harness<M> interface — the unified contract
+├── structured.ts               # runStructuredQuery() — shared structured output orchestration
 ├── models.ts                   # Model catalog — pure data, browser-safe (MODEL_REGISTRY, helpers)
 ├── errors.ts                   # HarnessError, HarnessNotInstalledError, HarnessAuthError
 ├── registry.ts                 # HarnessRegistry — register/get/getAll harnesses
@@ -84,6 +85,7 @@ src/
 |---|---|
 | `Harness<M>` | Interface every harness implements. `M` is the harness-specific event type. Includes `models()` for declaring supported models |
 | `HarnessQuery` | Normalized input: prompt, model, mode, MCP servers, client tools, signal |
+| `structuredQuery()` | High-level harness method for schema-constrained output |
 | `HarnessEvent<M>` | Stream envelope: `message`, `session_started`, `complete`, `error`, `stderr` |
 | `ClaudeEvent` | Discriminated union of all Claude CLI `--output-format stream-json` line types |
 | `CodexEvent` | Discriminated union of all Codex CLI `--json` line types |
@@ -92,14 +94,15 @@ src/
 
 ## How Query Execution Works
 
-1. Caller builds a `HarnessQuery` and calls `harness.query(q)`
+1. Caller builds a `HarnessQuery` and calls `harness.query(q)` (or `harness.structuredQuery(q)` for schema-constrained final output)
 2. If `clientTools` are present, a local HTTP MCP server starts (`tool-server.ts`)
 3. The MCP server config is merged with any user-provided `mcpServers`
 4. Harness-specific arg builder translates `HarnessQuery` → CLI flags
 5. `spawnJsonl()` launches the CLI, reads JSONL from stdout line-by-line
 6. Each line is parsed by the harness-specific parser (`parseClaudeEvent` / `parseCodexEvent`)
 7. Parsed events are wrapped in `HarnessEvent<M>` and yielded to the caller
-8. On process exit, cleanup runs (temp files, tool server shutdown)
+8. For structured queries, `complete.structuredOutput` is normalized and parsed by `structured.ts`
+9. On process exit, cleanup runs (temp files, tool server shutdown)
 
 ## Session Management
 

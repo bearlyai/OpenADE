@@ -237,6 +237,21 @@ describe("buildClaudeArgs", () => {
         expect(result.args[effortIdx + 1]).toBe("max")
     })
 
+    it("outputSchema adds --json-schema with serialized schema", () => {
+        const schema = {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+                answer: { type: "string" },
+            },
+            required: ["answer"],
+        }
+        const result = buildClaudeArgs(makeQuery({ outputSchema: schema }), {})
+        const schemaIdx = result.args.indexOf("--json-schema")
+        expect(schemaIdx).toBeGreaterThan(-1)
+        expect(JSON.parse(result.args[schemaIdx + 1])).toEqual(schema)
+    })
+
     it("resumeSessionId produces --resume <id>", () => {
         const result = buildClaudeArgs(makeQuery({ resumeSessionId: "sess-123" }), {})
         expect(result.args).toContain("--resume")

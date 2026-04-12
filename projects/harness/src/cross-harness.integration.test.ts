@@ -171,6 +171,37 @@ describe.skipIf(!claudeReady || !codexReady)("Cross-harness integration", () => 
                 expect(complete, `${h.id}: should emit complete`).toBeDefined()
             }
         })
+
+        it("2d. structuredQuery returns normalized structured output for both harnesses", async () => {
+            const harnesses: Harness[] = [claude, codex]
+            const schema = {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                    sentinel: { type: "string" },
+                    sum: { type: "number" },
+                },
+                required: ["sentinel", "sum"],
+            } as const
+
+            for (const h of harnesses) {
+                const tmpDir = await getTmpDir()
+                const result = await h.structuredQuery({
+                    prompt: "Return a JSON object with sentinel exactly \"structured-output-smoke\" and sum exactly 4.",
+                    cwd: tmpDir,
+                    mode: "yolo",
+                    signal: standardSignal(),
+                    output: { schema },
+                })
+
+                expect(result.output, `${h.id}: structured output should match requested schema`).toEqual({
+                    sentinel: "structured-output-smoke",
+                    sum: 4,
+                })
+                expect(result.usage, `${h.id}: usage should be present`).toBeDefined()
+                expect(result.events.some((e) => e.type === "complete"), `${h.id}: should contain complete event`).toBe(true)
+            }
+        })
     })
 
     // ============================================================================

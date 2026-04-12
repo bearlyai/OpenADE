@@ -29,3 +29,24 @@ export class HarnessAuthError extends HarnessError {
         this.authInstructions = authInstructions
     }
 }
+
+export class HarnessStructuredOutputError extends HarnessError {
+    rawOutput?: unknown
+    providerErrors?: string[]
+
+    constructor(
+        message: string,
+        harnessId: HarnessId,
+        options?: {
+            code?: HarnessErrorCode
+            cause?: Error
+            rawOutput?: unknown
+            providerErrors?: string[]
+        }
+    ) {
+        super(message, options?.code ?? "unknown", harnessId, options?.cause)
+        this.name = "HarnessStructuredOutputError"
+        this.rawOutput = options?.rawOutput
+        this.providerErrors = options?.providerErrors
+    }
+}

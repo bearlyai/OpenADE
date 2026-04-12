@@ -160,6 +160,29 @@ describe("parseClaudeEvent", () => {
         expect(event!.type).toBe("result")
     })
 
+    it("parses result:error_max_structured_output_retries with errors array", () => {
+        const raw = {
+            type: "result",
+            subtype: "error_max_structured_output_retries",
+            is_error: true,
+            duration_ms: 1000,
+            duration_api_ms: 800,
+            total_cost_usd: 0.01,
+            num_turns: 1,
+            session_id: "sess-123",
+            usage: {},
+            errors: ["Failed to provide valid structured output after 5 attempts"],
+        }
+
+        const event = parseClaudeEvent(raw)
+        expect(event).not.toBeNull()
+        expect(event!.type).toBe("result")
+        if (event!.type === "result") {
+            expect(event.subtype).toBe("error_max_structured_output_retries")
+            expect(event.errors).toEqual(["Failed to provide valid structured output after 5 attempts"])
+        }
+    })
+
     it("parses tool_progress event", () => {
         const raw = { type: "tool_progress", tool_use_id: "tool-123", data: "..." }
         const event = parseClaudeEvent(raw)
