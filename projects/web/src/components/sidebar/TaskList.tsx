@@ -1,15 +1,15 @@
 import type { TaskPreview, TaskPreviewLastEvent } from "@/persistence/repoStore"
 import { ContextMenu } from "@base-ui-components/react/context-menu"
 import cx from "classnames"
-import { CheckCircle, Copy, ListTodo, Loader2, Plus, RotateCcw, Square, Trash2, X } from "lucide-react"
+import { CheckCircle, Copy, ListTodo, Loader2, Pin, Plus, RotateCcw, Square, Trash2, X } from "lucide-react"
 import { observer } from "mobx-react"
-import { useCodeNavigate } from "../../routing"
 import { usePortalContainer } from "../../hooks/usePortalContainer"
+import { useCodeNavigate } from "../../routing"
 import { useCodeStore } from "../../store/context"
 import type { TaskCreation } from "../../store/managers/TaskCreationManager"
 import type { CodeEvent } from "../../types"
-import { resolveTaskCopyPath } from "./sidebarPathUtils"
 import { ScrollArea } from "../ui"
+import { resolveTaskCopyPath } from "./sidebarPathUtils"
 
 function isPlanType(lastEvent: TaskPreviewLastEvent): boolean {
     return lastEvent.sourceType === "plan" || lastEvent.sourceType === "revise"
@@ -83,19 +83,23 @@ const TaskItem = ({
     preview,
     isActive,
     isUnread,
+    isPinned,
     inProgressEvent,
     onSelect,
     onDelete,
     onToggleClosed,
+    onTogglePinned,
     onCopyPath,
 }: {
     preview: TaskPreview
     isActive: boolean
     isUnread: boolean
+    isPinned: boolean
     inProgressEvent: TaskPreviewLastEvent | null
     onSelect: () => void
     onDelete: () => void
     onToggleClosed: () => void
+    onTogglePinned: () => void
     onCopyPath: () => void
 }) => {
     const isClosed = preview.closed ?? false
@@ -127,6 +131,9 @@ const TaskItem = ({
                     />
                 }
             >
+                {/* Pin indicator (pinned tasks only) */}
+                {isPinned && <Pin className="w-3 h-3 flex-shrink-0 text-primary" fill="currentColor" />}
+
                 {/* Title */}
                 <span className="truncate min-w-0 flex-1 select-none">{preview.title}</span>
 
@@ -143,6 +150,10 @@ const TaskItem = ({
             <ContextMenu.Portal container={portalContainer}>
                 <ContextMenu.Positioner className="outline-none z-50" sideOffset={4}>
                     <ContextMenu.Popup className={contextPopupClassName}>
+                        <ContextMenu.Item className={contextItemClassName} onClick={onTogglePinned}>
+                            <Pin className="w-4 h-4" fill={isPinned ? "currentColor" : "none"} />
+                            <span>{isPinned ? "Unpin" : "Pin"}</span>
+                        </ContextMenu.Item>
                         <ContextMenu.Item className={contextItemClassName} onClick={onCopyPath}>
                             <Copy className="w-4 h-4" />
                             <span>Copy path</span>
@@ -241,12 +252,20 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
         const bTime = b.lastEvent?.at ?? b?.createdAt ?? zeroTime
         return bTime.localeCompare(aTime)
     }
+    // Pinned tasks float to top within each group
+    const pinnedSet = new Set(codeStore.personalSettingsStore?.settings.current.pinnedTaskIds ?? [])
+    const partitionPinned = (arr: TaskPreview[]) => {
+        const pinned = arr.filter((t) => pinnedSet.has(t.id))
+        const unpinned = arr.filter((t) => !pinnedSet.has(t.id))
+        return [...pinned, ...unpinned]
+    }
+
     const openPreviews = previews.filter((t) => !t.closed).sort(sortByRecent)
     // Running tasks float to the top
     const runningPreviews = openPreviews.filter((t) => codeStore.workingTaskIds.has(t.id))
     const nonRunningPreviews = openPreviews.filter((t) => !codeStore.workingTaskIds.has(t.id))
     const closedPreviews = previews.filter((t) => t.closed).sort(sortByRecent)
-    const sortedPreviews = [...runningPreviews, ...nonRunningPreviews, ...closedPreviews]
+    const sortedPreviews = [...partitionPinned(runningPreviews), ...partitionPinned(nonRunningPreviews), ...partitionPinned(closedPreviews)]
     const creations = codeStore.creation.getCreationsForRepo(workspaceId)
 
     const handleAddTask = () => {
@@ -277,6 +296,10 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
 
     const handleToggleClosed = async (toggledTaskId: string, currentClosed: boolean) => {
         await codeStore.tasks.setTaskClosed(toggledTaskId, !currentClosed)
+    }
+
+    const handleTogglePinned = (toggledTaskId: string) => {
+        codeStore.tasks.toggleTaskPinned(toggledTaskId)
     }
 
     const handleCopyTaskPath = async (selectedTaskId: string) => {
@@ -341,10 +364,12 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
                                     preview={preview}
                                     isActive={taskId === preview.id}
                                     isUnread={!preview.closed && !!preview.lastEventAt && (!preview.lastViewedAt || preview.lastEventAt > preview.lastViewedAt)}
+                                    isPinned={pinnedSet.has(preview.id)}
                                     inProgressEvent={getInProgressEventForTask(codeStore, preview.id)}
                                     onSelect={() => handleSelectTask(preview.id)}
                                     onDelete={() => handleDeleteTask(preview.id)}
                                     onToggleClosed={() => handleToggleClosed(preview.id, preview.closed ?? false)}
+                                    onTogglePinned={() => handleTogglePinned(preview.id)}
                                     onCopyPath={() => {
                                         void handleCopyTaskPath(preview.id)
                                     }}

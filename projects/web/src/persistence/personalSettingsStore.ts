@@ -87,6 +87,9 @@ export interface PersonalSettings {
 
     // === HyperPlan settings ===
 
+    /** Task IDs the user has pinned to the top of the sidebar */
+    pinnedTaskIds?: string[]
+
     /** HyperPlan default strategy ID: "standard" | "ensemble" | "cross-review" */
     hyperplanStrategyId?: string
     /** HyperPlan agent couplets for multi-agent strategies */

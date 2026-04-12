@@ -171,6 +171,14 @@ export class TaskManager {
         // Disconnect TaskStore
         this.store.disconnectTaskStore(id)
 
+        // Clean up pinned state
+        const pinned = this.store.personalSettingsStore?.settings.current.pinnedTaskIds
+        if (pinned?.includes(id)) {
+            this.store.personalSettingsStore?.settings.set({
+                pinnedTaskIds: pinned.filter((pid) => pid !== id),
+            })
+        }
+
         // Cleanup local state
         const model = this.taskModels.get(id)
         if (model) {
@@ -293,6 +301,16 @@ export class TaskManager {
         taskStore.meta.update((draft) => {
             draft.enabledMcpServerIds = serverIds.length > 0 ? serverIds : undefined
             draft.updatedAt = new Date().toISOString()
+        })
+    }
+
+    toggleTaskPinned(taskId: string): void {
+        const store = this.store.personalSettingsStore
+        if (!store) return
+        const current = store.settings.current.pinnedTaskIds ?? []
+        const isPinned = current.includes(taskId)
+        store.settings.set({
+            pinnedTaskIds: isPinned ? current.filter((id) => id !== taskId) : [...current, taskId],
         })
     }
 
