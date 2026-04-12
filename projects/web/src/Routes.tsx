@@ -1,7 +1,7 @@
 import type { TaskPreview } from "@/persistence/repoStore"
 import { Code, ListTodo, Loader2, Settings, Sparkles } from "lucide-react"
 import { observer } from "mobx-react"
-import { useCallback } from "react"
+import { useCallback, useRef, useState } from "react"
 import { Navigate, useParams } from "react-router"
 import { TaskStatsBar } from "./components/TaskStatsBar"
 import { getLastViewed } from "./constants"
@@ -232,19 +232,51 @@ export const CodeWorkspaceTaskRoute = observer(() => {
     }, [codeStore, taskId])
     // Determine navbar title and icon
     const taskTitle = taskModel?.title || "Task"
+    // Inline title editing
+    const [isEditingTitle, setIsEditingTitle] = useState(false)
+    const titleInputRef = useRef<HTMLInputElement>(null)
+    const handleTitleCommit = () => {
+        const value = titleInputRef.current?.value.trim()
+        if (value && value !== taskTitle && taskId) {
+            codeStore.tasks.setTaskTitle(taskId, value)
+        }
+        setIsEditingTitle(false)
+    }
     const navbarTitle = taskModel ? (
         <div className="flex items-center gap-1.5 min-w-0">
-            <span className="font-medium text-base-content truncate min-w-0">{taskTitle}</span>
-            <button
-                type="button"
-                className="btn flex items-center justify-center w-7 h-7 text-muted hover:bg-base-200 hover:text-base-content disabled:opacity-50 flex-shrink-0"
-                onClick={handleRegenerateTitle}
-                disabled={isRegeneratingTitle}
-                title="Generate new title"
-                aria-label="Generate new title"
-            >
-                {isRegeneratingTitle ? <Loader2 size="0.85rem" className="animate-spin" /> : <Sparkles size="0.85rem" />}
-            </button>
+            {isEditingTitle ? (
+                <>
+                    <input
+                        ref={titleInputRef}
+                        className="font-medium text-base-content min-w-0 bg-transparent border border-base-300 px-1 outline-none"
+                        defaultValue={taskTitle}
+                        autoFocus
+                        onBlur={handleTitleCommit}
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter") handleTitleCommit()
+                            if (e.key === "Escape") setIsEditingTitle(false)
+                        }}
+                    />
+                    <button
+                        type="button"
+                        className="btn flex items-center gap-1 px-1.5 py-0.5 text-xs text-muted hover:bg-base-200 hover:text-base-content disabled:opacity-50 flex-shrink-0"
+                        onClick={handleRegenerateTitle}
+                        disabled={isRegeneratingTitle}
+                        title="Generate new title"
+                        aria-label="Generate new title"
+                    >
+                        {isRegeneratingTitle ? <Loader2 size="0.85rem" className="animate-spin" /> : <Sparkles size="0.85rem" />}
+                        <span>Generate Title</span>
+                    </button>
+                </>
+            ) : (
+                <span
+                    className="font-medium text-base-content truncate min-w-0 cursor-text"
+                    onClick={() => setIsEditingTitle(true)}
+                >
+                    {taskTitle}
+                </span>
+            )}
         </div>
     ) : (
         taskTitle

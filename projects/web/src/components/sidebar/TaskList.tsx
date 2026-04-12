@@ -1,8 +1,9 @@
 import type { TaskPreview, TaskPreviewLastEvent } from "@/persistence/repoStore"
 import { ContextMenu } from "@base-ui-components/react/context-menu"
 import cx from "classnames"
-import { CheckCircle, Copy, ListTodo, Loader2, Pin, Plus, RotateCcw, Square, Trash2, X } from "lucide-react"
+import { CheckCircle, Copy, ListTodo, Loader2, Pencil, Pin, Plus, RotateCcw, Square, Trash2, X } from "lucide-react"
 import { observer } from "mobx-react"
+import { useRef, useState } from "react"
 import { usePortalContainer } from "../../hooks/usePortalContainer"
 import { useCodeNavigate } from "../../routing"
 import { useCodeStore } from "../../store/context"
@@ -90,6 +91,7 @@ const TaskItem = ({
     onToggleClosed,
     onTogglePinned,
     onCopyPath,
+    onRename,
 }: {
     preview: TaskPreview
     isActive: boolean
@@ -101,10 +103,21 @@ const TaskItem = ({
     onToggleClosed: () => void
     onTogglePinned: () => void
     onCopyPath: () => void
+    onRename: (newTitle: string) => void
 }) => {
     const isClosed = preview.closed ?? false
     const displayEvent = inProgressEvent ?? preview.lastEvent
     const portalContainer = usePortalContainer()
+    const [isEditing, setIsEditing] = useState(false)
+    const inputRef = useRef<HTMLInputElement>(null)
+
+    const handleCommit = () => {
+        const value = inputRef.current?.value.trim()
+        if (value && value !== preview.title) {
+            onRename(value)
+        }
+        setIsEditing(false)
+    }
 
     return (
         <ContextMenu.Root>
@@ -135,7 +148,31 @@ const TaskItem = ({
                 {isPinned && <Pin className="w-3 h-3 flex-shrink-0 text-primary" fill="currentColor" />}
 
                 {/* Title */}
-                <span className="truncate min-w-0 flex-1 select-none">{preview.title}</span>
+                {isEditing ? (
+                    <input
+                        ref={inputRef}
+                        className="truncate min-w-0 flex-1 text-sm bg-transparent text-inherit border border-base-300 px-1 py-0 outline-none"
+                        defaultValue={preview.title}
+                        autoFocus
+                        onBlur={handleCommit}
+                        onKeyDown={(e) => {
+                            e.stopPropagation()
+                            if (e.key === "Enter") handleCommit()
+                            if (e.key === "Escape") setIsEditing(false)
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                    />
+                ) : (
+                    <span
+                        className="truncate min-w-0 flex-1 select-none"
+                        onDoubleClick={(e) => {
+                            e.stopPropagation()
+                            setIsEditing(true)
+                        }}
+                    >
+                        {preview.title}
+                    </span>
+                )}
 
                 {/* Status suffix */}
                 {!isClosed && displayEvent && (
@@ -157,6 +194,10 @@ const TaskItem = ({
                         <ContextMenu.Item className={contextItemClassName} onClick={onCopyPath}>
                             <Copy className="w-4 h-4" />
                             <span>Copy path</span>
+                        </ContextMenu.Item>
+                        <ContextMenu.Item className={contextItemClassName} onClick={() => setTimeout(() => setIsEditing(true), 0)}>
+                            <Pencil className="w-4 h-4" />
+                            <span>Rename</span>
                         </ContextMenu.Item>
                         <ContextMenu.Item className={contextItemClassName} onClick={onToggleClosed}>
                             {isClosed ? <RotateCcw className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
@@ -302,6 +343,10 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
         codeStore.tasks.toggleTaskPinned(toggledTaskId)
     }
 
+    const handleRenameTask = (renamedTaskId: string, newTitle: string) => {
+        codeStore.tasks.setTaskTitle(renamedTaskId, newTitle)
+    }
+
     const handleCopyTaskPath = async (selectedTaskId: string) => {
         const repo = codeStore.repos.getRepo(workspaceId)
         if (!repo) return
@@ -373,6 +418,7 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
                                     onCopyPath={() => {
                                         void handleCopyTaskPath(preview.id)
                                     }}
+                                    onRename={(newTitle) => handleRenameTask(preview.id, newTitle)}
                                 />
                             ))}
                         </>
