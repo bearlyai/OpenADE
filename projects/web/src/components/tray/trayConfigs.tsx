@@ -54,7 +54,10 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         icon: GitCompare,
         shortcut: { key: "mod+shift+g", display: "⌘⇧G" },
         isVisible: (tray) => tray.taskModel.environment?.hasGit ?? false,
-        onOpen: (tray) => tray.taskModel.refreshGitState(),
+        onOpen: (tray) => {
+            tray.taskModel.refreshGitState()
+            tray.taskModel.changes.initializeForTray()
+        },
         renderBadge: (tray) => {
             const status = tray.taskModel.gitStatus
             if (!status?.hasChanges) return null
@@ -68,17 +71,7 @@ export const TRAY_CONFIGS: TrayConfig[] = [
             }
             const task = tray.store.tasks.getTask(tray.taskId)
             const isWorktree = task?.isolationStrategy?.type === "worktree"
-            return (
-                <ChangesViewer
-                    workDir={env.taskWorkingDir}
-                    gitStatus={tray.taskModel.gitStatus}
-                    isWorktree={isWorktree}
-                    mergeBaseCommit={env.mergeBaseCommit}
-                    className="h-full"
-                    taskId={tray.taskId}
-                    onRefresh={() => tray.taskModel.refreshGitState()}
-                />
-            )
+            return <ChangesViewer changesManager={tray.taskModel.changes} isWorktree={isWorktree} className="h-full" taskId={tray.taskId} />
         },
     },
     {
