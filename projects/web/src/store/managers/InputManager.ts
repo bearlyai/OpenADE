@@ -51,6 +51,8 @@ export interface Command {
     enabled: boolean
     /** If true, renders with ml-auto before it (pushes to the right) */
     spacer?: boolean
+    /** Row grouping: "primary" for direct AI actions, "secondary" for utilities/lifecycle */
+    group?: "primary" | "secondary"
 }
 
 export class InputManager {
@@ -236,6 +238,7 @@ export class InputManager {
                 label: "Stop",
                 icon: Square,
                 order: 0,
+                group: "primary" as const,
                 style: { variant: "danger" },
                 show: this.isWorking,
                 enabled: true,
@@ -250,6 +253,7 @@ export class InputManager {
                 label: this.retryLabel,
                 icon: RefreshCcw,
                 order: 1,
+                group: "primary" as const,
                 style: { variant: "danger" },
                 show: this.canRetry,
                 enabled: true,
@@ -269,6 +273,7 @@ export class InputManager {
                 label: "Run Plan",
                 icon: Play,
                 order: 4,
+                group: "primary" as const,
                 style: { variant: "success" },
                 show: this.hasActivePlan && !this.isWorking,
                 enabled: true,
@@ -283,7 +288,8 @@ export class InputManager {
                 id: "reviewPlan",
                 label: "Review Plan",
                 icon: ClipboardCheck,
-                order: 5,
+                order: 8,
+                group: "secondary" as const,
                 style: { variant: "neutral" },
                 show: this.hasActivePlan && !this.isWorking,
                 enabled: true,
@@ -303,6 +309,7 @@ export class InputManager {
                 label: "Revise Plan",
                 icon: RefreshCw,
                 order: 6,
+                group: "primary" as const,
                 style: { variant: "primary" },
                 show: this.hasActivePlan && !this.isWorking,
                 enabled: this.hasFeedback,
@@ -317,7 +324,8 @@ export class InputManager {
                 id: "cancelPlan",
                 label: "Cancel Plan",
                 icon: X,
-                order: 21,
+                order: 7,
+                group: "secondary" as const,
                 style: { variant: "danger" },
                 show: this.hasActivePlan && !this.isWorking,
                 enabled: true,
@@ -334,6 +342,7 @@ export class InputManager {
                 label: "Do",
                 icon: Play,
                 order: 10,
+                group: "primary" as const,
                 style: { variant: "success" },
                 show: !this.hasActivePlan && !this.isWorking,
                 enabled: this.hasFeedback,
@@ -349,6 +358,7 @@ export class InputManager {
                 label: this.planButtonLabel,
                 icon: FileText,
                 order: 15,
+                group: "primary" as const,
                 style: { variant: "primary" },
                 show: !this.hasActivePlan && !this.isWorking,
                 enabled: this.hasFeedback,
@@ -364,6 +374,7 @@ export class InputManager {
                 label: "Ask",
                 icon: MessageCircleQuestion,
                 order: 20,
+                group: "primary" as const,
                 style: { variant: "neutral" },
                 show: !this.isWorking,
                 enabled: this.hasFeedback,
@@ -378,7 +389,8 @@ export class InputManager {
                 id: "review",
                 label: "Review",
                 icon: ClipboardCheck,
-                order: 19,
+                order: 21,
+                group: "secondary" as const,
                 style: { variant: "neutral" },
                 show: !this.hasActivePlan && !this.isWorking && this.hasAnyActionHistory,
                 enabled: true,
@@ -398,6 +410,7 @@ export class InputManager {
                 label: "Repeat",
                 icon: Repeat,
                 order: 22,
+                group: "secondary" as const,
                 style: { variant: "neutral" },
                 show: !this.hasActivePlan && !this.isWorking,
                 enabled: this.hasInput,
@@ -412,6 +425,7 @@ export class InputManager {
                 label: COMMIT_AND_PUSH_LABEL,
                 icon: ArrowUpFromLine,
                 order: 100,
+                group: "secondary" as const,
                 style: { variant: "neutral" },
                 show: (this.hasGitWorkingChanges || this.hasUnpushedCommits) && !this.isWorking,
                 enabled: true,
@@ -444,6 +458,7 @@ export class InputManager {
                 label: "Close",
                 icon: CheckCircle,
                 order: 200,
+                group: "primary" as const,
                 style: { variant: "neutral" },
                 show: !this.isClosed && (!this.isWorking || this.isCommitAndPushInProgress),
                 enabled: true,
@@ -460,6 +475,7 @@ export class InputManager {
                 label: "Reopen",
                 icon: RotateCcw,
                 order: 201,
+                group: "primary" as const,
                 style: { variant: "neutral" },
                 show: this.isClosed,
                 enabled: true,
@@ -470,7 +486,7 @@ export class InputManager {
             },
         ]
 
-        const forceAll = typeof window !== "undefined" && (window as any).__devForceAllInputCommands
+        const forceAll = this.store.personalSettingsStore?.settings.current.devForceAllCommands ?? false
         return allCommands.filter((cmd) => forceAll || cmd.show).sort((a, b) => a.order - b.order)
     }
 

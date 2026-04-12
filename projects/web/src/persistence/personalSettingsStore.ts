@@ -82,6 +82,8 @@ export interface PersonalSettings {
     onboardingCompleted?: boolean
     /** Dev: Hide the tray buttons and slide-out panel */
     devHideTray?: boolean
+    /** Dev: Force all input commands visible at once for layout testing */
+    devForceAllCommands?: boolean
     /** Version string of the latest release notes the user has seen */
     lastSeenReleaseVersion?: string
 

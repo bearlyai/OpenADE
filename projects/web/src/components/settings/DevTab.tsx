@@ -6,7 +6,7 @@
  */
 
 import NiceModal from "@ebay/nice-modal-react"
-import { AlertTriangle, Eye, EyeOff, Megaphone, RotateCcw, Sparkles } from "lucide-react"
+import { AlertTriangle, Eye, EyeOff, Layers, Megaphone, RotateCcw, Sparkles } from "lucide-react"
 import { observer } from "mobx-react"
 import { OnboardingModal } from "../onboarding"
 import type { CodeStore } from "../../store/store"
@@ -41,9 +41,14 @@ export const DevTab = observer(({ store }: DevTabProps) => {
 
     // Dev settings stored in personalSettings
     const devHideTray = personalSettings?.settings.current.devHideTray ?? false
+    const devForceAllCommands = personalSettings?.settings.current.devForceAllCommands ?? false
 
     const handleToggleHideTray = () => {
         personalSettings?.settings.set({ devHideTray: !devHideTray })
+    }
+
+    const handleToggleForceAllCommands = () => {
+        personalSettings?.settings.set({ devForceAllCommands: !devForceAllCommands })
     }
 
     return (
@@ -164,6 +169,25 @@ export const DevTab = observer(({ store }: DevTabProps) => {
                             }`}
                         >
                             {devHideTray ? "Hidden" : "Visible"}
+                        </button>
+                    </div>
+
+                    <div className="flex items-center justify-between p-3 bg-base-200/50 border border-border">
+                        <div className="flex items-center gap-3">
+                            <Layers size={16} className="text-muted" />
+                            <div>
+                                <p className="text-sm font-medium text-base-content">Force All Commands</p>
+                                <p className="text-xs text-muted">Show all input bar action buttons at once</p>
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={handleToggleForceAllCommands}
+                            className={`btn px-3 py-1.5 text-sm font-medium transition-colors ${
+                                devForceAllCommands ? "bg-error text-error-content hover:bg-error/80" : "bg-base-200 text-base-content hover:bg-base-300"
+                            }`}
+                        >
+                            {devForceAllCommands ? "Forced" : "Normal"}
                         </button>
                     </div>
                 </div>

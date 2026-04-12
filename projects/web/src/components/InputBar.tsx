@@ -1,4 +1,5 @@
 import { Popover } from "@base-ui-components/react/popover"
+import { Tooltip } from "@base-ui-components/react/tooltip"
 import cx from "classnames"
 import { ExternalLink, GitBranch, ImagePlus, Plug, X } from "lucide-react"
 import { observer } from "mobx-react"
@@ -24,7 +25,9 @@ import { TaskMcpSelector } from "./mcp/TaskMcpSelector"
 import { TrayButtons, TraySlideOut, getTrayConfig } from "./tray"
 
 // Button variant styles
-const BUTTON_BASE = "btn flex items-center justify-center gap-2 px-4 h-9 text-sm font-medium transition-all duration-100 whitespace-nowrap shrink-0"
+const BUTTON_BASE = "btn flex items-center justify-center h-9 text-sm font-medium transition-all duration-100 whitespace-nowrap shrink-0"
+const BUTTON_LABELED = `${BUTTON_BASE} gap-2 px-4`
+const BUTTON_ICON_ONLY = `${BUTTON_BASE} w-9`
 
 // Semantic button styles - each variant has enabled and disabled states
 // Disabled states preserve the button's color identity with reduced opacity
@@ -53,22 +56,37 @@ const BUTTON_STYLES = {
 
 type ButtonVariant = keyof typeof BUTTON_STYLES
 
-/** Reusable action button that renders a Command */
-function CommandButton({ command, onExecute }: { command: Command; onExecute: (id: string) => void }) {
+/** Reusable action button that renders a Command. Secondary commands render icon-only with a tooltip. */
+function CommandButton({ command, onExecute, portalContainer }: { command: Command; onExecute: (id: string) => void; portalContainer: HTMLElement | null }) {
     const Icon = command.icon
     const variant = (command.style?.variant ?? "ghost") as ButtonVariant
     const styles = BUTTON_STYLES[variant]
+    const iconOnly = command.group === "secondary"
+    const base = iconOnly ? BUTTON_ICON_ONLY : BUTTON_LABELED
 
-    return (
+    const btn = (
         <button
             type="button"
             onClick={() => onExecute(command.id)}
             disabled={!command.enabled}
-            className={cx(BUTTON_BASE, command.enabled ? styles.enabled : styles.disabled)}
+            className={cx(base, command.enabled ? styles.enabled : styles.disabled)}
         >
             <Icon size={14} />
-            {command.label}
+            {!iconOnly && command.label}
         </button>
+    )
+
+    if (!iconOnly) return btn
+
+    return (
+        <Tooltip.Root delay={0}>
+            <Tooltip.Trigger render={btn} />
+            <Tooltip.Portal container={portalContainer}>
+                <Tooltip.Positioner sideOffset={6} side="top">
+                    <Tooltip.Popup className="bg-base-300 text-base-content text-xs px-2 py-1 shadow-lg border border-border">{command.label}</Tooltip.Popup>
+                </Tooltip.Positioner>
+            </Tooltip.Portal>
+        </Tooltip.Root>
     )
 }
 
@@ -299,19 +317,22 @@ export const InputBar = observer(function InputBar({
                 )}
 
                 {/* Action buttons row - rendered from centralized commands */}
-                <div className="flex flex-wrap items-center gap-2 px-2 py-2 bg-base-200">
-                    {commands.map((cmd) => (
-                        <div key={cmd.id} className={cx(cmd.spacer && "ml-auto", !cmd.spacer && input.isDisabled && "opacity-50 pointer-events-none")}>
-                            <CommandButton
-                                command={cmd}
-                                onExecute={(id) => {
-                                    tray.close()
-                                    input.runCommand(id)
-                                }}
-                            />
-                        </div>
-                    ))}
-                </div>
+                <Tooltip.Provider>
+                    <div className="flex flex-wrap items-center gap-2 px-2 py-2 bg-base-200">
+                        {commands.map((cmd) => (
+                            <div key={cmd.id} className={cx(cmd.spacer && "ml-auto", !cmd.spacer && input.isDisabled && "opacity-50 pointer-events-none")}>
+                                <CommandButton
+                                    command={cmd}
+                                    portalContainer={portalContainer}
+                                    onExecute={(id) => {
+                                        tray.close()
+                                        input.runCommand(id)
+                                    }}
+                                />
+                            </div>
+                        ))}
+                    </div>
+                </Tooltip.Provider>
             </div>
         </div>
     )
