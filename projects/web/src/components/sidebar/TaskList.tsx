@@ -1,6 +1,6 @@
 import type { TaskPreview, TaskPreviewLastEvent } from "@/persistence/repoStore"
-import { useModal } from "@ebay/nice-modal-react"
 import { ContextMenu } from "@base-ui-components/react/context-menu"
+import { useModal } from "@ebay/nice-modal-react"
 import cx from "classnames"
 import { CheckCircle, CheckSquare, Copy, ListTodo, Loader2, Pencil, Pin, Plus, RotateCcw, Square, Trash2, X } from "lucide-react"
 import { observer } from "mobx-react"
@@ -353,17 +353,19 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
         return bTime.localeCompare(aTime)
     }
     const pinnedSet = new Set(codeStore.personalSettingsStore?.settings.current.pinnedTaskIds ?? [])
-    const partitionPinned = (arr: TaskPreview[]) => {
-        const pinned = arr.filter((t) => pinnedSet.has(t.id))
-        const unpinned = arr.filter((t) => !pinnedSet.has(t.id))
-        return [...pinned, ...unpinned]
+    const withRunningFirst = (arr: TaskPreview[]) => {
+        const running = arr.filter((t) => codeStore.workingTaskIds.has(t.id))
+        const idle = arr.filter((t) => !codeStore.workingTaskIds.has(t.id))
+        return [...running, ...idle]
     }
 
     const openPreviews = previews.filter((t) => !t.closed).sort(sortByRecent)
-    const runningPreviews = openPreviews.filter((t) => codeStore.workingTaskIds.has(t.id))
-    const nonRunningPreviews = openPreviews.filter((t) => !codeStore.workingTaskIds.has(t.id))
+    const pinnedOpen = withRunningFirst(openPreviews.filter((t) => pinnedSet.has(t.id)))
+    const unpinnedOpen = withRunningFirst(openPreviews.filter((t) => !pinnedSet.has(t.id)))
     const closedPreviews = previews.filter((t) => t.closed).sort(sortByRecent)
-    const sortedPreviews = [...partitionPinned(runningPreviews), ...partitionPinned(nonRunningPreviews), ...partitionPinned(closedPreviews)]
+    const pinnedClosed = closedPreviews.filter((t) => pinnedSet.has(t.id))
+    const unpinnedClosed = closedPreviews.filter((t) => !pinnedSet.has(t.id))
+    const sortedPreviews = [...pinnedOpen, ...unpinnedOpen, ...pinnedClosed, ...unpinnedClosed]
     const creations = codeStore.creation.getCreationsForRepo(workspaceId)
 
     // ── Keyboard shortcuts for selection mode ──
