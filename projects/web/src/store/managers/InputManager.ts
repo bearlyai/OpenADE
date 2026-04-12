@@ -470,7 +470,8 @@ export class InputManager {
             },
         ]
 
-        return allCommands.filter((cmd) => cmd.show).sort((a, b) => a.order - b.order)
+        const forceAll = typeof window !== "undefined" && (window as any).__devForceAllInputCommands
+        return allCommands.filter((cmd) => forceAll || cmd.show).sort((a, b) => a.order - b.order)
     }
 
     async runCommand(id: string): Promise<void> {

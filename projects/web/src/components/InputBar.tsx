@@ -24,7 +24,7 @@ import { TaskMcpSelector } from "./mcp/TaskMcpSelector"
 import { TrayButtons, TraySlideOut, getTrayConfig } from "./tray"
 
 // Button variant styles
-const BUTTON_BASE = "btn flex items-center justify-center gap-2 px-4 h-9 text-sm font-medium transition-all duration-100 whitespace-nowrap"
+const BUTTON_BASE = "btn flex items-center justify-center gap-2 px-4 h-9 text-sm font-medium transition-all duration-100 whitespace-nowrap shrink-0"
 
 // Semantic button styles - each variant has enabled and disabled states
 // Disabled states preserve the button's color identity with reduced opacity
@@ -299,7 +299,7 @@ export const InputBar = observer(function InputBar({
                 )}
 
                 {/* Action buttons row - rendered from centralized commands */}
-                <div className="flex items-center gap-2 px-2 py-2 bg-base-200">
+                <div className="flex flex-wrap items-center gap-2 px-2 py-2 bg-base-200">
                     {commands.map((cmd) => (
                         <div key={cmd.id} className={cx(cmd.spacer && "ml-auto", !cmd.spacer && input.isDisabled && "opacity-50 pointer-events-none")}>
                             <CommandButton

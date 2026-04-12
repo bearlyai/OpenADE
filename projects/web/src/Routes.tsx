@@ -270,10 +270,7 @@ export const CodeWorkspaceTaskRoute = observer(() => {
                     </button>
                 </>
             ) : (
-                <span
-                    className="font-medium text-base-content truncate min-w-0 cursor-text"
-                    onClick={() => setIsEditingTitle(true)}
-                >
+                <span className="font-medium text-base-content truncate min-w-0 cursor-text" onClick={() => setIsEditingTitle(true)}>
                     {taskTitle}
                 </span>
             )}
