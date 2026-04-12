@@ -67,11 +67,11 @@ interface Harness<M = unknown> {
     query(q: HarnessQuery): AsyncGenerator<HarnessEvent<M>>
 
     // Session management (check capabilities().supportsSessionReplay)
-    listSessions(options?: ListSessionsOptions): Promise<SessionMeta[]>
-    getSessionEvents(sessionId: string, options?: GetSessionEventsOptions): Promise<HarnessEvent<M>[] | null>
-    writeSessionEvents(sessionId: string, events: HarnessEvent<M>[], options: WriteSessionEventsOptions): Promise<void>
-    deleteSession(sessionId: string, options?: DeleteSessionOptions): Promise<boolean>
-    isSessionActive(sessionId: string): Promise<boolean>
+    listSessions(options?): Promise<SessionMeta[]>
+    getSessionEvents(sessionId): Promise<HarnessEvent<M>[] | null>
+    writeSessionEvents(sessionId, events, options): Promise<void>
+    deleteSession(sessionId): Promise<boolean>
+    isSessionActive(sessionId): Promise<boolean>
 }
 ```
 
@@ -320,30 +320,25 @@ Read, write, and delete session data from each CLI's on-disk storage. Events are
 const harness = new ClaudeCodeHarness()
 
 // List recent sessions
-const sessions = await harness.listSessions({ cwd: "/my/project", limit: 10 })
+const sessions = await harness.listSessions({ limit: 10 })
 
-// Read events from a session
-const events = await harness.getSessionEvents(sessions[0].sessionId, { cwd: "/my/project" })
+// Read events from a session (same HarnessEvent<M> type as live streaming)
+const events = await harness.getSessionEvents(sessions[0].sessionId)
 
-// Check if session is still running
-const active = await harness.isSessionActive(sessions[0].sessionId)
-
-// Write events back (only when session is not active)
-if (!active) {
-    await harness.writeSessionEvents(sessions[0].sessionId, newEvents, { cwd: "/my/project" })
-}
+// Write events back (throws if session is still active)
+await harness.writeSessionEvents(sessions[0].sessionId, newEvents, { cwd: "/my/project" })
 
 // Delete a session
-await harness.deleteSession(sessions[0].sessionId, { cwd: "/my/project" })
+await harness.deleteSession(sessions[0].sessionId)
 ```
 
 | Method | Description |
 |---|---|
-| `listSessions(options?)` | List sessions from disk, sorted newest-first. Filter by `cwd`, cap with `limit`. |
-| `getSessionEvents(sessionId, options?)` | Read a session's JSONL file → `HarnessEvent<M>[]` (or `null` if not found) |
-| `writeSessionEvents(sessionId, events, options)` | Append events to an existing session. Throws if session is active. |
-| `deleteSession(sessionId, options?)` | Remove session files. Returns `false` if not found. |
-| `isSessionActive(sessionId)` | Check if a CLI process is currently serving the session (PID-based for Claude, always false for Codex) |
+| `listSessions(options?)` | List sessions from disk, sorted newest-first |
+| `getSessionEvents(sessionId)` | Read a session's JSONL → `HarnessEvent<M>[]` |
+| `writeSessionEvents(sessionId, events, options)` | Append events to an existing session |
+| `deleteSession(sessionId)` | Remove session files from disk |
+| `isSessionActive(sessionId)` | Check if a CLI process is currently serving the session |
 
 ---
 
