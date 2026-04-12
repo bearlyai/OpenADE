@@ -70,7 +70,7 @@ export async function generateTitle(
 ): Promise<string | null> {
     const manager = getHarnessQueryManager()
 
-    let prompt = `Generate a short, descriptive title (3-8 words) for this task:\n\n${description}`
+    let prompt = `Generate a concise, descriptive title (aim for exactly 3 words) for this task:\n\n${description}`
 
     if (events && events.length > 0) {
         const context = buildConversationContext(events)
@@ -86,7 +86,7 @@ export async function generateTitle(
         mode: "read-only",
         disablePlanningTools: true,
         appendSystemPrompt:
-            "You are a title generator. Output a title in this exact format:\n" + "Title: <your 3-8 word title>\n" + "Do not output anything else.",
+            "You are a title generator. Aim for exactly 3 words. Output a title in this exact format:\n" + "Title: <your 3 word title>\n" + "Do not output anything else.",
     })
 
     if (!query) return null
