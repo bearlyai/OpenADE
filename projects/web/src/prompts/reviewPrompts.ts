@@ -63,7 +63,7 @@ export function buildPlanReviewPrompt({
         userMessage:
             `<task_thread_context>\n${threadXml}\n</task_thread_context>\n\n` +
             `<plan_to_review>\n${planText}\n</plan_to_review>\n\n` +
-            "Review this plan. For each finding, provide: Location, Issue, Suggestion.\n" +
+            "Review this plan. For each finding: Location, Issue, Suggestion. Bullets only, no prose.\n" +
             "Prioritize correctness gaps and blockers first.\n" +
             "If relevant, verify assumptions against the current code and recent diffs/commits.\n\n" +
             `${REVIEW_DIMENSIONS}\n\n` +
@@ -89,7 +89,7 @@ export function buildWorkReviewPrompt({
             `<task_thread_context>\n${threadXml}\n</task_thread_context>\n\n` +
             "Review the recent work. Use read-only exploration as needed.\n" +
             "Inspect relevant git status/diff, recent commits, and touched files before writing conclusions.\n" +
-            "For each finding, provide: Location, Issue, Suggestion.\n" +
+            "For each finding: Location, Issue, Suggestion. Bullets only, no prose.\n" +
             "Prioritize bugs, regressions, and risky complexity.\n\n" +
             `${REVIEW_DIMENSIONS}\n\n` +
             `${REVIEW_SENSITIVITY_GUIDANCE}` +

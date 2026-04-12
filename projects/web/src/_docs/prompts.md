@@ -56,15 +56,25 @@ Comments are formatted as XML for Claude:
 
 Source types: plan, file, diff, patch, llm_output, edit_diff, write_diff, bash_output, assistant_text
 
-## Plan Output Format
+## Output Formats
 
-Plans follow this structure:
+All modes share `COMPACT_STYLE_RULES` (bullets > paragraphs, no filler, tradeoffs on labeled lines).
+
+### Plan
 ```markdown
-## 📋 Overview
-## ✅ Outcomes (expected results)
-## 🔀 Decisions (key choices with alternatives)
-## 📝 Plan (implementation steps)
+## 📋 Overview (Goal / Scope / Non-goals)
+## ✅ Outcomes (bulleted expected results)
+## 🔀 Decisions (Pick / Rejected / Depends on)
+## 📝 Plan (steps with files, additions/deletions, tests)
 ```
+Trivial changes skip straight to `## 📝 Plan`.
+
+### Ask
+Closed questions: `## Answer`, `## Evidence`, `## Tradeoffs`, `## Unknowns`
+Exploratory questions: structured prose with code refs, no skeleton.
+
+### Execute
+Completion summary: `## Done`, `## Verified`, `## Blocked` (optional), `## Risks` (optional)
 
 ## Action Prompts
 

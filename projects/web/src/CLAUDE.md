@@ -56,6 +56,7 @@ Also add to `TrayType` union in `store/managers/TrayManager.ts`.
 - **No trivial getters** - Inline `task.status === "stopped"` instead of `task.isStopped`
 - **Destructured params for 3+ args** - Use inline destructured params
 - **Remove unused methods** - After refactors, grep and clean up
+- **No string-containment tests on prompts** — `expect(prompt).toContain("some phrase")` tests are brittle, break on every wording change, and verify nothing meaningful. Test prompt builder *logic* (conditional inclusion, merging, undefined returns) not prompt *text*.
 
 ## Architecture
 
