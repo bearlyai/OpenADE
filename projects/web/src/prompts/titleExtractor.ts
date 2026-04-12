@@ -7,8 +7,8 @@
 import { getDefaultModelForHarness, getModelFullId, MODEL_REGISTRY } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { getHarnessQueryManager } from "../electronAPI/harnessQuery"
-import { extractPlanText } from "../hyperplan/extractPlanText"
 import type { CodeEvent } from "../types"
+import { buildTaskThreadXmlWithBudget } from "./taskThreadSerializer"
 
 /** Pick a model for title generation, resolved to the full wire ID for the given harness */
 function getTitleModel(harnessId: HarnessId): string {
@@ -33,33 +33,7 @@ export function generateSlug(): string {
     return `task-${generateRandomChars(8)}`
 }
 
-const MAX_CONVERSATION_CONTEXT_CHARS = 2000
-
-/** Build a truncated conversation summary from task events for title generation */
-export function buildConversationContext(events: CodeEvent[]): string | null {
-    const parts: string[] = []
-
-    for (const event of events) {
-        if (event.type !== "action") continue
-
-        if (event.userInput) {
-            parts.push(`User: ${event.userInput}`)
-        }
-
-        const assistantText = extractPlanText(event.execution.events, event.execution.harnessId)
-        if (assistantText) {
-            parts.push(`Assistant: ${assistantText}`)
-        }
-    }
-
-    if (parts.length === 0) return null
-
-    let context = parts.join("\n")
-    if (context.length > MAX_CONVERSATION_CONTEXT_CHARS) {
-        context = context.slice(0, MAX_CONVERSATION_CONTEXT_CHARS) + "..."
-    }
-    return context
-}
+const TITLE_CONTEXT_MAX_BYTES = 2000
 
 /** Generate a title from description using harness execution */
 export async function generateTitle(
@@ -73,9 +47,12 @@ export async function generateTitle(
     let prompt = `Generate a concise, descriptive title (aim for exactly 3 words) for this task:\n\n${description}`
 
     if (events && events.length > 0) {
-        const context = buildConversationContext(events)
-        if (context) {
-            prompt += `\n\nHere is some of the conversation so far:\n\n${context}`
+        const { xml, includedEvents } = buildTaskThreadXmlWithBudget(
+            { id: "", repoId: "", title: "", description: "", events },
+            { maxBytes: TITLE_CONTEXT_MAX_BYTES, truncateMiddle: true }
+        )
+        if (includedEvents > 0) {
+            prompt += `\n\nHere is some of the conversation so far:\n\n${xml}`
         }
     }
 
@@ -86,7 +63,9 @@ export async function generateTitle(
         mode: "read-only",
         disablePlanningTools: true,
         appendSystemPrompt:
-            "You are a title generator. Aim for exactly 3 words. Output a title in this exact format:\n" + "Title: <your 3 word title>\n" + "Do not output anything else.",
+            "You are a title generator. Aim for exactly 3 words. Output a title in this exact format:\n" +
+            "Title: <your 3 word title>\n" +
+            "Do not output anything else.",
     })
 
     if (!query) return null

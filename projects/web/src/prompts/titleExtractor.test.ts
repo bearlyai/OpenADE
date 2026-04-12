@@ -1,47 +1,49 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi, beforeEach } from "vitest"
+import type { ActionEvent, CodeEvent } from "../types"
 import type { HarnessStreamEvent } from "../electronAPI/harnessEventTypes"
-import type { CodeEvent, ActionEvent, SetupEnvironmentEvent } from "../types"
-import { buildConversationContext } from "./titleExtractor"
+import { fallbackTitle, generateSlug, generateTitle } from "./titleExtractor"
 
-/** Helper to build a raw_message execution event for Claude Code */
-function claudeRawEvent(message: Record<string, unknown>): HarnessStreamEvent {
-    return {
-        id: crypto.randomUUID(),
-        type: "raw_message",
-        executionId: "exec-1",
-        harnessId: "claude-code",
-        message,
-        direction: "execution",
-    } as unknown as HarnessStreamEvent
-}
+// Capture the prompt passed to startExecution
+let capturedPrompt: string | null = null
 
-/** Helper to build a raw_message execution event for Codex */
-function codexRawEvent(message: Record<string, unknown>): HarnessStreamEvent {
-    return {
-        id: crypto.randomUUID(),
-        type: "raw_message",
-        executionId: "exec-1",
-        harnessId: "codex",
-        message,
-        direction: "execution",
-    } as unknown as HarnessStreamEvent
-}
+vi.mock("../electronAPI/harnessQuery", () => ({
+    getHarnessQueryManager: () => ({
+        startExecution: async (prompt: string) => {
+            capturedPrompt = prompt
+            return {
+                stream: async function* () {
+                    yield { type: "result", result: "Title: Test Title" }
+                },
+                abort: () => {},
+                cleanup: () => {},
+            }
+        },
+    }),
+}))
 
-/** Helper to build an ActionEvent with Claude Code execution */
+vi.mock("../constants", () => ({
+    MODEL_REGISTRY: { "claude-code": { models: [{ id: "sonnet" }] } },
+    getDefaultModelForHarness: () => "sonnet",
+    getModelFullId: (alias: string) => `claude-${alias}`,
+}))
+
 function makeActionEvent(overrides: {
+    id?: string
     userInput?: string
     harnessId?: "claude-code" | "codex"
     streamEvents?: HarnessStreamEvent[]
 }): ActionEvent {
+    const id = overrides.id ?? crypto.randomUUID()
     return {
-        id: crypto.randomUUID(),
+        id,
         type: "action",
         status: "completed",
-        createdAt: new Date().toISOString(),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:00:10.000Z",
         userInput: overrides.userInput ?? "",
         execution: {
             harnessId: overrides.harnessId ?? "claude-code",
-            executionId: "exec-1",
+            executionId: `${id}-exec`,
             events: overrides.streamEvents ?? [],
         },
         source: { type: "do", userLabel: "Do" },
@@ -49,142 +51,79 @@ function makeActionEvent(overrides: {
     } as ActionEvent
 }
 
-/** Helper to build a SetupEnvironmentEvent */
-function makeSetupEvent(): SetupEnvironmentEvent {
-    return {
-        id: crypto.randomUUID(),
-        type: "setup_environment",
-        status: "completed",
-        createdAt: new Date().toISOString(),
-        userInput: "",
-        worktreeId: "wt-1",
-        deviceId: "dev-1",
-        workingDir: "/tmp",
-    }
-}
+beforeEach(() => {
+    capturedPrompt = null
+})
 
-describe("buildConversationContext", () => {
-    it("returns null when events array is empty", () => {
-        expect(buildConversationContext([])).toBeNull()
+describe("generateSlug", () => {
+    it("generates a slug with task- prefix and 8 random chars", () => {
+        const slug = generateSlug()
+        expect(slug).toMatch(/^task-[a-z0-9]{8}$/)
     })
 
-    it("returns null when no action events exist", () => {
-        const events: CodeEvent[] = [makeSetupEvent()]
-        expect(buildConversationContext(events)).toBeNull()
+    it("generates unique slugs", () => {
+        const slugs = new Set(Array.from({ length: 100 }, () => generateSlug()))
+        expect(slugs.size).toBe(100)
+    })
+})
+
+describe("fallbackTitle", () => {
+    it("returns short descriptions unchanged", () => {
+        expect(fallbackTitle("Fix login bug")).toBe("Fix login bug")
     })
 
-    it("returns null when action events have no userInput or assistant text", () => {
-        const events: CodeEvent[] = [makeActionEvent({ userInput: "", streamEvents: [] })]
-        expect(buildConversationContext(events)).toBeNull()
-    })
-
-    it("extracts user input from action events", () => {
-        const events: CodeEvent[] = [makeActionEvent({ userInput: "Fix the login bug" })]
-        expect(buildConversationContext(events)).toBe("User: Fix the login bug")
-    })
-
-    it("extracts assistant text from Claude Code result events", () => {
-        const events: CodeEvent[] = [
-            makeActionEvent({
-                userInput: "Fix the login bug",
-                streamEvents: [claudeRawEvent({ type: "result", result: "I fixed the authentication check in login.ts" })],
-            }),
-        ]
-        expect(buildConversationContext(events)).toBe("User: Fix the login bug\nAssistant: I fixed the authentication check in login.ts")
-    })
-
-    it("extracts assistant text from Codex agent_message events", () => {
-        const events: CodeEvent[] = [
-            makeActionEvent({
-                userInput: "Fix the login bug",
-                harnessId: "codex",
-                streamEvents: [
-                    codexRawEvent({
-                        type: "item.completed",
-                        item: { type: "agent_message", text: "I fixed the auth check" },
-                    }),
-                ],
-            }),
-        ]
-        expect(buildConversationContext(events)).toBe("User: Fix the login bug\nAssistant: I fixed the auth check")
-    })
-
-    it("handles multiple action events as conversation turns", () => {
-        const events: CodeEvent[] = [
-            makeActionEvent({
-                userInput: "Fix the login bug",
-                streamEvents: [claudeRawEvent({ type: "result", result: "I found the issue in auth.ts" })],
-            }),
-            makeActionEvent({
-                userInput: "Also update the tests",
-                streamEvents: [claudeRawEvent({ type: "result", result: "Tests updated for the auth fix" })],
-            }),
-        ]
-        expect(buildConversationContext(events)).toBe(
-            "User: Fix the login bug\n" +
-                "Assistant: I found the issue in auth.ts\n" +
-                "User: Also update the tests\n" +
-                "Assistant: Tests updated for the auth fix"
-        )
-    })
-
-    it("skips non-action events interspersed with action events", () => {
-        const events: CodeEvent[] = [
-            makeActionEvent({
-                userInput: "Fix the bug",
-                streamEvents: [claudeRawEvent({ type: "result", result: "Fixed" })],
-            }),
-            makeSetupEvent(),
-            makeActionEvent({
-                userInput: "Run tests",
-                streamEvents: [claudeRawEvent({ type: "result", result: "Tests pass" })],
-            }),
-        ]
-        expect(buildConversationContext(events)).toBe("User: Fix the bug\nAssistant: Fixed\nUser: Run tests\nAssistant: Tests pass")
-    })
-
-    it("includes user input even when assistant text is missing", () => {
-        const events: CodeEvent[] = [
-            makeActionEvent({
-                userInput: "Fix the bug",
-                streamEvents: [], // no assistant output
-            }),
-        ]
-        expect(buildConversationContext(events)).toBe("User: Fix the bug")
-    })
-
-    it("includes assistant text even when user input is empty", () => {
-        const events: CodeEvent[] = [
-            makeActionEvent({
-                userInput: "",
-                streamEvents: [claudeRawEvent({ type: "result", result: "Auto-generated response" })],
-            }),
-        ]
-        expect(buildConversationContext(events)).toBe("Assistant: Auto-generated response")
-    })
-
-    it("truncates context to MAX_CONVERSATION_CONTEXT_CHARS", () => {
-        const longText = "x".repeat(3000)
-        const events: CodeEvent[] = [
-            makeActionEvent({
-                userInput: longText,
-            }),
-        ]
-        const result = buildConversationContext(events)!
-        // "User: " (6 chars) + 3000 chars = 3006 total, should be truncated to 2000 + "..."
-        expect(result.length).toBe(2003) // 2000 + "..."
+    it("truncates long descriptions to 50 chars with ellipsis", () => {
+        const long = "a".repeat(100)
+        const result = fallbackTitle(long)
+        expect(result.length).toBe(53) // 50 + "..."
         expect(result.endsWith("...")).toBe(true)
     })
 
-    it("does not truncate context within the limit", () => {
-        const events: CodeEvent[] = [
-            makeActionEvent({
-                userInput: "Short input",
-                streamEvents: [claudeRawEvent({ type: "result", result: "Short output" })],
-            }),
-        ]
-        const result = buildConversationContext(events)!
-        expect(result).not.toContain("...")
-        expect(result).toBe("User: Short input\nAssistant: Short output")
+    it("collapses whitespace", () => {
+        expect(fallbackTitle("  fix   the   bug  ")).toBe("fix the bug")
+    })
+})
+
+describe("generateTitle", () => {
+    it("includes serialized thread XML in prompt when events are provided", async () => {
+        const events: CodeEvent[] = [makeActionEvent({ userInput: "Fix the login bug" })]
+        await generateTitle("Fix login", new AbortController(), "claude-code", events)
+
+        expect(capturedPrompt).toContain("Here is some of the conversation so far:")
+        expect(capturedPrompt).toContain("<task")
+        expect(capturedPrompt).toContain("Fix the login bug")
+    })
+
+    it("does not duplicate description in serialized context", async () => {
+        const description = "A".repeat(500)
+        const events: CodeEvent[] = [makeActionEvent({ userInput: "do it" })]
+        await generateTitle(description, new AbortController(), "claude-code", events)
+
+        // Description appears once at the top of the prompt, not inside <description> in the XML
+        const xmlPortion = capturedPrompt!.split("Here is some of the conversation so far:")[1]
+        expect(xmlPortion).not.toContain(description)
+    })
+
+    it("does not include thread context when no events are provided", async () => {
+        await generateTitle("Fix login", new AbortController(), "claude-code")
+
+        expect(capturedPrompt).not.toContain("<task")
+        expect(capturedPrompt).not.toContain("conversation so far")
+    })
+
+    it("does not include thread context when events array is empty", async () => {
+        await generateTitle("Fix login", new AbortController(), "claude-code", [])
+
+        expect(capturedPrompt).not.toContain("<task")
+    })
+
+    it("uses middle truncation to keep first and last events", async () => {
+        // Create many events with large user inputs to exceed the 2KB budget
+        const events: CodeEvent[] = Array.from({ length: 10 }, (_, i) => makeActionEvent({ id: `ev-${i}`, userInput: `Message ${i}: ${"x".repeat(300)}` }))
+        await generateTitle("Fix bug", new AbortController(), "claude-code", events)
+
+        // First and last events should be present
+        expect(capturedPrompt).toContain("Message 0:")
+        expect(capturedPrompt).toContain("Message 9:")
     })
 })

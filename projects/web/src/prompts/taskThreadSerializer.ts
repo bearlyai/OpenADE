@@ -1,6 +1,8 @@
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { groupStreamEvents, type MessageGroup } from "../components/events/messageGroups"
 import type { ActionEvent, ActionEventSource, Task } from "../types"
+
+type TaskLike = Pick<Task, "id" | "repoId" | "title" | "description" | "events">
 import { makeXml, type XmlNode } from "../utils/makeXML"
 
 export interface TaskThreadFormat {
@@ -14,6 +16,8 @@ export interface TaskThreadFormat {
 
 export interface TaskThreadContextBudgetOptions extends Partial<TaskThreadFormat> {
     maxBytes?: number
+    /** When true, keep events from both edges and drop the middle when over budget */
+    truncateMiddle?: boolean
 }
 
 export interface TaskThreadContextResult {
@@ -94,7 +98,7 @@ export type TaskThreadItemJson =
           errors?: string[]
       }
 
-export function buildTaskThreadJson(task: Task, format: Partial<TaskThreadFormat> = {}): TaskThreadJson {
+export function buildTaskThreadJson(task: TaskLike, format: Partial<TaskThreadFormat> = {}): TaskThreadJson {
     const resolvedFormat = resolveFormat(format)
     let actionEvents = task.events.filter((event): event is ActionEvent => event.type === "action")
     if (resolvedFormat.maxEvents != null) {
@@ -146,12 +150,12 @@ export function taskThreadJsonToXml(thread: TaskThreadJson): string {
     return makeXml(root)
 }
 
-export function buildTaskThreadXml(task: Task, format: Partial<TaskThreadFormat> = {}): string {
+export function buildTaskThreadXml(task: TaskLike, format: Partial<TaskThreadFormat> = {}): string {
     const threadJson = buildTaskThreadJson(task, format)
     return taskThreadJsonToXml(threadJson)
 }
 
-export function buildTaskThreadXmlWithBudget(task: Task, options: TaskThreadContextBudgetOptions = {}): TaskThreadContextResult {
+export function buildTaskThreadXmlWithBudget(task: TaskLike, options: TaskThreadContextBudgetOptions = {}): TaskThreadContextResult {
     const resolvedFormat = resolveFormat(options)
     const maxBytes = Math.max(0, options.maxBytes ?? DEFAULT_TASK_THREAD_CONTEXT_MAX_BYTES)
     let actionEvents = task.events.filter((event): event is ActionEvent => event.type === "action")
@@ -167,6 +171,11 @@ export function buildTaskThreadXmlWithBudget(task: Task, options: TaskThreadCont
     }
 
     const allThreadEvents = actionEvents.map((event) => actionEventToThreadEvent(event, resolvedFormat))
+
+    if (options.truncateMiddle) {
+        return selectEventsMiddleOut(threadTask, resolvedFormat, allThreadEvents, maxBytes)
+    }
+
     const selectedEvents: TaskThreadEventJson[] = []
 
     let xml = taskThreadJsonToXml({
@@ -201,6 +210,67 @@ export function buildTaskThreadXmlWithBudget(task: Task, options: TaskThreadCont
         truncated: omittedEvents > 0,
         includedEvents,
         omittedEvents,
+    }
+}
+
+/** Keep events from both edges, dropping the middle when over budget */
+function selectEventsMiddleOut(
+    threadTask: TaskThreadJson["task"],
+    format: TaskThreadFormat,
+    allThreadEvents: TaskThreadEventJson[],
+    maxBytes: number
+): TaskThreadContextResult {
+    const toXml = (indices: Set<number>) => {
+        const events = [...indices].sort((a, b) => a - b).map((i) => allThreadEvents[i])
+        return taskThreadJsonToXml({ task: threadTask, format, events })
+    }
+
+    const included = new Set<number>()
+    let xml = toXml(included)
+    let byteLength = getUtf8ByteLength(xml)
+
+    const tryAdd = (idx: number): boolean => {
+        included.add(idx)
+        const candidateXml = toXml(included)
+        const candidateBytes = getUtf8ByteLength(candidateXml)
+        if (candidateBytes > maxBytes) {
+            included.delete(idx)
+            return false
+        }
+        xml = candidateXml
+        byteLength = candidateBytes
+        return true
+    }
+
+    let left = 0
+    let right = allThreadEvents.length - 1
+    let leftDone = false
+    let rightDone = false
+
+    while (left <= right && (!leftDone || !rightDone)) {
+        if (!leftDone) {
+            if (tryAdd(left)) {
+                left++
+            } else {
+                leftDone = true
+            }
+        }
+        if (left > right) break
+        if (!rightDone) {
+            if (tryAdd(right)) {
+                right--
+            } else {
+                rightDone = true
+            }
+        }
+    }
+
+    return {
+        xml,
+        byteLength,
+        truncated: included.size < allThreadEvents.length,
+        includedEvents: included.size,
+        omittedEvents: allThreadEvents.length - included.size,
     }
 }
 

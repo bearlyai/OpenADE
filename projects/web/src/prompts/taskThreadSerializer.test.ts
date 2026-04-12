@@ -432,4 +432,58 @@ describe("buildTaskThreadXmlWithBudget", () => {
         expect(result.omittedEvents).toBe(1)
         expect(result.byteLength).toBeLessThanOrEqual(budget)
     })
+
+    it("truncateMiddle keeps first and last events, dropping the middle", () => {
+        const e1 = createActionEvent({ id: "m1", userInput: "first", harnessId: "claude-code", events: [] })
+        const e2 = createActionEvent({ id: "m2", userInput: "second", harnessId: "claude-code", events: [] })
+        const e3 = createActionEvent({ id: "m3", userInput: "third", harnessId: "claude-code", events: [] })
+        const e4 = createActionEvent({ id: "m4", userInput: "fourth", harnessId: "claude-code", events: [] })
+        const e5 = createActionEvent({ id: "m5", userInput: "fifth", harnessId: "claude-code", events: [] })
+
+        const fullTask = createTask([e1, e2, e3, e4, e5])
+        // Budget that fits exactly 2 events (first + last)
+        const twoEventTask = createTask([e1, e5])
+        const budget = getUtf8ByteLength(buildTaskThreadXml(twoEventTask))
+
+        const result = buildTaskThreadXmlWithBudget(fullTask, { maxBytes: budget, truncateMiddle: true })
+
+        expect(result.truncated).toBe(true)
+        expect(result.includedEvents).toBe(2)
+        expect(result.xml).toContain(`<event id="m1"`)
+        expect(result.xml).toContain(`<event id="m5"`)
+        expect(result.xml).not.toContain(`<event id="m3"`)
+    })
+
+    it("truncateMiddle returns all events when budget allows", () => {
+        const e1 = createActionEvent({ id: "f1", userInput: "first", harnessId: "claude-code", events: [] })
+        const e2 = createActionEvent({ id: "f2", userInput: "second", harnessId: "claude-code", events: [] })
+        const e3 = createActionEvent({ id: "f3", userInput: "third", harnessId: "claude-code", events: [] })
+
+        const task = createTask([e1, e2, e3])
+        const fullXml = buildTaskThreadXml(task)
+        const result = buildTaskThreadXmlWithBudget(task, { maxBytes: getUtf8ByteLength(fullXml), truncateMiddle: true })
+
+        expect(result.truncated).toBe(false)
+        expect(result.includedEvents).toBe(3)
+    })
+
+    it("truncateMiddle expands from edges inward", () => {
+        const e1 = createActionEvent({ id: "x1", userInput: "first", harnessId: "claude-code", events: [] })
+        const e2 = createActionEvent({ id: "x2", userInput: "second", harnessId: "claude-code", events: [] })
+        const e3 = createActionEvent({ id: "x3", userInput: "third", harnessId: "claude-code", events: [] })
+        const e4 = createActionEvent({ id: "x4", userInput: "fourth", harnessId: "claude-code", events: [] })
+
+        const fullTask = createTask([e1, e2, e3, e4])
+        // Budget that fits 3 events — should keep first, last, and second (left expands before right)
+        const threeEventTask = createTask([e1, e2, e4])
+        const budget = getUtf8ByteLength(buildTaskThreadXml(threeEventTask))
+
+        const result = buildTaskThreadXmlWithBudget(fullTask, { maxBytes: budget, truncateMiddle: true })
+
+        expect(result.includedEvents).toBe(3)
+        expect(result.xml).toContain(`<event id="x1"`)
+        expect(result.xml).toContain(`<event id="x2"`)
+        expect(result.xml).toContain(`<event id="x4"`)
+        expect(result.xml).not.toContain(`<event id="x3"`)
+    })
 })
