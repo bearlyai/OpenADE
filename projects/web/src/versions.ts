@@ -8,6 +8,18 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.68.0",
+        title: "Task Management & Harness APIs",
+        date: "2026-04-12",
+        highlights: [
+            "Multi-select task deletion lets you bulk-remove tasks with full resource cleanup",
+            "Pin tasks to the top of your sidebar for quick access to important work",
+            "Edit task titles inline directly from the sidebar or navbar",
+            "MCP connectors now open in a popover and reliably toggle on first click",
+            "Reviews focus on blocking findings only, with new dimensions for security, style, and robustness",
+        ],
+    },
+    {
         version: "0.67.0",
         title: "Refined Reviews",
         date: "2026-04-02",
