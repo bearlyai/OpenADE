@@ -165,11 +165,42 @@ export interface HarnessCapabilities {
     supportsCostTracking: boolean
     supportsNamedTools: boolean
     supportsImages: boolean
+    supportsSessionReplay: boolean
 }
 
 export interface SlashCommand {
     name: string
     type: "skill" | "slash_command"
+}
+
+// ============================================================================
+// Session Management
+// ============================================================================
+
+export interface SessionMeta {
+    sessionId: string
+    harnessId: HarnessId
+    cwd?: string
+    model?: string
+    startedAt?: string
+    messageCount?: number
+}
+
+export interface ListSessionsOptions {
+    cwd?: string
+    limit?: number
+}
+
+export interface GetSessionEventsOptions {
+    cwd?: string
+}
+
+export interface WriteSessionEventsOptions {
+    cwd: string
+}
+
+export interface DeleteSessionOptions {
+    cwd?: string
 }
 
 // ============================================================================

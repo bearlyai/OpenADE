@@ -15,6 +15,11 @@ import type {
     HarnessEvent,
     McpServerConfig,
     HarnessUsage,
+    SessionMeta,
+    ListSessionsOptions,
+    GetSessionEventsOptions,
+    WriteSessionEventsOptions,
+    DeleteSessionOptions,
 } from "../../types.js"
 import { HarnessNotInstalledError } from "../../errors.js"
 import { resolveExecutable } from "../../util/which.js"
@@ -24,6 +29,7 @@ import { buildUserPromptTool, USER_PROMPT_SYSTEM_HINT } from "../../util/user-pr
 import { buildClaudeArgs, type ClaudeCodeHarnessConfig } from "./args.js"
 import { writeMcpConfigJson } from "./mcp-config.js"
 import { parseClaudeEvent, type ClaudeEvent, type ClaudeResultEvent, type ClaudeSystemInitEvent } from "./types.js"
+import { listClaudeSessions, readClaudeSession, writeClaudeSession, deleteClaudeSession, isClaudeSessionActive } from "./sessions.js"
 
 export type { ClaudeCodeHarnessConfig } from "./args.js"
 export type { ClaudeEvent } from "./types.js"
@@ -58,6 +64,7 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
             supportsCostTracking: true,
             supportsNamedTools: true,
             supportsImages: true,
+            supportsSessionReplay: true,
         }
     }
 
@@ -100,7 +107,7 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
         // Check auth via `claude auth status` (outputs JSON with { loggedIn: boolean, ... })
         let authenticated = false
         try {
-            const env: Record<string, string> = { ...process.env as Record<string, string> }
+            const env: Record<string, string> = { ...(process.env as Record<string, string>) }
             // Unset CLAUDECODE so the command works inside nested Claude Code sessions
             delete env.CLAUDECODE
 
@@ -338,6 +345,34 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
                 }
             }
         }
+    }
+
+    // ── Session management ──
+
+    async listSessions(options?: ListSessionsOptions): Promise<SessionMeta[]> {
+        return listClaudeSessions(options)
+    }
+
+    async getSessionEvents(sessionId: string, options?: GetSessionEventsOptions): Promise<HarnessEvent<ClaudeEvent>[] | null> {
+        return readClaudeSession(sessionId, options)
+    }
+
+    async writeSessionEvents(sessionId: string, events: HarnessEvent<ClaudeEvent>[], options: WriteSessionEventsOptions): Promise<void> {
+        if (await isClaudeSessionActive(sessionId)) {
+            throw new Error(`Session ${sessionId} is currently active — cannot write while CLI is running`)
+        }
+        return writeClaudeSession(sessionId, events, options)
+    }
+
+    async deleteSession(sessionId: string, options?: DeleteSessionOptions): Promise<boolean> {
+        if (await isClaudeSessionActive(sessionId)) {
+            throw new Error(`Session ${sessionId} is currently active — cannot delete while CLI is running`)
+        }
+        return deleteClaudeSession(sessionId, options)
+    }
+
+    async isSessionActive(sessionId: string): Promise<boolean> {
+        return isClaudeSessionActive(sessionId)
     }
 
     private async resolveBinary(): Promise<string | undefined> {

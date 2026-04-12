@@ -44,6 +44,7 @@ src/
 ├── errors.ts                   # HarnessError, HarnessNotInstalledError, HarnessAuthError
 ├── registry.ts                 # HarnessRegistry — register/get/getAll harnesses
 ├── index.ts                    # Public barrel export
+├── browser.ts                  # Browser-safe barrel (types only, no Node deps)
 ├── util/
 │   ├── spawn.ts                # spawnJsonl() — spawn child, read JSONL stdout, yield events
 │   ├── spawn.test.ts
@@ -60,6 +61,8 @@ src/
 │   │   ├── args.test.ts
 │   │   ├── mcp-config.ts       # writeMcpConfigJson() — write --mcp-config temp file
 │   │   ├── mcp-config.test.ts
+│   │   ├── sessions.ts         # Session read/write/delete/list for ~/.claude on-disk format
+│   │   ├── sessions.test.ts
 │   │   └── index.ts            # ClaudeCodeHarness class
 │   └── codex/
 │       ├── types.ts            # CodexEvent union (7 variants) + parseCodexEvent()
@@ -68,8 +71,10 @@ src/
 │       ├── args.test.ts
 │       ├── config-overrides.ts # buildCodexMcpConfigOverrides() — -c flag generation
 │       ├── config-overrides.test.ts
-│       ├── pricing.ts         # calculateCostUsd() — token-based cost for Codex models
+│       ├── pricing.ts          # calculateCostUsd() — token-based cost for Codex models
 │       ├── pricing.test.ts
+│       ├── sessions.ts         # Session read/write/delete/list for ~/.codex on-disk format
+│       ├── sessions.test.ts
 │       └── index.ts            # CodexHarness class
 ```
 
@@ -95,6 +100,41 @@ src/
 6. Each line is parsed by the harness-specific parser (`parseClaudeEvent` / `parseCodexEvent`)
 7. Parsed events are wrapped in `HarnessEvent<M>` and yielded to the caller
 8. On process exit, cleanup runs (temp files, tool server shutdown)
+
+## Session Management
+
+The `Harness<M>` interface includes methods for reading, writing, and deleting session data from each CLI's on-disk storage. This enables session reload after disconnect, unloading/reloading event data, bidirectional sync, and session continuation.
+
+| Method | Description |
+|---|---|
+| `listSessions(options?)` | List sessions from disk, sorted newest-first |
+| `getSessionEvents(sessionId, options?)` | Read session JSONL → `HarnessEvent<M>[]` (same type as live streaming) |
+| `writeSessionEvents(sessionId, events, options)` | Append events to an existing session |
+| `deleteSession(sessionId, options?)` | Remove session files from disk |
+| `isSessionActive(sessionId)` | Check if a CLI process is currently serving the session |
+
+Check `capabilities().supportsSessionReplay` before using.
+
+### On-disk formats
+
+**Claude Code** (`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`):
+- Each line is a JSON object with `type` ("assistant" / "user" / "queue-operation"), `uuid`, `parentUuid` forming a linked list
+- Active sessions tracked via PID files at `~/.claude/sessions/<pid>.json`
+- Write appends chain from the current leaf UUID
+- Written entries include `userType: "external"`, `version: "harness"` metadata
+
+**Codex** (`~/.codex/sessions/YYYY/MM/DD/rollout-<datetime>-<uuid>.jsonl`):
+- Line types: `session_meta`, `event_msg` (turn lifecycle, token counts), `response_item` (messages, function calls, reasoning)
+- Read does two-pass: pass 1 collects `function_call_output` by `call_id`, pass 2 parses all lines with correlation
+- `session_meta` → `thread.started`, `event_msg` turn lifecycle → `turn.started`/`turn.completed`
+- Write wraps appended events in `turn_started`/`turn_complete` lifecycle
+- No PID-based active detection (always returns false)
+
+### Windows compatibility
+
+- `encodeProjectPath` handles both `/` and `\` separators
+- Codex rollout file filtering uses `path.basename()` (cross-platform)
+- All path construction uses `path.join`
 
 ## Adding a New Harness
 

@@ -24,6 +24,11 @@ export type {
     SlashCommand,
     ModelEntry,
     HarnessModelConfig,
+    SessionMeta,
+    ListSessionsOptions,
+    GetSessionEventsOptions,
+    WriteSessionEventsOptions,
+    DeleteSessionOptions,
 } from "./types.js"
 
 // ── Model catalog (pure data, no Node I/O — safe for renderer) ──

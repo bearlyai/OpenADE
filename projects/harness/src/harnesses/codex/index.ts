@@ -12,6 +12,11 @@ import type {
     HarnessEvent,
     McpServerConfig,
     HarnessUsage,
+    SessionMeta,
+    ListSessionsOptions,
+    GetSessionEventsOptions,
+    WriteSessionEventsOptions,
+    DeleteSessionOptions,
 } from "../../types.js"
 import { HarnessNotInstalledError } from "../../errors.js"
 import { resolveExecutable } from "../../util/which.js"
@@ -22,6 +27,7 @@ import { buildCodexArgs, type CodexHarnessConfig } from "./args.js"
 import { buildCodexMcpConfigOverrides } from "./config-overrides.js"
 import { calculateCostUsd } from "./pricing.js"
 import { parseCodexEvent, type CodexEvent, type CodexTurnCompletedEvent } from "./types.js"
+import { listCodexSessions, readCodexSession, writeCodexSession, deleteCodexSession, isCodexSessionActive } from "./sessions.js"
 
 export type { CodexHarnessConfig } from "./args.js"
 export type { CodexEvent } from "./types.js"
@@ -56,6 +62,7 @@ export class CodexHarness implements Harness<CodexEvent> {
             supportsCostTracking: true,
             supportsNamedTools: false,
             supportsImages: true,
+            supportsSessionReplay: true,
         }
     }
 
@@ -291,6 +298,34 @@ export class CodexHarness implements Harness<CodexEvent> {
                 }
             }
         }
+    }
+
+    // ── Session management ──
+
+    async listSessions(options?: ListSessionsOptions): Promise<SessionMeta[]> {
+        return listCodexSessions(options)
+    }
+
+    async getSessionEvents(sessionId: string, options?: GetSessionEventsOptions): Promise<HarnessEvent<CodexEvent>[] | null> {
+        return readCodexSession(sessionId, options)
+    }
+
+    async writeSessionEvents(sessionId: string, events: HarnessEvent<CodexEvent>[], options: WriteSessionEventsOptions): Promise<void> {
+        if (await isCodexSessionActive(sessionId)) {
+            throw new Error(`Session ${sessionId} is currently active — cannot write while CLI is running`)
+        }
+        return writeCodexSession(sessionId, events, options)
+    }
+
+    async deleteSession(sessionId: string, options?: DeleteSessionOptions): Promise<boolean> {
+        if (await isCodexSessionActive(sessionId)) {
+            throw new Error(`Session ${sessionId} is currently active — cannot delete while CLI is running`)
+        }
+        return deleteCodexSession(sessionId, options)
+    }
+
+    async isSessionActive(sessionId: string): Promise<boolean> {
+        return isCodexSessionActive(sessionId)
     }
 
     private async resolveBinary(): Promise<string | undefined> {

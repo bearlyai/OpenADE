@@ -1,4 +1,18 @@
-import type { HarnessId, HarnessMeta, HarnessCapabilities, HarnessModelConfig, HarnessInstallStatus, SlashCommand, HarnessQuery, HarnessEvent } from "./types.js"
+import type {
+    HarnessId,
+    HarnessMeta,
+    HarnessCapabilities,
+    HarnessModelConfig,
+    HarnessInstallStatus,
+    SlashCommand,
+    HarnessQuery,
+    HarnessEvent,
+    SessionMeta,
+    ListSessionsOptions,
+    GetSessionEventsOptions,
+    WriteSessionEventsOptions,
+    DeleteSessionOptions,
+} from "./types.js"
 
 export interface Harness<M = unknown> {
     readonly id: HarnessId
@@ -16,4 +30,11 @@ export interface Harness<M = unknown> {
 
     // ── Execution ──
     query(q: HarnessQuery): AsyncGenerator<HarnessEvent<M>>
+
+    // ── Session management (async, reads/writes disk) ──
+    listSessions(options?: ListSessionsOptions): Promise<SessionMeta[]>
+    getSessionEvents(sessionId: string, options?: GetSessionEventsOptions): Promise<HarnessEvent<M>[] | null>
+    writeSessionEvents(sessionId: string, events: HarnessEvent<M>[], options: WriteSessionEventsOptions): Promise<void>
+    deleteSession(sessionId: string, options?: DeleteSessionOptions): Promise<boolean>
+    isSessionActive(sessionId: string): Promise<boolean>
 }

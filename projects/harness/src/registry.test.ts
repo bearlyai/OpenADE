@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest"
 import { HarnessRegistry } from "./registry.js"
 import { HarnessError } from "./errors.js"
 import type { Harness } from "./harness.js"
-import type { HarnessMeta, HarnessCapabilities, HarnessInstallStatus, SlashCommand, HarnessQuery, HarnessEvent } from "./types.js"
+import type { HarnessMeta, HarnessCapabilities, HarnessInstallStatus, SlashCommand, HarnessQuery, HarnessEvent, SessionMeta } from "./types.js"
 
 function makeFakeHarness(id: string, installStatus?: Partial<HarnessInstallStatus>): Harness {
     return {
@@ -23,6 +23,7 @@ function makeFakeHarness(id: string, installStatus?: Partial<HarnessInstallStatu
                 supportsCostTracking: false,
                 supportsNamedTools: false,
                 supportsImages: false,
+                supportsSessionReplay: false,
             }
         },
         async checkInstallStatus(): Promise<HarnessInstallStatus> {
@@ -39,6 +40,19 @@ function makeFakeHarness(id: string, installStatus?: Partial<HarnessInstallStatu
         },
         async *query(_q: HarnessQuery): AsyncGenerator<HarnessEvent<unknown>> {
             yield { type: "complete" }
+        },
+        async listSessions(): Promise<SessionMeta[]> {
+            return []
+        },
+        async getSessionEvents(): Promise<HarnessEvent<unknown>[] | null> {
+            return null
+        },
+        async writeSessionEvents(): Promise<void> {},
+        async deleteSession(): Promise<boolean> {
+            return false
+        },
+        async isSessionActive(): Promise<boolean> {
+            return false
         },
     }
 }
