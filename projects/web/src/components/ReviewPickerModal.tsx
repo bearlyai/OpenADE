@@ -1,7 +1,7 @@
 import NiceModal, { useModal } from "@ebay/nice-modal-react"
 import { Star } from "lucide-react"
 import { observer } from "mobx-react"
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { HARNESS_META, MODEL_REGISTRY } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import type { ReviewType } from "../prompts/reviewPrompts"
@@ -54,6 +54,8 @@ export const ReviewPickerModal = NiceModal.create(
         const codeStore = useCodeStore()
         const taskModel = codeStore.tasks.getTaskModel(taskId)
 
+        const [notes, setNotes] = useState(customInstructions ?? "")
+
         const options = useMemo<ReviewAgentOption[]>(() => {
             const pairs: ReviewAgentOption[] = []
             for (const [harnessId, config] of Object.entries(MODEL_REGISTRY) as Array<[HarnessId, (typeof MODEL_REGISTRY)[HarnessId]]>) {
@@ -83,7 +85,7 @@ export const ReviewPickerModal = NiceModal.create(
                 reviewType,
                 harnessId,
                 modelId,
-                customInstructions,
+                customInstructions: notes.trim() || undefined,
             })
         }
 
@@ -109,6 +111,14 @@ export const ReviewPickerModal = NiceModal.create(
                 }
             >
                 <div className="flex flex-col gap-4">
+                    <textarea
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                        placeholder="Add notes for the reviewer (optional)"
+                        className="w-full px-3 py-2 text-sm bg-base-200 border border-border text-base-content placeholder:text-muted resize-none focus:outline-none focus:border-primary/50"
+                        rows={3}
+                    />
+
                     <div className="text-xs text-muted">Pick an agent to start review.</div>
 
                     {reviewOptions.length > 0 && (
