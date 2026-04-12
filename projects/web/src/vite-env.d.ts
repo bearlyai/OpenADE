@@ -57,6 +57,8 @@ interface OpenADEAPI {
         getGitStatus: (params: unknown) => Promise<unknown>
         listFiles: (params: unknown) => Promise<unknown>
         deleteWorkTree: (params: unknown) => Promise<unknown>
+        isBranchMerged: (params: unknown) => Promise<unknown>
+        deleteBranch: (params: unknown) => Promise<unknown>
         listWorkTrees: (params: unknown) => Promise<unknown>
         commitWorkTree: (params: unknown) => Promise<unknown>
         listBranches: (params: unknown) => Promise<unknown>
@@ -101,6 +103,7 @@ interface OpenADEAPI {
         reconnect: (args: { executionId: string }) => Promise<unknown>
         abort: (args: { executionId: string }) => Promise<unknown>
         checkStatus: () => Promise<unknown>
+        deleteSession: (args: { harnessId: string; sessionId: string; cwd?: string }) => Promise<unknown>
         onEvent: (cb: (event: unknown) => void) => () => void
         onToolCall: (executionId: string, cb: (callId: string, name: string, args: unknown) => void) => () => void
     }

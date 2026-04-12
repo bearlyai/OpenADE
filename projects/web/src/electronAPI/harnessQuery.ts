@@ -615,6 +615,20 @@ export function getHarnessQueryManager(): HarnessQueryManagerImpl {
 }
 
 /**
+ * Delete a harness session's on-disk files (JSONL, subagents, debug logs).
+ * Best-effort — returns false if the session wasn't found or couldn't be deleted.
+ */
+export async function deleteHarnessSession(params: {
+    harnessId: string
+    sessionId: string
+    cwd?: string
+}): Promise<boolean> {
+    if (!window.openadeAPI?.harness?.deleteSession) return false
+    const result = (await window.openadeAPI.harness.deleteSession(params)) as { ok: boolean }
+    return result.ok
+}
+
+/**
  * Check if Harness API is available (running in Electron)
  */
 export function isHarnessApiAvailable(): boolean {

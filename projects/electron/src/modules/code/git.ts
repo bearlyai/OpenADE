@@ -124,6 +124,17 @@ interface DeleteWorkTreeResponse {
     error?: string
 }
 
+interface IsBranchMergedParams {
+    repoDir: string
+    branchName: string
+    targetBranch: string
+}
+
+interface DeleteBranchParams {
+    repoDir: string
+    branchName: string
+}
+
 interface ListWorkTreesParams {
     repoDir: string
 }
@@ -1221,6 +1232,21 @@ async function handleDeleteWorkTree(params: DeleteWorkTreeParams): Promise<Delet
     }
 }
 
+async function handleIsBranchMerged(params: IsBranchMergedParams): Promise<boolean> {
+    const { repoRoot } = await resolveGitInfo(params.repoDir)
+    try {
+        await execGit(["merge-base", "--is-ancestor", params.branchName, params.targetBranch], repoRoot)
+        return true // exit 0 = is ancestor = fully merged
+    } catch {
+        return false // exit 1 = not ancestor = unmerged
+    }
+}
+
+async function handleDeleteBranch(params: DeleteBranchParams): Promise<void> {
+    const { repoRoot } = await resolveGitInfo(params.repoDir)
+    await execGit(["branch", "-D", params.branchName], repoRoot)
+}
+
 /**
  * List all worktrees (supports subdirectories)
  */
@@ -2072,6 +2098,16 @@ export const load = () => {
     ipcMain.handle("git:deleteWorkTree", async (event, params: DeleteWorkTreeParams) => {
         if (!checkAllowed(event)) throw new Error("not allowed")
         return handleDeleteWorkTree(params)
+    })
+
+    ipcMain.handle("git:isBranchMerged", async (event, params: IsBranchMergedParams) => {
+        if (!checkAllowed(event)) throw new Error("not allowed")
+        return handleIsBranchMerged(params)
+    })
+
+    ipcMain.handle("git:deleteBranch", async (event, params: DeleteBranchParams) => {
+        if (!checkAllowed(event)) throw new Error("not allowed")
+        return handleDeleteBranch(params)
     })
 
     ipcMain.handle("git:listWorkTrees", async (event, params: ListWorkTreesParams) => {

@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest"
 import type { AgentCouplet, HyperPlanStrategy } from "./types"
-import { crossReviewStrategy, ensembleStrategy, groupByDepth, isStandardStrategy, standardStrategy, topologicalSort, validateStrategy } from "./strategies"
+import {
+    crossReviewStrategy,
+    ensembleStrategy,
+    groupByDepth,
+    isStandardStrategy,
+    peerReviewStrategy,
+    standardStrategy,
+    topologicalSort,
+    validateStrategy,
+} from "./strategies"
 
 const claude: AgentCouplet = { harnessId: "claude-code", modelId: "opus" }
 const codex: AgentCouplet = { harnessId: "codex", modelId: "gpt-5.3-codex" }
@@ -70,6 +79,39 @@ describe("crossReviewStrategy", () => {
     })
 })
 
+describe("peerReviewStrategy", () => {
+    it("creates plan + review + revise steps", () => {
+        const s = peerReviewStrategy(claude, codex)
+        expect(s.steps).toHaveLength(3)
+        expect(s.steps[0].primitive).toBe("plan")
+        expect(s.steps[1].primitive).toBe("review")
+        expect(s.steps[2].primitive).toBe("revise")
+    })
+
+    it("review depends on plan and revise depends on review", () => {
+        const s = peerReviewStrategy(claude, codex)
+        expect(s.steps[1].inputs).toEqual(["plan_a"])
+        expect(s.steps[2].inputs).toEqual(["review_b"])
+    })
+
+    it("revise resumes the planner's session", () => {
+        const s = peerReviewStrategy(claude, codex)
+        expect(s.steps[2].resumeStepId).toBe("plan_a")
+    })
+
+    it("terminal step is revise", () => {
+        const s = peerReviewStrategy(claude, codex)
+        expect(s.terminalStepId).toBe("revise_a")
+    })
+
+    it("uses planner for plan/revise and reviewer for review", () => {
+        const s = peerReviewStrategy(claude, codex)
+        expect(s.steps[0].agent).toEqual(claude)
+        expect(s.steps[1].agent).toEqual(codex)
+        expect(s.steps[2].agent).toEqual(claude)
+    })
+})
+
 describe("validateStrategy", () => {
     it("accepts valid standard strategy", () => {
         expect(validateStrategy(standardStrategy(claude))).toEqual([])
@@ -81,6 +123,10 @@ describe("validateStrategy", () => {
 
     it("accepts valid cross-review strategy", () => {
         expect(validateStrategy(crossReviewStrategy(claude, codex, claude))).toEqual([])
+    })
+
+    it("accepts valid peer-review strategy", () => {
+        expect(validateStrategy(peerReviewStrategy(claude, codex))).toEqual([])
     })
 
     it("rejects plan step with inputs", () => {
@@ -134,7 +180,71 @@ describe("validateStrategy", () => {
             terminalStepId: "review_0",
         }
         const errors = validateStrategy(s)
-        expect(errors).toContain("Terminal step must produce a plan (plan or reconcile), not a review")
+        expect(errors).toContain("Terminal step must produce a plan (plan, reconcile, or revise), not a review")
+    })
+
+    it("rejects revise step with wrong input count", () => {
+        const s: HyperPlanStrategy = {
+            id: "bad-revise",
+            name: "Bad Revise",
+            description: "",
+            steps: [
+                { id: "plan_0", primitive: "plan", agent: claude, inputs: [] },
+                { id: "review_0", primitive: "review", agent: codex, inputs: ["plan_0"] },
+                { id: "revise_0", primitive: "revise", agent: claude, inputs: [], resumeStepId: "plan_0" },
+            ],
+            terminalStepId: "revise_0",
+        }
+        const errors = validateStrategy(s)
+        expect(errors).toContain('Revise step "revise_0" must have exactly 1 input')
+    })
+
+    it("rejects revise step without resumeStepId", () => {
+        const s: HyperPlanStrategy = {
+            id: "bad-revise",
+            name: "Bad Revise",
+            description: "",
+            steps: [
+                { id: "plan_0", primitive: "plan", agent: claude, inputs: [] },
+                { id: "review_0", primitive: "review", agent: codex, inputs: ["plan_0"] },
+                { id: "revise_0", primitive: "revise", agent: claude, inputs: ["review_0"] },
+            ],
+            terminalStepId: "revise_0",
+        }
+        const errors = validateStrategy(s)
+        expect(errors).toContain('Revise step "revise_0" must have a resumeStepId')
+    })
+
+    it("rejects revise step with unknown resumeStepId", () => {
+        const s: HyperPlanStrategy = {
+            id: "bad-revise",
+            name: "Bad Revise",
+            description: "",
+            steps: [
+                { id: "plan_0", primitive: "plan", agent: claude, inputs: [] },
+                { id: "review_0", primitive: "review", agent: codex, inputs: ["plan_0"] },
+                { id: "revise_0", primitive: "revise", agent: claude, inputs: ["review_0"], resumeStepId: "missing" },
+            ],
+            terminalStepId: "revise_0",
+        }
+        const errors = validateStrategy(s)
+        expect(errors).toContain('Revise step "revise_0" references unknown resumeStepId "missing"')
+    })
+
+    it("rejects revise step when resume target is non-plan", () => {
+        const s: HyperPlanStrategy = {
+            id: "bad-revise",
+            name: "Bad Revise",
+            description: "",
+            steps: [
+                { id: "plan_0", primitive: "plan", agent: claude, inputs: [] },
+                { id: "review_0", primitive: "review", agent: codex, inputs: ["plan_0"] },
+                { id: "revise_0", primitive: "revise", agent: claude, inputs: ["review_0"], resumeStepId: "review_0" },
+            ],
+            terminalStepId: "revise_0",
+        }
+        const errors = validateStrategy(s)
+        expect(errors).toContain('Revise step "revise_0" can only resume a plan step, not "review"')
     })
 
     it("rejects unknown input references", () => {
@@ -250,5 +360,14 @@ describe("groupByDepth", () => {
         const layers = groupByDepth(s)
         expect(layers).toHaveLength(1)
         expect(layers[0]).toHaveLength(1)
+    })
+
+    it("groups peer-review into 3 layers", () => {
+        const s = peerReviewStrategy(claude, codex)
+        const layers = groupByDepth(s)
+        expect(layers).toHaveLength(3)
+        expect(layers[0]).toHaveLength(1) // plan
+        expect(layers[1]).toHaveLength(1) // review
+        expect(layers[2]).toHaveLength(1) // revise
     })
 })

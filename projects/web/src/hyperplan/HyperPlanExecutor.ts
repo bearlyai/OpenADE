@@ -15,7 +15,14 @@ import type { HarnessStreamEvent, McpServerConfig } from "../electronAPI/harness
 import { type ClientHarnessQueryOptions, type HarnessQuery, getHarnessQueryManager, isHarnessApiAvailable } from "../electronAPI/harnessQuery"
 import { mergeAppendSystemPrompt } from "../prompts/executionContext"
 import { extractPlanText } from "./extractPlanText"
-import { type MainThreadContextMeta, type ReconcileInput, buildHyperPlanStepPrompt, buildReconcileStepPrompt, buildReviewStepPrompt } from "./prompts"
+import {
+    type MainThreadContextMeta,
+    type ReconcileInput,
+    buildHyperPlanStepPrompt,
+    buildReconcileStepPrompt,
+    buildReviewStepPrompt,
+    buildReviseStepPrompt,
+} from "./prompts"
 import { groupByDepth, isStandardStrategy, validateStrategy } from "./strategies"
 import type { HyperPlanStep, HyperPlanStrategy, SubPlanState } from "./types"
 
@@ -33,7 +40,7 @@ export interface HyperPlanCallbacks {
     /** Called when the terminal step emits a stream event (persisted as main execution events) */
     onTerminalEvent(event: HarnessStreamEvent): void
     /** Called when the terminal step's session ID is known */
-    onTerminalSessionId(sessionId: string): void
+    onTerminalSessionId(sessionId: string, parentSessionId?: string): void
     /** Called when reconciliation assigns anonymous labels to inputs */
     onLabelMapping?(mapping: Array<{ stepId: string; label: string }>): void
 }
@@ -62,6 +69,7 @@ export interface HyperPlanExecutorConfig {
 
 export class HyperPlanExecutor {
     private stepResults = new Map<string, string>() // stepId -> resultText
+    private stepSessionIds = new Map<string, string>() // stepId -> sessionId
     private aborted = false
     private config: HyperPlanExecutorConfig
     private activeQueries: HarnessQuery[] = []
@@ -118,6 +126,9 @@ export class HyperPlanExecutor {
                 const result = results[i]
                 if (result.status === "fulfilled" && result.value) {
                     this.stepResults.set(step.id, result.value.text)
+                    if (result.value.sessionId) {
+                        this.stepSessionIds.set(step.id, result.value.sessionId)
+                    }
                     if (step.id === strategy.terminalStepId) {
                         terminalSessionId = result.value.sessionId
                     }
@@ -189,6 +200,7 @@ export class HyperPlanExecutor {
         // Build prompt based on primitive type
         let userMessage: string
         let systemPrompt: string
+        let resumeSessionId: string | undefined
 
         switch (step.primitive) {
             case "plan": {
@@ -246,6 +258,39 @@ export class HyperPlanExecutor {
                 callbacks.onLabelMapping?.(result.labelMapping)
                 break
             }
+            case "revise": {
+                const reviewStepId = step.inputs[0]
+                const reviewText = this.stepResults.get(reviewStepId)
+                if (!reviewText) {
+                    const errMsg = `Revise step "${step.id}" has no review input from "${reviewStepId}"`
+                    if (!isTerminal) {
+                        callbacks.onSubPlanStatusChange(step.id, "error", undefined, errMsg)
+                    }
+                    return null
+                }
+
+                if (!step.resumeStepId) {
+                    const errMsg = `Revise step "${step.id}" has no resumeStepId`
+                    if (!isTerminal) {
+                        callbacks.onSubPlanStatusChange(step.id, "error", undefined, errMsg)
+                    }
+                    return null
+                }
+
+                resumeSessionId = this.stepSessionIds.get(step.resumeStepId)
+                if (!resumeSessionId) {
+                    const errMsg = `Cannot resume session for step "${step.resumeStepId}"`
+                    if (!isTerminal) {
+                        callbacks.onSubPlanStatusChange(step.id, "error", undefined, errMsg)
+                    }
+                    return null
+                }
+
+                const result = buildReviseStepPrompt(reviewText, reviewStepId)
+                userMessage = result.userMessage
+                systemPrompt = result.systemPrompt
+                break
+            }
         }
 
         // Start the query
@@ -255,7 +300,7 @@ export class HyperPlanExecutor {
             callbacks.onSubPlanStarted(step.id, executionId)
         }
 
-        const query = await this.startQuery(step, userMessage, systemPrompt, executionId)
+        const query = await this.startQuery(step, userMessage, systemPrompt, executionId, resumeSessionId)
         if (!query) {
             if (!isTerminal) {
                 callbacks.onSubPlanStatusChange(step.id, "error", undefined, "Failed to start query")
@@ -267,12 +312,12 @@ export class HyperPlanExecutor {
 
         let sessionId: string | undefined
 
-        if (isTerminal) {
-            query.onSessionId((sid) => {
-                sessionId = sid
-                callbacks.onTerminalSessionId(sid)
-            })
-        }
+        query.onSessionId((sid) => {
+            sessionId = sid
+            if (isTerminal) {
+                callbacks.onTerminalSessionId(sid, resumeSessionId)
+            }
+        })
 
         if (!isTerminal) {
             callbacks.onSubPlanStatusChange(step.id, "running")
@@ -328,7 +373,13 @@ export class HyperPlanExecutor {
     /**
      * Start a harness query for a step.
      */
-    private async startQuery(step: HyperPlanStep, prompt: string, appendSystemPrompt: string, executionId?: string): Promise<HarnessQuery | null> {
+    private async startQuery(
+        step: HyperPlanStep,
+        prompt: string,
+        appendSystemPrompt: string,
+        executionId?: string,
+        resumeSessionId?: string
+    ): Promise<HarnessQuery | null> {
         const { cwd, additionalDirectories, appendSystemPromptSuffix, thinking, mcpServerConfigs } = this.config
         const manager = getHarnessQueryManager()
 
@@ -341,6 +392,9 @@ export class HyperPlanExecutor {
             mode: "read-only",
             appendSystemPrompt: mergeAppendSystemPrompt(appendSystemPrompt, appendSystemPromptSuffix),
             mcpServerConfigs,
+            resumeSessionId,
+            // Resume planner sessions in-place for revise flow.
+            forkSession: resumeSessionId ? false : undefined,
         }
 
         return manager.startExecution(prompt, options, executionId)

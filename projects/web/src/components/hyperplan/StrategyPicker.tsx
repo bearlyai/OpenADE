@@ -62,6 +62,21 @@ function StandardDiagram() {
     )
 }
 
+function PeerReviewDiagram() {
+    return (
+        <svg viewBox="0 0 380 56" className="w-full h-[44px]">
+            <ArrowDef />
+            <DiagramNode x={46} y={28} label="Agent A" />
+            <Arrow x1={86} y1={28} x2={125} y2={28} />
+            <DiagramNode x={165} y={28} label="B reviews" />
+            <Arrow x1={205} y1={28} x2={244} y2={28} />
+            <DiagramNode x={290} y={28} label="A revises" variant="reconciler" />
+            <Arrow x1={336} y1={28} x2={348} y2={28} />
+            <DiagramNode x={366} y={28} label="Plan" variant="output" />
+        </svg>
+    )
+}
+
 function EnsembleDiagram() {
     return (
         <svg viewBox="0 0 320 90" className="w-full h-[72px]">
@@ -100,6 +115,7 @@ function CrossReviewDiagram() {
 
 const STRATEGY_DIAGRAMS: Record<string, () => React.JSX.Element> = {
     standard: StandardDiagram,
+    "peer-review": PeerReviewDiagram,
     ensemble: EnsembleDiagram,
     "cross-review": CrossReviewDiagram,
 }
@@ -137,6 +153,8 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
         )
         return idx >= 0 ? idx : 0
     })
+    const [plannerIndex, setPlannerIndex] = useState(0)
+    const [reviewerIndex, setReviewerIndex] = useState(() => (selectedAgents.length > 1 ? 1 : 0))
 
     // Harness install status
     const [harnessStatuses, setHarnessStatuses] = useState<HarnessStatusMap>({})
@@ -175,10 +193,20 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
     }
 
     const selectedPreset = STRATEGY_PRESETS.find((p) => p.id === selectedStrategyId)
+    const isPeerReview = selectedStrategyId === "peer-review"
+    const usesReconciler = selectedStrategyId === "ensemble" || selectedStrategyId === "cross-review"
     const needsMultipleAgents = (selectedPreset?.minAgents ?? 1) >= 2
     const hasEnoughAgents = selectedAgents.length >= (selectedPreset?.minAgents ?? 1)
     const availableHarnessCount = Object.values(harnessStatuses).filter((s) => s.installed && s.authenticated).length
-    const canRun = selectedStrategyId === "standard" || hasEnoughAgents
+    const hasValidPeerReviewRoles = selectedAgents.length >= 2 && plannerIndex !== reviewerIndex
+    const canRun = selectedStrategyId === "standard" || (isPeerReview ? hasValidPeerReviewRoles : hasEnoughAgents)
+
+    useEffect(() => {
+        if (!isPeerReview || selectedAgents.length < 2) return
+        if (plannerIndex === reviewerIndex) {
+            setReviewerIndex(plannerIndex === 0 ? 1 : 0)
+        }
+    }, [isPeerReview, selectedAgents.length, plannerIndex, reviewerIndex])
 
     const isAgentSelected = useCallback(
         (couplet: AgentCouplet) => selectedAgents.some((a) => a.harnessId === couplet.harnessId && a.modelId === couplet.modelId),
@@ -191,21 +219,50 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                 if (selectedAgents.length <= 1) return
                 const newAgents = selectedAgents.filter((a) => !(a.harnessId === couplet.harnessId && a.modelId === couplet.modelId))
                 setSelectedAgents(newAgents)
+
+                const maxIndex = Math.max(0, newAgents.length - 1)
+                const nextPlanner = Math.min(plannerIndex, maxIndex)
+                let nextReviewer = Math.min(reviewerIndex, maxIndex)
+                if (newAgents.length > 1 && nextPlanner === nextReviewer) {
+                    nextReviewer = nextPlanner === 0 ? 1 : 0
+                }
+                setPlannerIndex(nextPlanner)
+                setReviewerIndex(nextReviewer)
+
                 if (reconcilerIndex >= newAgents.length) setReconcilerIndex(0)
             } else {
                 setSelectedAgents([...selectedAgents, couplet])
             }
         },
-        [selectedAgents, reconcilerIndex, isAgentSelected]
+        [selectedAgents, reconcilerIndex, plannerIndex, reviewerIndex, isAgentSelected]
     )
 
     const handleRun = useCallback(
         (strategyId: string) => {
-            const reconciler = selectedAgents[reconcilerIndex] ?? selectedAgents[0]
-            store.setHyperPlanPreferences(strategyId, selectedAgents, reconciler)
+            let agentsForSave = selectedAgents
+            if (strategyId === "peer-review") {
+                const safePlannerIndex = selectedAgents[plannerIndex] ? plannerIndex : 0
+                const safeReviewerIndex =
+                    selectedAgents[reviewerIndex] && reviewerIndex !== safePlannerIndex
+                        ? reviewerIndex
+                        : selectedAgents.findIndex((_, idx) => idx !== safePlannerIndex)
+                const planner = selectedAgents[safePlannerIndex] ?? selectedAgents[0]
+
+                if (safeReviewerIndex >= 0) {
+                    const reviewer = selectedAgents[safeReviewerIndex] ?? selectedAgents[0]
+                    const rest = selectedAgents.filter((_, idx) => idx !== safePlannerIndex && idx !== safeReviewerIndex)
+                    agentsForSave = [planner, reviewer, ...rest]
+                } else {
+                    const rest = selectedAgents.filter((_, idx) => idx !== safePlannerIndex)
+                    agentsForSave = [planner, ...rest]
+                }
+            }
+
+            const reconciler = strategyId === "peer-review" ? agentsForSave[0] : (selectedAgents[reconcilerIndex] ?? selectedAgents[0])
+            store.setHyperPlanPreferences(strategyId, agentsForSave, reconciler)
             onRun(strategyId)
         },
-        [store, selectedAgents, reconcilerIndex, onRun]
+        [store, selectedAgents, reconcilerIndex, plannerIndex, reviewerIndex, onRun]
     )
 
     return (
@@ -303,6 +360,11 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                                             <div className="space-y-0.5">
                                                 {couplets.map((couplet) => {
                                                     const selected = isAgentSelected(couplet)
+                                                    const selectedIndex = selected
+                                                        ? selectedAgents.findIndex((a) => a.harnessId === couplet.harnessId && a.modelId === couplet.modelId)
+                                                        : -1
+                                                    const isPlanner = selectedIndex >= 0 && selectedIndex === plannerIndex
+                                                    const isReviewer = selectedIndex >= 0 && selectedIndex === reviewerIndex
                                                     const isReconciler =
                                                         selected &&
                                                         selectedAgents[reconcilerIndex]?.harnessId === couplet.harnessId &&
@@ -333,7 +395,7 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
 
                                                             <span className="flex-1 truncate font-mono text-xs">{couplet.label}</span>
 
-                                                            {selected && (
+                                                            {selected && usesReconciler && (
                                                                 <button
                                                                     type="button"
                                                                     className={cx(
@@ -351,6 +413,37 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                                                                     <Star size={13} className={isReconciler ? "fill-current" : ""} />
                                                                 </button>
                                                             )}
+
+                                                            {selected && isPeerReview && (
+                                                                <div className="flex items-center gap-1 shrink-0">
+                                                                    <button
+                                                                        type="button"
+                                                                        className={cx(
+                                                                            "btn h-5 px-1.5 text-[10px] border transition-colors",
+                                                                            isPlanner
+                                                                                ? "bg-primary text-primary-content border-primary"
+                                                                                : "border-border text-muted hover:text-base-content hover:border-base-300"
+                                                                        )}
+                                                                        onClick={() => selectedIndex >= 0 && setPlannerIndex(selectedIndex)}
+                                                                        title="Set as planner"
+                                                                    >
+                                                                        Planner
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        className={cx(
+                                                                            "btn h-5 px-1.5 text-[10px] border transition-colors",
+                                                                            isReviewer
+                                                                                ? "bg-info text-info-content border-info"
+                                                                                : "border-border text-muted hover:text-base-content hover:border-base-300"
+                                                                        )}
+                                                                        onClick={() => selectedIndex >= 0 && setReviewerIndex(selectedIndex)}
+                                                                        title="Set as reviewer"
+                                                                    >
+                                                                        Reviewer
+                                                                    </button>
+                                                                </div>
+                                                            )}
                                                         </div>
                                                     )
                                                 })}
@@ -359,10 +452,15 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                                     ))}
                                 </div>
 
-                                <div className="flex items-center gap-1.5 mt-3 text-xs text-muted">
-                                    <Star size={10} className="fill-warning text-warning" />
-                                    <span>designates the reconciler — it produces the final merged plan</span>
-                                </div>
+                                {usesReconciler && (
+                                    <div className="flex items-center gap-1.5 mt-3 text-xs text-muted">
+                                        <Star size={10} className="fill-warning text-warning" />
+                                        <span>designates the reconciler — it produces the final merged plan</span>
+                                    </div>
+                                )}
+                                {isPeerReview && (
+                                    <div className="mt-3 text-xs text-muted">Planner creates and revises the plan. Reviewer critiques independently.</div>
+                                )}
                             </div>
                         </div>
                     )}

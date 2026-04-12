@@ -795,11 +795,12 @@ export class ExecutionManager {
                     })
                 },
 
-                onTerminalSessionId: (sessionId) => {
+                onTerminalSessionId: (sessionId, parentSessionId) => {
                     this.store.events.updateEventSessionIds({
                         taskId,
                         eventId,
                         sessionId,
+                        parentSessionId,
                     })
                 },
 

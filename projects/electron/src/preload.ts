@@ -105,6 +105,8 @@ const openadeAPI = {
         getGitStatus: (params: unknown) => ipcRenderer.invoke("git:getGitStatus", params),
         listFiles: (params: unknown) => ipcRenderer.invoke("git:listFiles", params),
         deleteWorkTree: (params: unknown) => ipcRenderer.invoke("git:deleteWorkTree", params),
+        isBranchMerged: (params: unknown) => ipcRenderer.invoke("git:isBranchMerged", params),
+        deleteBranch: (params: unknown) => ipcRenderer.invoke("git:deleteBranch", params),
         listWorkTrees: (params: unknown) => ipcRenderer.invoke("git:listWorkTrees", params),
         commitWorkTree: (params: unknown) => ipcRenderer.invoke("git:commitWorkTree", params),
         listBranches: (params: unknown) => ipcRenderer.invoke("git:listBranches", params),
@@ -170,6 +172,8 @@ const openadeAPI = {
             ipcRenderer.invoke("harness:command", { id: crypto.randomUUID(), type: "reconnect", ...args }),
         // Check install status of all registered harnesses
         checkStatus: () => ipcRenderer.invoke("harness:check-status"),
+        deleteSession: (args: { harnessId: string; sessionId: string; cwd?: string }) =>
+            ipcRenderer.invoke("harness:deleteSession", args),
         // Streaming events (new channel)
         onEvent: (cb: (event: unknown) => void) =>
             createListener("harness:event", cb as (...args: unknown[]) => void),

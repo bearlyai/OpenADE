@@ -3,7 +3,7 @@ import { analytics, track } from "../analytics"
 import { DEFAULT_MODEL, getDefaultModelForHarness } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import type { ThinkingLevel } from "./TaskModel"
-import { crossReviewStrategy, ensembleStrategy, standardStrategy } from "../hyperplan/strategies"
+import { crossReviewStrategy, ensembleStrategy, peerReviewStrategy, standardStrategy } from "../hyperplan/strategies"
 import type { AgentCouplet, HyperPlanStrategy } from "../hyperplan/types"
 import { getDeviceConfig, setTelemetryDisabled } from "../electronAPI/deviceConfig"
 import { setGlobalEnv } from "../electronAPI/subprocess"
@@ -395,6 +395,9 @@ export class CodeStore {
             : agents[0]
 
         switch (strategyId) {
+            case "peer-review":
+                if (agents.length < 2) return standardStrategy(agents[0])
+                return peerReviewStrategy(agents[0], agents[1])
             case "ensemble":
                 if (agents.length < 2) return standardStrategy(agents[0])
                 return ensembleStrategy(agents, reconciler)

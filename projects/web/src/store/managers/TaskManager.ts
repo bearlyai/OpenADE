@@ -1,13 +1,42 @@
 import { makeAutoObservable, runInAction } from "mobx"
+import { dataFolderApi } from "../../electronAPI/dataFolder"
 import { gitApi } from "../../electronAPI/git"
+import { deleteHarnessSession } from "../../electronAPI/harnessQuery"
 import { getTaskPtyId, ptyApi } from "../../electronAPI/pty"
 import { snapshotsApi } from "../../electronAPI/snapshots"
 import { deleteTaskPreview, syncTaskPreviewFromStore, taskFromStore, updateTaskPreview } from "../../persistence"
+import { getStorageDriver } from "../../persistence/storage"
 import { fallbackTitle, generateTitle } from "../../prompts/titleExtractor"
 import type { Task, TaskDeviceEnvironment } from "../../types"
 import { TaskModel } from "../TaskModel"
 import type { CodeStore } from "../store"
 import { TaskUIStateManager } from "./TaskUIStateManager"
+
+// ============================================================================
+// Deep Delete Types
+// ============================================================================
+
+export interface TaskResourceInventory {
+    taskId: string
+    taskTitle: string
+    isRunning: boolean
+    snapshotIds: string[]
+    images: Array<{ id: string; ext: string }>
+    sessions: Array<{ sessionId: string; harnessId: string }>
+    worktree: {
+        slug: string
+        branchName: string
+        sourceBranch: string
+        branchMerged: boolean | null
+    } | null
+}
+
+export interface DeleteOptions {
+    deleteSnapshots: boolean
+    deleteImages: boolean
+    deleteSessions: boolean
+    deleteWorktrees: boolean
+}
 
 export class TaskManager {
     tasksById: Map<string, Task> = new Map()
@@ -191,6 +220,199 @@ export class TaskManager {
             this.store.workingTaskIds.delete(id)
         })
     }
+
+    // ==================== Deep Delete ====================
+
+    private resolveRepoId(taskId: string): string | null {
+        const task = this.getTask(taskId)
+        if (task?.repoId) return task.repoId
+
+        if (this.store.repoStore) {
+            for (const repo of this.store.repoStore.repos.all()) {
+                if (repo.tasks.find((t) => t.id === taskId)) {
+                    return repo.id
+                }
+            }
+        }
+        return null
+    }
+
+    private async ensureTaskStore(taskId: string, repoId: string) {
+        const cached = this.store.getCachedTaskStore(taskId)
+        if (cached) return cached
+        return this.store.getTaskStore(repoId, taskId)
+    }
+
+    async getResourceInventory(ids: string[]): Promise<TaskResourceInventory[]> {
+        const results: TaskResourceInventory[] = []
+
+        for (const id of ids) {
+            const repoId = this.resolveRepoId(id)
+            if (!repoId) continue
+
+            const taskStore = await this.ensureTaskStore(id, repoId)
+            const meta = taskStore.meta.current
+            const events = taskStore.events.all()
+
+            const snapshotIds: string[] = []
+            const images: Array<{ id: string; ext: string }> = []
+            const sessions = new Map<string, string>()
+
+            for (const event of events) {
+                if (event.type === "snapshot" && event.patchFileId) {
+                    snapshotIds.push(event.patchFileId)
+                }
+                if (event.type === "action") {
+                    if (event.images?.length) {
+                        for (const img of event.images) {
+                            images.push({ id: img.id, ext: img.ext })
+                        }
+                    }
+                    if (event.execution?.sessionId) {
+                        sessions.set(event.execution.sessionId, event.execution.harnessId ?? "claude-code")
+                    }
+                }
+            }
+            for (const sessionId of Object.values(meta.sessionIds)) {
+                if (!sessions.has(sessionId)) {
+                    sessions.set(sessionId, "claude-code")
+                }
+            }
+
+            let worktree: TaskResourceInventory["worktree"] = null
+            if (meta.isolationStrategy.type === "worktree") {
+                const branchName = `openade/${meta.slug}`
+                let branchMerged: boolean | null = null
+                const gitInfo = await this.store.repos.getGitInfo(repoId)
+                if (gitInfo) {
+                    try {
+                        branchMerged = await gitApi.isBranchMerged({
+                            repoDir: gitInfo.repoRoot,
+                            branchName,
+                            targetBranch: meta.isolationStrategy.sourceBranch,
+                        })
+                    } catch {
+                        branchMerged = null
+                    }
+                }
+                worktree = {
+                    slug: meta.slug,
+                    branchName,
+                    sourceBranch: meta.isolationStrategy.sourceBranch,
+                    branchMerged,
+                }
+            }
+
+            results.push({
+                taskId: id,
+                taskTitle: meta.title || meta.description || "Untitled",
+                isRunning: this.store.workingTaskIds.has(id),
+                snapshotIds,
+                images,
+                sessions: [...sessions.entries()].map(([sessionId, harnessId]) => ({ sessionId, harnessId })),
+                worktree,
+            })
+        }
+
+        return results
+    }
+
+    async deepRemoveTasks(ids: string[], options: DeleteOptions): Promise<void> {
+        for (const id of ids) {
+            await this.deepRemoveTask(id, options)
+        }
+    }
+
+    async deepRemoveTask(id: string, options: DeleteOptions): Promise<void> {
+        // 1. Abort active query + kill terminal
+        await this.store.queries.abortTask(id)
+        ptyApi.kill(getTaskPtyId(id)).catch(() => {})
+
+        // 2. Resolve repoId
+        const repoId = this.resolveRepoId(id)
+        if (!repoId) {
+            console.warn("[TaskManager] deepRemoveTask: Cannot find repoId for task", id)
+            return
+        }
+
+        // 3. Load TaskStore if needed
+        const taskStore = await this.ensureTaskStore(id, repoId)
+        const meta = taskStore.meta.current
+        const events = taskStore.events.all()
+
+        // 4. Conditionally delete snapshots
+        if (options.deleteSnapshots && snapshotsApi.isAvailable()) {
+            for (const event of events) {
+                if (event.type === "snapshot" && event.patchFileId) {
+                    await snapshotsApi.delete(event.patchFileId).catch(() => {})
+                }
+            }
+        }
+
+        // 5. Conditionally delete images
+        if (options.deleteImages && dataFolderApi.isAvailable()) {
+            for (const event of events) {
+                if (event.type === "action" && event.images?.length) {
+                    for (const img of event.images) {
+                        await dataFolderApi.delete("images", img.id, img.ext).catch(() => {})
+                    }
+                }
+            }
+        }
+
+        // 6. Conditionally delete harness sessions
+        if (options.deleteSessions) {
+            const sessionEntries = new Map<string, string>()
+            for (const sid of Object.values(meta.sessionIds)) {
+                sessionEntries.set(sid, "claude-code")
+            }
+            for (const event of events) {
+                if (event.type === "action" && event.execution?.sessionId) {
+                    sessionEntries.set(event.execution.sessionId, event.execution.harnessId ?? "claude-code")
+                }
+            }
+            for (const [sessionId, harnessId] of sessionEntries) {
+                await deleteHarnessSession({ harnessId, sessionId }).catch(() => {})
+            }
+        }
+
+        // 7. Conditionally delete worktree + branch
+        if (options.deleteWorktrees && meta.isolationStrategy.type === "worktree") {
+            const gitInfo = await this.store.repos.getGitInfo(repoId)
+            if (gitInfo) {
+                await gitApi.deleteWorkTree({ repoDir: gitInfo.repoRoot, id: meta.slug }).catch(() => {})
+                await gitApi.deleteBranch({ repoDir: gitInfo.repoRoot, branchName: `openade/${meta.slug}` }).catch(() => {})
+            }
+        }
+
+        // 8. Always: delete TaskPreview, disconnect + delete YJS doc, clean runtime state
+        if (this.store.repoStore) {
+            deleteTaskPreview(this.store.repoStore, repoId, id)
+        }
+        this.store.disconnectTaskStore(id)
+        await getStorageDriver().deleteDoc(`code:task:${id}`)
+
+        // Clean up pinned state
+        const pinned = this.store.personalSettingsStore?.settings.current.pinnedTaskIds
+        if (pinned?.includes(id)) {
+            this.store.personalSettingsStore?.settings.set({
+                pinnedTaskIds: pinned.filter((pid) => pid !== id),
+            })
+        }
+
+        const model = this.taskModels.get(id)
+        if (model) {
+            model.dispose()
+        }
+        runInAction(() => {
+            this.tasksById.delete(id)
+            this.taskModels.delete(id)
+            this.taskUIStates.delete(id)
+            this.store.workingTaskIds.delete(id)
+        })
+    }
+
+    // ==================== Session Management ====================
 
     async setSessionId({ taskId, key, sessionId }: { taskId: string; key: string; sessionId: string }): Promise<void> {
         const taskStore = this.store.getCachedTaskStore(taskId)

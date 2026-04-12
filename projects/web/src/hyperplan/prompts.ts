@@ -1,7 +1,7 @@
 /**
  * HyperPlan Prompts
  *
- * Prompt builders for the three HyperPlan primitives: Plan, Review, and Reconcile.
+ * Prompt builders for HyperPlan primitives: Plan, Review, Reconcile, and Revise.
  *
  * Key design decisions:
  * - Plan prompts are identical to the standard plan prompt + a Risks & Alternatives section.
@@ -137,6 +137,35 @@ export function buildReviewStepPrompt(
     return {
         systemPrompt: REVIEW_SYSTEM_PROMPT,
         userMessage: `<task_description>\n${taskDescription}\n</task_description>\n\n<plan_to_review id="${planStepId}">\n${planText}\n</plan_to_review>`,
+    }
+}
+
+// ============================================================================
+// Revise Step Prompt — resume planner session with peer review feedback
+// ============================================================================
+
+const REVISE_APPEND_SYSTEM_PROMPT = `<revision_mode>
+The user will share peer review feedback on your plan from an independent reviewer.
+Evaluate each point on its merits:
+- Adopt suggestions that genuinely improve the plan
+- Reject suggestions you disagree with (briefly note why in Revision Notes)
+- Produce a complete revised plan, not just a diff
+</revision_mode>`
+
+export function buildReviseStepPrompt(
+    reviewText: string,
+    reviewerStepId: string
+): {
+    systemPrompt: string
+    userMessage: string
+} {
+    return {
+        systemPrompt: REVISE_APPEND_SYSTEM_PROMPT,
+        userMessage: `I asked an independent reviewer to evaluate your plan. Here's their feedback — consider what resonates and what doesn't. Don't assume they're right about everything; use your own judgment.
+<peer_review from="${reviewerStepId}">
+${reviewText}
+</peer_review>
+Please produce a revised plan incorporating the feedback you agree with. In a "Revision Notes" section at the end, note what you changed and what you kept, and briefly explain why for any suggestions you rejected.`,
     }
 }
 

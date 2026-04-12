@@ -50,6 +50,21 @@ export function ensembleStrategy(planners: AgentCouplet[], reconciler: AgentCoup
     }
 }
 
+/** Peer Review — one agent plans, another reviews, planner revises with feedback. */
+export function peerReviewStrategy(planner: AgentCouplet, reviewer: AgentCouplet): HyperPlanStrategy {
+    return {
+        id: "peer-review",
+        name: "Peer Review",
+        description: "One agent plans, another reviews, then the planner revises based on feedback",
+        steps: [
+            { id: "plan_a", primitive: "plan", agent: planner, inputs: [] },
+            { id: "review_b", primitive: "review", agent: reviewer, inputs: ["plan_a"] },
+            { id: "revise_a", primitive: "revise", agent: planner, inputs: ["review_b"], resumeStepId: "plan_a" },
+        ],
+        terminalStepId: "revise_a",
+    }
+}
+
 /** Cross-Review — 2 agents plan, each reviews the other's plan, then reconcile. */
 export function crossReviewStrategy(agentA: AgentCouplet, agentB: AgentCouplet, reconciler: AgentCouplet): HyperPlanStrategy {
     return {
@@ -86,6 +101,7 @@ export interface StrategyPreset {
 
 export const STRATEGY_PRESETS: StrategyPreset[] = [
     { id: "standard", name: "Standard", description: "Plan with a single agent", minAgents: 1 },
+    { id: "peer-review", name: "Peer Review", description: "One agent plans, another reviews, planner revises", minAgents: 2 },
     { id: "ensemble", name: "Ensemble", description: "Multiple agents plan in parallel, then reconcile", minAgents: 2 },
     { id: "cross-review", name: "Cross-Review", description: "Two agents cross-review each other, then reconcile", minAgents: 2 },
 ]
@@ -114,7 +130,7 @@ export function validateStrategy(strategy: HyperPlanStrategy): string[] {
     if (!terminal) {
         errors.push(`Terminal step "${strategy.terminalStepId}" not found`)
     } else if (terminal.primitive === "review") {
-        errors.push("Terminal step must produce a plan (plan or reconcile), not a review")
+        errors.push("Terminal step must produce a plan (plan, reconcile, or revise), not a review")
     }
 
     for (const step of strategy.steps) {
@@ -129,6 +145,22 @@ export function validateStrategy(strategy: HyperPlanStrategy): string[] {
         // Reconcile steps must have >= 1 input
         if (step.primitive === "reconcile" && step.inputs.length < 1) {
             errors.push(`Reconcile step "${step.id}" must have at least 1 input`)
+        }
+        // Revise steps must have exactly 1 review input + resume target
+        if (step.primitive === "revise") {
+            if (step.inputs.length !== 1) {
+                errors.push(`Revise step "${step.id}" must have exactly 1 input`)
+            }
+            if (!step.resumeStepId) {
+                errors.push(`Revise step "${step.id}" must have a resumeStepId`)
+            } else if (!stepMap.has(step.resumeStepId)) {
+                errors.push(`Revise step "${step.id}" references unknown resumeStepId "${step.resumeStepId}"`)
+            } else {
+                const resumeTarget = stepMap.get(step.resumeStepId)!
+                if (resumeTarget.primitive !== "plan") {
+                    errors.push(`Revise step "${step.id}" can only resume a plan step, not "${resumeTarget.primitive}"`)
+                }
+            }
         }
         // All inputs reference existing steps
         for (const inputId of step.inputs) {

@@ -1,15 +1,17 @@
 import type { TaskPreview, TaskPreviewLastEvent } from "@/persistence/repoStore"
+import { useModal } from "@ebay/nice-modal-react"
 import { ContextMenu } from "@base-ui-components/react/context-menu"
 import cx from "classnames"
-import { CheckCircle, Copy, ListTodo, Loader2, Pencil, Pin, Plus, RotateCcw, Square, Trash2, X } from "lucide-react"
+import { CheckCircle, CheckSquare, Copy, ListTodo, Loader2, Pencil, Pin, Plus, RotateCcw, Square, Trash2, X } from "lucide-react"
 import { observer } from "mobx-react"
-import { useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { usePortalContainer } from "../../hooks/usePortalContainer"
 import { useCodeNavigate } from "../../routing"
 import { useCodeStore } from "../../store/context"
 import type { TaskCreation } from "../../store/managers/TaskCreationManager"
 import type { CodeEvent } from "../../types"
 import { ScrollArea } from "../ui"
+import { TaskDeleteConfirm } from "./TaskDeleteConfirm"
 import { resolveTaskCopyPath } from "./sidebarPathUtils"
 
 function isPlanType(lastEvent: TaskPreviewLastEvent): boolean {
@@ -86,7 +88,11 @@ const TaskItem = ({
     isUnread,
     isPinned,
     inProgressEvent,
+    selectionMode,
+    isSelected,
     onSelect,
+    onToggleSelect,
+    onEnterSelect,
     onDelete,
     onToggleClosed,
     onTogglePinned,
@@ -98,7 +104,11 @@ const TaskItem = ({
     isUnread: boolean
     isPinned: boolean
     inProgressEvent: TaskPreviewLastEvent | null
+    selectionMode: boolean
+    isSelected: boolean
     onSelect: () => void
+    onToggleSelect: () => void
+    onEnterSelect: () => void
     onDelete: () => void
     onToggleClosed: () => void
     onTogglePinned: () => void
@@ -119,70 +129,92 @@ const TaskItem = ({
         setIsEditing(false)
     }
 
+    const handleClick = selectionMode ? onToggleSelect : onSelect
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+            e.preventDefault()
+            handleClick()
+        }
+    }
+
+    const rowContent = (
+        <>
+            {/* Selection checkbox OR pin indicator */}
+            {selectionMode ? (
+                <input
+                    type="checkbox"
+                    className="flex-shrink-0 accent-primary"
+                    checked={isSelected}
+                    onChange={onToggleSelect}
+                    onClick={(e) => e.stopPropagation()}
+                />
+            ) : (
+                isPinned && <Pin className="w-3 h-3 flex-shrink-0 text-primary" fill="currentColor" />
+            )}
+
+            {/* Title */}
+            {isEditing ? (
+                <input
+                    ref={inputRef}
+                    className="truncate min-w-0 flex-1 text-sm bg-transparent text-inherit border border-base-300 px-1 py-0 outline-none"
+                    defaultValue={preview.title}
+                    autoFocus
+                    onBlur={handleCommit}
+                    onKeyDown={(e) => {
+                        e.stopPropagation()
+                        if (e.key === "Enter") handleCommit()
+                        if (e.key === "Escape") setIsEditing(false)
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                />
+            ) : (
+                <span
+                    className="truncate min-w-0 flex-1 select-none"
+                    onDoubleClick={(e) => {
+                        if (selectionMode) return
+                        e.stopPropagation()
+                        setIsEditing(true)
+                    }}
+                >
+                    {preview.title}
+                </span>
+            )}
+
+            {/* Status suffix */}
+            {!isClosed && displayEvent && (
+                <span className={cx("flex items-center gap-1 text-xs flex-shrink-0", getStatusColor(displayEvent))}>
+                    {getStatusIcon(displayEvent)}
+                    <span>{displayEvent.sourceLabel}</span>
+                </span>
+            )}
+
+            {isClosed && <span className="text-[11px] text-muted flex-shrink-0">Closed</span>}
+        </>
+    )
+
+    const rowClassName = cx(
+        "group btn flex items-center gap-2 font-normal py-1.5 pl-3 pr-2 hover:bg-base-200 w-full cursor-pointer text-sm",
+        isClosed ? "text-muted" : "text-base-content",
+        isActive && !selectionMode && "bg-base-300",
+        selectionMode && isSelected && "bg-primary/10",
+        !isClosed && isUnread && !selectionMode && "border-l-2 border-l-primary"
+    )
+
+    if (selectionMode) {
+        return (
+            <div role="button" tabIndex={0} className={rowClassName} onClick={handleClick} onKeyDown={handleKeyDown} title={preview.title}>
+                {rowContent}
+            </div>
+        )
+    }
+
     return (
         <ContextMenu.Root>
             <ContextMenu.Trigger
                 className="flex w-full"
-                render={
-                    <div
-                        role="button"
-                        tabIndex={0}
-                        className={cx(
-                            "group btn flex items-center gap-2 font-normal py-1.5 pl-3 pr-2 hover:bg-base-200 w-full cursor-pointer text-sm",
-                            isClosed ? "text-muted" : "text-base-content",
-                            isActive && "bg-base-300",
-                            !isClosed && isUnread && "border-l-2 border-l-primary"
-                        )}
-                        onClick={onSelect}
-                        onKeyDown={(e) => {
-                            if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
-                                e.preventDefault()
-                                onSelect()
-                            }
-                        }}
-                        title={preview.title}
-                    />
-                }
+                render={<div role="button" tabIndex={0} className={rowClassName} onClick={handleClick} onKeyDown={handleKeyDown} title={preview.title} />}
             >
-                {/* Pin indicator (pinned tasks only) */}
-                {isPinned && <Pin className="w-3 h-3 flex-shrink-0 text-primary" fill="currentColor" />}
-
-                {/* Title */}
-                {isEditing ? (
-                    <input
-                        ref={inputRef}
-                        className="truncate min-w-0 flex-1 text-sm bg-transparent text-inherit border border-base-300 px-1 py-0 outline-none"
-                        defaultValue={preview.title}
-                        autoFocus
-                        onBlur={handleCommit}
-                        onKeyDown={(e) => {
-                            e.stopPropagation()
-                            if (e.key === "Enter") handleCommit()
-                            if (e.key === "Escape") setIsEditing(false)
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                    />
-                ) : (
-                    <span
-                        className="truncate min-w-0 flex-1 select-none"
-                        onDoubleClick={(e) => {
-                            e.stopPropagation()
-                            setIsEditing(true)
-                        }}
-                    >
-                        {preview.title}
-                    </span>
-                )}
-
-                {/* Status suffix */}
-                {!isClosed && displayEvent && (
-                    <span className={cx("flex items-center gap-1 text-xs flex-shrink-0", getStatusColor(displayEvent))}>
-                        {getStatusIcon(displayEvent)}
-                        <span>{displayEvent.sourceLabel}</span>
-                    </span>
-                )}
-
-                {isClosed && <span className="text-[11px] text-muted flex-shrink-0">Closed</span>}
+                {rowContent}
             </ContextMenu.Trigger>
             <ContextMenu.Portal container={portalContainer}>
                 <ContextMenu.Positioner className="outline-none z-50" sideOffset={4}>
@@ -202,6 +234,10 @@ const TaskItem = ({
                         <ContextMenu.Item className={contextItemClassName} onClick={onToggleClosed}>
                             {isClosed ? <RotateCcw className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
                             <span>{isClosed ? "Reopen" : "Close"}</span>
+                        </ContextMenu.Item>
+                        <ContextMenu.Item className={contextItemClassName} onClick={onEnterSelect}>
+                            <CheckSquare className="w-4 h-4" />
+                            <span>Select</span>
                         </ContextMenu.Item>
                         <ContextMenu.Item className={contextItemClassName} onClick={onDelete}>
                             <Trash2 className="w-4 h-4" />
@@ -282,18 +318,40 @@ interface TasksSidebarContentProps {
 export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }: TasksSidebarContentProps) => {
     const codeStore = useCodeStore()
     const navigate = useCodeNavigate()
+    const deleteConfirmModal = useModal(TaskDeleteConfirm)
 
-    // Get task previews directly from RepoStore
+    // ── Selection mode ──
+    const [selectionMode, setSelectionMode] = useState(false)
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+
+    const enterSelectionMode = useCallback((initialId: string) => {
+        setSelectionMode(true)
+        setSelectedIds(new Set([initialId]))
+    }, [])
+
+    const exitSelectionMode = useCallback(() => {
+        setSelectionMode(false)
+        setSelectedIds(new Set())
+    }, [])
+
+    const toggleSelection = useCallback((id: string) => {
+        setSelectedIds((prev) => {
+            const next = new Set(prev)
+            if (next.has(id)) next.delete(id)
+            else next.add(id)
+            return next
+        })
+    }, [])
+
+    // ── Task previews + sorting ──
     const repo = codeStore.repoStore?.repos.get(workspaceId)
     const previews = repo?.tasks ?? []
     const zeroTime = new Date(0).toISOString()
-    // Sort by most recent activity: last event start time, or task creation time
     const sortByRecent = (a: TaskPreview, b: TaskPreview) => {
         const aTime = a.lastEvent?.at ?? a?.createdAt ?? zeroTime
         const bTime = b.lastEvent?.at ?? b?.createdAt ?? zeroTime
         return bTime.localeCompare(aTime)
     }
-    // Pinned tasks float to top within each group
     const pinnedSet = new Set(codeStore.personalSettingsStore?.settings.current.pinnedTaskIds ?? [])
     const partitionPinned = (arr: TaskPreview[]) => {
         const pinned = arr.filter((t) => pinnedSet.has(t.id))
@@ -302,13 +360,38 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     }
 
     const openPreviews = previews.filter((t) => !t.closed).sort(sortByRecent)
-    // Running tasks float to the top
     const runningPreviews = openPreviews.filter((t) => codeStore.workingTaskIds.has(t.id))
     const nonRunningPreviews = openPreviews.filter((t) => !codeStore.workingTaskIds.has(t.id))
     const closedPreviews = previews.filter((t) => t.closed).sort(sortByRecent)
     const sortedPreviews = [...partitionPinned(runningPreviews), ...partitionPinned(nonRunningPreviews), ...partitionPinned(closedPreviews)]
     const creations = codeStore.creation.getCreationsForRepo(workspaceId)
 
+    // ── Keyboard shortcuts for selection mode ──
+    const sortedPreviewsRef = useRef(sortedPreviews)
+    sortedPreviewsRef.current = sortedPreviews
+    const handleBulkDeleteRef = useRef<() => void>(() => {})
+
+    useEffect(() => {
+        if (!selectionMode) return
+        const handler = (e: KeyboardEvent) => {
+            const target = e.target as HTMLElement
+            if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return
+            if (e.key === "Escape") {
+                exitSelectionMode()
+            }
+            if ((e.metaKey || e.ctrlKey) && e.key === "a") {
+                e.preventDefault()
+                setSelectedIds(new Set(sortedPreviewsRef.current.map((p) => p.id)))
+            }
+            if (e.key === "Delete" || e.key === "Backspace") {
+                handleBulkDeleteRef.current()
+            }
+        }
+        window.addEventListener("keydown", handler)
+        return () => window.removeEventListener("keydown", handler)
+    }, [selectionMode])
+
+    // ── Handlers ──
     const handleAddTask = () => {
         navigate.go("CodeWorkspaceTaskCreate", { workspaceId })
     }
@@ -321,12 +404,30 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
         navigate.go("CodeWorkspaceTaskCreating", { workspaceId, creationId: selectedCreationId })
     }
 
-    const handleDeleteTask = async (deletedTaskId: string) => {
-        await codeStore.tasks.removeTask(deletedTaskId)
-        if (taskId === deletedTaskId) {
-            navigate.go("CodeWorkspace", { workspaceId })
-        }
+    const showDeleteConfirm = async (ids: string[], onDone?: () => void) => {
+        const inventory = await codeStore.tasks.getResourceInventory(ids)
+        deleteConfirmModal.show({
+            tasks: inventory,
+            onConfirm: async (options) => {
+                await codeStore.tasks.deepRemoveTasks(ids, options)
+                onDone?.()
+                if (taskId && ids.includes(taskId)) {
+                    navigate.go("CodeWorkspace", { workspaceId })
+                }
+            },
+        })
     }
+
+    const handleDeleteTask = async (deletedTaskId: string) => {
+        await showDeleteConfirm([deletedTaskId])
+    }
+
+    const handleBulkDelete = async () => {
+        if (selectedIds.size === 0) return
+        const ids = [...selectedIds]
+        await showDeleteConfirm(ids, exitSelectionMode)
+    }
+    handleBulkDeleteRef.current = handleBulkDelete
 
     const handleCancelCreation = async (cancelledCreationId: string) => {
         await codeStore.creation.cancelCreation(cancelledCreationId)
@@ -370,6 +471,8 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
         }
     }
 
+    const selectAll = () => setSelectedIds(new Set(sortedPreviews.map((p) => p.id)))
+
     const isEmpty = sortedPreviews.length === 0 && creations.length === 0
 
     return (
@@ -385,6 +488,31 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
                     <span>New task</span>
                 </button>
             </div>
+
+            {/* Selection mode header bar */}
+            {selectionMode && (
+                <div className="flex items-center justify-between px-3 py-1.5 mx-1.5 mb-1 bg-base-200 text-base-content text-xs">
+                    <span className="font-medium">{selectedIds.size} selected</span>
+                    <div className="flex items-center gap-1.5">
+                        <button type="button" className="btn px-2 py-1 text-xs hover:bg-base-300 transition-colors" onClick={selectAll}>
+                            All
+                        </button>
+                        <button
+                            type="button"
+                            className="btn flex items-center gap-1 px-2 py-1 text-xs text-error hover:bg-error/10 transition-colors"
+                            onClick={handleBulkDelete}
+                            disabled={selectedIds.size === 0}
+                        >
+                            <Trash2 className="w-3 h-3" />
+                            Delete
+                        </button>
+                        <button type="button" className="btn px-1 py-1 text-xs hover:bg-base-300 transition-colors" onClick={exitSelectionMode}>
+                            <X className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                </div>
+            )}
+
             <ScrollArea className="flex-1">
                 <div className="flex flex-col gap-0.5 px-1.5">
                     {isEmpty ? (
@@ -411,7 +539,11 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
                                     isUnread={!preview.closed && !!preview.lastEventAt && (!preview.lastViewedAt || preview.lastEventAt > preview.lastViewedAt)}
                                     isPinned={pinnedSet.has(preview.id)}
                                     inProgressEvent={getInProgressEventForTask(codeStore, preview.id)}
+                                    selectionMode={selectionMode}
+                                    isSelected={selectedIds.has(preview.id)}
                                     onSelect={() => handleSelectTask(preview.id)}
+                                    onToggleSelect={() => toggleSelection(preview.id)}
+                                    onEnterSelect={() => enterSelectionMode(preview.id)}
                                     onDelete={() => handleDeleteTask(preview.id)}
                                     onToggleClosed={() => handleToggleClosed(preview.id, preview.closed ?? false)}
                                     onTogglePinned={() => handleTogglePinned(preview.id)}

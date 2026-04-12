@@ -141,6 +141,17 @@ interface DeleteWorkTreeResponse {
     error?: string
 }
 
+interface IsBranchMergedParams {
+    repoDir: string
+    branchName: string
+    targetBranch: string
+}
+
+interface DeleteBranchParams {
+    repoDir: string
+    branchName: string
+}
+
 interface ListWorkTreesParams {
     repoDir: string
 }
@@ -405,6 +416,22 @@ async function deleteWorkTree(params: DeleteWorkTreeParams): Promise<DeleteWorkT
     return (await window.openadeAPI.git.deleteWorkTree(params)) as DeleteWorkTreeResponse
 }
 
+async function isBranchMerged(params: IsBranchMergedParams): Promise<boolean> {
+    if (!window.openadeAPI) {
+        throw new Error("Not running in Electron")
+    }
+
+    return (await window.openadeAPI.git.isBranchMerged(params)) as boolean
+}
+
+async function deleteBranch(params: DeleteBranchParams): Promise<void> {
+    if (!window.openadeAPI) {
+        throw new Error("Not running in Electron")
+    }
+
+    await window.openadeAPI.git.deleteBranch(params)
+}
+
 /**
  * List all worktrees for a repository
  */
@@ -530,6 +557,8 @@ export const gitApi = {
     getGitStatus,
     listFiles,
     deleteWorkTree,
+    isBranchMerged,
+    deleteBranch,
     listWorkTrees,
     commitWorkTree,
     listBranches,

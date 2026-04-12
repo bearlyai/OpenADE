@@ -150,7 +150,8 @@ export const HyperPlanEventItem = observer(function HyperPlanEventItem({ event, 
 
     const strategyId = event.source.type === "hyperplan" ? event.source.strategyId : "unknown"
 
-    const phaseLabel = isPlanning ? "Planning..." : isReconciling ? "Reconciling..." : isComplete ? "Completed" : "Error"
+    const terminalPhaseLabel = strategyId === "peer-review" ? "Revising..." : "Reconciling..."
+    const phaseLabel = isPlanning ? "Planning..." : isReconciling ? terminalPhaseLabel : isComplete ? "Completed" : "Error"
 
     return (
         <CollapsibleEvent
@@ -193,7 +194,9 @@ export const HyperPlanEventItem = observer(function HyperPlanEventItem({ event, 
                         {isReconciling && (
                             <div className="flex items-center gap-2 text-xs text-muted mb-1">
                                 <Loader size={10} className="animate-spin" />
-                                <span>Reconciling \u00b7 {getHarnessDisplayName(event.execution.harnessId)}</span>
+                                <span>
+                                    {strategyId === "peer-review" ? "Revising" : "Reconciling"} \u00b7 {getHarnessDisplayName(event.execution.harnessId)}
+                                </span>
                             </div>
                         )}
                         <InlineMessages

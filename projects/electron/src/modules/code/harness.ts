@@ -880,6 +880,21 @@ export const load = () => {
             executionId: args.executionId,
         })
     })
+
+    ipcMain.handle(
+        "harness:deleteSession",
+        async (event, args: { harnessId: string; sessionId: string; cwd?: string }): Promise<{ ok: boolean }> => {
+            if (!checkAllowed(event)) throw new Error("not allowed")
+            const harness = registry.get(args.harnessId as HarnessId)
+            if (!harness) return { ok: false }
+            try {
+                await harness.deleteSession(args.sessionId, { cwd: args.cwd })
+                return { ok: true }
+            } catch {
+                return { ok: false }
+            }
+        }
+    )
 }
 
 // ============================================================================

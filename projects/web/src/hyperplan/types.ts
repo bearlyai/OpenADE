@@ -23,7 +23,7 @@ export interface AgentCouplet {
 // Strategy Primitives
 // ============================================================================
 
-export type StepPrimitive = "plan" | "review" | "reconcile"
+export type StepPrimitive = "plan" | "review" | "reconcile" | "revise"
 
 export interface HyperPlanStep {
     id: string
@@ -31,6 +31,8 @@ export interface HyperPlanStep {
     agent: AgentCouplet
     /** Step IDs this step depends on. Empty for "plan" steps (roots). */
     inputs: string[]
+    /** For "revise" steps: the plan step whose session should be resumed */
+    resumeStepId?: string
 }
 
 export interface HyperPlanStrategy {
@@ -38,7 +40,7 @@ export interface HyperPlanStrategy {
     name: string
     description: string
     steps: HyperPlanStep[]
-    /** Must point to a plan or reconcile step (never review). */
+    /** Must point to a plan/reconcile/revise step (never review). */
     terminalStepId: string
 }
 
@@ -58,7 +60,7 @@ export interface SubPlanState {
     error?: string
 }
 
-export type HyperPlanPhase = "planning" | "reconciling" | "completed" | "error"
+export type HyperPlanPhase = "planning" | "reviewing" | "reconciling" | "revising" | "completed" | "error"
 
 // ============================================================================
 // Persisted Sub-Execution (stored on ActionEvent)
