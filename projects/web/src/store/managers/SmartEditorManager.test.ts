@@ -8,10 +8,19 @@ vi.mock("../../electronAPI/files", () => ({
     },
 }))
 
+vi.mock("../../electronAPI/dataFolder", () => ({
+    dataFolderApi: {
+        load: vi.fn(),
+        isAvailable: vi.fn(() => true),
+    },
+}))
+
+import { dataFolderApi } from "../../electronAPI/dataFolder"
 import { filesApi } from "../../electronAPI/files"
 import type { ImageAttachment } from "../../types"
 
 const STORAGE_KEY = "code:fileUsageStats"
+const STASH_STORAGE_KEY = "code:stashedDrafts:ws-1:test"
 const WORKSPACE = "ws-1"
 const DAY_MS = 24 * 60 * 60 * 1000
 const DOC = {
@@ -38,6 +47,14 @@ function createImage(id: string): ImageAttachment {
         resizedWidth: 100,
         resizedHeight: 80,
     }
+}
+
+async function waitForCondition(condition: () => boolean): Promise<void> {
+    for (let i = 0; i < 20; i++) {
+        if (condition()) return
+        await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    throw new Error("Condition was not met in time")
 }
 
 describe("SmartEditorManager frecency ranking", () => {
@@ -201,6 +218,9 @@ describe("SmartEditorManager stashed drafts", () => {
     beforeEach(() => {
         localStorage.clear()
         vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {})
+        vi.spyOn(URL, "createObjectURL").mockImplementation(() => "blob:restored-preview")
+        vi.mocked(dataFolderApi.load).mockResolvedValue(new Uint8Array([1, 2, 3]).buffer)
+        vi.mocked(dataFolderApi.isAvailable).mockReturnValue(true)
     })
 
     afterEach(() => {
@@ -298,6 +318,32 @@ describe("SmartEditorManager stashed drafts", () => {
         expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:img-1")
         expect(manager.stashedDrafts).toHaveLength(1)
         expect(manager.stashedDrafts[0].id).toBe(second?.id)
+    })
+
+    it("persists stashes and restores them after a refresh", async () => {
+        const manager = new SmartEditorManager("test", WORKSPACE)
+        const image = createImage("img-1")
+
+        manager.setValue("Draft alpha")
+        manager.setFiles(["src/a.ts"])
+        manager.setEditorContent(DOC)
+        manager.addImage(image, "blob:img-1")
+        manager.stashCurrentDraft()
+
+        const stored = JSON.parse(localStorage.getItem(STASH_STORAGE_KEY) || "[]")
+        expect(stored).toHaveLength(1)
+        expect(stored[0].snapshot.value).toBe("Draft alpha")
+        expect(stored[0].snapshot.pendingImages).toEqual([image])
+        expect(stored[0].snapshot.pendingImageDataUrls).toBeUndefined()
+
+        const reloadedManager = new SmartEditorManager("test", WORKSPACE)
+        await waitForCondition(() => reloadedManager.stashedDrafts.length === 1)
+
+        expect(vi.mocked(dataFolderApi.load)).toHaveBeenCalledWith("images", "img-1", "png")
+        expect(URL.createObjectURL).toHaveBeenCalledTimes(1)
+        expect(reloadedManager.stashedDrafts).toHaveLength(1)
+        expect(reloadedManager.stashedDrafts[0].snapshot.value).toBe("Draft alpha")
+        expect(reloadedManager.stashedDrafts[0].snapshot.pendingImageDataUrls.get("img-1")).toBe("blob:restored-preview")
     })
 
     it("clear can preserve preview URLs during stash transfer", () => {

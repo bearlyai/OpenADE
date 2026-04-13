@@ -10,8 +10,9 @@
  * Managers are retrieved by ID and workspaceId via SmartEditorManagerStore.
  */
 
-import { makeAutoObservable, observable } from "mobx"
+import { makeAutoObservable, observable, runInAction } from "mobx"
 import { ulid } from "ulid"
+import { dataFolderApi } from "../../electronAPI/dataFolder"
 import { filesApi } from "../../electronAPI/files"
 import type { ImageAttachment } from "../../types"
 
@@ -37,6 +38,19 @@ export interface StashedDraft {
     id: string
     createdAt: string
     snapshot: EditorSnapshot
+}
+
+interface PersistedEditorSnapshot {
+    value: string
+    files: string[]
+    editorContent: Record<string, unknown> | null
+    pendingImages: ImageAttachment[]
+}
+
+interface PersistedStashedDraft {
+    id: string
+    createdAt: string
+    snapshot: PersistedEditorSnapshot
 }
 
 interface FileUsageStat {
@@ -73,6 +87,20 @@ function clonePendingImages(images: ImageAttachment[]): ImageAttachment[] {
     return images.map((image) => ({ ...image }))
 }
 
+async function loadImagePreviewUrl(image: ImageAttachment): Promise<string | null> {
+    if (!dataFolderApi.isAvailable()) return null
+
+    try {
+        const data = await dataFolderApi.load("images", image.id, image.ext)
+        if (!data) return null
+        const blob = new Blob([data], { type: image.mediaType })
+        return URL.createObjectURL(blob)
+    } catch (err) {
+        console.error("[SmartEditorManager] Failed to restore image preview:", image.id, err)
+        return null
+    }
+}
+
 // ============================================================================
 // SmartEditorManager
 // ============================================================================
@@ -103,6 +131,7 @@ export class SmartEditorManager {
         this.id = id
         this.workspaceId = workspaceId
         makeAutoObservable(this)
+        void this.loadPersistedStashes()
     }
 
     // === Input state ===
@@ -167,6 +196,7 @@ export class SmartEditorManager {
 
         const draft = this.createDraft(this.captureSnapshot())
         this.stashedDrafts.unshift(draft)
+        this.persistStashedDrafts()
         this.clear({ revokeImagePreviews: false })
         return draft
     }
@@ -180,6 +210,7 @@ export class SmartEditorManager {
             this.stashedDrafts.unshift(this.createDraft(this.captureSnapshot()))
         }
 
+        this.persistStashedDrafts()
         this.restoreSnapshot(nextDraft.snapshot)
         return true
     }
@@ -192,6 +223,7 @@ export class SmartEditorManager {
             URL.revokeObjectURL(url)
         }
         this.stashedDrafts = this.stashedDrafts.filter((item) => item.id !== stashId)
+        this.persistStashedDrafts()
     }
 
     addImage(image: ImageAttachment, dataUrl: string): void {
@@ -346,6 +378,76 @@ export class SmartEditorManager {
             createdAt: new Date().toISOString(),
             snapshot,
         }
+    }
+
+    private async loadPersistedStashes(): Promise<void> {
+        const persistedDrafts = this.getPersistedStashedDrafts()
+        if (persistedDrafts.length === 0) return
+
+        const drafts = await Promise.all(
+            persistedDrafts.map(async (draft) => ({
+                id: draft.id,
+                createdAt: draft.createdAt,
+                snapshot: {
+                    value: draft.snapshot.value,
+                    files: [...draft.snapshot.files],
+                    editorContent: cloneEditorContent(draft.snapshot.editorContent),
+                    pendingImages: clonePendingImages(draft.snapshot.pendingImages),
+                    pendingImageDataUrls: await this.createPreviewUrlMap(draft.snapshot.pendingImages),
+                },
+            }))
+        )
+
+        runInAction(() => {
+            this.stashedDrafts = drafts
+        })
+    }
+
+    private getPersistedStashedDrafts(): PersistedStashedDraft[] {
+        try {
+            const data = localStorage.getItem(this.getStashedDraftsKey())
+            if (!data) return []
+            const parsed = JSON.parse(data)
+            if (!Array.isArray(parsed)) return []
+            return parsed as PersistedStashedDraft[]
+        } catch {
+            return []
+        }
+    }
+
+    private persistStashedDrafts(): void {
+        if (this.stashedDrafts.length === 0) {
+            localStorage.removeItem(this.getStashedDraftsKey())
+            return
+        }
+
+        const serialized: PersistedStashedDraft[] = this.stashedDrafts.map((draft) => ({
+            id: draft.id,
+            createdAt: draft.createdAt,
+            snapshot: {
+                value: draft.snapshot.value,
+                files: [...draft.snapshot.files],
+                editorContent: cloneEditorContent(draft.snapshot.editorContent),
+                pendingImages: clonePendingImages(draft.snapshot.pendingImages),
+            },
+        }))
+
+        localStorage.setItem(this.getStashedDraftsKey(), JSON.stringify(serialized))
+    }
+
+    private getStashedDraftsKey(): string {
+        return `code:stashedDrafts:${this.workspaceId}:${this.id}`
+    }
+
+    private async createPreviewUrlMap(images: ImageAttachment[]): Promise<Map<string, string>> {
+        const entries = await Promise.all(
+            images.map(async (image) => {
+                const url = await loadImagePreviewUrl(image)
+                return url ? ([image.id, url] as const) : null
+            })
+        )
+
+        return new Map(entries.filter((entry): entry is readonly [string, string] => entry !== null))
     }
 
     private pathsToItems(paths: string[]): FileUsageItem[] {
