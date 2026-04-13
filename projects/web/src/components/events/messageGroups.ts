@@ -176,17 +176,8 @@ export function groupStreamEvents(events: HarnessStreamEvent[], harnessId: Harne
     // Group by harness using narrowing (no unsafe casts)
     const messageGroups = groupRawMessageEvents(messageEvents, harnessId, completionUsage)
 
-    // Extract stderr events and create StderrGroups, filtering out known noise
-    const stderrGroups: StderrGroup[] = events
-        .filter(
-            (e): e is HarnessStreamEvent & { type: "stderr"; direction: "execution" } =>
-                e.direction === "execution" && e.type === "stderr" && !STDERR_NOISE_PATTERNS.some((p) => p.test(e.data))
-        )
-        .map((e) => ({
-            type: "stderr" as const,
-            data: e.data,
-            eventId: e.id,
-        }))
+    // Extract stderr events and merge adjacent stderr bursts into a single visible group.
+    const stderrGroups = collectStderrGroups(events)
 
     // Extract harness-level error events (e.g. process_crashed) and render as ResultGroups
     const errorGroups: ResultGroup[] = events
@@ -204,6 +195,34 @@ export function groupStreamEvents(events: HarnessStreamEvent[], harnessId: Harne
 
     // Append stderr and errors at the end
     return [...messageGroups, ...stderrGroups, ...errorGroups]
+}
+
+function collectStderrGroups(events: HarnessStreamEvent[]): StderrGroup[] {
+    const groups: StderrGroup[] = []
+    let current: StderrGroup | null = null
+
+    for (const event of events) {
+        const isVisibleStderr = event.direction === "execution" && event.type === "stderr" && !STDERR_NOISE_PATTERNS.some((pattern) => pattern.test(event.data))
+
+        if (!isVisibleStderr) {
+            current = null
+            continue
+        }
+
+        if (current) {
+            current.data += `\n${event.data}`
+            continue
+        }
+
+        current = {
+            type: "stderr",
+            data: event.data,
+            eventId: event.id,
+        }
+        groups.push(current)
+    }
+
+    return groups
 }
 
 /** Dispatch raw message events to per-harness parser using discriminated union narrowing */
