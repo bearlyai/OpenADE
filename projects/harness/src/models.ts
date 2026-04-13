@@ -25,7 +25,7 @@ export const MODEL_REGISTRY: Record<HarnessId, HarnessModelConfig> = {
     "claude-code": {
         models: [
             { id: "opus", fullId: "claude-opus-4-6", label: "Opus 4.6", displayClass: "Opus" },
-            { id: "sonnet", fullId: "claude-sonnet-4-5-20250929", label: "Sonnet 4.5", displayClass: "Sonnet" },
+            { id: "sonnet", fullId: "claude-sonnet-4-6", label: "Sonnet 4.6", displayClass: "Sonnet" },
             { id: "haiku", fullId: "claude-haiku-4-5-20251001", label: "Haiku 4.5", displayClass: "Haiku" },
         ],
         defaultModel: "opus",

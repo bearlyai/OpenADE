@@ -29,7 +29,7 @@ export type ThinkingLevel = "low" | "med" | "high" | "max"
 export class TaskModel {
     gitStatus: GitStatusResponse | null = null
     model: string = DEFAULT_MODEL
-    thinking: ThinkingLevel = "high"
+    thinking: ThinkingLevel = "max"
     harnessId: HarnessId = "claude-code"
     private gitStateLoading = false
     private _environmentCache: TaskEnvironment | null = null

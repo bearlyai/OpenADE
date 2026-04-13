@@ -13,6 +13,8 @@ import type { PersonalSettingsStore } from "../persistence/personalSettingsStore
 import { type PersonalSettingsStoreConnection, connectPersonalSettingsStore } from "../persistence/personalSettingsStoreBootstrap"
 import { type RepoStore, getTaskPreview } from "../persistence/repoStore"
 import { type RepoStoreConnection, connectRepoStore } from "../persistence/repoStoreBootstrap"
+import type { ScratchpadStore } from "../persistence/scratchpadStore"
+import { type ScratchpadStoreConnection, connectScratchpadStore } from "../persistence/scratchpadStoreBootstrap"
 import { type TaskStoreConnection, loadTaskStore } from "../persistence/taskLoader"
 import { type TaskStore, syncTaskPreviewFromStore } from "../persistence/taskStore"
 import type { User } from "../types"
@@ -28,6 +30,7 @@ import { QueryManager } from "./managers/QueryManager"
 import { RepoManager } from "./managers/RepoManager"
 import { RepoProcessesManager } from "./managers/RepoProcessesManager"
 import { RunCmdManager } from "./managers/RunCmdManager"
+import { ScratchpadManager } from "./managers/ScratchpadManager"
 import { SmartEditorManagerStore } from "./managers/SmartEditorManager"
 import { type CreationPhase, type TaskCreation, TaskCreationManager, type TaskCreationOptions } from "./managers/TaskCreationManager"
 import { TaskManager } from "./managers/TaskManager"
@@ -43,16 +46,18 @@ export interface CodeStoreConfig {
 export class CodeStore {
     readonly config: CodeStoreConfig
     defaultModel: string = DEFAULT_MODEL
-    defaultThinking: ThinkingLevel = "high"
+    defaultThinking: ThinkingLevel = "max"
     defaultHarnessId: HarnessId = "claude-code"
     workingTaskIds: Set<string> = new Set()
 
     repoStore: RepoStore | null = null
     mcpServerStore: McpServerStore | null = null
     personalSettingsStore: PersonalSettingsStore | null = null
+    scratchpadStore: ScratchpadStore | null = null
     private repoStoreConnection: RepoStoreConnection | null = null
     private mcpServerStoreConnection: McpServerStoreConnection | null = null
     private personalSettingsStoreConnection: PersonalSettingsStoreConnection | null = null
+    private scratchpadStoreConnection: ScratchpadStoreConnection | null = null
     private taskStoreConnections: Map<string, TaskStoreConnection> = new Map()
     private envVarsReactionDisposer: (() => void) | null = null
     private telemetryReactionDisposer: (() => void) | null = null
@@ -78,6 +83,7 @@ export class CodeStore {
     readonly runCmd: RunCmdManager
     readonly crons: CronManager
     readonly repeat: RepeatManager
+    readonly scratchpads: ScratchpadManager
 
     constructor(config: CodeStoreConfig) {
         this.config = config
