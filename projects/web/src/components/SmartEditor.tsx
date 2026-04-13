@@ -731,12 +731,16 @@ export const SmartEditor = observer(
                 }
             }, [editor, manager])
 
-            // Register setContent callback so manager.setTextContent() can update the editor
+            // Register setContent callback so manager-driven restores can replace the full editor state.
             useEffect(() => {
                 if (!editor) return
 
-                const setContent = (text: string) => {
-                    editor.commands.setContent(text)
+                const setContent = (content: string | Record<string, unknown> | null) => {
+                    if (content === null) {
+                        editor.commands.clearContent()
+                    } else {
+                        editor.commands.setContent(content)
+                    }
                     editor.commands.focus("end")
                 }
 

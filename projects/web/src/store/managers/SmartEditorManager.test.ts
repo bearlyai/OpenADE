@@ -9,13 +9,35 @@ vi.mock("../../electronAPI/files", () => ({
 }))
 
 import { filesApi } from "../../electronAPI/files"
+import type { ImageAttachment } from "../../types"
 
 const STORAGE_KEY = "code:fileUsageStats"
 const WORKSPACE = "ws-1"
 const DAY_MS = 24 * 60 * 60 * 1000
+const DOC = {
+    type: "doc",
+    content: [
+        {
+            type: "paragraph",
+            content: [{ type: "text", text: "Draft alpha" }],
+        },
+    ],
+} satisfies Record<string, unknown>
 
 function seedStats(stats: Record<string, { count: number; lastUsed: number }>) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ [WORKSPACE]: stats }))
+}
+
+function createImage(id: string): ImageAttachment {
+    return {
+        id,
+        mediaType: "image/png",
+        ext: "png",
+        originalWidth: 100,
+        originalHeight: 80,
+        resizedWidth: 100,
+        resizedHeight: 80,
+    }
 }
 
 describe("SmartEditorManager frecency ranking", () => {
@@ -172,5 +194,121 @@ describe("SmartEditorManager.validateFiles", () => {
         // Stats should be unchanged
         const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}")
         expect(stored[WORKSPACE]["src/a.ts"]).toBeDefined()
+    })
+})
+
+describe("SmartEditorManager stashed drafts", () => {
+    beforeEach(() => {
+        localStorage.clear()
+        vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {})
+    })
+
+    afterEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    it("returns null when stashing an empty editor", () => {
+        const manager = new SmartEditorManager("test", WORKSPACE)
+
+        expect(manager.stashCurrentDraft()).toBeNull()
+        expect(manager.stashedDrafts).toHaveLength(0)
+    })
+
+    it("stashes full editor state and clears active state without revoking transferred previews", () => {
+        const manager = new SmartEditorManager("test", WORKSPACE)
+        const image = createImage("img-1")
+
+        manager.setValue("Draft alpha")
+        manager.setFiles(["src/a.ts"])
+        manager.setEditorContent(DOC)
+        manager.addImage(image, "blob:img-1")
+
+        const draft = manager.stashCurrentDraft()
+
+        expect(draft).not.toBeNull()
+        expect(draft?.snapshot.value).toBe("Draft alpha")
+        expect(draft?.snapshot.files).toEqual(["src/a.ts"])
+        expect(draft?.snapshot.editorContent).toEqual(DOC)
+        expect(draft?.snapshot.pendingImages).toEqual([image])
+        expect(draft?.snapshot.pendingImageDataUrls.get("img-1")).toBe("blob:img-1")
+        expect(manager.value).toBe("")
+        expect(manager.files).toEqual([])
+        expect(manager.pendingImages).toEqual([])
+        expect(manager.pendingImageDataUrls.size).toBe(0)
+        expect(URL.revokeObjectURL).not.toHaveBeenCalled()
+    })
+
+    it("pops a selected stash and restores full editor state", () => {
+        const manager = new SmartEditorManager("test", WORKSPACE)
+        const image = createImage("img-1")
+
+        manager.setValue("Draft alpha")
+        manager.setFiles(["src/a.ts"])
+        manager.setEditorContent(DOC)
+        manager.addImage(image, "blob:img-1")
+        const draft = manager.stashCurrentDraft()
+
+        expect(manager.popStash(draft?.id)).toBe(true)
+        expect(manager.value).toBe("Draft alpha")
+        expect(manager.files).toEqual(["src/a.ts"])
+        expect(manager.editorContent).toEqual(DOC)
+        expect(manager.pendingImages).toEqual([image])
+        expect(manager.pendingImageDataUrls.get("img-1")).toBe("blob:img-1")
+        expect(manager.stashedDrafts).toHaveLength(0)
+    })
+
+    it("auto-stashes the current draft before popping another stash", () => {
+        const manager = new SmartEditorManager("test", WORKSPACE)
+
+        manager.setValue("Draft alpha")
+        manager.setEditorContent(DOC)
+        const first = manager.stashCurrentDraft()
+
+        manager.setValue("Draft beta")
+        manager.setEditorContent({
+            type: "doc",
+            content: [
+                {
+                    type: "paragraph",
+                    content: [{ type: "text", text: "Draft beta" }],
+                },
+            ],
+        })
+
+        expect(manager.popStash(first?.id)).toBe(true)
+        expect(manager.value).toBe("Draft alpha")
+        expect(manager.stashedDrafts).toHaveLength(1)
+        expect(manager.stashedDrafts[0].snapshot.value).toBe("Draft beta")
+    })
+
+    it("deletes a stash and revokes only that stash preview URLs", () => {
+        const manager = new SmartEditorManager("test", WORKSPACE)
+
+        manager.setValue("Draft alpha")
+        manager.addImage(createImage("img-1"), "blob:img-1")
+        const first = manager.stashCurrentDraft()
+
+        manager.setValue("Draft beta")
+        manager.addImage(createImage("img-2"), "blob:img-2")
+        const second = manager.stashCurrentDraft()
+
+        manager.deleteStash(first?.id ?? "")
+
+        expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1)
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:img-1")
+        expect(manager.stashedDrafts).toHaveLength(1)
+        expect(manager.stashedDrafts[0].id).toBe(second?.id)
+    })
+
+    it("clear can preserve preview URLs during stash transfer", () => {
+        const manager = new SmartEditorManager("test", WORKSPACE)
+
+        manager.setValue("Draft alpha")
+        manager.addImage(createImage("img-1"), "blob:img-1")
+        manager.clear({ revokeImagePreviews: false })
+
+        expect(URL.revokeObjectURL).not.toHaveBeenCalled()
+        expect(manager.pendingImages).toEqual([])
+        expect(manager.pendingImageDataUrls.size).toBe(0)
     })
 })

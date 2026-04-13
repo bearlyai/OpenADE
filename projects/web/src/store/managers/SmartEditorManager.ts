@@ -11,6 +11,7 @@
  */
 
 import { makeAutoObservable, observable } from "mobx"
+import { ulid } from "ulid"
 import { filesApi } from "../../electronAPI/files"
 import type { ImageAttachment } from "../../types"
 
@@ -22,6 +23,20 @@ export interface FileUsageItem {
     path: string
     fileName: string
     parentDir?: string
+}
+
+export interface EditorSnapshot {
+    value: string
+    files: string[]
+    editorContent: Record<string, unknown> | null
+    pendingImages: ImageAttachment[]
+    pendingImageDataUrls: Map<string, string>
+}
+
+export interface StashedDraft {
+    id: string
+    createdAt: string
+    snapshot: EditorSnapshot
 }
 
 interface FileUsageStat {
@@ -49,6 +64,15 @@ function frecencyScore(stat: FileUsageStat, now: number): number {
     return stat.count * decay
 }
 
+function cloneEditorContent(content: Record<string, unknown> | null): Record<string, unknown> | null {
+    if (content === null) return null
+    return JSON.parse(JSON.stringify(content)) as Record<string, unknown>
+}
+
+function clonePendingImages(images: ImageAttachment[]): ImageAttachment[] {
+    return images.map((image) => ({ ...image }))
+}
+
 // ============================================================================
 // SmartEditorManager
 // ============================================================================
@@ -65,6 +89,7 @@ export class SmartEditorManager {
     pendingImages: ImageAttachment[] = []
     // In-memory data URLs for previewing pending images (keyed by image ID)
     pendingImageDataUrls: Map<string, string> = observable.map()
+    stashedDrafts: StashedDraft[] = []
 
     // Bumped after localStorage mutations to invalidate MobX computed getters
     private _statsVersion = 0
@@ -72,7 +97,7 @@ export class SmartEditorManager {
     // Callbacks registered by SmartEditor
     private onInsertFile: ((path: string) => void) | null = null
     private onClear: (() => void) | null = null
-    private onSetContent: ((text: string) => void) | null = null
+    private onSetContent: ((content: string | Record<string, unknown> | null) => void) | null = null
 
     constructor(id: string, workspaceId: string) {
         this.id = id
@@ -94,19 +119,79 @@ export class SmartEditorManager {
         this.editorContent = content
     }
 
-    clear(): void {
+    get hasDraftableContent(): boolean {
+        return this.value.trim().length > 0 || this.pendingImages.length > 0
+    }
+
+    clear(options?: { revokeImagePreviews?: boolean }): void {
+        const revokeImagePreviews = options?.revokeImagePreviews ?? true
         this.value = ""
         this.files = []
         this.editorContent = null
-        // Revoke object URLs to prevent memory leaks
-        for (const url of this.pendingImageDataUrls.values()) {
-            URL.revokeObjectURL(url)
+        if (revokeImagePreviews) {
+            for (const url of this.pendingImageDataUrls.values()) {
+                URL.revokeObjectURL(url)
+            }
         }
         this.pendingImages = []
         this.pendingImageDataUrls.clear()
         if (this.onClear) {
             this.onClear()
         }
+    }
+
+    captureSnapshot(): EditorSnapshot {
+        return {
+            value: this.value,
+            files: [...this.files],
+            editorContent: cloneEditorContent(this.editorContent),
+            pendingImages: clonePendingImages(this.pendingImages),
+            pendingImageDataUrls: new Map(this.pendingImageDataUrls),
+        }
+    }
+
+    restoreSnapshot(snapshot: EditorSnapshot): void {
+        this.value = snapshot.value
+        this.files = [...snapshot.files]
+        this.editorContent = cloneEditorContent(snapshot.editorContent)
+        this.pendingImages = clonePendingImages(snapshot.pendingImages)
+        this.pendingImageDataUrls.clear()
+        for (const [id, dataUrl] of snapshot.pendingImageDataUrls.entries()) {
+            this.pendingImageDataUrls.set(id, dataUrl)
+        }
+        this.onSetContent?.(this.editorContent)
+    }
+
+    stashCurrentDraft(): StashedDraft | null {
+        if (!this.hasDraftableContent) return null
+
+        const draft = this.createDraft(this.captureSnapshot())
+        this.stashedDrafts.unshift(draft)
+        this.clear({ revokeImagePreviews: false })
+        return draft
+    }
+
+    popStash(stashId?: string): boolean {
+        const nextDraft = stashId ? this.stashedDrafts.find((draft) => draft.id === stashId) : this.stashedDrafts[0]
+        if (!nextDraft) return false
+
+        this.stashedDrafts = this.stashedDrafts.filter((draft) => draft.id !== nextDraft.id)
+        if (this.hasDraftableContent) {
+            this.stashedDrafts.unshift(this.createDraft(this.captureSnapshot()))
+        }
+
+        this.restoreSnapshot(nextDraft.snapshot)
+        return true
+    }
+
+    deleteStash(stashId: string): void {
+        const draft = this.stashedDrafts.find((item) => item.id === stashId)
+        if (!draft) return
+
+        for (const url of draft.snapshot.pendingImageDataUrls.values()) {
+            URL.revokeObjectURL(url)
+        }
+        this.stashedDrafts = this.stashedDrafts.filter((item) => item.id !== stashId)
     }
 
     addImage(image: ImageAttachment, dataUrl: string): void {
@@ -139,7 +224,7 @@ export class SmartEditorManager {
         this.onClear = null
     }
 
-    registerSetContentCallback(cb: (text: string) => void): void {
+    registerSetContentCallback(cb: (content: string | Record<string, unknown> | null) => void): void {
         this.onSetContent = cb
     }
 
@@ -253,6 +338,14 @@ export class SmartEditorManager {
         const entries = Object.entries(stats)
         entries.sort((a, b) => frecencyScore(b[1], now) - frecencyScore(a[1], now))
         return entries.slice(0, MAX_FAVORITES).map(([path]) => path)
+    }
+
+    private createDraft(snapshot: EditorSnapshot): StashedDraft {
+        return {
+            id: ulid(),
+            createdAt: new Date().toISOString(),
+            snapshot,
+        }
     }
 
     private pathsToItems(paths: string[]): FileUsageItem[] {

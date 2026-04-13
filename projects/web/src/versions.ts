@@ -8,6 +8,15 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.70.0",
+        title: "Task Draft Stash",
+        date: "2026-04-12",
+        highlights: [
+            "Task creation now lets you stash drafts to a side rail and pop them back into the editor later",
+            "Draft stashes preserve the full rich editor state, including file mentions and attached images",
+        ],
+    },
+    {
         version: "0.69.0",
         title: "Inline Config Editing & Better Navigation",
         date: "2026-04-12",

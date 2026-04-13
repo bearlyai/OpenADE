@@ -2,6 +2,7 @@ import { Popover } from "@base-ui-components/react/popover"
 import cx from "classnames"
 import { exhaustive } from "exhaustive"
 import {
+    Archive,
     AlertCircle,
     AlertTriangle,
     ChevronDown,
@@ -32,6 +33,7 @@ import { useImageDropZone } from "../hooks/useImageDropZone"
 import { usePortalContainer } from "../hooks/usePortalContainer"
 import { useCodeNavigate } from "../routing"
 import { useCodeStore } from "../store/context"
+import type { StashedDraft } from "../store/managers/SmartEditorManager"
 import type { CreationPhase, TaskCreation } from "../store/managers/TaskCreationManager"
 import { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager"
 import type { Repo } from "../types"
@@ -133,6 +135,154 @@ function truncateMiddle(str: string, maxLen: number): string {
     const backChars = Math.floor(charsToShow / 2)
     return str.slice(0, frontChars) + ellipsis + str.slice(-backChars)
 }
+
+function formatDraftPreview(draft: StashedDraft): string {
+    const imageCount = draft.snapshot.pendingImages.length
+    const normalized = draft.snapshot.value.replace(/\s+/g, " ").trim()
+    if (normalized.length > 0) {
+        return normalized.length > 96 ? `${normalized.slice(0, 96)}...` : normalized
+    }
+    if (imageCount > 0) {
+        return `Draft with ${imageCount} image${imageCount === 1 ? "" : "s"}`
+    }
+    return "Empty draft"
+}
+
+function formatDraftTime(createdAt: string): string {
+    return new Intl.DateTimeFormat(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+    }).format(new Date(createdAt))
+}
+
+function StashedDraftItem({ draft, onPop, onDelete }: { draft: StashedDraft; onPop: () => void; onDelete: () => void }) {
+    const imageCount = draft.snapshot.pendingImages.length
+    const preview = formatDraftPreview(draft)
+
+    return (
+        <div className="border border-border bg-base-100 p-3">
+            <div className="flex items-start gap-2">
+                <FileText size={14} className="mt-0.5 flex-shrink-0 text-muted" />
+                <div className="min-w-0 flex-1">
+                    <p className="text-sm text-base-content break-words" title={preview}>
+                        {preview}
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
+                        <span>{formatDraftTime(draft.createdAt)}</span>
+                        {imageCount > 0 && (
+                            <span>
+                                {imageCount} image{imageCount === 1 ? "" : "s"}
+                            </span>
+                        )}
+                    </div>
+                </div>
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+                <button
+                    type="button"
+                    onClick={onPop}
+                    className="btn flex items-center gap-1.5 px-2.5 py-1.5 text-xs bg-base-200 text-base-content hover:bg-base-300 transition-colors"
+                >
+                    <RotateCcw size={12} />
+                    Pop
+                </button>
+                <button
+                    type="button"
+                    onClick={onDelete}
+                    className="btn flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted hover:text-base-content hover:bg-base-200 transition-colors"
+                >
+                    <X size={12} />
+                    Delete
+                </button>
+            </div>
+        </div>
+    )
+}
+
+export const TaskCreateDraftsMenu = observer(({ workspaceId }: { workspaceId: string }) => {
+    const codeStore = useCodeStore()
+    const portalContainer = usePortalContainer()
+    const editorManager = codeStore.smartEditors.getManager("task-create", workspaceId)
+
+    const handleStash = () => {
+        editorManager.stashCurrentDraft()
+    }
+
+    return (
+        <div className="flex items-center gap-2">
+            <button
+                type="button"
+                onClick={handleStash}
+                disabled={!editorManager.hasDraftableContent}
+                className={cx(
+                    "btn flex items-center gap-1.5 px-3 py-1.5 text-sm transition-colors",
+                    editorManager.hasDraftableContent
+                        ? "bg-base-200 text-base-content hover:bg-base-300 cursor-pointer"
+                        : "bg-base-200/40 text-base-content/50 cursor-not-allowed"
+                )}
+            >
+                <Archive size={14} />
+                <span>Stash</span>
+            </button>
+
+            <Popover.Root>
+                <Popover.Trigger className="btn flex items-center gap-1.5 px-2 py-1.5 text-sm text-muted hover:text-base-content hover:bg-base-200 transition-colors">
+                    <Archive size={14} />
+                    <span>Drafts</span>
+                    {editorManager.stashedDrafts.length > 0 && (
+                        <span className="min-w-5 px-1.5 py-0.5 text-xs bg-base-200 text-base-content">{editorManager.stashedDrafts.length}</span>
+                    )}
+                    <ChevronDown size={12} />
+                </Popover.Trigger>
+                <Popover.Portal container={portalContainer}>
+                    <Popover.Positioner sideOffset={8} side="bottom" align="end">
+                        <Popover.Popup className="z-50 w-80 bg-base-100 border border-border shadow-lg outline-none">
+                            <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                                <div className="flex items-center gap-2 text-sm text-base-content">
+                                    <Archive size={14} className="text-muted" />
+                                    <span>Drafts</span>
+                                </div>
+                                <span className="text-xs text-muted">{editorManager.stashedDrafts.length}</span>
+                            </div>
+                            <div className="flex flex-col gap-3 p-3">
+                                <button
+                                    type="button"
+                                    onClick={handleStash}
+                                    disabled={!editorManager.hasDraftableContent}
+                                    className={cx(
+                                        "btn flex w-full items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium transition-all",
+                                        editorManager.hasDraftableContent
+                                            ? "bg-base-200 text-base-content hover:bg-base-300 cursor-pointer"
+                                            : "bg-base-200/40 text-base-content/50 cursor-not-allowed"
+                                    )}
+                                >
+                                    <Archive size={14} />
+                                    Stash current draft
+                                </button>
+                                {editorManager.stashedDrafts.length > 0 ? (
+                                    <div className="flex max-h-80 flex-col gap-3 overflow-y-auto">
+                                        {editorManager.stashedDrafts.map((draft) => (
+                                            <StashedDraftItem
+                                                key={draft.id}
+                                                draft={draft}
+                                                onPop={() => editorManager.popStash(draft.id)}
+                                                onDelete={() => editorManager.deleteStash(draft.id)}
+                                            />
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="border border-dashed border-border p-4 text-sm text-muted">
+                                        Stashed drafts show up here so you can swap them back into the editor.
+                                    </div>
+                                )}
+                            </div>
+                        </Popover.Popup>
+                    </Popover.Positioner>
+                </Popover.Portal>
+            </Popover.Root>
+        </div>
+    )
+})
 
 export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePageProps) => {
     const codeStore = useCodeStore()
@@ -398,7 +548,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                 )}
 
                 {/* Main toolbar row */}
-                <div className="flex items-center gap-4 px-4 py-3">
+                <div className="flex flex-wrap items-center gap-4 px-4 py-3">
                     {/* Left section: Connectors - scrollable */}
                     <div className="flex-1 min-w-0 overflow-x-auto">
                         <div className="flex items-center gap-2">
@@ -476,7 +626,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                     )}
 
                     {/* Right section: Settings + Pending + Actions */}
-                    <div className="flex items-center gap-2 flex-shrink-0">
+                    <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
                         {/* Pending tasks indicator */}
                         {pendingCreations.length > 0 && (
                             <Popover.Root>

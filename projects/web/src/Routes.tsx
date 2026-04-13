@@ -8,7 +8,7 @@ import { getLastViewed } from "./constants"
 import { isCodeModuleAvailable } from "./electronAPI/capabilities"
 import { CodeLayout, type CodeLayoutProps } from "./layout/CodeLayout"
 import { OnboardingPage } from "./pages/OnboardingPage"
-import { TaskCreatePage } from "./pages/TaskCreatePage"
+import { TaskCreateDraftsMenu, TaskCreatePage } from "./pages/TaskCreatePage"
 import { TaskCreationPage } from "./pages/TaskCreationPage"
 import { TaskPage } from "./pages/TaskPage"
 import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage"
@@ -171,7 +171,12 @@ export const CodeWorkspaceTaskCreateRoute = observer(() => {
     }
 
     return (
-        <Layout workspaceId={workspaceId} title="New Task" icon={<Code size="1.25rem" className="text-muted" />}>
+        <Layout
+            workspaceId={workspaceId}
+            title="New Task"
+            icon={<Code size="1.25rem" className="text-muted" />}
+            navbarRight={<TaskCreateDraftsMenu workspaceId={workspaceId} />}
+        >
             <TaskCreatePage workspaceId={workspaceId} repo={repo} />
         </Layout>
     )
