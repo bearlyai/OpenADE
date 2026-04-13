@@ -8,6 +8,17 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.69.0",
+        title: "Inline Config Editing & Better Navigation",
+        date: "2026-04-12",
+        highlights: [
+            "Edit processes and cron jobs inline from the app instead of round-tripping through a task and raw TOML edits",
+            "Browse multiple openade.toml files from a built-in file tree with a wider editor for faster config maintenance",
+            "Pinned tasks now always stay above unpinned tasks in the sidebar, even when an unpinned task is running",
+            "Process config is now consistently openade.toml-only, reducing ambiguity across process management",
+        ],
+    },
+    {
         version: "0.68.0",
         title: "Task Management & Harness APIs",
         date: "2026-04-12",
