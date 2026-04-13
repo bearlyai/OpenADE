@@ -1,1 +1,26 @@
+[[process]]
+name = "web"
+type = "daemon"
+command = "vite dev"
+work_dir = "projects/web"
+url = "http://localhost:5173"
 
+[[process]]
+name = "electron"
+type = "daemon"
+command = "npm run start"
+work_dir = "projects/electron"
+
+[[process]]
+name = "landing"
+type = "daemon"
+command = "yarn dev"
+work_dir = "projects/landing"
+url = "http://localhost:3000"
+
+[[cron]]
+name = "test"
+schedule = "0 9 * * *"
+type = "do"
+prompt = "hello!"
+isolation = "head"
