@@ -9,11 +9,14 @@ export interface ReleaseNote {
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
         version: "0.70.0",
-        title: "Task Draft Stash",
-        date: "2026-04-12",
+        title: "Scratchpad, Draft Stashing & Sonnet 4.6",
+        date: "2026-04-13",
         highlights: [
-            "Task creation now lets you stash drafts to a side rail and pop them back into the editor later",
-            "Draft stashes preserve the full rich editor state, including file mentions and attached images",
+            "New scratchpad tray panel for quick notes with auto-generated titles from the first line",
+            "Stash task drafts to a side rail and restore them later — rich editor state including file mentions and images is preserved across context switches and refreshes",
+            "Cron jobs can now reuse an existing task thread instead of always creating new tasks",
+            "Added Sonnet 4.6 model with default effort set to max",
+            "Stderr line bursts in inline messages are now collapsed for cleaner output",
         ],
     },
     {
