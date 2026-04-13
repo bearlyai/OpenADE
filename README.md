@@ -39,8 +39,8 @@
 ## Download
 
 <p align="center">
-  <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.68.0/OpenADE-0.68.0-universal.dmg"><img src="https://img.shields.io/badge/macOS-Universal-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS"></a>
-  <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.68.0/OpenADE-0.68.0-arm64.AppImage"><img src="https://img.shields.io/badge/Linux-arm64-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux"></a>
+  <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.69.0/OpenADE-0.69.0-universal.dmg"><img src="https://img.shields.io/badge/macOS-Universal-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS"></a>
+  <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.69.0/OpenADE-0.69.0-arm64.AppImage"><img src="https://img.shields.io/badge/Linux-arm64-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux"></a>
 </p>
 
 <details>
@@ -51,7 +51,7 @@
 Windows support is early and largely untested — you will likely hit rough edges. If you're patient and willing to report bugs, we'd love your help shaking things out:
 
 <p align="center">
-  <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.68.0/OpenADE-Setup-0.68.0.exe"><img src="https://img.shields.io/badge/Windows-x64_(Experimental)-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows"></a>
+  <a href="https://github.com/bearlyai/OpenADE/releases/download/v0.69.0/OpenADE-Setup-0.69.0.exe"><img src="https://img.shields.io/badge/Windows-x64_(Experimental)-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows"></a>
 </p>
 
 > **Tip:** For a more reliable experience on Windows, you can run the Linux build inside [WSL (Windows Subsystem for Linux)](https://learn.microsoft.com/en-us/windows/wsl/) instead.
@@ -149,9 +149,9 @@ Let them cook. 🧑‍🍳
 
 | Platform | Download |
 |----------|----------|
-| macOS (Universal) | [OpenADE-0.68.0-universal.dmg](https://github.com/bearlyai/OpenADE/releases/download/v0.68.0/OpenADE-0.68.0-universal.dmg) |
-| Linux (arm64) | [OpenADE-0.68.0-arm64.AppImage](https://github.com/bearlyai/OpenADE/releases/download/v0.68.0/OpenADE-0.68.0-arm64.AppImage) |
-| Windows (Experimental) | [OpenADE-Setup-0.68.0.exe](https://github.com/bearlyai/OpenADE/releases/download/v0.68.0/OpenADE-Setup-0.68.0.exe) |
+| macOS (Universal) | [OpenADE-0.69.0-universal.dmg](https://github.com/bearlyai/OpenADE/releases/download/v0.69.0/OpenADE-0.69.0-universal.dmg) |
+| Linux (arm64) | [OpenADE-0.69.0-arm64.AppImage](https://github.com/bearlyai/OpenADE/releases/download/v0.69.0/OpenADE-0.69.0-arm64.AppImage) |
+| Windows (Experimental) | [OpenADE-Setup-0.69.0.exe](https://github.com/bearlyai/OpenADE/releases/download/v0.69.0/OpenADE-Setup-0.69.0.exe) |
 
 > **Note:** The Windows build is experimental and largely untested — expect rough edges. For a smoother experience, try running the Linux build via [WSL](https://learn.microsoft.com/en-us/windows/wsl/).
 
