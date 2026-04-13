@@ -1035,6 +1035,19 @@ export const ProcsEditorModal = NiceModal.create(
                                                         <option value="head">head</option>
                                                         <option value="worktree">worktree</option>
                                                     </select>
+                                                    <label className="md:col-span-12 h-9 flex items-center gap-2 cursor-pointer">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={cron.reuseTask ?? true}
+                                                            onChange={(e) =>
+                                                                setCrons((prev) =>
+                                                                    prev.map((c, i) => (i === index ? { ...c, reuseTask: e.target.checked } : c))
+                                                                )
+                                                            }
+                                                            className="accent-primary"
+                                                        />
+                                                        <span className="text-xs text-muted">Reuse the same task thread across runs</span>
+                                                    </label>
                                                     {cronAssistHints[index] && (
                                                         <div className="md:col-span-12 text-[11px] text-muted flex items-start gap-1">
                                                             <Sparkles size={11} className="mt-0.5" />

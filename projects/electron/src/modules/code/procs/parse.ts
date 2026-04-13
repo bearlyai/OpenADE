@@ -28,6 +28,7 @@ const CronSchema = z.object({
     isolation: z.enum(["head", "worktree"]).optional(),
     harness: z.string().optional(),
     in_task_id: z.string().optional(),
+    reuse_task: z.boolean().default(true),
 })
 
 /** Zod schema for the entire config file */
@@ -76,6 +77,7 @@ export function parseProcsFile(content: string, relativePath: string): ParseResu
             isolation: c.isolation,
             harness: c.harness,
             inTaskId: c.in_task_id,
+            reuseTask: c.reuse_task,
         }))
 
         return { config: { relativePath, processes, crons } }
@@ -127,6 +129,7 @@ export function parseEditableProcsFile(content: string, relativePath: string): P
             isolation: cron.isolation,
             harness: cron.harness,
             inTaskId: cron.inTaskId,
+            reuseTask: cron.reuseTask,
         })),
     }
 }

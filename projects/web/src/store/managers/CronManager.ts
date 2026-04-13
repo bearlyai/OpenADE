@@ -519,7 +519,7 @@ export class CronManager {
                 type: def.type,
                 input: def.prompt,
                 appendSystemPrompt: def.appendSystemPrompt,
-                inTaskId: def.inTaskId || undefined,
+                inTaskId: def.inTaskId || (def.reuseTask && state?.lastTaskId) || undefined,
                 isolationStrategy: def.isolation === "worktree" ? { type: "worktree", sourceBranch: "HEAD" } : { type: "head" },
                 harnessId: (def.harness as HarnessId) || undefined,
                 title: `[Cron] ${def.name}`,

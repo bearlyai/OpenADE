@@ -71,6 +71,7 @@ prompt = "Review the codebase for issues"
 				isolation: undefined,
 				harness: undefined,
 				inTaskId: undefined,
+				reuseTask: true,
 			})
 			expect(result.config.processes).toHaveLength(0)
 		}
@@ -88,6 +89,7 @@ images = ["screenshot.png"]
 isolation = "worktree"
 harness = "claude-code"
 in_task_id = "task-123"
+reuse_task = true
 `
 		const result = parseProcsFile(content, "pkg/openade.toml")
 		expect("config" in result).toBe(true)
@@ -100,6 +102,7 @@ in_task_id = "task-123"
 			expect(cron.isolation).toBe("worktree")
 			expect(cron.harness).toBe("claude-code")
 			expect(cron.inTaskId).toBe("task-123")
+			expect(cron.reuseTask).toBe(true)
 		}
 	})
 
@@ -243,6 +246,7 @@ prompt = "Review"
 			isolation: undefined,
 			harness: undefined,
 			inTaskId: undefined,
+			reuseTask: true,
 		})
 	})
 
@@ -268,6 +272,7 @@ prompt = "Review"
 					isolation: "worktree",
 					harness: "codex",
 					inTaskId: "task-1",
+					reuseTask: true,
 				},
 			],
 		})
@@ -275,6 +280,7 @@ prompt = "Review"
 		expect(toml).toContain("work_dir")
 		expect(toml).toContain("append_system_prompt")
 		expect(toml).toContain("in_task_id")
+		expect(toml).not.toContain("reuse_task")
 
 		const parsed = parseEditableProcsFile(toml, "openade.toml")
 		expect("error" in parsed).toBe(false)
@@ -284,6 +290,20 @@ prompt = "Review"
 		expect(parsed.processes[0].workDir).toBe("apps/web")
 		expect(parsed.crons[0].appendSystemPrompt).toBe("Be careful")
 		expect(parsed.crons[0].inTaskId).toBe("task-1")
+		expect(parsed.crons[0].reuseTask).toBe(true)
+	})
+
+	it("serializes reuse_task = false and round-trips", () => {
+		const toml = serializeProcsFile({
+			processes: [],
+			crons: [{ name: "No Reuse", schedule: "0 9 * * 1", type: "plan", prompt: "Test", reuseTask: false }],
+		})
+		expect(toml).toContain("reuse_task = false")
+
+		const parsed = parseEditableProcsFile(toml, "openade.toml")
+		expect("error" in parsed).toBe(false)
+		if ("error" in parsed) return
+		expect(parsed.crons[0].reuseTask).toBe(false)
 	})
 
 	it("rejects duplicate process names during serialization", () => {

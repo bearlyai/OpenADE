@@ -63,6 +63,8 @@ export interface CronDef {
     harness?: string
     /** If set, run in an existing task instead of creating a new one */
     inTaskId?: string
+    /** If true, reuse the task from the last run instead of creating a new one */
+    reuseTask?: boolean
 }
 
 export type CronInput = Omit<CronDef, "id">

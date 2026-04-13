@@ -75,6 +75,7 @@ function toCronToml(cron: CronInput): Record<string, unknown> {
     if (cron.isolation) out.isolation = cron.isolation
     if (cron.harness?.trim()) out.harness = cron.harness.trim()
     if (cron.inTaskId?.trim()) out.in_task_id = cron.inTaskId.trim()
+    if (cron.reuseTask === false) out.reuse_task = false
     return out
 }
 
