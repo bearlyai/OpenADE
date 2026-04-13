@@ -6,7 +6,7 @@
  */
 
 import type { LucideIcon } from "lucide-react"
-import { FolderOpen, GitCommitHorizontal, GitCompare, Play, Search, TerminalSquare } from "lucide-react"
+import { FolderOpen, GitCommitHorizontal, GitCompare, NotebookPen, Play, Search, TerminalSquare } from "lucide-react"
 import type { ReactNode } from "react"
 import type { RunContext } from "../../electronAPI/procs"
 import { getTaskPtyId } from "../../electronAPI/pty"
@@ -17,6 +17,7 @@ import { ProcessesTray } from "../ProcessesTray"
 import { SearchTray } from "../SearchTray"
 import { Terminal } from "../Terminal"
 import { FilesTrayContent } from "./FilesTrayContent"
+import { ScratchpadTrayContent } from "./ScratchpadTrayContent"
 
 export interface TrayConfig {
     id: TrayType
@@ -115,6 +116,15 @@ export const TRAY_CONFIGS: TrayConfig[] = [
                 return <NoEnvironment />
             }
             return <Terminal ptyId={getTaskPtyId(tray.taskId)} cwd={env.taskWorkingDir} className="h-full" onClose={() => tray.close()} />
+        },
+    },
+    {
+        id: "scratchpad",
+        label: "Scratch Pad",
+        icon: NotebookPen,
+        renderContent: (tray) => {
+            const repo = tray.store.repos.getRepo(tray.workspaceId)
+            return <ScratchpadTrayContent workspaceId={tray.workspaceId} repoPath={repo?.path ?? null} />
         },
     },
     {

@@ -33,7 +33,6 @@ const SidebarContent = observer(() => {
     const codeStore = useCodeStore()
     const params = useParams<{ workspaceId?: string; taskId?: string; creationId?: string }>()
     const { workspaceId, taskId, creationId } = params
-
     const handleOpenSettings = useCallback(
         (tab?: SettingsTab) => {
             NiceModal.show(SettingsModal, { store: codeStore, initialTab: tab })

@@ -13,8 +13,6 @@ import type { PersonalSettingsStore } from "../persistence/personalSettingsStore
 import { type PersonalSettingsStoreConnection, connectPersonalSettingsStore } from "../persistence/personalSettingsStoreBootstrap"
 import { type RepoStore, getTaskPreview } from "../persistence/repoStore"
 import { type RepoStoreConnection, connectRepoStore } from "../persistence/repoStoreBootstrap"
-import type { ScratchpadStore } from "../persistence/scratchpadStore"
-import { type ScratchpadStoreConnection, connectScratchpadStore } from "../persistence/scratchpadStoreBootstrap"
 import { type TaskStoreConnection, loadTaskStore } from "../persistence/taskLoader"
 import { type TaskStore, syncTaskPreviewFromStore } from "../persistence/taskStore"
 import type { User } from "../types"
@@ -53,11 +51,9 @@ export class CodeStore {
     repoStore: RepoStore | null = null
     mcpServerStore: McpServerStore | null = null
     personalSettingsStore: PersonalSettingsStore | null = null
-    scratchpadStore: ScratchpadStore | null = null
     private repoStoreConnection: RepoStoreConnection | null = null
     private mcpServerStoreConnection: McpServerStoreConnection | null = null
     private personalSettingsStoreConnection: PersonalSettingsStoreConnection | null = null
-    private scratchpadStoreConnection: ScratchpadStoreConnection | null = null
     private taskStoreConnections: Map<string, TaskStoreConnection> = new Map()
     private envVarsReactionDisposer: (() => void) | null = null
     private telemetryReactionDisposer: (() => void) | null = null
@@ -102,6 +98,7 @@ export class CodeStore {
         this.runCmd = new RunCmdManager(this)
         this.crons = new CronManager(this)
         this.repeat = new RepeatManager(this)
+        this.scratchpads = new ScratchpadManager()
 
         makeAutoObservable(this, {
             workingTaskIds: true,
@@ -125,6 +122,7 @@ export class CodeStore {
             runCmd: false,
             crons: false,
             repeat: false,
+            scratchpads: false,
         })
     }
 
@@ -317,6 +315,8 @@ export class CodeStore {
             this.personalSettingsStoreConnection = null
             this.personalSettingsStore = null
         }
+
+        this.scratchpads.disconnectAll()
 
         if (this.envVarsReactionDisposer) {
             this.envVarsReactionDisposer()
