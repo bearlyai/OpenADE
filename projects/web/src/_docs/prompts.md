@@ -70,11 +70,10 @@ All modes share `COMPACT_STYLE_RULES` (bullets > paragraphs, no filler, tradeoff
 Trivial changes skip straight to `## 📝 Plan`.
 
 ### Ask
-Closed questions: `## Answer`, `## Evidence`, `## Tradeoffs`, `## Unknowns`
-Exploratory questions: structured prose with code refs, no skeleton.
+No required sections. Lead with the answer, use whatever format fits. Make tradeoffs explicit when they exist.
 
 ### Execute
-Completion summary: `## Done`, `## Verified`, `## Blocked` (optional), `## Risks` (optional)
+No required sections. Cover what was done, what was verified, and any risks or blockers.
 
 ## Action Prompts
 

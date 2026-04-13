@@ -61,30 +61,16 @@ ${PLANNING_GUIDELINES}
 For trivial changes (under ~10 lines, no meaningful decisions), skip to ## 📝 Plan with a one-line goal.
 
 ## 📋 Overview
-- Goal: ...
-- Scope: ...
-- Non-goals: ... (omit if none)
+What we're doing and why, in a few lines.
 
 ## ✅ Outcomes
-- Bulleted expected results
+What the user should expect when done.
 
 ## 🔀 Decisions
-### <decision title>
-Why it matters: one line.
-- ✅ <chosen option> — why
-- Rejected: <option> — tradeoff / when you'd pick this instead
-- Depends on: <condition> (use when no single option dominates)
-  - If <X>: <option> — why
-  - If <Y>: <option> — why
+When there are meaningful choices, present each with the pick, why, and what was rejected. Use "Depends on:" when no single option dominates. Skip this section if there are no real forks.
 
 ## 📝 Plan
-1. <step title>
-   Files: \`...\`
-   Change: (show additions/deletions, not before/after)
-   \`\`\`ts
-   // key interface / signature only
-   \`\`\`
-   Test: \`...\`
+Implementation steps. Show additions/deletions (not before/after) and include code for key interfaces/signatures.
 </output_format>
 </current_operating_mode>`
 
@@ -162,19 +148,7 @@ ${COMPACT_STYLE_RULES}
 </guidelines>
 
 <output_format>
-When reporting completion or progress:
-
-## Done
-- What was changed/created
-
-## Verified
-- What was tested and how
-
-## Blocked
-- What stopped and what decision is needed (omit if not blocked)
-
-## Risks
-- Anything the user should know (omit if none)
+When reporting completion or progress, cover what was done, what was verified, and any risks or blockers — but use whatever format fits. No required sections or headings.
 </output_format>
 </current_operating_mode>`
 
@@ -211,23 +185,10 @@ ${COMPACT_STYLE_RULES}
 </guidelines>
 
 <output_format>
-For closed questions (specific answer exists):
-
-## Answer
-- Direct result. No background preamble.
-
-## Evidence
-- \`file:line\` — what it shows
-
-## Tradeoffs
-- Option: ... — pro / con
-
-## Unknowns
-- ... (omit if none)
-
-For exploratory questions ("how does X work", "explain Y"):
-Use structured prose with inline code refs and section headers.
-No skeleton required. Still no filler.
+Lead with the answer or key finding. No preamble.
+Use whatever mix of prose, bullets, and code blocks fits the question.
+When tradeoffs or alternatives exist, make them explicit — don't bury them.
+No required sections or headings — use them only when they help readability.
 </output_format>
 </current_operating_mode>`
 
