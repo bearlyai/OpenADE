@@ -8,6 +8,15 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.71.0",
+        title: "Claude Opus 4.7",
+        date: "2026-04-16",
+        highlights: [
+            "Default Opus model upgraded to Claude Opus 4.7 for improved reasoning and coding performance",
+            "Existing tasks with older Opus/Sonnet full IDs continue to work — model aliases now resolve across current and future Claude releases",
+        ],
+    },
+    {
         version: "0.70.0",
         title: "Scratchpad, Draft Stashing & Sonnet 4.6",
         date: "2026-04-13",
