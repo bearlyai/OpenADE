@@ -8,6 +8,15 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.71.0",
+        title: "Opus 4.7 Upgrade",
+        date: "2026-04-16",
+        highlights: [
+            "Upgraded default Claude model from Opus 4.6 to Opus 4.7 — Anthropic's most capable model with a step-change improvement in agentic coding",
+            "Sonnet 4.6 and Haiku 4.5 remain available as alternative models",
+        ],
+    },
+    {
         version: "0.70.0",
         title: "Scratchpad, Draft Stashing & Sonnet 4.6",
         date: "2026-04-13",

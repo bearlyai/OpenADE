@@ -74,7 +74,7 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
     models(): HarnessModelConfig {
         return {
             models: [
-                { id: "opus", fullId: "claude-opus-4-6", label: "Opus 4.6", displayClass: "Opus" },
+                { id: "opus", fullId: "claude-opus-4-7", label: "Opus 4.7", displayClass: "Opus" },
                 { id: "sonnet", fullId: "claude-sonnet-4-6", label: "Sonnet 4.6", displayClass: "Sonnet" },
                 { id: "haiku", fullId: "claude-haiku-4-5-20251001", label: "Haiku 4.5", displayClass: "Haiku" },
             ],

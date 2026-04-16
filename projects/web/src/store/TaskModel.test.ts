@@ -91,7 +91,7 @@ describe("TaskModel harness lock", () => {
     })
 
     it("maps persisted full model IDs to harness aliases", () => {
-        const task = createTask([createActionEvent({ id: "a1", harnessId: "claude-code", modelId: "claude-opus-4-6" })])
+        const task = createTask([createActionEvent({ id: "a1", harnessId: "claude-code", modelId: "claude-opus-4-7" })])
 
         const model = new TaskModel(createStore(task), task.id)
 
@@ -142,7 +142,7 @@ describe("TaskModel harness lock", () => {
             execution: {
                 type: "claude-code",
                 executionId: "a1-exec",
-                modelId: "claude-opus-4-6",
+                modelId: "claude-opus-4-7",
                 events: [],
             },
             source: { type: "do" as const, userLabel: "Do" },

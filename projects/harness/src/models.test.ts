@@ -60,7 +60,7 @@ describe("defaults", () => {
 
 describe("getModelFullId", () => {
     it("resolves alias with harnessId", () => {
-        expect(getModelFullId("opus", "claude-code")).toBe("claude-opus-4-6")
+        expect(getModelFullId("opus", "claude-code")).toBe("claude-opus-4-7")
     })
 
     it("resolves alias searching all harnesses", () => {
@@ -72,7 +72,7 @@ describe("getModelFullId", () => {
     })
 
     it("does not resolve alias from wrong harness, falls back to all", () => {
-        expect(getModelFullId("opus", "codex")).toBe("claude-opus-4-6")
+        expect(getModelFullId("opus", "codex")).toBe("claude-opus-4-7")
     })
 })
 
@@ -146,13 +146,14 @@ describe("normalizeModelClass", () => {
     })
 
     it("resolves from registry by fullId", () => {
-        expect(normalizeModelClass("claude-opus-4-6")).toBe("Opus")
+        expect(normalizeModelClass("claude-opus-4-7")).toBe("Opus")
         expect(normalizeModelClass("gpt-5.3-codex")).toBe("Codex")
         expect(normalizeModelClass("gpt-5.4")).toBe("Codex")
     })
 
     it("falls back to string matching for legacy model IDs", () => {
         expect(normalizeModelClass("claude-opus-4-20250514")).toBe("Opus")
+        expect(normalizeModelClass("claude-opus-4-6")).toBe("Opus")
         expect(normalizeModelClass("claude-sonnet-3-5-20241022")).toBe("Sonnet")
         expect(normalizeModelClass("some-codex-variant")).toBe("Codex")
         expect(normalizeModelClass("gpt-5.4-xhigh")).toBe("Codex")
