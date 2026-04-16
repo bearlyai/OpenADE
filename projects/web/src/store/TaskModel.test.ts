@@ -91,12 +91,30 @@ describe("TaskModel harness lock", () => {
     })
 
     it("maps persisted full model IDs to harness aliases", () => {
-        const task = createTask([createActionEvent({ id: "a1", harnessId: "claude-code", modelId: "claude-opus-4-6" })])
+        const task = createTask([createActionEvent({ id: "a1", harnessId: "claude-code", modelId: "claude-opus-4-7" })])
 
         const model = new TaskModel(createStore(task), task.id)
 
         expect(model.harnessId).toBe("claude-code")
         expect(model.model).toBe("opus")
+    })
+
+    it("maps future Claude full model IDs to stable aliases", () => {
+        const task = createTask([createActionEvent({ id: "a1", harnessId: "claude-code", modelId: "claude-opus-4-8" })])
+
+        const model = new TaskModel(createStore(task), task.id)
+
+        expect(model.harnessId).toBe("claude-code")
+        expect(model.model).toBe("opus")
+    })
+
+    it("maps future Claude Sonnet full model IDs to stable aliases", () => {
+        const task = createTask([createActionEvent({ id: "a1", harnessId: "claude-code", modelId: "claude-sonnet-4-7-20260601" })])
+
+        const model = new TaskModel(createStore(task), task.id)
+
+        expect(model.harnessId).toBe("claude-code")
+        expect(model.model).toBe("sonnet")
     })
 
     it("does not allow harness switching once action history exists", () => {
@@ -142,7 +160,7 @@ describe("TaskModel harness lock", () => {
             execution: {
                 type: "claude-code",
                 executionId: "a1-exec",
-                modelId: "claude-opus-4-6",
+                modelId: "claude-opus-4-7",
                 events: [],
             },
             source: { type: "do" as const, userLabel: "Do" },

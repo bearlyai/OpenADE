@@ -22,6 +22,7 @@ import type {
     DeleteSessionOptions,
 } from "../../types.js"
 import { HarnessNotInstalledError } from "../../errors.js"
+import { CODEX_MODEL_CONFIG } from "../../models.js"
 import { runStructuredQuery } from "../../structured.js"
 import { resolveExecutable } from "../../util/which.js"
 import { spawnJsonl } from "../../util/spawn.js"
@@ -71,14 +72,7 @@ export class CodexHarness implements Harness<CodexEvent> {
     }
 
     models(): HarnessModelConfig {
-        return {
-            models: [
-                { id: "gpt-5.4", fullId: "gpt-5.4", label: "GPT-5.4", displayClass: "Codex" },
-                { id: "gpt-5.3-codex", fullId: "gpt-5.3-codex", label: "GPT-5.3 Codex", displayClass: "Codex" },
-                { id: "gpt-5.3-codex-spark", fullId: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark", displayClass: "Codex" },
-            ],
-            defaultModel: "gpt-5.4",
-        }
+        return CODEX_MODEL_CONFIG
     }
 
     async checkInstallStatus(): Promise<HarnessInstallStatus> {

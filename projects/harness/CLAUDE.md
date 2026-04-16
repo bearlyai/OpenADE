@@ -41,7 +41,7 @@ src/
 ├── types.ts                    # All shared types (HarnessQuery, HarnessEvent, ModelEntry, etc.)
 ├── harness.ts                  # Harness<M> interface — the unified contract
 ├── structured.ts               # runStructuredQuery() — shared structured output orchestration
-├── models.ts                   # Model catalog — pure data, browser-safe (MODEL_REGISTRY, helpers)
+├── models.ts                   # Model catalog — pure data, browser-safe (MODEL_REGISTRY, helpers, single source of truth for model version bumps)
 ├── errors.ts                   # HarnessError, HarnessNotInstalledError, HarnessAuthError
 ├── registry.ts                 # HarnessRegistry — register/get/getAll harnesses
 ├── index.ts                    # Public barrel export
@@ -91,6 +91,8 @@ src/
 | `CodexEvent` | Discriminated union of all Codex CLI `--json` line types |
 | `HarnessRegistry` | Container to register harnesses by ID and check install status in bulk |
 | Client tools | `ClientToolDefinition[]` → spun up as a local MCP HTTP server, injected via config |
+
+When vendor model versions change, update `src/models.ts` first. Harness implementations should return the shared model config from that file rather than re-declaring model metadata inline.
 
 ## How Query Execution Works
 

@@ -314,7 +314,7 @@ Import from `../components/ui` not `@/funktionalChat/components`.
 | XML helpers | `utils/makeXML.ts` |
 | Local routing | `routing.ts` |
 | MCP presets & icons | `constants.ts` |
-| Model catalog (from harness) | `constants.ts` (re-exports from `@openade/harness`) |
+| Model catalog (from harness) | `constants.ts` (re-exports from `@openade/harness`; source of truth is `projects/harness/src/models.ts`) |
 | Store coordinator | `store/store.ts` |
 | Task observable | `store/TaskModel.ts` |
 | Harness execution | `store/managers/ExecutionManager.ts` |
@@ -336,6 +336,8 @@ Import from `../components/ui` not `@/funktionalChat/components`.
 
 HyperPlan planning can pass serialized main-thread context to sub-planners using `prompts/taskThreadSerializer.ts`.
 This context is capped by UTF-8 byte budget (default `240_000`) and includes the newest events that fit.
+
+Model version bumps should be made in `projects/harness/src/models.ts`. Web pickers and execution helpers read from that shared catalog, so avoid hardcoding new model versions in web components.
 
 ## MobX Patterns
 

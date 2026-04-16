@@ -60,7 +60,7 @@ describe("defaults", () => {
 
 describe("getModelFullId", () => {
     it("resolves alias with harnessId", () => {
-        expect(getModelFullId("opus", "claude-code")).toBe("claude-opus-4-6")
+        expect(getModelFullId("opus", "claude-code")).toBe("claude-opus-4-7")
     })
 
     it("resolves alias searching all harnesses", () => {
@@ -72,7 +72,7 @@ describe("getModelFullId", () => {
     })
 
     it("does not resolve alias from wrong harness, falls back to all", () => {
-        expect(getModelFullId("opus", "codex")).toBe("claude-opus-4-6")
+        expect(getModelFullId("opus", "codex")).toBe("claude-opus-4-7")
     })
 })
 
@@ -125,6 +125,24 @@ describe("resolveModelForHarness", () => {
         expect(resolveModelForHarness("sonnet", "claude-code")).toBe("sonnet")
     })
 
+    it("maps current full IDs to aliases", () => {
+        expect(resolveModelForHarness("claude-opus-4-7", "claude-code")).toBe("opus")
+        expect(resolveModelForHarness("gpt-5.3-codex", "codex")).toBe("gpt-5.3-codex")
+    })
+
+    it("maps future Claude family full IDs to stable aliases", () => {
+        expect(resolveModelForHarness("claude-opus-4-8", "claude-code")).toBe("opus")
+        expect(resolveModelForHarness("claude-sonnet-4-7-20260601", "claude-code")).toBe("sonnet")
+    })
+
+    it("prefers the longest compatible Codex alias", () => {
+        expect(resolveModelForHarness("gpt-5.3-codex-spark-preview", "codex")).toBe("gpt-5.3-codex-spark")
+    })
+
+    it("maps Codex variants that keep the alias prefix", () => {
+        expect(resolveModelForHarness("gpt-5.4-xhigh", "codex")).toBe("gpt-5.4")
+    })
+
     it("falls back to harness default for unknown alias", () => {
         expect(resolveModelForHarness("nonexistent", "claude-code")).toBe("opus")
     })
@@ -146,7 +164,7 @@ describe("normalizeModelClass", () => {
     })
 
     it("resolves from registry by fullId", () => {
-        expect(normalizeModelClass("claude-opus-4-6")).toBe("Opus")
+        expect(normalizeModelClass("claude-opus-4-7")).toBe("Opus")
         expect(normalizeModelClass("gpt-5.3-codex")).toBe("Codex")
         expect(normalizeModelClass("gpt-5.4")).toBe("Codex")
     })

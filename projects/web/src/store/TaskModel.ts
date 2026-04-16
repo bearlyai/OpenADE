@@ -6,7 +6,7 @@
  */
 
 import { makeAutoObservable, runInAction } from "mobx"
-import { DEFAULT_MODEL, MODEL_REGISTRY, getDefaultModelForHarness, resolveModelForHarness } from "../constants"
+import { DEFAULT_MODEL, getDefaultModelForHarness, resolveModelForHarness } from "../constants"
 import type { GitStatusResponse } from "../electronAPI/git"
 import { extractRawMessageEvents } from "../electronAPI/harnessEventTypes"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
@@ -183,16 +183,6 @@ export class TaskModel {
     }
 
     private normalizeModelForHarness(modelId: string, harnessId: HarnessId): string {
-        const config = MODEL_REGISTRY[harnessId]
-        if (!config) return modelId
-
-        if (config.models.some((model) => model.id === modelId)) {
-            return modelId
-        }
-
-        const byFullId = config.models.find((model) => model.fullId === modelId)
-        if (byFullId) return byFullId.id
-
         return resolveModelForHarness(modelId, harnessId)
     }
 
