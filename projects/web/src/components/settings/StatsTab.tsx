@@ -6,7 +6,7 @@ import { normalizeModelClass } from "../../constants"
 import type { RepoItem, TaskPreviewUsage } from "../../persistence/repoStore"
 import type { CodeStore } from "../../store/store"
 import { StatsShareCard } from "./StatsShareCard"
-import { getRelativePeriodRanges, type RelativePeriodKey } from "./statsPeriodUtils"
+import { type RelativePeriodKey, getRelativePeriodRanges } from "./statsPeriodUtils"
 import { copyCardToClipboard } from "./statsShare"
 
 /** The earliest real month in the project — legacy "Unknown" dates get folded into this. */
@@ -77,7 +77,7 @@ function expandPeriodLabel(label: string): string {
 function formatCost(cost: number): string {
     if (cost === 0) return "$0.00"
     if (cost < 0.01) return `$${cost.toFixed(4)}`
-    return `$${cost.toFixed(2)}`
+    return `$${cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 function formatTokens(n: number): string {
