@@ -7,7 +7,7 @@
 
 import { makeAutoObservable, runInAction } from "mobx"
 import { DEFAULT_MODEL, getDefaultModelForHarness, resolveModelForHarness } from "../constants"
-import type { GitStatusResponse } from "../electronAPI/git"
+import type { GitSummaryResponse } from "../electronAPI/git"
 import { extractRawMessageEvents } from "../electronAPI/harnessEventTypes"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { computeTaskUsage } from "../persistence/taskStatsUtils"
@@ -27,7 +27,7 @@ import type { CodeStore } from "./store"
 export type ThinkingLevel = "low" | "med" | "high" | "max"
 
 export class TaskModel {
-    gitStatus: GitStatusResponse | null = null
+    gitStatus: GitSummaryResponse | null = null
     model: string = DEFAULT_MODEL
     thinking: ThinkingLevel = "max"
     harnessId: HarnessId = "claude-code"
@@ -41,6 +41,7 @@ export class TaskModel {
     private _contentSearch: ContentSearchManager | null = null
     private _sdkCapabilities: SdkCapabilitiesManager | null = null
     private _changes: ChangesManager | null = null
+    private _eventModelCache = new Map<string, EventModel>()
     private disposers: Array<() => void> = []
 
     constructor(
@@ -49,7 +50,8 @@ export class TaskModel {
     ) {
         makeAutoObservable(this, {
             taskId: false,
-        })
+            _eventModelCache: false,
+        } as never)
 
         // Subscribe to execution events to refresh git state after any event completes
         this.disposers.push(
@@ -202,6 +204,10 @@ export class TaskModel {
 
     get title(): string {
         return this.task?.title ?? ""
+    }
+
+    get isClosed(): boolean {
+        return this.task?.closed ?? false
     }
 
     get slug(): string {
@@ -364,7 +370,21 @@ export class TaskModel {
 
     get events(): EventModel[] {
         const rawEvents = this.task?.events ?? []
-        return rawEvents.map((e, i) => this.createEventModel(e, i === rawEvents.length - 1))
+        const validIds = new Set<string>()
+        const lastIndex = rawEvents.length - 1
+        const result = rawEvents.map((e, i) => {
+            validIds.add(e.id)
+            const cached = this._eventModelCache.get(e.id)
+            if (cached) return cached
+            const model = this.createEventModel(e, i === lastIndex)
+            this._eventModelCache.set(e.id, model)
+            return model
+        })
+        // Drop cache entries for events that no longer exist
+        for (const id of this._eventModelCache.keys()) {
+            if (!validIds.has(id)) this._eventModelCache.delete(id)
+        }
+        return result
     }
 
     private createEventModel(event: CodeEvent, isLast: boolean): EventModel {
@@ -447,7 +467,7 @@ export class TaskModel {
         this.gitStateLoading = true
 
         try {
-            const result = await env.getGitStatus()
+            const result = await env.getGitSummary()
             runInAction(() => {
                 this.gitStatus = result
             })

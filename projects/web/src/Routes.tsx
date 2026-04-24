@@ -237,6 +237,7 @@ export const CodeWorkspaceTaskRoute = observer(() => {
     }, [codeStore, taskId])
     // Determine navbar title and icon
     const taskTitle = taskModel?.title || "Task"
+    const isTaskClosed = taskModel?.isClosed ?? false
     // Inline title editing
     const [isEditingTitle, setIsEditingTitle] = useState(false)
     const titleInputRef = useRef<HTMLInputElement>(null)
@@ -279,6 +280,7 @@ export const CodeWorkspaceTaskRoute = observer(() => {
                     {taskTitle}
                 </span>
             )}
+            {isTaskClosed && <span className="text-[11px] text-muted flex-shrink-0">Closed</span>}
         </div>
     ) : (
         taskTitle

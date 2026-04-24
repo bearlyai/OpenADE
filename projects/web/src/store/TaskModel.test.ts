@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest"
 import { DEFAULT_MODEL, getDefaultModelForHarness } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import type { ActionEvent, Task } from "../types"
-import { EventManager } from "./managers/EventManager"
 import { TaskModel } from "./TaskModel"
+import { EventManager } from "./managers/EventManager"
 import type { CodeStore } from "./store"
 
 function createActionEvent({
@@ -64,6 +64,14 @@ function createStore(task: Task): CodeStore {
 }
 
 describe("TaskModel harness lock", () => {
+    it("exposes closed state from task metadata", () => {
+        const task = { ...createTask([]), closed: true }
+
+        const model = new TaskModel(createStore(task), task.id)
+
+        expect(model.isClosed).toBe(true)
+    })
+
     it("hydrates harness/model from latest action event", () => {
         const task = createTask([
             createActionEvent({ id: "a1", harnessId: "claude-code", modelId: "opus" }),
