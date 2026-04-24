@@ -28,7 +28,7 @@ import { SmartEditor, type SmartEditorRef } from "../components/SmartEditor"
 import { StrategyPicker } from "../components/hyperplan/StrategyPicker"
 import { TaskMcpSelector } from "../components/mcp/TaskMcpSelector"
 import { Select, Switch } from "../components/ui"
-import type { BranchInfo, GitStatusResponse } from "../electronAPI/git"
+import type { BranchInfo, GitSummaryResponse } from "../electronAPI/git"
 import { useImageDropZone } from "../hooks/useImageDropZone"
 import { usePortalContainer } from "../hooks/usePortalContainer"
 import { useCodeNavigate } from "../routing"
@@ -293,7 +293,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
     const [defaultBranch, setDefaultBranch] = useState<string>("")
     const [lastUsedBranch, setLastUsedBranch] = useState<string | null>(null)
     const [branchesLoading, setBranchesLoading] = useState(false)
-    const [uncommittedChanges, setUncommittedChanges] = useState<GitStatusResponse | null>(null)
+    const [uncommittedChanges, setUncommittedChanges] = useState<GitSummaryResponse | null>(null)
     const [useWorktree, setUseWorktree] = useState(false)
     const [createMore, setCreateMore] = useState(() => localStorage.getItem(getCreateMoreKey(workspaceId)) === "true")
     const [pendingNavigationCreationId, setPendingNavigationCreationId] = useState<string | null>(null)
@@ -358,7 +358,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
 
         const checkUncommitted = async () => {
             try {
-                const result = await codeStore.repos.getGitStatus(workspaceId)
+                const result = await codeStore.repos.getGitSummary(workspaceId)
                 setUncommittedChanges(result)
             } catch (err) {
                 console.error("[TaskCreatePage] Failed to check uncommitted changes:", err)
@@ -374,7 +374,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
 
         const handleFocus = async () => {
             try {
-                const result = await codeStore.repos.getGitStatus(workspaceId)
+                const result = await codeStore.repos.getGitSummary(workspaceId)
                 setUncommittedChanges(result)
             } catch (err) {
                 console.error("[TaskCreatePage] Failed to refresh uncommitted changes:", err)
@@ -425,6 +425,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
             images,
             enabledMcpServerIds: selectedMcpServerIds.length > 0 ? selectedMcpServerIds : undefined,
             harnessId: codeStore.defaultHarnessId,
+            modelId: codeStore.defaultModel,
             thinking: codeStore.defaultThinking,
         })
 

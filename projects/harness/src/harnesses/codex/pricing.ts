@@ -4,7 +4,7 @@ interface ModelPricing {
     cacheReadPerMillion?: number
 }
 
-// Prices from https://models.dev/api.json (OpenAI provider), per million tokens
+// Prices from https://openai.com/api/pricing/ and the GPT-5.5 release notes, per million tokens
 const CODEX_PRICING: Record<string, ModelPricing> = {
     "codex-mini-latest": { inputPerMillion: 1.5, outputPerMillion: 6.0, cacheReadPerMillion: 0.375 },
     "gpt-5-codex": { inputPerMillion: 1.25, outputPerMillion: 10.0, cacheReadPerMillion: 0.125 },
@@ -14,7 +14,8 @@ const CODEX_PRICING: Record<string, ModelPricing> = {
     "gpt-5.2-codex": { inputPerMillion: 1.75, outputPerMillion: 14.0, cacheReadPerMillion: 0.175 },
     "gpt-5.3-codex": { inputPerMillion: 1.75, outputPerMillion: 14.0, cacheReadPerMillion: 0.175 },
     "gpt-5.3-codex-spark": { inputPerMillion: 1.75, outputPerMillion: 14.0, cacheReadPerMillion: 0.175 },
-    "gpt-5.4": { inputPerMillion: 2.50, outputPerMillion: 15.0, cacheReadPerMillion: 1.25 },
+    "gpt-5.5": { inputPerMillion: 5.0, outputPerMillion: 30.0, cacheReadPerMillion: 0.5 },
+    "gpt-5.4": { inputPerMillion: 2.50, outputPerMillion: 15.0, cacheReadPerMillion: 0.25 },
 }
 
 // Suffixes appended by model_reasoning_effort config — don't affect per-token pricing

@@ -3,14 +3,14 @@ import { calculateCostUsd } from "./pricing.js"
 
 describe("calculateCostUsd", () => {
     it("returns correct cost for exact model match", () => {
-        // gpt-5.3-codex: $1.75/M input, $14.00/M output
-        const cost = calculateCostUsd("gpt-5.3-codex", 1_000_000, 1_000_000)
-        expect(cost).toBeCloseTo(1.75 + 14.0)
+        // gpt-5.5: $5.00/M input, $30.00/M output
+        const cost = calculateCostUsd("gpt-5.5", 1_000_000, 1_000_000)
+        expect(cost).toBeCloseTo(5.0 + 30.0)
     })
 
     it("strips effort suffix -xhigh", () => {
-        const cost = calculateCostUsd("gpt-5.3-codex-xhigh", 1_000_000, 0)
-        expect(cost).toBeCloseTo(1.75)
+        const cost = calculateCostUsd("gpt-5.5-xhigh", 1_000_000, 0)
+        expect(cost).toBeCloseTo(5.0)
     })
 
     it("strips effort suffix -high", () => {
@@ -39,20 +39,25 @@ describe("calculateCostUsd", () => {
     })
 
     it("includes cache read tokens in cost", () => {
-        // gpt-5.3-codex: $0.175/M cache read
-        const cost = calculateCostUsd("gpt-5.3-codex", 0, 0, 1_000_000)
-        expect(cost).toBeCloseTo(0.175)
+        // gpt-5.5: $0.50/M cache read
+        const cost = calculateCostUsd("gpt-5.5", 0, 0, 1_000_000)
+        expect(cost).toBeCloseTo(0.5)
+    })
+
+    it("uses the current gpt-5.4 cached input rate", () => {
+        const cost = calculateCostUsd("gpt-5.4", 0, 0, 1_000_000)
+        expect(cost).toBeCloseTo(0.25)
     })
 
     it("computes combined cost with all token types", () => {
-        // gpt-5.3-codex: $1.75/M input, $14.00/M output, $0.175/M cache read
-        const cost = calculateCostUsd("gpt-5.3-codex", 500_000, 200_000, 300_000)
-        const expected = (500_000 / 1e6) * 1.75 + (200_000 / 1e6) * 14.0 + (300_000 / 1e6) * 0.175
+        // gpt-5.5: $5.00/M input, $30.00/M output, $0.50/M cache read
+        const cost = calculateCostUsd("gpt-5.5", 500_000, 200_000, 300_000)
+        const expected = (500_000 / 1e6) * 5.0 + (200_000 / 1e6) * 30.0 + (300_000 / 1e6) * 0.5
         expect(cost).toBeCloseTo(expected)
     })
 
     it("returns 0 for zero tokens (not undefined)", () => {
-        const cost = calculateCostUsd("gpt-5.3-codex", 0, 0, 0)
+        const cost = calculateCostUsd("gpt-5.5", 0, 0, 0)
         expect(cost).toBe(0)
     })
 

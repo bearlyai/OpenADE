@@ -21,6 +21,7 @@ export interface TaskCreationOptions {
     images?: ImageAttachment[]
     enabledMcpServerIds?: string[]
     harnessId?: HarnessId
+    modelId?: string
     thinking?: ThinkingLevel
 }
 
@@ -33,6 +34,7 @@ export interface TaskCreation {
     images: ImageAttachment[]
     enabledMcpServerIds?: string[]
     harnessId?: HarnessId
+    modelId?: string
     thinking?: ThinkingLevel
     phase: CreationPhase | "pending" | "completing"
     error: string | null
@@ -69,6 +71,7 @@ export class TaskCreationManager {
             images: options.images ? [...options.images] : [],
             enabledMcpServerIds: options.enabledMcpServerIds,
             harnessId: options.harnessId,
+            modelId: options.modelId,
             thinking: options.thinking,
             phase: "pending",
             error: null,
@@ -314,12 +317,15 @@ export class TaskCreationManager {
                 hasMcpServers: (creation.enabledMcpServerIds?.length ?? 0) > 0,
             })
 
-            // Set harness and thinking level on the TaskModel before execution starts
+            // Set harness, model, and thinking level on the TaskModel before execution starts
             {
                 const taskModel = this.store.tasks.getTaskModel(task.id)
                 if (taskModel) {
                     if (creation.harnessId) {
                         taskModel.setHarnessId(creation.harnessId)
+                    }
+                    if (creation.modelId) {
+                        taskModel.setModel(creation.modelId)
                     }
                     if (creation.thinking) {
                         taskModel.setThinking(creation.thinking)

@@ -93,8 +93,8 @@ describe("getModelsForHarness", () => {
 
     it("returns models for codex", () => {
         const models = getModelsForHarness("codex")
-        expect(models.length).toBe(3)
-        expect(models.map((m) => m.id)).toEqual(["gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark"])
+        expect(models.length).toBe(4)
+        expect(models.map((m) => m.id)).toEqual(["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark"])
     })
 
     it("returns empty array for unknown harness", () => {
@@ -111,8 +111,8 @@ describe("getDefaultModelForHarness", () => {
         expect(getDefaultModelForHarness("claude-code")).toBe("opus")
     })
 
-    it("returns gpt-5.4 for codex", () => {
-        expect(getDefaultModelForHarness("codex")).toBe("gpt-5.4")
+    it("returns gpt-5.5 for codex", () => {
+        expect(getDefaultModelForHarness("codex")).toBe("gpt-5.5")
     })
 
     it("falls back to DEFAULT_MODEL for unknown harness", () => {
@@ -149,7 +149,7 @@ describe("resolveModelForHarness", () => {
     })
 
     it("maps Codex variants that keep the alias prefix", () => {
-        expect(resolveModelForHarness("gpt-5.4-xhigh", "codex")).toBe("gpt-5.4")
+        expect(resolveModelForHarness("gpt-5.5-xhigh", "codex")).toBe("gpt-5.5")
     })
 
     it("falls back to harness default for unknown alias", () => {
@@ -176,6 +176,7 @@ describe("normalizeModelClass", () => {
     it("resolves from registry by fullId", () => {
         expect(normalizeModelClass("claude-opus-4-7")).toBe("Opus")
         expect(normalizeModelClass("gpt-5.3-codex")).toBe("Codex")
+        expect(normalizeModelClass("gpt-5.5")).toBe("Codex")
         expect(normalizeModelClass("gpt-5.4")).toBe("Codex")
     })
 
@@ -183,7 +184,7 @@ describe("normalizeModelClass", () => {
         expect(normalizeModelClass("claude-opus-4-20250514")).toBe("Opus")
         expect(normalizeModelClass("claude-sonnet-3-5-20241022")).toBe("Sonnet")
         expect(normalizeModelClass("some-codex-variant")).toBe("Codex")
-        expect(normalizeModelClass("gpt-5.4-xhigh")).toBe("Codex")
+        expect(normalizeModelClass("gpt-5.5-xhigh")).toBe("Codex")
     })
 
     it("returns Other for unknown models", () => {
