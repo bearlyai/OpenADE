@@ -113,10 +113,21 @@ function NoteItem({ pad, isActive, onSelect, onDelete }: { pad: ScratchpadMeta; 
     )
 }
 
+const lastActivePadKey = (workspaceId: string) => `scratchpad:last-active:${workspaceId}`
+
 export const ScratchpadTrayContent = observer(({ workspaceId, repoPath }: ScratchpadTrayContentProps) => {
     const codeStore = useCodeStore()
     const [indexLoading, setIndexLoading] = useState(true)
-    const [activePadId, setActivePadId] = useState<string | null>(null)
+    const [activePadId, setActivePadIdState] = useState<string | null>(null)
+
+    const setActivePadId = useCallback(
+        (id: string | null) => {
+            setActivePadIdState(id)
+            if (id) localStorage.setItem(lastActivePadKey(workspaceId), id)
+            else localStorage.removeItem(lastActivePadKey(workspaceId))
+        },
+        [workspaceId]
+    )
 
     useEffect(() => {
         setIndexLoading(true)
@@ -125,22 +136,26 @@ export const ScratchpadTrayContent = observer(({ workspaceId, repoPath }: Scratc
 
     const pads = codeStore.scratchpads.getPads(workspaceId)
 
-    // Auto-select first pad or create one
     useEffect(() => {
         if (indexLoading) return
         if (activePadId && pads.some((p) => p.id === activePadId)) return
+        const remembered = localStorage.getItem(lastActivePadKey(workspaceId))
+        if (remembered && pads.some((p) => p.id === remembered)) {
+            setActivePadId(remembered)
+            return
+        }
         if (pads.length > 0) {
             setActivePadId(pads[0].id)
         } else {
             const id = codeStore.scratchpads.createPad(workspaceId, "My Notes")
             setActivePadId(id)
         }
-    }, [indexLoading, pads, activePadId, workspaceId, codeStore.scratchpads])
+    }, [indexLoading, pads, activePadId, workspaceId, codeStore.scratchpads, setActivePadId])
 
     const handleCreate = useCallback(() => {
         const id = codeStore.scratchpads.createPad(workspaceId)
         setActivePadId(id)
-    }, [workspaceId, codeStore.scratchpads])
+    }, [workspaceId, codeStore.scratchpads, setActivePadId])
 
     const handleDelete = useCallback(
         (id: string) => {
@@ -151,7 +166,7 @@ export const ScratchpadTrayContent = observer(({ workspaceId, repoPath }: Scratc
                 setActivePadId(remaining.length > 0 ? remaining[0].id : null)
             }
         },
-        [workspaceId, activePadId, pads, codeStore.scratchpads, codeStore.smartEditors]
+        [workspaceId, activePadId, pads, codeStore.scratchpads, codeStore.smartEditors, setActivePadId]
     )
 
     const activeMeta = activePadId ? codeStore.scratchpads.getPadMeta(workspaceId, activePadId) : undefined

@@ -97,14 +97,13 @@ export class ScratchpadManager {
         const contentStore = this.contentConnections.get(padId)?.store
         contentStore?.data.set({ content, plainText })
 
-        const firstLine =
-            plainText
-                .split("\n")
-                .find((l) => l.trim())
-                ?.trim() || "Untitled"
+        const firstLine = plainText
+            .split("\n")
+            .find((l) => l.trim())
+            ?.trim()
         const indexStore = this.indexStores.get(workspaceId)
         indexStore?.pads.update(padId, (draft) => {
-            draft.title = firstLine
+            if (firstLine) draft.title = firstLine
             draft.preview = plainText.slice(0, 100)
             draft.updatedAt = new Date().toISOString()
         })

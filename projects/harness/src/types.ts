@@ -254,7 +254,7 @@ export interface DeleteSessionOptions {
 
 export interface ModelEntry {
     id: string // alias used in picker (e.g. "opus", "o3")
-    fullId: string // wire model ID sent to CLI
+    fullId: string // wire model ID or rolling alias sent to CLI
     label: string // display label (e.g. "Opus 4.7")
     displayClass: string // normalized class for grouping/display (e.g. "Opus")
 }

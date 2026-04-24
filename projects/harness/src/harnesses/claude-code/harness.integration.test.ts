@@ -404,6 +404,25 @@ describe.skipIf(!ready)("Claude Code (authenticated)", () => {
             expect(initEvent).toBeDefined()
             expect(initEvent!.model.toLowerCase()).toContain("haiku")
         })
+
+        it("5b. Rolling opus alias is accepted and resolves to an Opus init model", async () => {
+            const tmpDir = await getTmpDir()
+            const events = await collectEvents(
+                harness.query({
+                    prompt: "Reply with exactly: hello",
+                    cwd: tmpDir,
+                    mode: "yolo",
+                    model: "opus",
+                    signal: trivialSignal(),
+                })
+            )
+
+            const messages = findAllMessages<ClaudeEvent>(events)
+            const initEvent = messages.find((m) => m.type === "system" && (m as ClaudeSystemInitEvent).subtype === "init") as ClaudeSystemInitEvent | undefined
+
+            expect(initEvent).toBeDefined()
+            expect(initEvent!.model.toLowerCase()).toContain("opus")
+        })
     })
 
     // ============================================================================

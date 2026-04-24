@@ -23,7 +23,9 @@ export const HARNESS_META: Record<HarnessId, HarnessMetaEntry> = {
 
 export const CLAUDE_CODE_MODEL_CONFIG: HarnessModelConfig = {
     models: [
-        { id: "opus", fullId: "claude-opus-4-7", label: "Opus 4.7", displayClass: "Opus" },
+        { id: "opus-4-6", fullId: "claude-opus-4-6", label: "Opus 4.6", displayClass: "Opus" },
+        { id: "opus-4-7", fullId: "claude-opus-4-7", label: "Opus 4.7", displayClass: "Opus" },
+        { id: "opus", fullId: "opus", label: "Opus (latest)", displayClass: "Opus" },
         { id: "sonnet", fullId: "claude-sonnet-4-6", label: "Sonnet 4.6", displayClass: "Sonnet" },
         { id: "haiku", fullId: "claude-haiku-4-5-20251001", label: "Haiku 4.5", displayClass: "Haiku" },
     ],
@@ -55,11 +57,15 @@ function findExactModelEntry(value: string, config: HarnessModelConfig): ModelEn
     return config.models.find((model) => model.id === value || model.fullId === value)
 }
 
+function isRollingAlias(model: ModelEntry): boolean {
+    return model.id.toLowerCase() === model.displayClass.toLowerCase()
+}
+
 function getModelCompatibilityScore(value: string, model: ModelEntry): number {
     const lower = value.toLowerCase()
     let score = 0
 
-    for (const candidate of [model.id.toLowerCase(), model.displayClass.toLowerCase()]) {
+    for (const candidate of [model.id.toLowerCase(), model.displayClass.toLowerCase(), model.fullId.toLowerCase()]) {
         if (lower.includes(candidate)) {
             score = Math.max(score, candidate.length)
         }
@@ -80,6 +86,11 @@ function findCompatibleModelEntry(value: string, config: HarnessModelConfig): Mo
         if (score > bestScore) {
             bestMatch = model
             bestScore = score
+            continue
+        }
+
+        if (score > 0 && score === bestScore && bestMatch && isRollingAlias(model) && !isRollingAlias(bestMatch)) {
+            bestMatch = model
         }
     }
 

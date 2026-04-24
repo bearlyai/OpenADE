@@ -90,13 +90,22 @@ describe("TaskModel harness lock", () => {
         expect(model.model).toBe("opus")
     })
 
-    it("maps persisted full model IDs to harness aliases", () => {
+    it("maps persisted exact Opus full model IDs to versioned aliases", () => {
         const task = createTask([createActionEvent({ id: "a1", harnessId: "claude-code", modelId: "claude-opus-4-7" })])
 
         const model = new TaskModel(createStore(task), task.id)
 
         expect(model.harnessId).toBe("claude-code")
-        expect(model.model).toBe("opus")
+        expect(model.model).toBe("opus-4-7")
+    })
+
+    it("maps persisted Opus 4.6 full model IDs to versioned aliases", () => {
+        const task = createTask([createActionEvent({ id: "a1", harnessId: "claude-code", modelId: "claude-opus-4-6" })])
+
+        const model = new TaskModel(createStore(task), task.id)
+
+        expect(model.harnessId).toBe("claude-code")
+        expect(model.model).toBe("opus-4-6")
     })
 
     it("maps future Claude full model IDs to stable aliases", () => {
@@ -172,7 +181,7 @@ describe("TaskModel harness lock", () => {
         const model = new TaskModel(createStore(task), task.id)
 
         expect(model.harnessId).toBe("claude-code")
-        expect(model.model).toBe("opus")
+        expect(model.model).toBe("opus-4-7")
     })
 
     it("v1 compat: defaults to claude-code when neither harnessId nor type exists", () => {
