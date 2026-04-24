@@ -1,4 +1,4 @@
-import type { AnnotationSide, FileContents } from "@pierre/diffs"
+import type { AnnotationSide, FileContents, LineDiffTypes } from "@pierre/diffs"
 import { type ParsedPatch, File as PierreFile, FileDiff as PierreFileDiff, MultiFileDiff as PierreMultiFileDiff } from "@pierre/diffs/react"
 import { Check, Copy } from "lucide-react"
 import { observer } from "mobx-react"
@@ -17,6 +17,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Z_INDEX } from "../constants"
 import type { Comment, CommentSelectedText, CommentSource } from "../types"
 import { useCommentAnnotations } from "./comments/hooks/useCommentAnnotations"
+import type { CommentAnnotationMeta } from "./comments/types"
 import { extractSelectedText, extractSelectedTextFromDiff, isLineInDiffHunks } from "./comments/utils"
 import { formatMarkdownTables, shouldFormatAsMarkdown } from "./utils/markdownTableFormatter"
 
@@ -238,7 +239,7 @@ const CommentableFileInner = observer(function CommentableFileInner({
 
     return (
         <CopyOverlay content={file.contents}>
-            <PierreFile
+            <PierreFile<CommentAnnotationMeta>
                 file={file}
                 className={className}
                 options={{
@@ -267,11 +268,25 @@ interface FileDiffViewerProps {
     fileDiff: ParsedPatch["files"][number]
     className?: string
     diffStyle?: DiffStyle
+    disableFileHeader?: boolean
+    options?: {
+        lineDiffType?: LineDiffTypes
+        maxLineDiffLength?: number
+        tokenizeMaxLineLength?: number
+        overflow?: "scroll" | "wrap"
+    }
     /** Pass handlers to enable commenting, or null for read-only display */
     commentHandlers: CommentHandlers | null
 }
 
-export const FileDiffViewer = observer(function FileDiffViewer({ fileDiff, className, diffStyle = "split", commentHandlers }: FileDiffViewerProps) {
+export const FileDiffViewer = observer(function FileDiffViewer({
+    fileDiff,
+    className,
+    diffStyle = "split",
+    disableFileHeader,
+    options,
+    commentHandlers,
+}: FileDiffViewerProps) {
     const wrapperRef = useRef<HTMLDivElement>(null)
     const theme = useEditorTheme(wrapperRef)
 
@@ -285,11 +300,13 @@ export const FileDiffViewer = observer(function FileDiffViewer({ fileDiff, class
                         fileDiff={fileDiff}
                         className={className}
                         options={{
-                            theme,
                             overflow: "wrap",
                             diffStyle,
+                            disableFileHeader,
                             enableLineSelection: false,
                             enableHoverUtility: false,
+                            ...options,
+                            theme,
                         }}
                     />
                 </CopyOverlay>
@@ -299,7 +316,15 @@ export const FileDiffViewer = observer(function FileDiffViewer({ fileDiff, class
 
     return (
         <div ref={wrapperRef}>
-            <CommentableFileDiffInner fileDiff={fileDiff} className={className} diffStyle={diffStyle} commentHandlers={commentHandlers} theme={theme} />
+            <CommentableFileDiffInner
+                fileDiff={fileDiff}
+                className={className}
+                diffStyle={diffStyle}
+                disableFileHeader={disableFileHeader}
+                options={options}
+                commentHandlers={commentHandlers}
+                theme={theme}
+            />
         </div>
     )
 })
@@ -308,6 +333,13 @@ interface CommentableFileDiffInnerProps {
     fileDiff: ParsedPatch["files"][number]
     className?: string
     diffStyle: DiffStyle
+    disableFileHeader?: boolean
+    options?: {
+        lineDiffType?: LineDiffTypes
+        maxLineDiffLength?: number
+        tokenizeMaxLineLength?: number
+        overflow?: "scroll" | "wrap"
+    }
     commentHandlers: CommentHandlers
     theme: string
 }
@@ -316,6 +348,8 @@ const CommentableFileDiffInner = observer(function CommentableFileDiffInner({
     fileDiff,
     className,
     diffStyle,
+    disableFileHeader,
+    options,
     commentHandlers,
     theme,
 }: CommentableFileDiffInnerProps) {
@@ -347,13 +381,15 @@ const CommentableFileDiffInner = observer(function CommentableFileDiffInner({
 
     return (
         <CopyOverlay content={copyContent}>
-            <PierreFileDiff
+            <PierreFileDiff<CommentAnnotationMeta>
                 fileDiff={fileDiff}
                 className={className}
                 options={{
-                    theme,
                     overflow: "wrap",
                     diffStyle,
+                    disableFileHeader,
+                    ...options,
+                    theme,
                     enableLineSelection: !readOnly && !hasOpenForm,
                     enableHoverUtility: !readOnly && !hasOpenForm,
                     onLineSelectionEnd: !readOnly ? handleLineSelectionEnd : undefined,
@@ -505,7 +541,7 @@ const CommentableMultiFileDiffInner = observer(function CommentableMultiFileDiff
 
     return (
         <CopyOverlay content={newFile.contents}>
-            <PierreMultiFileDiff
+            <PierreMultiFileDiff<CommentAnnotationMeta>
                 oldFile={oldFile}
                 newFile={newFile}
                 className={className}

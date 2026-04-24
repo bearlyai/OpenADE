@@ -72,6 +72,12 @@ interface GitStatusParams {
     workTreeId?: string // Optional - if not provided, checks the main repo directly
 }
 
+interface UncommittedChangesStats {
+    filesChanged: number
+    insertions: number
+    deletions: number
+}
+
 /** File info returned from git status with binary detection */
 interface GitFileInfo {
     path: string
@@ -79,7 +85,7 @@ interface GitFileInfo {
     status?: "added" | "deleted" | "modified" | "renamed"
 }
 
-interface GitStatusResponse {
+interface GitSummaryResponse {
     // Git ref info
     branch: string | null // Current branch name (null if detached HEAD)
     headCommit: string // Short SHA of HEAD commit
@@ -91,15 +97,26 @@ interface GitStatusResponse {
     hasChanges: boolean
     staged: {
         files: GitFileInfo[]
+        stats: UncommittedChangesStats
+    }
+    unstaged: {
+        files: GitFileInfo[]
+        stats: UncommittedChangesStats
+    }
+    untracked: GitFileInfo[]
+}
+
+interface GitStatusResponse extends GitSummaryResponse {
+    staged: {
+        files: GitFileInfo[]
         patch: string
-        stats: { filesChanged: number; insertions: number; deletions: number }
+        stats: UncommittedChangesStats
     }
     unstaged: {
         files: GitFileInfo[]
         patch: string
-        stats: { filesChanged: number; insertions: number; deletions: number }
+        stats: UncommittedChangesStats
     }
-    untracked: GitFileInfo[]
 }
 
 interface ListFilesParams {
@@ -260,6 +277,36 @@ interface GetFilePairResponse {
     before: string
     after: string
     tooLarge?: boolean
+}
+
+interface GetWorktreeFilePatchParams {
+    workDir: string
+    fromTreeish: string
+    filePath: string
+    oldPath?: string // For renamed files
+    contextLines: 0 | 3 | 10 | 25
+    allowTruncation?: boolean
+}
+
+interface GetCommitFilePatchParams {
+    workDir: string
+    commit: string
+    filePath: string
+    oldPath?: string // For renamed files
+    contextLines: 0 | 3 | 10 | 25
+    allowTruncation?: boolean
+}
+
+interface GetFilePatchResponse {
+    patch: string
+    truncated: boolean
+    heavy: boolean
+    stats: {
+        insertions: number
+        deletions: number
+        changedLines: number
+        hunkCount: number
+    }
 }
 
 interface GetGitLogParams {
@@ -928,6 +975,16 @@ function truncatePatch(patch: string, maxSize: number = MAX_PATCH_SIZE): { patch
     return { patch: truncatedPatch, truncated: true }
 }
 
+function countHunks(patch: string): number {
+    let count = 0
+    for (const line of patch.split("\n")) {
+        if (line.startsWith("@@")) {
+            count++
+        }
+    }
+    return count
+}
+
 // Common binary file extensions for fallback detection (when git can't determine)
 const BINARY_EXTENSIONS = new Set([
     // Images
@@ -988,6 +1045,173 @@ function mergeFileStatuses(files: GitFileInfo[], statuses: ChangedFileInfo[]): v
     }
 }
 
+function parseNumstatStats(output: string): UncommittedChangesStats {
+    if (!output.trim()) {
+        return { filesChanged: 0, insertions: 0, deletions: 0 }
+    }
+
+    let filesChanged = 0
+    let insertions = 0
+    let deletions = 0
+
+    for (const line of output.split("\n")) {
+        if (!line.trim()) continue
+        const parts = line.split("\t")
+        if (parts.length < 3) continue
+
+        filesChanged++
+
+        const additions = parts[0]
+        const removals = parts[1]
+        if (additions !== "-") {
+            insertions += parseInt(additions, 10) || 0
+        }
+        if (removals !== "-") {
+            deletions += parseInt(removals, 10) || 0
+        }
+    }
+
+    return { filesChanged, insertions, deletions }
+}
+
+async function resolveWorkingDirFromGitStatusParams(params: GitStatusParams): Promise<string> {
+    validateRepoDir(params.repoDir)
+
+    if (params.workTreeId) {
+        validateWorkTreeId(params.workTreeId)
+        const workingDir = getWorktreePath(params.workTreeId)
+        if (!fs.existsSync(workingDir)) {
+            throw new Error(`Worktree does not exist: ${workingDir}`)
+        }
+        return workingDir
+    }
+
+    return params.repoDir
+}
+
+interface GitSummaryData {
+    branch: string | null
+    headCommit: string
+    ahead: number | null
+    hasChanges: boolean
+    staged: {
+        files: GitFileInfo[]
+        stats: UncommittedChangesStats
+    }
+    unstaged: {
+        files: GitFileInfo[]
+        stats: UncommittedChangesStats
+    }
+    untracked: GitFileInfo[]
+}
+
+async function collectGitSummaryData(workingDir: string): Promise<GitSummaryData> {
+    // Get current branch name (returns "HEAD" if detached)
+    const branchResult = await execGit(["rev-parse", "--abbrev-ref", "HEAD"], workingDir)
+    let branch: string | null = null
+    if (branchResult.success) {
+        const branchName = branchResult.stdout.trim()
+        branch = branchName === "HEAD" ? null : branchName
+    }
+
+    // Get short HEAD commit SHA
+    const headResult = await execGit(["rev-parse", "--short", "HEAD"], workingDir)
+    const headCommit = headResult.success ? headResult.stdout.trim() : ""
+
+    // Get ahead count (commits ahead of upstream tracking branch)
+    let ahead: number | null = null
+    if (branch) {
+        const aheadResult = await execGit(["rev-list", "--count", "@{upstream}..HEAD"], workingDir)
+        if (aheadResult.success) {
+            ahead = parseInt(aheadResult.stdout.trim(), 10) || 0
+        } else {
+            const fallbackResult = await execGit(["rev-list", "--count", "origin/HEAD..HEAD"], workingDir)
+            if (fallbackResult.success) {
+                ahead = parseInt(fallbackResult.stdout.trim(), 10) || 0
+            }
+        }
+    }
+
+    // Use numstat + name-status so tray refreshes avoid generating full patches.
+    const stagedNumstatResult = await execGit(["diff", "--cached", "--numstat", "-M"], workingDir)
+    const stagedNumstat = stagedNumstatResult.success ? stagedNumstatResult.stdout : ""
+    const stagedFiles = stagedNumstatResult.success
+        ? parseNumstatOutput(stagedNumstatResult.stdout)
+        : []
+    const stagedStats = parseNumstatStats(stagedNumstat)
+
+    const stagedNameStatusResult = await execGit(["diff", "--cached", "--name-status", "-M"], workingDir)
+    if (stagedNameStatusResult.success) {
+        mergeFileStatuses(stagedFiles, parseNameStatusOutput(stagedNameStatusResult.stdout))
+    }
+
+    const unstagedNumstatResult = await execGit(["diff", "--numstat", "-M"], workingDir)
+    const unstagedNumstat = unstagedNumstatResult.success ? unstagedNumstatResult.stdout : ""
+    const unstagedFiles = unstagedNumstatResult.success
+        ? parseNumstatOutput(unstagedNumstatResult.stdout)
+        : []
+    const unstagedStats = parseNumstatStats(unstagedNumstat)
+
+    const unstagedNameStatusResult = await execGit(["diff", "--name-status", "-M"], workingDir)
+    if (unstagedNameStatusResult.success) {
+        mergeFileStatuses(unstagedFiles, parseNameStatusOutput(unstagedNameStatusResult.stdout))
+    }
+
+    const untrackedResult = await execGit(["ls-files", "--others", "--exclude-standard"], workingDir)
+    const untracked: GitFileInfo[] = untrackedResult.success
+        ? untrackedResult.stdout
+              .split("\n")
+              .filter((f: string) => f.trim())
+              .map((filePath: string) => ({ path: filePath, binary: isBinaryByExtension(filePath) }))
+        : []
+
+    const hasChanges = stagedFiles.length > 0 || unstagedFiles.length > 0 || untracked.length > 0
+
+    return {
+        branch,
+        headCommit,
+        ahead,
+        hasChanges,
+        staged: {
+            files: stagedFiles,
+            stats: stagedStats,
+        },
+        unstaged: {
+            files: unstagedFiles,
+            stats: unstagedStats,
+        },
+        untracked,
+    }
+}
+
+async function handleGetGitSummary(params: GitStatusParams): Promise<GitSummaryResponse> {
+    const startTime = Date.now()
+    logger.info("[Git:getGitSummary] Getting git summary", JSON.stringify({
+        repoDir: params.repoDir,
+        workTreeId: params.workTreeId,
+    }))
+
+    try {
+        const workingDir = await resolveWorkingDirFromGitStatusParams(params)
+        const summary = await collectGitSummaryData(workingDir)
+
+        logger.info("[Git:getGitSummary] Summary retrieved", JSON.stringify({
+            branch: summary.branch,
+            headCommit: summary.headCommit,
+            hasChanges: summary.hasChanges,
+            stagedCount: summary.staged.files.length,
+            unstagedCount: summary.unstaged.files.length,
+            untrackedCount: summary.untracked.length,
+            duration: Date.now() - startTime,
+        }))
+
+        return summary
+    } catch (error: any) {
+        logger.error("[Git:getGitSummary] Error:", JSON.stringify({ error: error.message, stack: error.stack, duration: Date.now() - startTime }))
+        throw error
+    }
+}
+
 /**
  * Get git status including current branch, HEAD commit, and working tree changes
  * Excludes binary files from patches and truncates large patches
@@ -1000,129 +1224,47 @@ async function handleGetGitStatus(params: GitStatusParams): Promise<GitStatusRes
     }))
 
     try {
-        validateRepoDir(params.repoDir)
-
-        // Determine the working directory - either worktree or main repo
-        let workingDir: string
-        if (params.workTreeId) {
-            validateWorkTreeId(params.workTreeId)
-            workingDir = getWorktreePath(params.workTreeId)
-
-            // Validate worktree exists
-            if (!fs.existsSync(workingDir)) {
-                throw new Error(`Worktree does not exist: ${workingDir}`)
-            }
-        } else {
-            // Use the main repo directly
-            workingDir = params.repoDir
-        }
-
-        // Get current branch name (returns "HEAD" if detached)
-        const branchResult = await execGit(["rev-parse", "--abbrev-ref", "HEAD"], workingDir)
-        let branch: string | null = null
-        if (branchResult.success) {
-            const branchName = branchResult.stdout.trim()
-            // "HEAD" means detached HEAD state
-            branch = branchName === "HEAD" ? null : branchName
-        }
-
-        // Get short HEAD commit SHA
-        const headResult = await execGit(["rev-parse", "--short", "HEAD"], workingDir)
-        const headCommit = headResult.success ? headResult.stdout.trim() : ""
-
-        // Get ahead count (commits ahead of upstream tracking branch)
-        // Falls back to comparing against origin's default branch when no upstream is set
-        // (e.g. new branch that has never been pushed)
-        let ahead: number | null = null
-        if (branch) {
-            const aheadResult = await execGit(["rev-list", "--count", "@{upstream}..HEAD"], workingDir)
-            if (aheadResult.success) {
-                ahead = parseInt(aheadResult.stdout.trim(), 10) || 0
-            } else {
-                // No upstream tracking branch — fall back to origin's default branch
-                const fallbackResult = await execGit(["rev-list", "--count", "origin/HEAD..HEAD"], workingDir)
-                if (fallbackResult.success) {
-                    ahead = parseInt(fallbackResult.stdout.trim(), 10) || 0
-                }
-                // If origin/HEAD also fails (no remote at all), ahead stays null
-            }
-        }
+        const workingDir = await resolveWorkingDirFromGitStatusParams(params)
+        const summary = await collectGitSummaryData(workingDir)
 
         // Get staged changes (diff --cached)
         const stagedDiffResult = await execGit(["diff", "--cached"], workingDir)
         const stagedPatchRaw = stagedDiffResult.success ? stagedDiffResult.stdout : ""
         const { patch: stagedPatch, truncated: stagedTruncated } = truncatePatch(stagedPatchRaw)
-        const stagedStats = parsePatchStats(stagedPatchRaw) // Stats from full patch
-
-        // Get staged file names with binary detection using --numstat
-        const stagedNumstatResult = await execGit(["diff", "--cached", "--numstat"], workingDir)
-        const stagedFiles = stagedNumstatResult.success
-            ? parseNumstatOutput(stagedNumstatResult.stdout)
-            : []
-
-        // Get staged file statuses (added/deleted/modified/renamed) using --name-status
-        const stagedNameStatusResult = await execGit(["diff", "--cached", "--name-status", "-M"], workingDir)
-        if (stagedNameStatusResult.success) {
-            mergeFileStatuses(stagedFiles, parseNameStatusOutput(stagedNameStatusResult.stdout))
-        }
 
         // Get unstaged changes (diff without --cached)
         const unstagedDiffResult = await execGit(["diff"], workingDir)
         const unstagedPatchRaw = unstagedDiffResult.success ? unstagedDiffResult.stdout : ""
         const { patch: unstagedPatch, truncated: unstagedTruncated } = truncatePatch(unstagedPatchRaw)
-        const unstagedStats = parsePatchStats(unstagedPatchRaw) // Stats from full patch
-
-        // Get unstaged file names with binary detection using --numstat
-        const unstagedNumstatResult = await execGit(["diff", "--numstat"], workingDir)
-        const unstagedFiles = unstagedNumstatResult.success
-            ? parseNumstatOutput(unstagedNumstatResult.stdout)
-            : []
-
-        // Get unstaged file statuses (added/deleted/modified/renamed) using --name-status
-        const unstagedNameStatusResult = await execGit(["diff", "--name-status", "-M"], workingDir)
-        if (unstagedNameStatusResult.success) {
-            mergeFileStatuses(unstagedFiles, parseNameStatusOutput(unstagedNameStatusResult.stdout))
-        }
-
-        // Get untracked files (use extension-based binary detection since they're not in git yet)
-        const untrackedResult = await execGit(["ls-files", "--others", "--exclude-standard"], workingDir)
-        const untracked: GitFileInfo[] = untrackedResult.success
-            ? untrackedResult.stdout
-                  .split("\n")
-                  .filter((f: string) => f.trim())
-                  .map((filePath: string) => ({ path: filePath, binary: isBinaryByExtension(filePath) }))
-            : []
-
-        const hasChanges = stagedFiles.length > 0 || unstagedFiles.length > 0 || untracked.length > 0
 
         logger.info("[Git:getGitStatus] Status retrieved", JSON.stringify({
-            branch,
-            headCommit,
-            hasChanges,
-            stagedCount: stagedFiles.length,
-            unstagedCount: unstagedFiles.length,
-            untrackedCount: untracked.length,
+            branch: summary.branch,
+            headCommit: summary.headCommit,
+            hasChanges: summary.hasChanges,
+            stagedCount: summary.staged.files.length,
+            unstagedCount: summary.unstaged.files.length,
+            untrackedCount: summary.untracked.length,
             stagedTruncated,
             unstagedTruncated,
             duration: Date.now() - startTime,
         }))
 
         return {
-            branch,
-            headCommit,
-            ahead,
-            hasChanges,
+            branch: summary.branch,
+            headCommit: summary.headCommit,
+            ahead: summary.ahead,
+            hasChanges: summary.hasChanges,
             staged: {
-                files: stagedFiles,
+                files: summary.staged.files,
                 patch: stagedPatch,
-                stats: stagedStats,
+                stats: summary.staged.stats,
             },
             unstaged: {
-                files: unstagedFiles,
+                files: summary.unstaged.files,
                 patch: unstagedPatch,
-                stats: unstagedStats,
+                stats: summary.unstaged.stats,
             },
-            untracked,
+            untracked: summary.untracked,
         }
     } catch (error: any) {
         logger.error("[Git:getGitStatus] Error:", JSON.stringify({ error: error.message, stack: error.stack, duration: Date.now() - startTime }))
@@ -1747,6 +1889,8 @@ const GENERATED_FILE_BASENAMES = new Set([
     "bun.lockb",
 ])
 
+const FILE_PATCH_CONTEXT_LINES = new Set([0, 3, 10, 25])
+
 function isGeneratedFile(filePath: string): boolean {
     const basename = path.basename(filePath)
     return GENERATED_FILE_BASENAMES.has(basename)
@@ -1761,6 +1905,97 @@ function exceedsLineLimit(content: string): boolean {
         }
     }
     return false
+}
+
+function validatePatchContextLines(contextLines: number): asserts contextLines is 0 | 3 | 10 | 25 {
+    if (!FILE_PATCH_CONTEXT_LINES.has(contextLines)) {
+        throw new Error(`Invalid contextLines value: ${contextLines}`)
+    }
+}
+
+function getFilePatchPathspecs(filePath: string, oldPath?: string): string[] {
+    if (oldPath && oldPath !== filePath) {
+        return [oldPath, filePath]
+    }
+    return [filePath]
+}
+
+function createEmptyFilePatchResponse(): GetFilePatchResponse {
+    return {
+        patch: "",
+        truncated: false,
+        heavy: false,
+        stats: {
+            insertions: 0,
+            deletions: 0,
+            changedLines: 0,
+            hunkCount: 0,
+        },
+    }
+}
+
+function resolveWorktreeFilePath(workDir: string, filePath: string): { absolutePath: string; relativePath: string } | null {
+    const resolvedWorkDir = path.resolve(workDir)
+    const absolutePath = path.resolve(resolvedWorkDir, filePath)
+    const relativePath = path.relative(resolvedWorkDir, absolutePath)
+    if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+        return null
+    }
+    return {
+        absolutePath,
+        relativePath: relativePath.split(path.sep).join("/"),
+    }
+}
+
+function finalizeFilePatchResponse(patch: string, allowTruncation: boolean = true): GetFilePatchResponse {
+    if (!patch) {
+        return createEmptyFilePatchResponse()
+    }
+
+    const truncated = allowTruncation && patch.length > MAX_PATCH_SIZE
+    const patchStats = parsePatchStats(patch)
+    const changedLines = patchStats.insertions + patchStats.deletions
+    const hunkCount = countHunks(patch)
+
+    return {
+        patch: truncated ? patch.slice(0, MAX_PATCH_SIZE) : patch,
+        truncated,
+        heavy: truncated || patch.length > 256 * 1024 || changedLines > 4_000 || hunkCount > 50,
+        stats: {
+            insertions: patchStats.insertions,
+            deletions: patchStats.deletions,
+            changedLines,
+            hunkCount,
+        },
+    }
+}
+
+async function getUntrackedFilePatch(
+    workDir: string,
+    filePath: string,
+    contextLines: 0 | 3 | 10 | 25,
+    allowTruncation: boolean = true
+): Promise<GetFilePatchResponse> {
+    const resolvedPath = resolveWorktreeFilePath(workDir, filePath)
+    if (!resolvedPath) {
+        throw new Error(`Untracked file path escapes worktree: ${filePath}`)
+    }
+
+    if (!fs.existsSync(resolvedPath.absolutePath)) {
+        return createEmptyFilePatchResponse()
+    }
+
+    const result = await execCommand(
+        "git",
+        ["diff", "--no-index", `-U${contextLines}`, "--", "/dev/null", resolvedPath.relativePath],
+        { cwd: workDir, maxBuffer: 50 * 1024 * 1024 }
+    )
+
+    if (!result.success && result.code !== 1) {
+        throw new Error(`Failed to get untracked file patch: ${result.stderr}`)
+    }
+
+    return finalizeFilePatchResponse(result.stdout, allowTruncation)
 }
 
 /**
@@ -1915,6 +2150,118 @@ async function handleGetFilePair(params: GetFilePairParams): Promise<GetFilePair
     }
 }
 
+async function handleGetWorktreeFilePatch(params: GetWorktreeFilePatchParams): Promise<GetFilePatchResponse> {
+    const startTime = Date.now()
+    logger.info("[Git:getWorktreeFilePatch] Getting file patch", JSON.stringify({
+        workDir: params.workDir,
+        from: params.fromTreeish,
+        filePath: params.filePath,
+        oldPath: params.oldPath,
+        contextLines: params.contextLines,
+    }))
+
+    try {
+        validatePatchContextLines(params.contextLines)
+        if (isGeneratedFile(params.filePath)) {
+            logger.info("[Git:getWorktreeFilePatch] Skipping generated file", JSON.stringify({ filePath: params.filePath }))
+            return createEmptyFilePatchResponse()
+        }
+        if (!resolveWorktreeFilePath(params.workDir, params.filePath)) {
+            throw new Error(`Worktree file path escapes worktree: ${params.filePath}`)
+        }
+        if (params.oldPath && !resolveWorktreeFilePath(params.workDir, params.oldPath)) {
+            throw new Error(`Worktree file path escapes worktree: ${params.oldPath}`)
+        }
+
+        const pathspecs = getFilePatchPathspecs(params.filePath, params.oldPath)
+        const result = await execGit(
+            ["diff", "-M", `-U${params.contextLines}`, params.fromTreeish, "--", ...pathspecs],
+            params.workDir
+        )
+
+        if (!result.success) {
+            throw new Error(`Failed to get worktree file patch: ${result.stderr}`)
+        }
+
+        const allowTruncation = params.allowTruncation !== false
+        let response = finalizeFilePatchResponse(result.stdout, allowTruncation)
+        if (!response.patch && !params.oldPath) {
+            response = await getUntrackedFilePatch(params.workDir, params.filePath, params.contextLines, allowTruncation)
+        }
+
+        logger.info("[Git:getWorktreeFilePatch] File patch ready", JSON.stringify({
+            filePath: params.filePath,
+            hasPatch: response.patch.length > 0,
+            truncated: response.truncated,
+            heavy: response.heavy,
+            changedLines: response.stats.changedLines,
+            duration: Date.now() - startTime,
+        }))
+
+        return response
+    } catch (error: any) {
+        logger.error("[Git:getWorktreeFilePatch] Error:", JSON.stringify({ error: error.message, duration: Date.now() - startTime }))
+        throw error
+    }
+}
+
+async function handleGetCommitFilePatch(params: GetCommitFilePatchParams): Promise<GetFilePatchResponse> {
+    const startTime = Date.now()
+    logger.info("[Git:getCommitFilePatch] Getting commit file patch", JSON.stringify({
+        workDir: params.workDir,
+        commit: params.commit,
+        filePath: params.filePath,
+        oldPath: params.oldPath,
+        contextLines: params.contextLines,
+    }))
+
+    try {
+        validatePatchContextLines(params.contextLines)
+        if (isGeneratedFile(params.filePath)) {
+            logger.info("[Git:getCommitFilePatch] Skipping generated file", JSON.stringify({ filePath: params.filePath }))
+            return createEmptyFilePatchResponse()
+        }
+
+        const parentResult = await execGit(["show", "--no-patch", "--format=%P", params.commit], params.workDir)
+        if (!parentResult.success) {
+            throw new Error(`Failed to resolve commit parents: ${parentResult.stderr}`)
+        }
+
+        const pathspecs = getFilePatchPathspecs(params.filePath, params.oldPath)
+        const parents = parentResult.stdout.trim().split(/\s+/).filter(Boolean)
+        const result = parents.length === 0
+            ? await execGit(
+                  ["diff-tree", "--root", "-p", "-M", `-U${params.contextLines}`, params.commit, "--", ...pathspecs],
+                  params.workDir
+              )
+            : await execGit(
+                  ["diff", "-M", `-U${params.contextLines}`, parents[0], params.commit, "--", ...pathspecs],
+                  params.workDir
+              )
+
+        if (!result.success) {
+            throw new Error(`Failed to get commit file patch: ${result.stderr}`)
+        }
+
+        const response = finalizeFilePatchResponse(result.stdout, params.allowTruncation !== false)
+
+        logger.info("[Git:getCommitFilePatch] Commit file patch ready", JSON.stringify({
+            filePath: params.filePath,
+            hasPatch: response.patch.length > 0,
+            truncated: response.truncated,
+            heavy: response.heavy,
+            changedLines: response.stats.changedLines,
+            isRootCommit: parents.length === 0,
+            duration: Date.now() - startTime,
+        }))
+
+        return response
+    } catch (error: any) {
+        logger.error("[Git:getCommitFilePatch] Error:", JSON.stringify({ error: error.message, duration: Date.now() - startTime }))
+        throw error
+    }
+}
+
 /**
  * Initialize a git repository with a default .gitignore
  */
@@ -2043,6 +2390,13 @@ async function buildHotFilesCache(repoDir: string): Promise<Record<string, numbe
     return fileCounts
 }
 
+export const __test__ = {
+    finalizeFilePatchResponse,
+    getUntrackedFilePatch,
+    handleGetWorktreeFilePatch,
+    handleGetCommitFilePatch,
+}
+
 // ============================================================================
 // Module Export
 // ============================================================================
@@ -2083,6 +2437,11 @@ export const load = () => {
     ipcMain.handle("git:getMergeBase", async (event, params: GetMergeBaseParams) => {
         if (!checkAllowed(event)) throw new Error("not allowed")
         return handleGetMergeBase(params)
+    })
+
+    ipcMain.handle("git:getGitSummary", async (event, params: GitStatusParams) => {
+        if (!checkAllowed(event)) throw new Error("not allowed")
+        return handleGetGitSummary(params)
     })
 
     ipcMain.handle("git:getGitStatus", async (event, params: GitStatusParams) => {
@@ -2158,6 +2517,16 @@ export const load = () => {
     ipcMain.handle("git:getFilePair", async (event, params: GetFilePairParams) => {
         if (!checkAllowed(event)) throw new Error("not allowed")
         return handleGetFilePair(params)
+    })
+
+    ipcMain.handle("git:getWorktreeFilePatch", async (event, params: GetWorktreeFilePatchParams) => {
+        if (!checkAllowed(event)) throw new Error("not allowed")
+        return handleGetWorktreeFilePatch(params)
+    })
+
+    ipcMain.handle("git:getCommitFilePatch", async (event, params: GetCommitFilePatchParams) => {
+        if (!checkAllowed(event)) throw new Error("not allowed")
+        return handleGetCommitFilePatch(params)
     })
 
     logger.info("[Git] IPC handlers registered successfully")

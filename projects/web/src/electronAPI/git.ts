@@ -96,7 +96,7 @@ export interface GitFileInfo {
     status?: "added" | "deleted" | "modified" | "renamed"
 }
 
-export interface GitStatusResponse {
+export interface GitSummaryResponse {
     // Git ref info
     branch: string | null // Current branch name (null if detached HEAD)
     headCommit: string // Short SHA of HEAD commit
@@ -108,6 +108,18 @@ export interface GitStatusResponse {
     hasChanges: boolean
     staged: {
         files: GitFileInfo[]
+        stats: UncommittedChangesStats
+    }
+    unstaged: {
+        files: GitFileInfo[]
+        stats: UncommittedChangesStats
+    }
+    untracked: GitFileInfo[]
+}
+
+export interface GitStatusResponse extends GitSummaryResponse {
+    staged: {
+        files: GitFileInfo[]
         patch: string
         stats: UncommittedChangesStats
     }
@@ -116,7 +128,6 @@ export interface GitStatusResponse {
         patch: string
         stats: UncommittedChangesStats
     }
-    untracked: GitFileInfo[]
 }
 
 interface ListFilesParams {
@@ -259,6 +270,36 @@ export interface GetFilePairResponse {
     tooLarge?: boolean
 }
 
+interface GetWorktreeFilePatchParams {
+    workDir: string
+    fromTreeish: string
+    filePath: string
+    oldPath?: string
+    contextLines: 0 | 3 | 10 | 25
+    allowTruncation?: boolean
+}
+
+interface GetCommitFilePatchParams {
+    workDir: string
+    commit: string
+    filePath: string
+    oldPath?: string
+    contextLines: 0 | 3 | 10 | 25
+    allowTruncation?: boolean
+}
+
+export interface GetFilePatchResponse {
+    patch: string
+    truncated: boolean
+    heavy: boolean
+    stats: {
+        insertions: number
+        deletions: number
+        changedLines: number
+        hunkCount: number
+    }
+}
+
 interface GetGitLogParams {
     workDir: string
     ref?: string
@@ -395,6 +436,17 @@ export async function getGitStatus(params: GitStatusParams): Promise<GitStatusRe
 }
 
 /**
+ * Get lightweight git summary for branch/head/status/file lists without patch payloads
+ */
+export async function getGitSummary(params: GitStatusParams): Promise<GitSummaryResponse> {
+    if (!window.openadeAPI) {
+        throw new Error("Not running in Electron")
+    }
+
+    return (await window.openadeAPI.git.getGitSummary(params)) as GitSummaryResponse
+}
+
+/**
  * List files in a repository or worktree with optional fuzzy search
  */
 async function listFiles(params: ListFilesParams): Promise<ListFilesResponse> {
@@ -527,6 +579,22 @@ async function getFilePair(params: GetFilePairParams): Promise<GetFilePairRespon
     return (await window.openadeAPI.git.getFilePair(params)) as GetFilePairResponse
 }
 
+async function getWorktreeFilePatch(params: GetWorktreeFilePatchParams): Promise<GetFilePatchResponse> {
+    if (!window.openadeAPI) {
+        throw new Error("Not running in Electron")
+    }
+
+    return (await window.openadeAPI.git.getWorktreeFilePatch(params)) as GetFilePatchResponse
+}
+
+async function getCommitFilePatch(params: GetCommitFilePatchParams): Promise<GetFilePatchResponse> {
+    if (!window.openadeAPI) {
+        throw new Error("Not running in Electron")
+    }
+
+    return (await window.openadeAPI.git.getCommitFilePatch(params)) as GetFilePatchResponse
+}
+
 async function getLog(params: GetGitLogParams): Promise<GetGitLogResponse> {
     if (!window.openadeAPI) {
         throw new Error("Not running in Electron")
@@ -554,6 +622,7 @@ export const gitApi = {
     getOrCreateWorkTree,
     workTreeDiffPatch,
     getMergeBase,
+    getGitSummary,
     getGitStatus,
     listFiles,
     deleteWorkTree,
@@ -569,5 +638,7 @@ export const gitApi = {
     getChangedFiles,
     getFileAtTreeish,
     getFilePair,
+    getWorktreeFilePatch,
+    getCommitFilePatch,
     isAvailable: isGitApiAvailable,
 }

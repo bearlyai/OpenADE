@@ -102,6 +102,7 @@ const openadeAPI = {
         getOrCreateWorkTree: (params: unknown) => ipcRenderer.invoke("git:getOrCreateWorkTree", params),
         workTreeDiffPatch: (params: unknown) => ipcRenderer.invoke("git:workTreeDiffPatch", params),
         getMergeBase: (params: unknown) => ipcRenderer.invoke("git:getMergeBase", params),
+        getGitSummary: (params: unknown) => ipcRenderer.invoke("git:getGitSummary", params),
         getGitStatus: (params: unknown) => ipcRenderer.invoke("git:getGitStatus", params),
         listFiles: (params: unknown) => ipcRenderer.invoke("git:listFiles", params),
         deleteWorkTree: (params: unknown) => ipcRenderer.invoke("git:deleteWorkTree", params),
@@ -117,6 +118,8 @@ const openadeAPI = {
         getChangedFiles: (params: unknown) => ipcRenderer.invoke("git:getChangedFiles", params),
         getFileAtTreeish: (params: unknown) => ipcRenderer.invoke("git:getFileAtTreeish", params),
         getFilePair: (params: unknown) => ipcRenderer.invoke("git:getFilePair", params),
+        getWorktreeFilePatch: (params: unknown) => ipcRenderer.invoke("git:getWorktreeFilePatch", params),
+        getCommitFilePatch: (params: unknown) => ipcRenderer.invoke("git:getCommitFilePatch", params),
     },
 
     // ========================================================================
@@ -286,6 +289,22 @@ const openadeAPI = {
             ipcRenderer.invoke("code:data:load", args),
         delete: (args: { folder: string; id: string; ext: string }) =>
             ipcRenderer.invoke("code:data:delete", args),
+    },
+
+    // ========================================================================
+    // Snapshots
+    // ========================================================================
+    snapshots: {
+        saveBundle: (args: { id: string; patch: string; index: unknown }) =>
+            ipcRenderer.invoke("snapshots:saveBundle", args),
+        loadPatch: (args: { id: string }) =>
+            ipcRenderer.invoke("snapshots:loadPatch", args),
+        loadIndex: (args: { id: string }) =>
+            ipcRenderer.invoke("snapshots:loadIndex", args),
+        loadPatchSlice: (args: { id: string; start: number; end: number }) =>
+            ipcRenderer.invoke("snapshots:loadPatchSlice", args),
+        deleteBundle: (args: { id: string }) =>
+            ipcRenderer.invoke("snapshots:deleteBundle", args),
     },
 
     // ========================================================================

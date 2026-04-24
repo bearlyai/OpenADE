@@ -3,11 +3,28 @@
  * Tests all handlers with focus on subdirectory support
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest"
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest"
 import * as fs from "fs-extra"
 import * as path from "path"
 import * as os from "os"
 import { execSync } from "child_process"
+
+vi.mock("electron", () => ({
+    ipcMain: {
+        handle: vi.fn(),
+        removeHandler: vi.fn(),
+    },
+}))
+
+vi.mock("electron-log", () => ({
+    default: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+    },
+}))
+
+let gitTestables: typeof import("./git").__test__
 
 // Test repository paths
 const TEST_BASE_DIR = path.join(os.tmpdir(), `bearly-git-tests-${Date.now()}`)
@@ -139,6 +156,7 @@ async function cleanupTestRepo() {
 
 describe("Git Module Tests", () => {
     beforeAll(async () => {
+        gitTestables = (await import("./git")).__test__
         await cleanupTestRepo()
         await setupTestRepo()
     })
@@ -529,6 +547,205 @@ describe("Git Module Tests", () => {
                 path: "deleted.txt",
                 status: "deleted",
             })
+        })
+
+        it("returns compact and expanded worktree patches based on requested context", async () => {
+            const repoDir = path.join(TEST_BASE_DIR, `worktree-patch-repo-${Date.now()}`)
+            await fs.ensureDir(repoDir)
+
+            gitExec("git init", repoDir)
+            gitExec('git config user.email "test@bearly.ai"', repoDir)
+            gitExec('git config user.name "Test User"', repoDir)
+
+            const original = Array.from({ length: 30 }, (_, index) => `line ${String(index + 1).padStart(2, "0")}`).join("\n")
+            await fs.writeFile(path.join(repoDir, "context.txt"), original)
+            gitExec("git add context.txt", repoDir)
+            gitExec('git commit -m "base"', repoDir)
+
+            const updated = original.replace("line 15", "line 15 changed")
+            await fs.writeFile(path.join(repoDir, "context.txt"), updated)
+
+            const compact = await gitTestables.handleGetWorktreeFilePatch({
+                workDir: repoDir,
+                fromTreeish: "HEAD",
+                filePath: "context.txt",
+                contextLines: 0,
+            })
+            const expanded = await gitTestables.handleGetWorktreeFilePatch({
+                workDir: repoDir,
+                fromTreeish: "HEAD",
+                filePath: "context.txt",
+                contextLines: 10,
+            })
+
+            expect(compact.patch).toContain("@@")
+            expect(compact.patch).toContain("-line 15")
+            expect(compact.patch).toContain("+line 15 changed")
+            expect(compact.patch).not.toContain("\n line 14\n")
+            expect(expanded.patch).toContain("\n line 14\n")
+            expect(expanded.patch).toContain("\n line 24\n")
+            expect(expanded.stats.hunkCount).toBe(1)
+        })
+
+        it("returns a patch for untracked worktree files", async () => {
+            const repoDir = path.join(TEST_BASE_DIR, `untracked-patch-repo-${Date.now()}`)
+            await fs.ensureDir(repoDir)
+
+            gitExec("git init", repoDir)
+            gitExec('git config user.email "test@bearly.ai"', repoDir)
+            gitExec('git config user.name "Test User"', repoDir)
+            await fs.writeFile(path.join(repoDir, "tracked.txt"), "tracked\n")
+            gitExec("git add tracked.txt", repoDir)
+            gitExec('git commit -m "base"', repoDir)
+
+            await fs.writeFile(path.join(repoDir, "new-file.txt"), "alpha\nbeta\ngamma\n")
+
+            const response = await gitTestables.handleGetWorktreeFilePatch({
+                workDir: repoDir,
+                fromTreeish: "HEAD",
+                filePath: "new-file.txt",
+                contextLines: 3,
+            })
+
+            expect(response.patch).toContain("+++ b/new-file.txt")
+            expect(response.patch).toContain("+alpha")
+            expect(response.patch).toContain("+gamma")
+            expect(response.stats.insertions).toBe(3)
+            expect(response.truncated).toBe(false)
+        })
+
+        it("rejects untracked paths that escape the worktree", async () => {
+            const repoDir = path.join(TEST_BASE_DIR, `escaped-path-repo-${Date.now()}`)
+            await fs.ensureDir(repoDir)
+
+            gitExec("git init", repoDir)
+            gitExec('git config user.email "test@bearly.ai"', repoDir)
+            gitExec('git config user.name "Test User"', repoDir)
+            await fs.writeFile(path.join(repoDir, "tracked.txt"), "tracked\n")
+            gitExec("git add tracked.txt", repoDir)
+            gitExec('git commit -m "base"', repoDir)
+
+            const escapedFileName = `escaped-${Date.now()}.txt`
+            await fs.writeFile(path.join(TEST_BASE_DIR, escapedFileName), "secret\n")
+
+            await expect(
+                gitTestables.handleGetWorktreeFilePatch({
+                    workDir: repoDir,
+                    fromTreeish: "HEAD",
+                    filePath: `../${escapedFileName}`,
+                    contextLines: 3,
+                })
+            ).rejects.toThrow("escapes worktree")
+        })
+
+        it("skips generated files for worktree patch previews", async () => {
+            const repoDir = path.join(TEST_BASE_DIR, `generated-worktree-patch-repo-${Date.now()}`)
+            await fs.ensureDir(repoDir)
+
+            gitExec("git init", repoDir)
+            gitExec('git config user.email "test@bearly.ai"', repoDir)
+            gitExec('git config user.name "Test User"', repoDir)
+            await fs.writeFile(path.join(repoDir, "package-lock.json"), '{\n  "name": "demo"\n}\n')
+            gitExec("git add package-lock.json", repoDir)
+            gitExec('git commit -m "base"', repoDir)
+
+            await fs.writeFile(path.join(repoDir, "package-lock.json"), '{\n  "name": "demo",\n  "lockfileVersion": 3\n}\n')
+
+            const response = await gitTestables.handleGetWorktreeFilePatch({
+                workDir: repoDir,
+                fromTreeish: "HEAD",
+                filePath: "package-lock.json",
+                contextLines: 3,
+            })
+
+            expect(response.patch).toBe("")
+            expect(response.truncated).toBe(false)
+            expect(response.heavy).toBe(false)
+        })
+
+        it("returns a root commit patch for added files", async () => {
+            const repoDir = path.join(TEST_BASE_DIR, `root-patch-repo-${Date.now()}`)
+            await fs.ensureDir(repoDir)
+
+            gitExec("git init", repoDir)
+            gitExec('git config user.email "test@bearly.ai"', repoDir)
+            gitExec('git config user.name "Test User"', repoDir)
+
+            await fs.writeFile(path.join(repoDir, "root.txt"), "root content\n")
+            gitExec("git add root.txt", repoDir)
+            gitExec('git commit -m "root commit"', repoDir)
+
+            const sha = gitExec("git rev-parse HEAD", repoDir).trim()
+            const response = await gitTestables.handleGetCommitFilePatch({
+                workDir: repoDir,
+                commit: sha,
+                filePath: "root.txt",
+                contextLines: 3,
+            })
+
+            expect(response.patch).toContain("+++ b/root.txt")
+            expect(response.patch).toContain("+root content")
+            expect(response.stats.insertions).toBe(1)
+            expect(response.stats.hunkCount).toBe(1)
+        })
+
+        it("returns rename-aware commit patches", async () => {
+            const repoDir = path.join(TEST_BASE_DIR, `rename-patch-repo-${Date.now()}`)
+            await fs.ensureDir(repoDir)
+
+            gitExec("git init", repoDir)
+            gitExec('git config user.email "test@bearly.ai"', repoDir)
+            gitExec('git config user.name "Test User"', repoDir)
+
+            await fs.writeFile(path.join(repoDir, "old-name.txt"), "line 1\nline 2\n")
+            gitExec("git add old-name.txt", repoDir)
+            gitExec('git commit -m "initial"', repoDir)
+
+            gitExec("git mv old-name.txt new-name.txt", repoDir)
+            await fs.writeFile(path.join(repoDir, "new-name.txt"), "line 1\nline 2 renamed\n")
+            gitExec("git add new-name.txt", repoDir)
+            gitExec('git commit -m "rename file"', repoDir)
+
+            const sha = gitExec("git rev-parse HEAD", repoDir).trim()
+            const response = await gitTestables.handleGetCommitFilePatch({
+                workDir: repoDir,
+                commit: sha,
+                filePath: "new-name.txt",
+                oldPath: "old-name.txt",
+                contextLines: 3,
+            })
+
+            expect(response.patch).toContain("+++ b/new-name.txt")
+            expect(response.patch).toContain("--- a/old-name.txt")
+            expect(response.patch).toContain("+line 2 renamed")
+        })
+
+        it("skips generated files for commit patch previews", async () => {
+            const repoDir = path.join(TEST_BASE_DIR, `generated-commit-patch-repo-${Date.now()}`)
+            await fs.ensureDir(repoDir)
+
+            gitExec("git init", repoDir)
+            gitExec('git config user.email "test@bearly.ai"', repoDir)
+            gitExec('git config user.name "Test User"', repoDir)
+            await fs.writeFile(path.join(repoDir, "package-lock.json"), '{\n  "name": "demo"\n}\n')
+            gitExec("git add package-lock.json", repoDir)
+            gitExec('git commit -m "base"', repoDir)
+
+            await fs.writeFile(path.join(repoDir, "package-lock.json"), '{\n  "name": "demo",\n  "packages": {}\n}\n')
+            gitExec("git add package-lock.json", repoDir)
+            gitExec('git commit -m "update lockfile"', repoDir)
+
+            const sha = gitExec("git rev-parse HEAD", repoDir).trim()
+            const response = await gitTestables.handleGetCommitFilePatch({
+                workDir: repoDir,
+                commit: sha,
+                filePath: "package-lock.json",
+                contextLines: 3,
+            })
+
+            expect(response.patch).toBe("")
+            expect(response.truncated).toBe(false)
+            expect(response.heavy).toBe(false)
         })
     })
 })

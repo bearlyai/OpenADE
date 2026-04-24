@@ -54,6 +54,7 @@ interface OpenADEAPI {
         getOrCreateWorkTree: (params: unknown) => Promise<unknown>
         workTreeDiffPatch: (params: unknown) => Promise<unknown>
         getMergeBase: (params: unknown) => Promise<unknown>
+        getGitSummary: (params: unknown) => Promise<unknown>
         getGitStatus: (params: unknown) => Promise<unknown>
         listFiles: (params: unknown) => Promise<unknown>
         deleteWorkTree: (params: unknown) => Promise<unknown>
@@ -69,6 +70,15 @@ interface OpenADEAPI {
         getChangedFiles: (params: unknown) => Promise<unknown>
         getFileAtTreeish: (params: unknown) => Promise<unknown>
         getFilePair: (params: unknown) => Promise<unknown>
+        getWorktreeFilePatch: (params: unknown) => Promise<unknown>
+        getCommitFilePatch: (params: unknown) => Promise<unknown>
+    }
+    snapshots: {
+        saveBundle: (params: unknown) => Promise<void>
+        loadPatch: (params: unknown) => Promise<unknown>
+        loadIndex: (params: unknown) => Promise<unknown>
+        loadPatchSlice: (params: unknown) => Promise<unknown>
+        deleteBundle: (params: unknown) => Promise<void>
     }
     process: {
         runCmd: (params: unknown) => Promise<unknown>

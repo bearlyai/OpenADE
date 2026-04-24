@@ -1,12 +1,15 @@
+import { parsePatchFiles } from "@pierre/diffs"
 import { ArrowRight, ChevronDown, ChevronRight, FileCode, FileImage, Folder, RefreshCw } from "lucide-react"
 import { observer } from "mobx-react"
-import { useMemo } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { twMerge } from "tailwind-merge"
 import type { ChangesManager } from "../store/managers/ChangesManager"
 import { useCodeStore } from "../store/context"
-import { StatusIcon, type ViewMode, ViewModeToggle } from "./git/shared"
+import { getChangesLoadMode, getPatchContextLines, shouldUsePatchDiff } from "../utils/gitDiffContext"
+import { type AnnotationSide, type CommentHandlers, FileDiffViewer, FileViewer, MultiFileDiffViewer } from "./FilesAndDiffs"
+import { DiffContextSelect, StatusIcon, type ViewMode, ViewModeToggle } from "./git/shared"
 import { Select } from "./ui/Select"
-import { type AnnotationSide, type CommentHandlers, FileViewer, MultiFileDiffViewer } from "./FilesAndDiffs"
+import { VirtualizedFixedList } from "./ui/VirtualizedFixedList"
 import type { FlatTreeEntry } from "./utils/changesTree"
 
 type DiffSource = "uncommitted" | "from-base"
@@ -95,26 +98,44 @@ interface ChangesViewerProps {
 
 export const ChangesViewer = observer(function ChangesViewer({ changesManager, isWorktree, className, taskId }: ChangesViewerProps) {
     const codeStore = useCodeStore()
+    const [renderLargeDiffKey, setRenderLargeDiffKey] = useState<string | null>(null)
     const viewMode = codeStore.ui.viewMode
+    const diffContext = codeStore.ui.diffContext
     const setViewMode = (mode: ViewMode) => codeStore.ui.setViewMode(mode)
+    const setDiffContext = (context: typeof diffContext) => codeStore.ui.setDiffContext(context)
+    const usePatchDiff = shouldUsePatchDiff(viewMode, diffContext)
+    const patchContextLines = getPatchContextLines(diffContext)
+    const patchDiffStyle = viewMode === "split" ? "split" : "unified"
 
-    const { files, selectedFile, filePair, fileLoading, diffSource, flatEntries, expandedPaths, isLoading } = changesManager
+    const { files, selectedFile, filePair, filePatch, filePairLoading, filePatchLoading, diffSource, flatEntries, expandedPaths, isLoading } = changesManager
+    const largeDiffKey = selectedFile && filePatch ? `${selectedFile.path}:${filePatch.stats.changedLines}:${filePatch.stats.hunkCount}` : null
+    const deferLargeDiff = filePatch?.heavy === true && renderLargeDiffKey !== largeDiffKey
 
-    // Stabilize file objects so contentDeps in useCommentAnnotations doesn't
-    // change on every render — prevents clearing the open CommentForm
     const currentFile = useMemo(() => {
         if (!selectedFile || !filePair) return null
-        return { name: selectedFile.path, contents: filePair.after }
+        return {
+            name: selectedFile.path,
+            contents: filePair.after,
+            cacheKey: `${selectedFile.path}:current:${filePair.after.length}`,
+        }
     }, [selectedFile?.path, filePair?.after])
 
     const diffOldFile = useMemo(() => {
         if (!selectedFile || !filePair) return null
-        return { name: selectedFile.oldPath || selectedFile.path, contents: filePair.before }
+        return {
+            name: selectedFile.oldPath || selectedFile.path,
+            contents: filePair.before,
+            cacheKey: `${selectedFile.oldPath || selectedFile.path}:old:${filePair.before.length}`,
+        }
     }, [selectedFile?.oldPath, selectedFile?.path, filePair?.before])
 
     const diffNewFile = useMemo(() => {
         if (!selectedFile || !filePair) return null
-        return { name: selectedFile.path, contents: filePair.after }
+        return {
+            name: selectedFile.path,
+            contents: filePair.after,
+            cacheKey: `${selectedFile.path}:new:${filePair.after.length}`,
+        }
     }, [selectedFile?.path, filePair?.after])
 
     const commentHandlers: CommentHandlers | null = useMemo(() => {
@@ -133,7 +154,145 @@ export const ChangesViewer = observer(function ChangesViewer({ changesManager, i
         return { taskId, sourceMatch, createSource }
     }, [taskId, selectedFile?.path])
 
+    const patchView = useMemo(() => {
+        if (!filePatch?.patch || deferLargeDiff) {
+            return { fileDiff: null, parseError: false }
+        }
+
+        try {
+            const parsedPatches = parsePatchFiles(filePatch.patch, selectedFile?.path)
+            for (const patch of parsedPatches) {
+                if (patch.files[0]) {
+                    return { fileDiff: patch.files[0], parseError: false }
+                }
+            }
+            return { fileDiff: null, parseError: false }
+        } catch (error) {
+            console.error("[ChangesViewer] Failed to parse patch:", error)
+            return { fileDiff: null, parseError: true }
+        }
+    }, [deferLargeDiff, filePatch?.patch, selectedFile?.path])
+
+    useEffect(() => {
+        setRenderLargeDiffKey(null)
+    }, [selectedFile?.path])
+
+    useEffect(() => {
+        if (!selectedFile) {
+            return
+        }
+
+        changesManager.ensureSelectedFileLoaded(getChangesLoadMode(viewMode, diffContext), usePatchDiff ? patchContextLines : undefined)
+    }, [changesManager, diffContext, patchContextLines, selectedFile?.path, usePatchDiff, viewMode])
+
     const onRefresh = () => changesManager.refresh()
+
+    const toolbar = (
+        <div className="px-3 py-2 border-b border-border bg-base-200 flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-2">
+                {isWorktree ? <DiffSourceSelect value={diffSource} onChange={(v) => changesManager.setDiffSource(v)} /> : <div />}
+                <button
+                    type="button"
+                    onClick={onRefresh}
+                    className="btn p-1 text-muted hover:text-base-content hover:bg-base-300 transition-colors"
+                    title="Refresh changes"
+                >
+                    <RefreshCw size={14} />
+                </button>
+            </div>
+            <div className="flex items-center justify-end gap-2">
+                <DiffContextSelect value={diffContext} onChange={setDiffContext} />
+                <ViewModeToggle value={viewMode} onChange={setViewMode} />
+            </div>
+        </div>
+    )
+
+    const renderContent = () => {
+        if (!selectedFile) {
+            return <div className="flex items-center justify-center py-12 text-muted text-sm">Select a file to view changes</div>
+        }
+
+        if (usePatchDiff) {
+            if (filePatchLoading) {
+                return <div className="flex items-center justify-center py-12 text-muted text-sm">Loading file...</div>
+            }
+            if (selectedFile.binary) {
+                return <div className="flex items-center justify-center py-12 text-muted text-sm">Binary file — cannot display diff</div>
+            }
+            if (deferLargeDiff && filePatch) {
+                return (
+                    <div className="px-4 py-6 flex flex-col items-center gap-3 text-sm">
+                        <div className="text-base-content font-medium">Large diff deferred</div>
+                        <div className="text-muted text-center">
+                            {filePatch.stats.changedLines} changed lines across {filePatch.stats.hunkCount} hunks.
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setRenderLargeDiffKey(largeDiffKey)}
+                            className="btn px-3 py-1.5 text-xs bg-base-300 hover:bg-base-200 text-base-content"
+                        >
+                            Render diff
+                        </button>
+                    </div>
+                )
+            }
+            if (patchView.parseError) {
+                return <div className="flex items-center justify-center py-12 text-muted text-sm">Large diff preview unavailable for this file</div>
+            }
+            if (patchView.fileDiff) {
+                return (
+                    <div className="min-h-full bg-editor-background">
+                        {(filePatch?.truncated || filePatch?.heavy) && (
+                            <div className="px-3 py-2 border-b border-border bg-base-200 text-xs text-muted">
+                                {filePatch.truncated
+                                    ? `Large diff preview truncated to keep rendering responsive (${filePatch.stats.changedLines} changed lines)`
+                                    : `Large diff — simplified rendering enabled (${filePatch.stats.changedLines} changed lines)`}
+                            </div>
+                        )}
+                        <FileDiffViewer
+                            fileDiff={patchView.fileDiff}
+                            diffStyle={patchDiffStyle}
+                            disableFileHeader
+                            commentHandlers={commentHandlers}
+                            options={
+                                filePatch?.heavy ? { lineDiffType: "none", maxLineDiffLength: 0, tokenizeMaxLineLength: 0, overflow: "scroll" } : undefined
+                            }
+                        />
+                    </div>
+                )
+            }
+            return <div className="flex items-center justify-center py-12 text-muted text-sm">No diff content for selected context</div>
+        }
+
+        if (filePairLoading) {
+            return <div className="flex items-center justify-center py-12 text-muted text-sm">Loading file...</div>
+        }
+        if (selectedFile.binary) {
+            return <div className="flex items-center justify-center py-12 text-muted text-sm">Binary file — cannot display diff</div>
+        }
+        if (filePair?.tooLarge) {
+            return <div className="flex items-center justify-center py-12 text-muted text-sm">File too large to diff</div>
+        }
+        if (currentFile && diffOldFile && diffNewFile) {
+            return (
+                <div className="min-h-full bg-editor-background">
+                    {viewMode === "current" ? (
+                        <FileViewer file={currentFile} disableFileHeader commentHandlers={commentHandlers} />
+                    ) : (
+                        <MultiFileDiffViewer
+                            oldFile={diffOldFile}
+                            newFile={diffNewFile}
+                            diffStyle={viewMode}
+                            disableFileHeader
+                            commentHandlers={commentHandlers}
+                        />
+                    )}
+                </div>
+            )
+        }
+
+        return <div className="flex items-center justify-center py-12 text-muted text-sm">Select a file to view changes</div>
+    }
 
     if (isLoading) {
         return <div className={twMerge("flex items-center justify-center py-12 text-muted text-sm", className)}>Loading changes...</div>
@@ -142,22 +301,7 @@ export const ChangesViewer = observer(function ChangesViewer({ changesManager, i
     if (files.length === 0) {
         return (
             <div className={twMerge("flex flex-col h-full", className)}>
-                {isWorktree && (
-                    <div className="px-3 py-2 border-b border-border flex items-center justify-between bg-base-200">
-                        <DiffSourceSelect value={diffSource} onChange={(v) => changesManager.setDiffSource(v)} />
-                        <div className="flex items-center gap-2">
-                            <button
-                                type="button"
-                                onClick={onRefresh}
-                                className="btn p-1 text-muted hover:text-base-content hover:bg-base-300 transition-colors"
-                                title="Refresh changes"
-                            >
-                                <RefreshCw size={14} />
-                            </button>
-                            <ViewModeToggle value={viewMode} onChange={setViewMode} />
-                        </div>
-                    </div>
-                )}
+                {toolbar}
                 <div className="flex-1 flex items-center justify-center py-12 text-muted text-sm">No changes.</div>
             </div>
         )
@@ -166,25 +310,14 @@ export const ChangesViewer = observer(function ChangesViewer({ changesManager, i
     return (
         <div className={twMerge("flex h-full", className)}>
             <div className="w-64 border-r border-border flex-shrink-0 bg-base-200 flex flex-col">
-                <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2">
-                    {isWorktree ? <DiffSourceSelect value={diffSource} onChange={(v) => changesManager.setDiffSource(v)} /> : <div />}
-                    <div className="flex items-center gap-2">
-                        <button
-                            type="button"
-                            onClick={onRefresh}
-                            className="btn p-1 text-muted hover:text-base-content hover:bg-base-300 transition-colors"
-                            title="Refresh changes"
-                        >
-                            <RefreshCw size={14} />
-                        </button>
-                        <ViewModeToggle value={viewMode} onChange={setViewMode} />
-                    </div>
-                </div>
-                <div className="flex-1 overflow-y-auto">
-                    <div className="flex flex-col py-1">
-                        {flatEntries.map((entry) => (
+                {toolbar}
+                <VirtualizedFixedList
+                    items={flatEntries}
+                    rowHeight={30}
+                    className="flex-1 overflow-y-auto"
+                    renderRow={(entry) => (
+                        <div className="py-1">
                             <ChangesTreeItem
-                                key={entry.node.path}
                                 entry={entry}
                                 expanded={entry.node.isDir && expandedPaths.has(entry.node.path)}
                                 selected={!entry.node.isDir && entry.node.file?.path === selectedFile?.path}
@@ -198,9 +331,9 @@ export const ChangesViewer = observer(function ChangesViewer({ changesManager, i
                                     changesManager.toggleExpanded(entry.node.path)
                                 }}
                             />
-                        ))}
-                    </div>
-                </div>
+                        </div>
+                    )}
+                />
             </div>
             <div className="flex-1 min-w-0 overflow-auto flex flex-col">
                 {selectedFile && (
@@ -220,29 +353,7 @@ export const ChangesViewer = observer(function ChangesViewer({ changesManager, i
                         </span>
                     </div>
                 )}
-                {fileLoading ? (
-                    <div className="flex items-center justify-center py-12 text-muted text-sm">Loading file...</div>
-                ) : selectedFile?.binary ? (
-                    <div className="flex items-center justify-center py-12 text-muted text-sm">Binary file — cannot display diff</div>
-                ) : filePair?.tooLarge ? (
-                    <div className="flex items-center justify-center py-12 text-muted text-sm">File too large to diff</div>
-                ) : currentFile && diffOldFile && diffNewFile ? (
-                    <div className="min-h-full bg-editor-background">
-                        {viewMode === "current" ? (
-                            <FileViewer file={currentFile} disableFileHeader commentHandlers={commentHandlers} />
-                        ) : (
-                            <MultiFileDiffViewer
-                                oldFile={diffOldFile}
-                                newFile={diffNewFile}
-                                diffStyle={viewMode}
-                                disableFileHeader
-                                commentHandlers={commentHandlers}
-                            />
-                        )}
-                    </div>
-                ) : (
-                    <div className="flex items-center justify-center py-12 text-muted text-sm">Select a file to view changes</div>
-                )}
+                {renderContent()}
             </div>
         </div>
     )

@@ -1,11 +1,20 @@
 import { makeAutoObservable, reaction, runInAction } from "mobx"
-import { type ChangedFileInfo, type GetFilePairResponse, type GitStatusResponse, gitApi } from "../../electronAPI/git"
-import { buildFileTree, collectAllDirPaths, flattenFileTree, type FileTreeNode, type FlatTreeEntry } from "../../components/utils/changesTree"
+import { type ChangedFileInfo, type GetFilePairResponse, type GetFilePatchResponse, type GitSummaryResponse, gitApi } from "../../electronAPI/git"
+import {
+    buildFileTree,
+    collectAllDirPaths,
+    collectAncestorDirPaths,
+    collectInitialDirPaths,
+    flattenFileTree,
+    type FileTreeNode,
+    type FlatTreeEntry,
+} from "../../components/utils/changesTree"
 import type { TaskModel } from "../TaskModel"
 
 type DiffSource = "uncommitted" | "from-base"
+type ChangesViewMode = "current" | "split" | "unified"
 
-function deriveUncommittedFiles(status: GitStatusResponse): ChangedFileInfo[] {
+function deriveUncommittedFiles(status: GitSummaryResponse): ChangedFileInfo[] {
     const files: ChangedFileInfo[] = []
     const seen = new Set<string>()
 
@@ -29,18 +38,31 @@ export class ChangesManager {
     expandedPaths: Set<string> = new Set()
 
     filePair: GetFilePairResponse | null = null
-    fileLoading = false
+    filePatch: GetFilePatchResponse | null = null
+    filePairLoading = false
+    filePatchLoading = false
 
     fromBaseFiles: ChangedFileInfo[] | null = null
     fromBaseLoading = false
 
     private filePairLoadId = 0
+    private filePatchLoadId = 0
+    private filePatchContextLines: 0 | 3 | 10 | 25 = 3
+    private filePairCache = new Map<string, GetFilePairResponse>()
+    private filePatchCache = new Map<string, GetFilePatchResponse>()
     private disposers: Array<() => void> = []
 
     constructor(private taskModel: TaskModel) {
-        makeAutoObservable<this, "taskModel" | "filePairLoadId" | "disposers">(this, {
+        makeAutoObservable<
+            this,
+            "taskModel" | "filePairLoadId" | "filePatchLoadId" | "filePatchContextLines" | "filePairCache" | "filePatchCache" | "disposers"
+        >(this, {
             taskModel: false,
             filePairLoadId: false,
+            filePatchLoadId: false,
+            filePatchContextLines: false,
+            filePairCache: false,
+            filePatchCache: false,
             disposers: false,
         })
 
@@ -77,6 +99,10 @@ export class ChangesManager {
         return flattenFileTree(this.fileTree, this.expandedPaths)
     }
 
+    get fileLoading(): boolean {
+        return this.filePairLoading || this.filePatchLoading
+    }
+
     get isLoading(): boolean {
         return this.diffSource === "uncommitted" ? this.taskModel.gitStatus === null : this.fromBaseLoading
     }
@@ -95,12 +121,14 @@ export class ChangesManager {
         if (this.selectedFilePath === path) return
         this.selectedFilePath = path
         this.filePair = null
-        this.loadFilePair()
+        this.filePatch = null
     }
 
     setDiffSource(source: DiffSource): void {
         if (this.diffSource === source) return
         this.diffSource = source
+        this.clearLoadedFiles()
+        this.clearCaches()
         if (source === "from-base" && this.fromBaseFiles === null) {
             this.loadFromBaseFiles()
         }
@@ -118,28 +146,46 @@ export class ChangesManager {
         this.taskModel.refreshGitState()
     }
 
+    ensureSelectedFileLoaded(mode: ChangesViewMode, patchContextLines?: 0 | 3 | 10 | 25): void {
+        if (mode === "current") {
+            void this.loadFilePair()
+        } else {
+            const nextContextLines = patchContextLines ?? this.filePatchContextLines
+            if (this.filePatchContextLines !== nextContextLines) {
+                this.filePatchContextLines = nextContextLines
+                this.filePatch = null
+            }
+            void this.loadFilePatch(nextContextLines)
+        }
+    }
+
     // === Internal ===
 
     private onGitStatusChanged(): void {
         // Reset from-base cache (new commits may exist)
         this.fromBaseFiles = null
+        this.clearCaches()
 
         if (this.diffSource === "from-base") {
-            this.loadFromBaseFiles()
+            void this.loadFromBaseFiles()
         }
 
-        // Update expanded paths for new file tree
         const tree = this.fileTree
-        this.expandedPaths = collectAllDirPaths(tree)
+        this.expandedPaths = this.buildExpandedPaths(tree)
 
         // Validate selection still exists
         if (this.selectedFilePath && !this.files.some((f) => f.path === this.selectedFilePath)) {
             this.selectedFilePath = this.files[0]?.path ?? null
+            this.clearLoadedFiles()
         }
 
-        // Silently refetch file pair (don't clear existing — keeps CommentForm alive)
         if (this.selectedFile) {
-            this.loadFilePair()
+            if (this.filePair !== null) {
+                void this.loadFilePair()
+            }
+            if (this.filePatch !== null) {
+                void this.loadFilePatch(this.filePatchContextLines)
+            }
         }
     }
 
@@ -161,7 +207,7 @@ export class ChangesManager {
         if (!file || !dir) {
             runInAction(() => {
                 this.filePair = null
-                this.fileLoading = false
+                this.filePairLoading = false
             })
             return
         }
@@ -169,7 +215,17 @@ export class ChangesManager {
         if (file.binary) {
             runInAction(() => {
                 this.filePair = null
-                this.fileLoading = false
+                this.filePairLoading = false
+            })
+            return
+        }
+
+        const cacheKey = this.getFilePairCacheKey(file)
+        const cached = this.filePairCache.get(cacheKey)
+        if (cached) {
+            runInAction(() => {
+                this.filePair = cached
+                this.filePairLoading = false
             })
             return
         }
@@ -177,7 +233,7 @@ export class ChangesManager {
         const loadId = ++this.filePairLoadId
         const isInitialLoad = this.filePair === null
         if (isInitialLoad) {
-            this.fileLoading = true
+            this.filePairLoading = true
         }
 
         try {
@@ -190,20 +246,95 @@ export class ChangesManager {
             })
             runInAction(() => {
                 if (loadId !== this.filePairLoadId) return
+                this.filePairCache.set(cacheKey, result)
                 // Skip update if content hasn't changed — prevents unnecessary
                 // re-renders that would destroy open CommentForms
                 const prev = this.filePair
                 if (!prev || prev.before !== result.before || prev.after !== result.after || prev.tooLarge !== result.tooLarge) {
                     this.filePair = result
                 }
-                this.fileLoading = false
+                this.filePairLoading = false
             })
         } catch (err) {
             console.error("[ChangesManager] Failed to load file pair:", err)
             runInAction(() => {
                 if (loadId !== this.filePairLoadId) return
                 this.filePair = null
-                this.fileLoading = false
+                this.filePairLoading = false
+            })
+        }
+    }
+
+    private async loadFilePatch(contextLines: 0 | 3 | 10 | 25 = this.filePatchContextLines): Promise<void> {
+        const file = this.selectedFile
+        const dir = this.workDir
+        if (!file || !dir) {
+            runInAction(() => {
+                this.filePatch = null
+                this.filePatchLoading = false
+            })
+            return
+        }
+
+        if (file.binary) {
+            runInAction(() => {
+                this.filePatch = null
+                this.filePatchLoading = false
+            })
+            return
+        }
+
+        this.filePatchContextLines = contextLines
+
+        const cacheKey = this.getFilePatchCacheKey(file, contextLines)
+        const cached = this.filePatchCache.get(cacheKey)
+        if (cached) {
+            runInAction(() => {
+                this.filePatch = cached
+                this.filePatchLoading = false
+            })
+            return
+        }
+
+        const loadId = ++this.filePatchLoadId
+        const isInitialLoad = this.filePatch === null
+        if (isInitialLoad) {
+            this.filePatchLoading = true
+        }
+
+        try {
+            const result = await gitApi.getWorktreeFilePatch({
+                workDir: dir,
+                fromTreeish: this.fromTreeish,
+                filePath: file.path,
+                oldPath: file.oldPath,
+                contextLines,
+            })
+
+            runInAction(() => {
+                if (loadId !== this.filePatchLoadId) return
+                this.filePatchCache.set(cacheKey, result)
+                const prev = this.filePatch
+                if (
+                    !prev ||
+                    prev.patch !== result.patch ||
+                    prev.truncated !== result.truncated ||
+                    prev.heavy !== result.heavy ||
+                    prev.stats.insertions !== result.stats.insertions ||
+                    prev.stats.deletions !== result.stats.deletions ||
+                    prev.stats.changedLines !== result.stats.changedLines ||
+                    prev.stats.hunkCount !== result.stats.hunkCount
+                ) {
+                    this.filePatch = result
+                }
+                this.filePatchLoading = false
+            })
+        } catch (err) {
+            console.error("[ChangesManager] Failed to load file patch:", err)
+            runInAction(() => {
+                if (loadId !== this.filePatchLoadId) return
+                this.filePatch = null
+                this.filePatchLoading = false
             })
         }
     }
@@ -224,12 +355,11 @@ export class ChangesManager {
             runInAction(() => {
                 this.fromBaseFiles = result.files
                 this.fromBaseLoading = false
-                // Update tree expansion and selection
-                this.expandedPaths = collectAllDirPaths(this.fileTree)
+                this.expandedPaths = this.buildExpandedPaths(this.fileTree)
                 if (!this.selectedFilePath || !this.files.some((f) => f.path === this.selectedFilePath)) {
                     this.selectedFilePath = this.files[0]?.path ?? null
                 }
-                this.loadFilePair()
+                this.clearLoadedFiles()
             })
         } catch (err) {
             console.error("[ChangesManager] Failed to load from-base files:", err)
@@ -241,14 +371,51 @@ export class ChangesManager {
     }
 
     initializeForTray(): void {
-        // Expand all directories on first open
-        this.expandedPaths = collectAllDirPaths(this.fileTree)
+        this.expandedPaths = this.buildExpandedPaths(this.fileTree)
 
-        // Select first file if none selected
         if (!this.selectedFilePath && this.files.length > 0) {
             this.selectedFilePath = this.files[0].path
         }
+    }
 
-        this.loadFilePair()
+    private buildExpandedPaths(tree: FileTreeNode[]): Set<string> {
+        const allDirPaths = collectAllDirPaths(tree)
+        const nextExpanded = new Set<string>([...this.expandedPaths].filter((path) => allDirPaths.has(path)))
+
+        if (nextExpanded.size === 0) {
+            for (const path of collectInitialDirPaths(tree, 200)) {
+                nextExpanded.add(path)
+            }
+        }
+
+        if (this.selectedFilePath) {
+            for (const path of collectAncestorDirPaths(this.selectedFilePath)) {
+                if (allDirPaths.has(path)) {
+                    nextExpanded.add(path)
+                }
+            }
+        }
+
+        return nextExpanded
+    }
+
+    private clearLoadedFiles(): void {
+        this.filePair = null
+        this.filePatch = null
+        this.filePairLoading = false
+        this.filePatchLoading = false
+    }
+
+    private clearCaches(): void {
+        this.filePairCache.clear()
+        this.filePatchCache.clear()
+    }
+
+    private getFilePairCacheKey(file: ChangedFileInfo): string {
+        return [this.diffSource, this.fromTreeish, this.toTreeish, file.path, file.oldPath ?? ""].join("::")
+    }
+
+    private getFilePatchCacheKey(file: ChangedFileInfo, contextLines: 0 | 3 | 10 | 25): string {
+        return [this.diffSource, this.fromTreeish, this.toTreeish, file.path, file.oldPath ?? "", `U${contextLines}`].join("::")
     }
 }

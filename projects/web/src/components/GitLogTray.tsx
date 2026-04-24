@@ -1,11 +1,13 @@
+import { parsePatchFiles } from "@pierre/diffs"
 import { FileCode, GitBranch, GitCommitHorizontal, RefreshCw } from "lucide-react"
 import { observer } from "mobx-react"
 import { type ReactNode, useEffect, useMemo, useState } from "react"
 import { twMerge } from "tailwind-merge"
-import { type ChangedFileInfo, type GitLogEntry, type WorkTreeInfo, gitApi } from "../electronAPI/git"
+import { type ChangedFileInfo, type GetFilePatchResponse, type GitLogEntry, type WorkTreeInfo, gitApi } from "../electronAPI/git"
 import { useCodeStore } from "../store/context"
-import { FileViewer, MultiFileDiffViewer } from "./FilesAndDiffs"
-import { FileListItem, StatusIcon, type ViewMode, ViewModeToggle } from "./git/shared"
+import { getPatchContextLines, isWholeFileDiffContext, shouldUsePatchDiff } from "../utils/gitDiffContext"
+import { FileDiffViewer, FileViewer, MultiFileDiffViewer } from "./FilesAndDiffs"
+import { DiffContextSelect, FileListItem, StatusIcon, type ViewMode, ViewModeToggle } from "./git/shared"
 import { Select } from "./ui/Select"
 import { getDisambiguatedPaths } from "./utils/paths"
 
@@ -101,6 +103,7 @@ function buildScopeOptions(workDir: string, branches: { name: string }[], worktr
 export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch, className }: GitLogTrayProps) {
     const codeStore = useCodeStore()
 
+    const [renderLargeDiffKey, setRenderLargeDiffKey] = useState<string | null>(null)
     const [scopeOptions, setScopeOptions] = useState<ScopeOption[]>([])
     const [scopeLoading, setScopeLoading] = useState(false)
     const [scopeRefreshToken, setScopeRefreshToken] = useState(0)
@@ -117,11 +120,19 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
     const [commitFilesLoading, setCommitFilesLoading] = useState(false)
     const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
     const [filePair, setFilePair] = useState<{ before: string; after: string; tooLarge?: boolean } | null>(null)
+    const [filePatch, setFilePatch] = useState<GetFilePatchResponse | null>(null)
     const [fileLoading, setFileLoading] = useState(false)
+    const [patchLoading, setPatchLoading] = useState(false)
     const [fileError, setFileError] = useState<string | null>(null)
 
     const viewMode = codeStore.ui.viewMode
+    const diffContext = codeStore.ui.diffContext
     const setViewMode = (mode: ViewMode) => codeStore.ui.setViewMode(mode)
+    const setDiffContext = (context: typeof diffContext) => codeStore.ui.setDiffContext(context)
+    const usePatchDiff = shouldUsePatchDiff(viewMode, diffContext)
+    const patchContextLines = getPatchContextLines(diffContext)
+    const patchDiffStyle = viewMode === "split" ? "split" : "unified"
+    const shouldLoadFilePair = viewMode === "current" || isWholeFileDiffContext(diffContext)
 
     const selectedScope = useMemo(() => scopeOptions.find((option) => option.id === selectedScopeId) ?? null, [scopeOptions, selectedScopeId])
 
@@ -132,6 +143,11 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
         if (!selectedFilePath) return commitFiles[0]
         return commitFiles.find((file) => file.path === selectedFilePath) ?? commitFiles[0]
     }, [commitFiles, selectedFilePath])
+    const largeDiffKey =
+        selectedCommit && selectedFile && filePatch
+            ? `${selectedCommit.sha}:${selectedFile.path}:${filePatch.stats.changedLines}:${filePatch.stats.hunkCount}`
+            : null
+    const deferLargeDiff = filePatch?.heavy === true && renderLargeDiffKey !== largeDiffKey
 
     const shortCommitPaths = useMemo(() => {
         const allPaths: string[] = []
@@ -177,6 +193,29 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
             }
         })
     }, [commitFiles, shortCommitPaths])
+
+    const patchView = useMemo(() => {
+        if (!filePatch?.patch || deferLargeDiff) {
+            return { fileDiff: null, parseError: false }
+        }
+
+        try {
+            const parsedPatches = parsePatchFiles(filePatch.patch)
+            for (const patch of parsedPatches) {
+                if (patch.files[0]) {
+                    return { fileDiff: patch.files[0], parseError: false }
+                }
+            }
+            return { fileDiff: null, parseError: false }
+        } catch (error) {
+            console.error("[GitLogTray] Failed to parse patch:", error)
+            return { fileDiff: null, parseError: true }
+        }
+    }, [deferLargeDiff, filePatch?.patch])
+
+    useEffect(() => {
+        setRenderLargeDiffKey(null)
+    }, [selectedCommitSha, selectedFile?.path])
 
     useEffect(() => {
         let cancelled = false
@@ -283,12 +322,14 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
             setCommitFiles([])
             setSelectedFilePath(null)
             setFilePair(null)
+            setFilePatch(null)
             return
         }
 
         let cancelled = false
         setCommitFilesLoading(true)
         setFilePair(null)
+        setFilePatch(null)
         setFileError(null)
 
         async function loadCommitFiles(scopeValue: ScopeOption, commitValue: GitLogEntry) {
@@ -331,24 +372,19 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
         const scope = selectedScope
         const commit = selectedCommit
         const file = selectedFile
-        if (!scope || !commit || !file) {
+        if (!shouldLoadFilePair || !scope || !commit || !file || file.binary) {
             setFilePair(null)
-            return
-        }
-
-        if (file.binary) {
-            setFilePair(null)
+            setFileLoading(false)
             return
         }
 
         let cancelled = false
         setFileLoading(true)
         setFileError(null)
+        setFilePair(null)
 
         async function loadFilePair(scopeValue: ScopeOption, commitValue: GitLogEntry, fileValue: ChangedFileInfo) {
             try {
-                // Fast-reject generated / lock files — their diffs are never
-                // useful and computing them freezes the renderer.
                 const basename = fileValue.path.split("/").pop() ?? fileValue.path
                 if (GENERATED_FILE_BASENAMES.has(basename)) {
                     setFilePair({ before: "", after: "", tooLarge: true })
@@ -380,8 +416,6 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
                     return
                 }
 
-                // Check line count — files under the byte limit can still
-                // freeze the diff algorithm + DOM renderer.
                 const exceedsLineLimit = (content: string) => {
                     let count = 0
                     for (let i = 0; i < content.length; i++) {
@@ -418,7 +452,53 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
         return () => {
             cancelled = true
         }
-    }, [selectedScope, selectedCommit, selectedFile])
+    }, [selectedScope, selectedCommit, selectedFile, shouldLoadFilePair])
+
+    useEffect(() => {
+        const scope = selectedScope
+        const commit = selectedCommit
+        const file = selectedFile
+        if (!usePatchDiff || !scope || !commit || !file || file.binary) {
+            setFilePatch(null)
+            setPatchLoading(false)
+            return
+        }
+
+        let cancelled = false
+        setPatchLoading(true)
+        setFileError(null)
+        setFilePatch(null)
+
+        async function loadFilePatch(scopeValue: ScopeOption, commitValue: GitLogEntry, fileValue: ChangedFileInfo) {
+            try {
+                const result = await gitApi.getCommitFilePatch({
+                    workDir: scopeValue.workDir,
+                    commit: commitValue.sha,
+                    filePath: fileValue.path,
+                    oldPath: fileValue.oldPath,
+                    contextLines: patchContextLines,
+                })
+
+                if (cancelled) return
+
+                setFilePatch(result)
+            } catch (error) {
+                console.error("[GitLogTray] Failed to load commit patch:", error)
+                if (cancelled) return
+                setFilePatch(null)
+                setFileError("Failed to load diff")
+            } finally {
+                if (!cancelled) {
+                    setPatchLoading(false)
+                }
+            }
+        }
+
+        loadFilePatch(scope, commit, file)
+        return () => {
+            cancelled = true
+        }
+    }, [selectedScope, selectedCommit, selectedFile, usePatchDiff, patchContextLines])
 
     const refresh = () => {
         setScopeRefreshToken((value) => value + 1)
@@ -447,6 +527,106 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
         }
     }
 
+    const renderFileContent = () => {
+        if (!selectedFile) {
+            return <div className="flex items-center justify-center py-12 text-muted text-sm">Select a file to view changes</div>
+        }
+
+        if (usePatchDiff) {
+            if (patchLoading) {
+                return <div className="flex items-center justify-center py-12 text-muted text-sm">Loading file...</div>
+            }
+            if (selectedFile.binary) {
+                return <div className="flex items-center justify-center py-12 text-muted text-sm">Binary file — cannot display diff</div>
+            }
+            if (deferLargeDiff && filePatch) {
+                return (
+                    <div className="px-4 py-6 flex flex-col items-center gap-3 text-sm">
+                        <div className="text-base-content font-medium">Large diff deferred</div>
+                        <div className="text-muted text-center">
+                            {filePatch.stats.changedLines} changed lines across {filePatch.stats.hunkCount} hunks.
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setRenderLargeDiffKey(largeDiffKey)}
+                            className="btn px-3 py-1.5 text-xs bg-base-300 hover:bg-base-200 text-base-content"
+                        >
+                            Render diff
+                        </button>
+                    </div>
+                )
+            }
+            if (patchView.parseError) {
+                return <div className="flex items-center justify-center py-12 text-muted text-sm">Large diff preview unavailable for this file</div>
+            }
+            if (patchView.fileDiff) {
+                return (
+                    <div className="min-h-full bg-editor-background">
+                        {(filePatch?.truncated || filePatch?.heavy) && (
+                            <div className="px-3 py-2 border-b border-border bg-base-200 text-xs text-muted">
+                                {filePatch.truncated
+                                    ? `Large diff preview truncated to keep rendering responsive (${filePatch.stats.changedLines} changed lines)`
+                                    : `Large diff — simplified rendering enabled (${filePatch.stats.changedLines} changed lines)`}
+                            </div>
+                        )}
+                        <FileDiffViewer
+                            fileDiff={patchView.fileDiff}
+                            diffStyle={patchDiffStyle}
+                            disableFileHeader
+                            commentHandlers={null}
+                            options={
+                                filePatch?.heavy ? { lineDiffType: "none", maxLineDiffLength: 0, tokenizeMaxLineLength: 0, overflow: "scroll" } : undefined
+                            }
+                        />
+                    </div>
+                )
+            }
+            return <div className="flex items-center justify-center py-12 text-muted text-sm">No diff content for selected context</div>
+        }
+
+        if (fileLoading) {
+            return <div className="flex items-center justify-center py-12 text-muted text-sm">Loading file...</div>
+        }
+        if (selectedFile.binary) {
+            return <div className="flex items-center justify-center py-12 text-muted text-sm">Binary file — cannot display diff</div>
+        }
+        if (filePair?.tooLarge) {
+            return <div className="flex items-center justify-center py-12 text-muted text-sm">File too large to diff</div>
+        }
+        if (selectedFile && filePair) {
+            return (
+                <div className="min-h-full bg-editor-background">
+                    {viewMode === "current" ? (
+                        <FileViewer
+                            file={{
+                                name: selectedFile.path,
+                                contents: filePair.after,
+                            }}
+                            disableFileHeader
+                            commentHandlers={null}
+                        />
+                    ) : (
+                        <MultiFileDiffViewer
+                            oldFile={{
+                                name: selectedFile.oldPath ?? selectedFile.path,
+                                contents: filePair.before,
+                            }}
+                            newFile={{
+                                name: selectedFile.path,
+                                contents: filePair.after,
+                            }}
+                            diffStyle={viewMode}
+                            disableFileHeader
+                            commentHandlers={null}
+                        />
+                    )}
+                </div>
+            )
+        }
+
+        return <div className="flex items-center justify-center py-12 text-muted text-sm">Select a file to view changes</div>
+    }
+
     return (
         <div className={twMerge("flex flex-col h-full", className)}>
             <div className="px-3 py-2 border-b border-border flex items-center gap-2 justify-between bg-base-200">
@@ -470,6 +650,7 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
                     >
                         <RefreshCw size={14} />
                     </button>
+                    <DiffContextSelect value={diffContext} onChange={setDiffContext} />
                     <ViewModeToggle value={viewMode} onChange={setViewMode} />
                 </div>
             </div>
@@ -589,46 +770,7 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
                                             </span>
                                         </div>
                                     )}
-                                    <div className="flex-1 min-h-0 overflow-auto">
-                                        {fileLoading ? (
-                                            <div className="flex items-center justify-center py-12 text-muted text-sm">Loading file...</div>
-                                        ) : selectedFile?.binary ? (
-                                            <div className="flex items-center justify-center py-12 text-muted text-sm">Binary file — cannot display diff</div>
-                                        ) : filePair?.tooLarge ? (
-                                            <div className="flex items-center justify-center py-12 text-muted text-sm">File too large to diff</div>
-                                        ) : selectedFile && filePair ? (
-                                            <div className="min-h-full bg-editor-background">
-                                                {viewMode === "current" ? (
-                                                    <FileViewer
-                                                        file={{
-                                                            name: selectedFile.path,
-                                                            contents: filePair.after,
-                                                        }}
-                                                        disableFileHeader
-                                                        commentHandlers={null}
-                                                    />
-                                                ) : (
-                                                    <MultiFileDiffViewer
-                                                        oldFile={{
-                                                            name: selectedFile.oldPath ?? selectedFile.path,
-                                                            contents: filePair.before,
-                                                        }}
-                                                        newFile={{
-                                                            name: selectedFile.path,
-                                                            contents: filePair.after,
-                                                        }}
-                                                        diffStyle={viewMode}
-                                                        expandUnchanged
-                                                        expansionLineCount={2}
-                                                        disableFileHeader
-                                                        commentHandlers={null}
-                                                    />
-                                                )}
-                                            </div>
-                                        ) : (
-                                            <div className="flex items-center justify-center py-12 text-muted text-sm">Select a file to view changes</div>
-                                        )}
-                                    </div>
+                                    <div className="flex-1 min-h-0 overflow-auto">{renderFileContent()}</div>
                                 </>
                             )}
                         </>

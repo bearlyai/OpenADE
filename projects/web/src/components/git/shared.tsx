@@ -1,6 +1,8 @@
 import { ArrowRight, Columns2, FileCode, FileImage, FileText, Minus, Pencil, Plus, Rows2 } from "lucide-react"
 import { twMerge } from "tailwind-merge"
 import type { ChangedFileInfo } from "../../electronAPI/git"
+import { DIFF_CONTEXT_OPTIONS, type DiffContextSetting } from "../../utils/gitDiffContext"
+import { Select } from "../ui/Select"
 
 export type ViewMode = "split" | "unified" | "current"
 
@@ -23,6 +25,20 @@ export function ViewModeToggle({ value, onChange }: { value: ViewMode; onChange:
                 <FileText size={14} />
             </button>
         </div>
+    )
+}
+
+export function DiffContextSelect({ value, onChange }: { value: DiffContextSetting; onChange: (v: DiffContextSetting) => void }) {
+    return (
+        <Select
+            selectedId={value}
+            entries={DIFF_CONTEXT_OPTIONS.map((option) => ({ id: option.id, content: option.label }))}
+            onSelect={(entry) => onChange(entry.id)}
+            className={{
+                trigger: "h-8 px-2 text-xs border border-border bg-base-100 hover:bg-base-200 transition-colors min-w-[7.5rem]",
+                value: "text-xs truncate",
+            }}
+        />
     )
 }
 

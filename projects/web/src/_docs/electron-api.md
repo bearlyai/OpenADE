@@ -86,11 +86,23 @@ The parser/serializer source of truth lives in Electron (`modules/code/procs`), 
 
 Stateless functions in `git.ts`. Key operations:
 - `getOrCreateWorkTree()` - Creates isolated worktree for task
-- `getGitStatus()` - Branch, uncommitted changes
-- `workTreeDiffPatch()` - Generate unified diff
+- `getGitSummary()` - Lightweight branch and change summary for tray refreshes
+- `getGitStatus()` - Heavy branch + full staged/unstaged patch payloads for explicit snapshot/export flows
+- `workTreeDiffPatch()` - Generate full worktree-vs-commit patch (legacy snapshot helper)
 - `getLog()` - Paginated commit history for a branch/ref
 - `getCommitFiles()` - Files changed in a specific commit
-- `getFilePair()` - Before/after file content for diff viewer
+- `getFilePair()` - Full before/after file content for current/whole-file views
+- `getWorktreeFilePatch()` - Per-file patch for working tree diffs; accepts `allowTruncation: false` for full-fidelity snapshot bundling
+- `getCommitFilePatch()` - Per-file patch for Git Log diffs
+
+## Snapshot Operations
+
+Snapshot bundles live in dedicated snapshot IPC, not the generic data-folder wrapper:
+- `saveBundle()` - Persist `{id}.patch` and `{id}.json`
+- `loadIndex()` - Load or backfill the patch index for a snapshot
+- `loadPatchSlice()` - Read a byte range from the saved patch file
+- `loadPatch()` - Load the raw patch on demand for copy/download/dedupe
+- `deleteBundle()` - Remove both patch and index files
 
 ## Adding New IPC
 
