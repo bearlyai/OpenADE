@@ -8,6 +8,18 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.72.0",
+        title: "Faster Diffs & GPT-5.5",
+        date: "2026-04-24",
+        highlights: [
+            "Large snapshot and diff views stay responsive — snapshot bundles are indexed and only the selected file slice is loaded",
+            "Changes and git log trays default to compact per-hunk diffs with shared context controls for quicker history review",
+            "Added GPT-5.5 to Codex task creation, and your selected model now persists from the new-task page through to the first execution",
+            'Scratchpad titles no longer revert to "Untitled" on empty first lines, and the tray remembers the last-active pad per workspace',
+            "Task headers now display a Closed label so the page title reflects task status",
+        ],
+    },
+    {
         version: "0.71.0",
         title: "Claude Opus 4.7",
         date: "2026-04-16",
