@@ -365,12 +365,20 @@ describe("buildClaudeArgs", () => {
         expect(result.env.DISABLE_ERROR_REPORTING).toBeUndefined()
     })
 
-    it("forceSubagentModel: true with model sets ANTHROPIC_DEFAULT_*_MODEL env vars", () => {
+    it("forceSubagentModel: true skips subagent env vars for rolling aliases", () => {
         const result = buildClaudeArgs(makeQuery({ model: "opus" }), { forceSubagentModel: true })
-        expect(result.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("opus")
-        expect(result.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("opus")
-        expect(result.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("opus")
-        expect(result.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("opus")
+        expect(result.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined()
+        expect(result.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBeUndefined()
+        expect(result.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBeUndefined()
+        expect(result.env.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined()
+    })
+
+    it("forceSubagentModel: true still sets subagent env vars for concrete models", () => {
+        const result = buildClaudeArgs(makeQuery({ model: "claude-opus-4-7" }), { forceSubagentModel: true })
+        expect(result.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-4-7")
+        expect(result.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-opus-4-7")
+        expect(result.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-opus-4-7")
+        expect(result.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("claude-opus-4-7")
     })
 
     it("forceSubagentModel: true without model does not set subagent env vars", () => {

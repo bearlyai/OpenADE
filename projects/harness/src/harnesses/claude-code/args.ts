@@ -1,3 +1,4 @@
+import { MODEL_REGISTRY } from "../../models.js"
 import type { HarnessQuery, PromptPart } from "../../types.js"
 
 export interface ClaudeCodeHarnessConfig {
@@ -153,6 +154,17 @@ const THINKING_EFFORT_MAP: Record<string, string> = {
     max: "max",
 }
 
+function getSubagentModelOverride(model: string | undefined): string | undefined {
+    if (!model) return undefined
+
+    const rollingAlias = MODEL_REGISTRY["claude-code"].models.find((entry) => entry.id === model && entry.fullId === model)
+    if (rollingAlias) {
+        return undefined
+    }
+
+    return model
+}
+
 function hasConfiguredMcp(query: HarnessQuery): boolean {
     const hasExternalMcp = !!query.mcpServers && Object.keys(query.mcpServers).length > 0
     const hasClientTools = !!query.clientTools && query.clientTools.length > 0
@@ -302,11 +314,14 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
 
     // Subagent model forcing
     const forceSubagentModel = config.forceSubagentModel ?? true
-    if (forceSubagentModel && query.model) {
-        env.ANTHROPIC_DEFAULT_OPUS_MODEL = query.model
-        env.ANTHROPIC_DEFAULT_SONNET_MODEL = query.model
-        env.ANTHROPIC_DEFAULT_HAIKU_MODEL = query.model
-        env.CLAUDE_CODE_SUBAGENT_MODEL = query.model
+    const subagentModel = getSubagentModelOverride(query.model)
+    if (forceSubagentModel && subagentModel) {
+        // Rolling aliases like "opus" work for --model but are rejected in
+        // ANTHROPIC_DEFAULT_*_MODEL env vars by newer Claude Code versions.
+        env.ANTHROPIC_DEFAULT_OPUS_MODEL = subagentModel
+        env.ANTHROPIC_DEFAULT_SONNET_MODEL = subagentModel
+        env.ANTHROPIC_DEFAULT_HAIKU_MODEL = subagentModel
+        env.CLAUDE_CODE_SUBAGENT_MODEL = subagentModel
     }
 
     // Merge query env
