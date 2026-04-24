@@ -49,6 +49,12 @@ function shouldHideUserInput(event: ActionEvent): boolean {
     return event.source.type === "ask" && event.source.origin === "review_follow_up"
 }
 
+export function getReviewUserInstructions(event: ActionEvent): string | undefined {
+    if (event.source.type !== "review") return undefined
+    const text = event.source.userInstructions?.trim()
+    return text ? text : undefined
+}
+
 export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: ActionEventItemProps) => {
     const codeStore = useCodeStore()
     const isPlan = isPlanOrRevise(event)
@@ -72,6 +78,7 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
 
     const useLabel = isPlan ? label : event.source.userLabel
     const hideUserInput = shouldHideUserInput(event)
+    const reviewUserInstructions = getReviewUserInstructions(event)
     const queryText = hideUserInput ? undefined : event.userInput
 
     const hasDefunctSessionError = codeStore.events.hasDefunctSessionError(event)
@@ -107,6 +114,7 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
                     <ImageAttachments images={event.images} />
                 </div>
             )}
+            {reviewUserInstructions && <UserInputMessage text={reviewUserInstructions} />}
             {!hideUserInput && event.userInput && <UserInputMessage text={event.userInput} />}
             {includedComments.length > 0 && <CommentsSection comments={includedComments} variant="submitted" />}
 

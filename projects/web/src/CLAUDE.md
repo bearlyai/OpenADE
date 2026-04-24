@@ -158,6 +158,7 @@ Set at task creation, immutable:
 - **Repeat** - Repeatedly sends the same prompt until stopped; optional stop-on-text halts on match
 - **Ask** - Read-only exploration
 - **Review** - Launch external read-only review of recent work (when no active plan), then auto-handoff notes back to main thread
+- Review events may persist the generated reviewer instructions on `source.userInstructions` so the exact prompt can be copied from the event log
 - **Commit & Push** - Git commit (if needed) and push in one flow (accepts optional additional commit instructions from the editor)
 
 ## Comment System

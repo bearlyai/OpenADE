@@ -12,7 +12,7 @@ import { captureError, track } from "../../analytics"
 import { getModelFullId } from "../../constants"
 import type { HarnessId, HarnessStreamEvent, McpServerConfig } from "../../electronAPI/harnessEventTypes"
 import { getHarnessQueryManager, isHarnessApiAvailable } from "../../electronAPI/harnessQuery"
-import { getGitStatus, isGitApiAvailable } from "../../electronAPI/git"
+import { getGitSummary, isGitApiAvailable } from "../../electronAPI/git"
 import { buildMcpServerConfigs } from "../../electronAPI/mcp"
 import { HyperPlanExecutor, type HyperPlanCallbacks } from "../../hyperplan/HyperPlanExecutor"
 import { extractPlanText } from "../../hyperplan/extractPlanText"
@@ -89,7 +89,7 @@ export class ExecutionManager {
     private async getGitRefs(cwd: string): Promise<GitRefs | undefined> {
         if (!isGitApiAvailable()) return undefined
         try {
-            const status = await getGitStatus({ repoDir: cwd })
+            const status = await getGitSummary({ repoDir: cwd })
             return {
                 sha: status.headCommit,
                 branch: status.branch ?? undefined,
@@ -571,12 +571,13 @@ export class ExecutionManager {
         }
 
         const userLabel = reviewType === "plan" ? "Review Plan" : "Review"
+        const reviewUserInstructions = reviewPrompt.userMessage
         const reviewDisplayInput = customInstructions?.trim() ? `${userLabel}: ${customInstructions.trim()}` : userLabel
 
         const reviewRun = await this.runAction({
             taskId,
             input: { userInput: reviewDisplayInput, images: [] },
-            source: { type: "review", userLabel, reviewType },
+            source: { type: "review", userLabel, reviewType, userInstructions: reviewUserInstructions },
             buildPrompt: async () => reviewPrompt,
             readOnly: true,
             createSnapshot: false,

@@ -26,6 +26,7 @@ Events form the task's execution history. Three types:
 - `plan` / `revise` - Planning mode
 - `run_plan` - Executing an approved plan
 - `do` / `ask` - Direct execution or read-only exploration
+- `review` - External read-only review; may persist `userInstructions` so the exact reviewer prompt can be copied from the event UI
 
 ## Comment Consumption
 
