@@ -9,6 +9,8 @@ This is a TypeScript-first codebase. When fixing type errors, focus on proper Ty
 
 Slide-out panels (Files, Search, Changes, Terminal, Processes) managed by `TrayManager`. Each tray type is defined declaratively in `components/tray/trayConfigs.tsx`.
 
+Diff rendering uses `@pierre/diffs` under `components/FilesAndDiffs.tsx`, with `DiffsWorkerProvider` mounted at the code-app root so syntax highlighting runs off the main thread. The Changes tray must stay on the lightweight `getGitSummary()` path until a specific file is selected.
+
 ### Adding a New Tray
 
 Add to `TRAY_CONFIGS` array in `trayConfigs.tsx`:
@@ -209,7 +211,7 @@ Files are stored at `~/.openade/data/{folder}/{id}.{ext}` via three IPC channels
 - `code:data:load` — returns Buffer/string or null
 - `code:data:delete` — best-effort unlink
 
-Allowed folders: `images`, `snapshots`. Web side uses `dataFolderApi` from `electronAPI/dataFolder.ts`. Snapshots use a thin wrapper (`snapshotsApi`) that delegates to `dataFolderApi` with `folder: "snapshots"`.
+Allowed folders: `images`, `snapshots`. Web side uses `dataFolderApi` from `electronAPI/dataFolder.ts` for generic blobs. Snapshot diffs now use dedicated snapshot IPC (`electronAPI/snapshots.ts`) that stores `{id}.patch` plus `{id}.json`, loads the index first, and range-reads only the selected file slice.
 
 ### Image Attachments
 

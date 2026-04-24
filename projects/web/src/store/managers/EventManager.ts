@@ -425,7 +425,7 @@ export class EventManager {
 
         // If stored in file, load it
         if (snapshot.patchFileId && snapshotsApi.isAvailable()) {
-            const patch = await snapshotsApi.load(snapshot.patchFileId)
+            const patch = await snapshotsApi.loadPatch(snapshot.patchFileId)
             return patch ?? ""
         }
 
@@ -513,7 +513,7 @@ export class EventManager {
 
             if (snapshotsApi.isAvailable()) {
                 try {
-                    await snapshotsApi.save(eventId, patchResult.patch)
+                    await snapshotsApi.saveBundle(eventId, patchResult.patch, patchResult.index)
                     fullPatch = "" // Don't store inline when saved to file
                     patchFileId = eventId
                     console.debug("[EventManager] createSnapshot: Patch saved to file", { eventId, size: patchResult.patch.length })

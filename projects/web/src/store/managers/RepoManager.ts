@@ -7,7 +7,7 @@
  */
 
 import { computed, makeAutoObservable } from "mobx"
-import { type BranchInfo, type GitStatusResponse, gitApi } from "../../electronAPI/git"
+import { type BranchInfo, type GitSummaryResponse, gitApi } from "../../electronAPI/git"
 import { addRepo as addRepoToStore, deleteRepo as deleteRepoFromStore, updateRepo as updateRepoInStore } from "../../persistence"
 import type { Repo } from "../../types"
 import type { CodeStore } from "../store"
@@ -214,7 +214,7 @@ export class RepoManager {
      * Get git status for a repo.
      * Requires git info to be fetched first.
      */
-    async getGitStatus(repoId: string): Promise<GitStatusResponse> {
+    async getGitSummary(repoId: string): Promise<GitSummaryResponse> {
         const gitInfo = await this.getGitInfo(repoId)
         if (!gitInfo) {
             return {
@@ -222,8 +222,8 @@ export class RepoManager {
                 headCommit: "",
                 ahead: null,
                 hasChanges: false,
-                staged: { files: [], patch: "", stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
-                unstaged: { files: [], patch: "", stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                unstaged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
                 untracked: [],
             }
         }
@@ -234,13 +234,13 @@ export class RepoManager {
                 headCommit: "",
                 ahead: null,
                 hasChanges: false,
-                staged: { files: [], patch: "", stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
-                unstaged: { files: [], patch: "", stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                unstaged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
                 untracked: [],
             }
         }
 
-        return gitApi.getGitStatus({
+        return gitApi.getGitSummary({
             repoDir: gitInfo.repoRoot,
         })
     }

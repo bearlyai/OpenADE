@@ -5,7 +5,7 @@ import { ExternalLink, GitBranch, ImagePlus, Plug, X } from "lucide-react"
 import { observer } from "mobx-react"
 import { useRef } from "react"
 import { Z_INDEX } from "../constants"
-import type { GitStatusResponse } from "../electronAPI/git"
+import type { GitSummaryResponse } from "../electronAPI/git"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { openUrlInNativeBrowser } from "../electronAPI/shell"
 import { usePortalContainer } from "../hooks/usePortalContainer"
@@ -114,7 +114,7 @@ export const InputBar = observer(function InputBar({
     input: InputManager
     editorManager: SmartEditorManager
     tray: TrayManager
-    gitStatus?: GitStatusResponse | null
+    gitStatus?: GitSummaryResponse | null
     /** Associated pull request info */
     pullRequest?: { url: string; number?: number; provider: "github" | "gitlab" | "other" }
     /** Directory for @file mention autocomplete, null to disable */

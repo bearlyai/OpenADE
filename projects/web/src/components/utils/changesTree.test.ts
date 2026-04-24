@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { ChangedFileInfo } from "../../electronAPI/git"
-import { buildFileTree, collectAllDirPaths, flattenFileTree } from "./changesTree"
+import { buildFileTree, collectAllDirPaths, collectAncestorDirPaths, collectInitialDirPaths, flattenFileTree } from "./changesTree"
 
 function changedFile(path: string, status: ChangedFileInfo["status"] = "modified", extra: Partial<ChangedFileInfo> = {}): ChangedFileInfo {
     return {
@@ -127,5 +127,28 @@ describe("collectAllDirPaths", () => {
     it("returns empty set for files at root only", () => {
         const tree = buildFileTree([changedFile("README.md"), changedFile("package.json")])
         expect([...collectAllDirPaths(tree)]).toEqual([])
+    })
+})
+
+describe("collectInitialDirPaths", () => {
+    it("expands only enough ancestors to expose the configured number of rows", () => {
+        const tree = buildFileTree([
+            changedFile("src/components/Button.tsx"),
+            changedFile("src/components/Input.tsx"),
+            changedFile("src/utils/format.ts"),
+            changedFile("docs/guide.md"),
+        ])
+
+        expect([...collectInitialDirPaths(tree, 4)].sort()).toEqual(["docs", "src"])
+    })
+})
+
+describe("collectAncestorDirPaths", () => {
+    it("returns all parent directories for a file path", () => {
+        expect(collectAncestorDirPaths("src/components/Button.tsx")).toEqual(["src", "src/components"])
+    })
+
+    it("returns an empty list for root-level files", () => {
+        expect(collectAncestorDirPaths("README.md")).toEqual([])
     })
 })

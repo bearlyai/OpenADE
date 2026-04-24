@@ -136,3 +136,32 @@ export function collectAllDirPaths(nodes: FileTreeNode[]): Set<string> {
     walk(nodes)
     return dirPaths
 }
+
+export function collectInitialDirPaths(nodes: FileTreeNode[], maxVisibleRows: number): Set<string> {
+    const dirPaths = new Set<string>()
+    let visibleRows = 0
+
+    const walk = (treeNodes: FileTreeNode[]) => {
+        for (const node of treeNodes) {
+            visibleRows++
+            if (!node.isDir) continue
+            if (visibleRows >= maxVisibleRows) continue
+            dirPaths.add(node.path)
+            walk(node.children)
+        }
+    }
+
+    walk(nodes)
+    return dirPaths
+}
+
+export function collectAncestorDirPaths(filePath: string): string[] {
+    const parts = splitPath(filePath)
+    if (parts.length <= 1) return []
+
+    const ancestors: string[] = []
+    for (let i = 0; i < parts.length - 1; i++) {
+        ancestors.push(parts.slice(0, i + 1).join("/"))
+    }
+    return ancestors
+}

@@ -1,6 +1,7 @@
 import { Camera, Check, Copy, Download, Loader2 } from "lucide-react"
 import { observer } from "mobx-react"
 import { useEffect, useState } from "react"
+import { snapshotsApi } from "../../electronAPI/snapshots"
 import { useCodeStore } from "../../store/context"
 import type { SnapshotEventModel } from "../../store/EventModel"
 import type { SnapshotEvent } from "../../types"
@@ -22,19 +23,26 @@ export const SnapshotEventItem = observer(({ event, expanded, onToggle, taskId }
     const hasChanges = stats.filesChanged > 0 || stats.insertions > 0 || stats.deletions > 0
     const [copied, setCopied] = useState(false)
 
-    // Load patch from file when expanded (if stored externally)
+    // Load patch index from file when expanded (if stored externally)
     useEffect(() => {
-        if (expanded && eventModel?.patchFileId && !eventModel.isPatchLoaded) {
-            eventModel.loadPatch()
+        if (expanded && eventModel?.patchFileId && !eventModel.isIndexLoaded) {
+            eventModel.loadIndex()
         }
     }, [expanded, eventModel])
 
-    // Get patch from model (handles both inline and file-based patches)
-    const fullPatch = eventModel?.fullPatch ?? event.fullPatch ?? ""
-    const isLoading = eventModel?.isPatchLoading ?? false
+    const patchIndex = eventModel?.patchIndex ?? null
+    const isLoading = eventModel?.isIndexLoading ?? false
 
     const handleCopy = async () => {
         try {
+            const fullPatch =
+                event.fullPatch ||
+                eventModel?.fullPatch ||
+                (event.patchFileId && snapshotsApi.isAvailable() ? await snapshotsApi.loadPatch(event.patchFileId) : "") ||
+                ""
+            if (!fullPatch) {
+                return
+            }
             await navigator.clipboard.writeText(fullPatch)
             setCopied(true)
             setTimeout(() => setCopied(false), 2000)
@@ -43,7 +51,16 @@ export const SnapshotEventItem = observer(({ event, expanded, onToggle, taskId }
         }
     }
 
-    const handleDownload = () => {
+    const handleDownload = async () => {
+        const fullPatch =
+            event.fullPatch ||
+            eventModel?.fullPatch ||
+            (event.patchFileId && snapshotsApi.isAvailable() ? await snapshotsApi.loadPatch(event.patchFileId) : "") ||
+            ""
+        if (!fullPatch) {
+            return
+        }
+
         const randomStr = Math.random().toString(36).substring(2, 8)
         const filename = `patch-${randomStr}.patch`
         const blob = new Blob([fullPatch], { type: "text/plain" })
@@ -118,7 +135,14 @@ export const SnapshotEventItem = observer(({ event, expanded, onToggle, taskId }
                             Loading patch...
                         </div>
                     ) : (
-                        <ViewPatch patch={fullPatch} taskId={taskId} snapshotEventId={event.id} />
+                        <ViewPatch
+                            patch={event.fullPatch}
+                            patchFileId={event.patchFileId}
+                            patchIndex={patchIndex}
+                            indexLoading={isLoading}
+                            taskId={taskId}
+                            snapshotEventId={event.id}
+                        />
                     )
                 ) : (
                     <div className="px-4 py-6 text-muted text-sm text-center">No changes from {referenceBranch}</div>

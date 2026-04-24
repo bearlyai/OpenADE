@@ -22,6 +22,8 @@ Events form the task's execution history. Three types:
 | `setup_environment` | Worktree setup completed | No |
 | `snapshot` | Frozen code state after action | No |
 
+Snapshot events may keep `fullPatch` inline for legacy/fallback storage, but the normal path stores the patch externally as `{patchFileId}.patch` with an indexed `{patchFileId}.json` sidecar. The UI loads the index first and only fetches the selected file slice.
+
 **ActionEventSource** tells you what triggered an action:
 - `plan` / `revise` - Planning mode
 - `run_plan` - Executing an approved plan

@@ -2,6 +2,7 @@ import NiceModal from "@ebay/nice-modal-react"
 import { observer } from "mobx-react"
 import { type ReactNode, useCallback, useEffect, useState } from "react"
 import { twMerge } from "tailwind-merge"
+import { DiffsWorkerProvider } from "../components/DiffsWorkerProvider"
 import { UpdateBanner, UpdateErrorBanner } from "../components/UpdateBanner"
 import { ReleaseNotification } from "../components/notifications/ReleaseNotification"
 import { CodeSidebar } from "../components/sidebar/Sidebar"
@@ -173,19 +174,21 @@ export const CodeAppLayout = observer((props: CodeAppLayoutProps) => {
     return (
         <div className={`code-theme ${themeClass} w-full h-full overflow-hidden relative flex flex-col`}>
             <FramedApp resolvedTheme={isDark ? "dark" : "light"} center={frameCenter}>
-                <NiceModal.Provider>
-                    <PortalContainerProvider>
-                        <div className="w-full h-full flex relative">
-                            <CodeSidebar />
-                            <div className="flex flex-col relative h-full flex-1 min-w-0">
-                                <div className="h-full w-full relative flex flex-col">
-                                    <WithNavbar navbar={navbar}>{children}</WithNavbar>
+                <DiffsWorkerProvider>
+                    <NiceModal.Provider>
+                        <PortalContainerProvider>
+                            <div className="w-full h-full flex relative">
+                                <CodeSidebar />
+                                <div className="flex flex-col relative h-full flex-1 min-w-0">
+                                    <div className="h-full w-full relative flex flex-col">
+                                        <WithNavbar navbar={navbar}>{children}</WithNavbar>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                        <ReleaseNotification />
-                    </PortalContainerProvider>
-                </NiceModal.Provider>
+                            <ReleaseNotification />
+                        </PortalContainerProvider>
+                    </NiceModal.Provider>
+                </DiffsWorkerProvider>
             </FramedApp>
         </div>
     )

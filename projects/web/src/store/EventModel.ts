@@ -10,7 +10,7 @@
  */
 
 import { action, computed, observable, runInAction } from "mobx"
-import { snapshotsApi } from "../electronAPI/snapshots"
+import { type SnapshotPatchIndex, snapshotsApi } from "../electronAPI/snapshots"
 import type { HyperPlanSubExecution } from "../hyperplan/types"
 import type { ActionEvent, ActionEventSource, ClaudeStreamEvent, CodeEvent, SetupEnvironmentEvent, SnapshotEvent } from "../types"
 import type { CodeStore } from "./store"
@@ -199,8 +199,14 @@ export class SnapshotEventModel extends EventModel {
     /** Loaded patch content from file (null = not loaded yet) */
     @observable private _loadedPatch: string | null = null
 
+    /** Loaded patch index for indexed snapshot viewing */
+    @observable.ref private _patchIndex: SnapshotPatchIndex | null = null
+
     /** Whether we're currently loading the patch from file */
-    @observable private _loading = false
+    @observable private _loadingPatch = false
+
+    /** Whether we're currently loading the patch index */
+    @observable private _loadingIndex = false
 
     @computed
     private get snapshotEvent(): SnapshotEvent | undefined {
@@ -223,6 +229,11 @@ export class SnapshotEventModel extends EventModel {
         return this.snapshotEvent?.patchFileId
     }
 
+    @computed
+    get patchIndex(): SnapshotPatchIndex | null {
+        return this._patchIndex
+    }
+
     /**
      * Get the full patch content.
      * Returns inline patch if present, otherwise returns loaded patch from file.
@@ -241,7 +252,7 @@ export class SnapshotEventModel extends EventModel {
     /** Whether the patch is currently being loaded from file */
     @computed
     get isPatchLoading(): boolean {
-        return this._loading
+        return this._loadingPatch
     }
 
     /** Whether the patch has been loaded (or is available inline) */
@@ -256,6 +267,48 @@ export class SnapshotEventModel extends EventModel {
         return false
     }
 
+    @computed
+    get isIndexLoading(): boolean {
+        return this._loadingIndex
+    }
+
+    @computed
+    get isIndexLoaded(): boolean {
+        if (this._patchIndex !== null) return true
+        if (!this.patchFileId) return true
+        return false
+    }
+
+    @action
+    async loadIndex(): Promise<void> {
+        if (this._patchIndex !== null || this._loadingIndex) return
+
+        const fileId = this.patchFileId
+        if (!fileId) return
+
+        if (!snapshotsApi.isAvailable()) {
+            console.warn("[SnapshotEventModel] Snapshots API not available, cannot load patch index")
+            return
+        }
+
+        this._loadingIndex = true
+        try {
+            const index = await snapshotsApi.loadIndex(fileId)
+            runInAction(() => {
+                this._patchIndex = index
+            })
+        } catch (err) {
+            console.error("[SnapshotEventModel] Failed to load patch index:", err)
+            runInAction(() => {
+                this._patchIndex = null
+            })
+        } finally {
+            runInAction(() => {
+                this._loadingIndex = false
+            })
+        }
+    }
+
     /**
      * Load the patch from file if stored externally.
      * Safe to call multiple times - will only load once.
@@ -263,7 +316,7 @@ export class SnapshotEventModel extends EventModel {
     @action
     async loadPatch(): Promise<void> {
         // Already loaded or loading
-        if (this._loadedPatch !== null || this._loading) return
+        if (this._loadedPatch !== null || this._loadingPatch) return
 
         // No file to load (inline patch or no patch)
         const fileId = this.patchFileId
@@ -278,9 +331,9 @@ export class SnapshotEventModel extends EventModel {
             return
         }
 
-        this._loading = true
+        this._loadingPatch = true
         try {
-            const patch = await snapshotsApi.load(fileId)
+            const patch = await snapshotsApi.loadPatch(fileId)
             runInAction(() => {
                 this._loadedPatch = patch ?? ""
                 if (!patch) {
@@ -294,7 +347,7 @@ export class SnapshotEventModel extends EventModel {
             })
         } finally {
             runInAction(() => {
-                this._loading = false
+                this._loadingPatch = false
             })
         }
     }

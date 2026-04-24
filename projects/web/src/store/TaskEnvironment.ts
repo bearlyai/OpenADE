@@ -1,5 +1,6 @@
 import { exhaustive } from "exhaustive"
-import { type GetFilePairResponse, type GitStatusResponse, gitApi } from "../electronAPI/git"
+import { type ChangedFileInfo, type GetFilePairResponse, type GitStatusResponse, type GitSummaryResponse, gitApi } from "../electronAPI/git"
+import type { SnapshotPatchIndex } from "../electronAPI/snapshots"
 import type { IsolationStrategy, Repo, SnapshotChangedFile, Task, TaskDeviceEnvironment } from "../types"
 import { getDeviceId } from "../utils/deviceId"
 import type { GitInfo } from "./managers/RepoManager"
@@ -9,6 +10,7 @@ export type { GitInfo } from "./managers/RepoManager"
 
 export interface PatchResult {
     patch: string
+    index: SnapshotPatchIndex
     stats: {
         filesChanged: number
         insertions: number
@@ -16,6 +18,8 @@ export interface PatchResult {
     }
     files?: SnapshotChangedFile[]
 }
+
+const textEncoder = new TextEncoder()
 
 export interface SetupParams {
     taskSlug: string
@@ -94,124 +98,101 @@ export class TaskEnvironment {
             return null
         }
 
-        const worktreeId = this.worktreeId
-        const gitRoot = this.gitRoot
+        const fromTreeish = exhaustive.tag(this.task.isolationStrategy, "type", {
+            worktree: () => this.mergeBaseCommit ?? null,
+            head: () => "HEAD",
+        })
 
-        // For head mode (no worktree), return uncommitted changes
-        if (!worktreeId) {
-            return this.getUncommittedPatch()
-        }
-
-        // For worktree mode, need merge base commit and git root
-        if (!this.mergeBaseCommit || !gitRoot) {
+        if (!fromTreeish) {
             return null
         }
 
         try {
-            const result = await gitApi.workTreeDiffPatch({
-                repoDir: gitRoot,
-                workTreeId: worktreeId,
-                compareToCommit: this.mergeBaseCommit,
-            })
-
-            const stats = this.parsePatchStats(result.patch)
-            const files = await this.getWorktreeChangedFiles()
-
-            return {
-                patch: result.patch,
-                stats,
-                files,
-            }
+            const changedFiles = await this.getSnapshotChangedFiles(fromTreeish)
+            return this.buildPatchResult(fromTreeish, changedFiles)
         } catch (err) {
             console.error("[TaskEnvironment] getPatch failed:", err)
             return null
         }
     }
 
-    private async getUncommittedPatch(): Promise<PatchResult | null> {
-        if (!gitApi.isAvailable()) {
-            return null
-        }
-
-        try {
-            const uncommitted = await this.getGitStatus()
-            if (!uncommitted.hasChanges) {
-                return {
-                    patch: "",
-                    stats: { filesChanged: 0, insertions: 0, deletions: 0 },
-                }
-            }
-
-            // Combine staged and unstaged patches
-            const patches: string[] = []
-            if (uncommitted.staged.patch) {
-                patches.push(uncommitted.staged.patch)
-            }
-            if (uncommitted.unstaged.patch) {
-                patches.push(uncommitted.unstaged.patch)
-            }
-
-            const combinedPatch = patches.join("\n")
-            const stats = {
-                filesChanged: uncommitted.staged.stats.filesChanged + uncommitted.unstaged.stats.filesChanged + uncommitted.untracked.length,
-                insertions: uncommitted.staged.stats.insertions + uncommitted.unstaged.stats.insertions,
-                deletions: uncommitted.staged.stats.deletions + uncommitted.unstaged.stats.deletions,
-            }
-
-            return {
-                patch: combinedPatch,
-                stats,
-                files: this.collectUncommittedFiles(uncommitted),
-            }
-        } catch (err) {
-            console.error("[TaskEnvironment] getUncommittedPatch failed:", err)
-            return null
-        }
+    private async getSnapshotChangedFiles(fromTreeish: string): Promise<ChangedFileInfo[]> {
+        const result = await gitApi.getChangedFiles({
+            workDir: this.taskRootDir,
+            fromTreeish,
+            toTreeish: "",
+        })
+        return result.files
     }
 
-    private async getWorktreeChangedFiles(): Promise<SnapshotChangedFile[]> {
-        if (!gitApi.isAvailable()) return []
-        if (!this.mergeBaseCommit) return []
+    private async buildPatchResult(fromTreeish: string, changedFiles: ChangedFileInfo[]): Promise<PatchResult> {
+        if (changedFiles.length === 0) {
+            return {
+                patch: "",
+                index: { version: 1, patchSize: 0, files: [] },
+                stats: { filesChanged: 0, insertions: 0, deletions: 0 },
+                files: [],
+            }
+        }
 
-        try {
-            const result = await gitApi.getChangedFiles({
+        const patchParts: string[] = []
+        const index: SnapshotPatchIndex = { version: 1, patchSize: 0, files: [] }
+        let insertions = 0
+        let deletions = 0
+
+        for (const file of changedFiles) {
+            const patchResult = await gitApi.getWorktreeFilePatch({
                 workDir: this.taskRootDir,
-                fromTreeish: this.mergeBaseCommit,
-                toTreeish: "HEAD",
+                fromTreeish,
+                filePath: file.path,
+                oldPath: file.oldPath,
+                contextLines: 3,
+                allowTruncation: false,
             })
-            return result.files.map((file) => ({
+
+            if (!patchResult.patch) {
+                continue
+            }
+
+            const normalizedPatch = patchResult.patch.endsWith("\n") ? patchResult.patch : `${patchResult.patch}\n`
+            const patchStart = index.patchSize
+            const patchSize = textEncoder.encode(normalizedPatch).length
+            const patchEnd = patchStart + patchSize
+
+            patchParts.push(normalizedPatch)
+            index.patchSize = patchEnd
+            index.files.push({
+                id: String(index.files.length),
+                path: file.path,
+                oldPath: file.oldPath,
+                status: file.status,
+                binary: file.binary === true || normalizedPatch.includes("Binary files ") || normalizedPatch.includes("GIT binary patch"),
+                insertions: patchResult.stats.insertions,
+                deletions: patchResult.stats.deletions,
+                changedLines: patchResult.stats.changedLines,
+                hunkCount: patchResult.stats.hunkCount,
+                patchStart,
+                patchEnd,
+            })
+
+            insertions += patchResult.stats.insertions
+            deletions += patchResult.stats.deletions
+        }
+
+        return {
+            patch: patchParts.join(""),
+            index,
+            stats: {
+                filesChanged: index.files.length,
+                insertions,
+                deletions,
+            },
+            files: index.files.map((file) => ({
                 path: file.path,
                 status: file.status,
                 ...(file.oldPath ? { oldPath: file.oldPath } : {}),
-            }))
-        } catch (err) {
-            console.warn("[TaskEnvironment] getWorktreeChangedFiles failed:", err)
-            return []
+            })),
         }
-    }
-
-    private collectUncommittedFiles(status: GitStatusResponse): SnapshotChangedFile[] {
-        const files: SnapshotChangedFile[] = []
-        const seen = new Set<string>()
-
-        const pushFile = (path: string, fileStatus: SnapshotChangedFile["status"]): void => {
-            const key = `${fileStatus}:${path}`
-            if (seen.has(key)) return
-            seen.add(key)
-            files.push({ path, status: fileStatus })
-        }
-
-        for (const file of status.staged.files) {
-            pushFile(file.path, file.status ?? "modified")
-        }
-        for (const file of status.unstaged.files) {
-            pushFile(file.path, file.status ?? "modified")
-        }
-        for (const file of status.untracked) {
-            pushFile(file.path, "added")
-        }
-
-        return files
     }
 
     async getFilePair(filePath: string, oldPath?: string): Promise<GetFilePairResponse> {
@@ -235,6 +216,39 @@ export class TaskEnvironment {
 
     get hasGhCli(): boolean {
         return this.gitInfo?.hasGhCli ?? false
+    }
+
+    async getGitSummary(): Promise<GitSummaryResponse> {
+        if (!gitApi.isAvailable()) {
+            return {
+                branch: null,
+                headCommit: "",
+                ahead: null,
+                hasChanges: false,
+                staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                unstaged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                untracked: [],
+            }
+        }
+
+        const gitRoot = this.gitRoot
+        if (!gitRoot) {
+            return {
+                branch: null,
+                headCommit: "",
+                ahead: null,
+                hasChanges: false,
+                staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                unstaged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                untracked: [],
+            }
+        }
+
+        const worktreeId = this.worktreeId
+        return gitApi.getGitSummary({
+            repoDir: gitRoot,
+            workTreeId: worktreeId ?? undefined,
+        })
     }
 
     async getGitStatus(): Promise<GitStatusResponse> {
@@ -268,25 +282,6 @@ export class TaskEnvironment {
             repoDir: gitRoot,
             workTreeId: worktreeId ?? undefined,
         })
-    }
-
-    private parsePatchStats(patch: string): PatchResult["stats"] {
-        let filesChanged = 0
-        let insertions = 0
-        let deletions = 0
-
-        const lines = patch.split("\n")
-        for (const line of lines) {
-            if (line.startsWith("diff --git")) {
-                filesChanged++
-            } else if (line.startsWith("+") && !line.startsWith("+++")) {
-                insertions++
-            } else if (line.startsWith("-") && !line.startsWith("---")) {
-                deletions++
-            }
-        }
-
-        return { filesChanged, insertions, deletions }
     }
 
     static async setup({ taskSlug, gitInfo, isolationStrategy, onPhase, signal }: SetupParams): Promise<TaskDeviceEnvironment> {
