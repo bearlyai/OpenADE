@@ -15,11 +15,11 @@ function setupDownloadLinks() {
   const os = detectOS()
 
   const links: Record<string, string> = {
-    mac: "https://github.com/bearlyai/OpenADE/releases/download/v0.72.0/OpenADE-0.72.0-universal.dmg",
+    mac: "https://github.com/bearlyai/OpenADE/releases/download/v0.72.1/OpenADE-0.72.1-universal.dmg",
     linux:
-      "https://github.com/bearlyai/OpenADE/releases/download/v0.72.0/OpenADE-0.72.0-arm64.AppImage",
+      "https://github.com/bearlyai/OpenADE/releases/download/v0.72.1/OpenADE-0.72.1-arm64.AppImage",
     windows:
-      "https://github.com/bearlyai/OpenADE/releases/download/v0.72.0/OpenADE-Setup-0.72.0.exe",
+      "https://github.com/bearlyai/OpenADE/releases/download/v0.72.1/OpenADE-Setup-0.72.1.exe",
   }
 
   const labels: Record<string, string> = {
