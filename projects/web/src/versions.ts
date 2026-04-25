@@ -8,6 +8,15 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.72.1",
+        title: "Claude Opus Selection Fix",
+        date: "2026-04-25",
+        highlights: [
+            "Claude Code tasks using rolling Opus selections no longer break on newer Claude Code versions",
+            "Concrete Claude model IDs still force matching subagent models when configured",
+        ],
+    },
+    {
         version: "0.72.0",
         title: "Faster Diffs & GPT-5.5",
         date: "2026-04-24",
