@@ -284,7 +284,7 @@ interface GetWorktreeFilePatchParams {
     fromTreeish: string
     filePath: string
     oldPath?: string // For renamed files
-    contextLines: 0 | 3 | 10 | 25
+    contextLines: 1 | 3 | 10 | 25 | 100
     allowTruncation?: boolean
 }
 
@@ -293,7 +293,7 @@ interface GetCommitFilePatchParams {
     commit: string
     filePath: string
     oldPath?: string // For renamed files
-    contextLines: 0 | 3 | 10 | 25
+    contextLines: 1 | 3 | 10 | 25 | 100
     allowTruncation?: boolean
 }
 
@@ -1889,7 +1889,7 @@ const GENERATED_FILE_BASENAMES = new Set([
     "bun.lockb",
 ])
 
-const FILE_PATCH_CONTEXT_LINES = new Set([0, 3, 10, 25])
+const FILE_PATCH_CONTEXT_LINES = new Set([1, 3, 10, 25, 100])
 
 function isGeneratedFile(filePath: string): boolean {
     const basename = path.basename(filePath)
@@ -1907,7 +1907,7 @@ function exceedsLineLimit(content: string): boolean {
     return false
 }
 
-function validatePatchContextLines(contextLines: number): asserts contextLines is 0 | 3 | 10 | 25 {
+function validatePatchContextLines(contextLines: number): asserts contextLines is 1 | 3 | 10 | 25 | 100 {
     if (!FILE_PATCH_CONTEXT_LINES.has(contextLines)) {
         throw new Error(`Invalid contextLines value: ${contextLines}`)
     }
@@ -1973,7 +1973,7 @@ function finalizeFilePatchResponse(patch: string, allowTruncation: boolean = tru
 async function getUntrackedFilePatch(
     workDir: string,
     filePath: string,
-    contextLines: 0 | 3 | 10 | 25,
+    contextLines: 1 | 3 | 10 | 25 | 100,
     allowTruncation: boolean = true
 ): Promise<GetFilePatchResponse> {
     const resolvedPath = resolveWorktreeFilePath(workDir, filePath)

@@ -275,7 +275,7 @@ interface GetWorktreeFilePatchParams {
     fromTreeish: string
     filePath: string
     oldPath?: string
-    contextLines: 0 | 3 | 10 | 25
+    contextLines: 1 | 3 | 10 | 25 | 100
     allowTruncation?: boolean
 }
 
@@ -284,7 +284,7 @@ interface GetCommitFilePatchParams {
     commit: string
     filePath: string
     oldPath?: string
-    contextLines: 0 | 3 | 10 | 25
+    contextLines: 1 | 3 | 10 | 25 | 100
     allowTruncation?: boolean
 }
 

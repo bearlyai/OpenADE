@@ -569,7 +569,7 @@ describe("Git Module Tests", () => {
                 workDir: repoDir,
                 fromTreeish: "HEAD",
                 filePath: "context.txt",
-                contextLines: 0,
+                contextLines: 1,
             })
             const expanded = await gitTestables.handleGetWorktreeFilePatch({
                 workDir: repoDir,
@@ -581,7 +581,8 @@ describe("Git Module Tests", () => {
             expect(compact.patch).toContain("@@")
             expect(compact.patch).toContain("-line 15")
             expect(compact.patch).toContain("+line 15 changed")
-            expect(compact.patch).not.toContain("\n line 14\n")
+            expect(compact.patch).toContain("\n line 14\n")
+            expect(compact.patch).not.toContain("\n line 13\n")
             expect(expanded.patch).toContain("\n line 14\n")
             expect(expanded.patch).toContain("\n line 24\n")
             expect(expanded.stats.hunkCount).toBe(1)

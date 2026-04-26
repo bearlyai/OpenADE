@@ -16,7 +16,7 @@
     "@amplitude/analytics-browser": "^2.11.0",
     "@base-ui-components/react": "1.0.0-beta.4",
     "@ebay/nice-modal-react": "^1.2.9",
-    "@pierre/diffs": "^1.0.6",
+    "@pierre/diffs": "^1.1.19",
     "@sentry/browser": "^8.45.0",
     "@tailwindcss/vite": "^4.1.14",
     "@tiptap/core": "^3.0.0",

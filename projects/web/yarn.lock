@@ -967,18 +967,22 @@
   resolved "https://registry.yarnpkg.com/@oxc-resolver/binding-win32-x64-msvc/-/binding-win32-x64-msvc-11.17.0.tgz#bffb901ace22e9ed45e546fb39fa7afd53a81d72"
   integrity sha512-pX6s2kMXLQg+hlqKk5UqOW09iLLxnTkvn8ohpYp2Mhsm2yzDPCx9dyOHiB/CQixLzTkLQgWWJykN4Z3UfRKW4Q==
 
-"@pierre/diffs@^1.0.6":
-  version "1.0.10"
-  resolved "https://registry.npmjs.org/@pierre/diffs/-/diffs-1.0.10.tgz"
-  integrity sha512-ahkpfS30NfaB+PBxnf0/Mc20ySBRTQmM28a7Ojpd0UZixmTyhGhJfBFjvmhX8dSzR22lB3h3OIMMxpB4yYTIOQ==
+"@pierre/diffs@^1.1.19":
+  version "1.1.19"
+  resolved "https://registry.npmjs.org/@pierre/diffs/-/diffs-1.1.19.tgz"
+  integrity sha512-eYyDW69heXd7i9zdkWogGYosHzoYF2dstV6uDcmnQAf72uRChs3hrpf/7ym/ayTiwD8a+TQ7oZ5vNNb0tstJvA==
   dependencies:
-    "@shikijs/core" "^3.0.0"
-    "@shikijs/engine-javascript" "^3.0.0"
+    "@pierre/theme" "0.0.28"
     "@shikijs/transformers" "^3.0.0"
     diff "8.0.3"
     hast-util-to-html "9.0.5"
     lru_map "0.4.1"
     shiki "^3.0.0"
+
+"@pierre/theme@0.0.28":
+  version "0.0.28"
+  resolved "https://registry.npmjs.org/@pierre/theme/-/theme-0.0.28.tgz"
+  integrity sha512-1j/H/fECBuc9dEvntdWI+l435HZapw+RCJTlqCA6BboQ5TjlnE005j/ROWutXIs8aq5OAc82JI2Kwk4A1WWBgw==
 
 "@polka/url@^1.0.0-next.24":
   version "1.0.0-next.29"
@@ -1175,7 +1179,7 @@
   resolved "https://registry.npmjs.org/@sentry/core/-/core-8.55.0.tgz"
   integrity sha512-6g7jpbefjHYs821Z+EBJ8r4Z7LT5h80YSWRJaylGS4nW5W5Z2KXzpdnyFarv37O7QjauzVC2E+PABmpkw5/JGA==
 
-"@shikijs/core@3.22.0", "@shikijs/core@^3.0.0":
+"@shikijs/core@3.22.0":
   version "3.22.0"
   resolved "https://registry.npmjs.org/@shikijs/core/-/core-3.22.0.tgz"
   integrity sha512-iAlTtSDDbJiRpvgL5ugKEATDtHdUVkqgHDm/gbD2ZS9c88mx7G1zSYjjOxp5Qa0eaW0MAQosFRmJSk354PRoQA==
@@ -1185,7 +1189,7 @@
     "@types/hast" "^3.0.4"
     hast-util-to-html "^9.0.5"
 
-"@shikijs/engine-javascript@3.22.0", "@shikijs/engine-javascript@^3.0.0":
+"@shikijs/engine-javascript@3.22.0":
   version "3.22.0"
   resolved "https://registry.npmjs.org/@shikijs/engine-javascript/-/engine-javascript-3.22.0.tgz"
   integrity sha512-jdKhfgW9CRtj3Tor0L7+yPwdG3CgP7W+ZEqSsojrMzCjD1e0IxIbwUMDDpYlVBlC08TACg4puwFGkZfLS+56Tw==

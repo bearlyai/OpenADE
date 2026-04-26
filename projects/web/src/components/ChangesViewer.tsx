@@ -101,11 +101,16 @@ export const ChangesViewer = observer(function ChangesViewer({ changesManager, i
     const [renderLargeDiffKey, setRenderLargeDiffKey] = useState<string | null>(null)
     const viewMode = codeStore.ui.viewMode
     const diffContext = codeStore.ui.diffContext
-    const setViewMode = (mode: ViewMode) => codeStore.ui.setViewMode(mode)
-    const setDiffContext = (context: typeof diffContext) => codeStore.ui.setDiffContext(context)
     const usePatchDiff = shouldUsePatchDiff(viewMode, diffContext)
     const patchContextLines = getPatchContextLines(diffContext)
     const patchDiffStyle = viewMode === "split" ? "split" : "unified"
+    const setViewMode = (mode: ViewMode) => codeStore.ui.setViewMode(mode)
+    const setDiffContext = (context: typeof diffContext) => {
+        if (viewMode !== "current") {
+            changesManager.beginPatchContextTransition(getPatchContextLines(context))
+        }
+        codeStore.ui.setDiffContext(context)
+    }
 
     const { files, selectedFile, filePair, filePatch, filePairLoading, filePatchLoading, diffSource, flatEntries, expandedPaths, isLoading } = changesManager
     const largeDiffKey = selectedFile && filePatch ? `${selectedFile.path}:${filePatch.stats.changedLines}:${filePatch.stats.hunkCount}` : null
@@ -188,21 +193,21 @@ export const ChangesViewer = observer(function ChangesViewer({ changesManager, i
     const onRefresh = () => changesManager.refresh()
 
     const toolbar = (
-        <div className="px-3 py-2 border-b border-border bg-base-200 flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-2">
-                {isWorktree ? <DiffSourceSelect value={diffSource} onChange={(v) => changesManager.setDiffSource(v)} /> : <div />}
-                <button
-                    type="button"
-                    onClick={onRefresh}
-                    className="btn p-1 text-muted hover:text-base-content hover:bg-base-300 transition-colors"
-                    title="Refresh changes"
-                >
-                    <RefreshCw size={14} />
-                </button>
-            </div>
-            <div className="flex items-center justify-end gap-2">
-                <DiffContextSelect value={diffContext} onChange={setDiffContext} />
-                <ViewModeToggle value={viewMode} onChange={setViewMode} />
+        <div className="px-3 py-2 border-b border-border bg-base-200 overflow-x-auto">
+            <div className="flex items-center gap-2 w-full min-w-max">
+                {isWorktree ? <DiffSourceSelect value={diffSource} onChange={(v) => changesManager.setDiffSource(v)} /> : null}
+                <div className="flex items-center gap-2 ml-auto">
+                    <DiffContextSelect value={diffContext} onChange={setDiffContext} />
+                    <ViewModeToggle value={viewMode} onChange={setViewMode} />
+                    <button
+                        type="button"
+                        onClick={onRefresh}
+                        className="btn p-1 text-muted hover:text-base-content hover:bg-base-300 transition-colors flex-shrink-0"
+                        title="Refresh changes"
+                    >
+                        <RefreshCw size={14} />
+                    </button>
+                </div>
             </div>
         </div>
     )
@@ -253,6 +258,7 @@ export const ChangesViewer = observer(function ChangesViewer({ changesManager, i
                             fileDiff={patchView.fileDiff}
                             diffStyle={patchDiffStyle}
                             disableFileHeader
+                            disableWorkerPool
                             commentHandlers={commentHandlers}
                             options={
                                 filePatch?.heavy ? { lineDiffType: "none", maxLineDiffLength: 0, tokenizeMaxLineLength: 0, overflow: "scroll" } : undefined

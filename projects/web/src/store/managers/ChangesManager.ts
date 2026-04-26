@@ -1,5 +1,6 @@
 import { makeAutoObservable, reaction, runInAction } from "mobx"
 import { type ChangedFileInfo, type GetFilePairResponse, type GetFilePatchResponse, type GitSummaryResponse, gitApi } from "../../electronAPI/git"
+import type { PatchContextLines } from "../../utils/gitDiffContext"
 import {
     buildFileTree,
     collectAllDirPaths,
@@ -47,7 +48,7 @@ export class ChangesManager {
 
     private filePairLoadId = 0
     private filePatchLoadId = 0
-    private filePatchContextLines: 0 | 3 | 10 | 25 = 3
+    private filePatchContextLines: PatchContextLines = 3
     private filePairCache = new Map<string, GetFilePairResponse>()
     private filePatchCache = new Map<string, GetFilePatchResponse>()
     private disposers: Array<() => void> = []
@@ -146,7 +147,12 @@ export class ChangesManager {
         this.taskModel.refreshGitState()
     }
 
-    ensureSelectedFileLoaded(mode: ChangesViewMode, patchContextLines?: 0 | 3 | 10 | 25): void {
+    beginPatchContextTransition(contextLines: PatchContextLines): void {
+        this.filePatchContextLines = contextLines
+        this.filePatchLoading = true
+    }
+
+    ensureSelectedFileLoaded(mode: ChangesViewMode, patchContextLines?: PatchContextLines): void {
         if (mode === "current") {
             void this.loadFilePair()
         } else {
@@ -265,7 +271,7 @@ export class ChangesManager {
         }
     }
 
-    private async loadFilePatch(contextLines: 0 | 3 | 10 | 25 = this.filePatchContextLines): Promise<void> {
+    private async loadFilePatch(contextLines: PatchContextLines = this.filePatchContextLines): Promise<void> {
         const file = this.selectedFile
         const dir = this.workDir
         if (!file || !dir) {
@@ -297,10 +303,7 @@ export class ChangesManager {
         }
 
         const loadId = ++this.filePatchLoadId
-        const isInitialLoad = this.filePatch === null
-        if (isInitialLoad) {
-            this.filePatchLoading = true
-        }
+        this.filePatchLoading = true
 
         try {
             const result = await gitApi.getWorktreeFilePatch({
@@ -415,7 +418,7 @@ export class ChangesManager {
         return [this.diffSource, this.fromTreeish, this.toTreeish, file.path, file.oldPath ?? ""].join("::")
     }
 
-    private getFilePatchCacheKey(file: ChangedFileInfo, contextLines: 0 | 3 | 10 | 25): string {
+    private getFilePatchCacheKey(file: ChangedFileInfo, contextLines: PatchContextLines): string {
         return [this.diffSource, this.fromTreeish, this.toTreeish, file.path, file.oldPath ?? "", `U${contextLines}`].join("::")
     }
 }

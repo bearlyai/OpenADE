@@ -18,7 +18,7 @@ import { Z_INDEX } from "../constants"
 import type { Comment, CommentSelectedText, CommentSource } from "../types"
 import { useCommentAnnotations } from "./comments/hooks/useCommentAnnotations"
 import type { CommentAnnotationMeta } from "./comments/types"
-import { extractSelectedText, extractSelectedTextFromDiff, isLineInDiffHunks } from "./comments/utils"
+import { extractSelectedText, extractSelectedTextFromDiff, getFileDiffCopyContent, isLineInDiffHunks } from "./comments/utils"
 import { formatMarkdownTables, shouldFormatAsMarkdown } from "./utils/markdownTableFormatter"
 
 // ============================================================================
@@ -269,6 +269,7 @@ interface FileDiffViewerProps {
     className?: string
     diffStyle?: DiffStyle
     disableFileHeader?: boolean
+    disableWorkerPool?: boolean
     options?: {
         lineDiffType?: LineDiffTypes
         maxLineDiffLength?: number
@@ -284,13 +285,14 @@ export const FileDiffViewer = observer(function FileDiffViewer({
     className,
     diffStyle = "split",
     disableFileHeader,
+    disableWorkerPool,
     options,
     commentHandlers,
 }: FileDiffViewerProps) {
     const wrapperRef = useRef<HTMLDivElement>(null)
     const theme = useEditorTheme(wrapperRef)
 
-    const copyContent = fileDiff.newLines?.join("\n") ?? ""
+    const copyContent = getFileDiffCopyContent(fileDiff)
 
     if (commentHandlers === null) {
         return (
@@ -299,6 +301,7 @@ export const FileDiffViewer = observer(function FileDiffViewer({
                     <PierreFileDiff
                         fileDiff={fileDiff}
                         className={className}
+                        disableWorkerPool={disableWorkerPool}
                         options={{
                             overflow: "wrap",
                             diffStyle,
@@ -321,6 +324,7 @@ export const FileDiffViewer = observer(function FileDiffViewer({
                 className={className}
                 diffStyle={diffStyle}
                 disableFileHeader={disableFileHeader}
+                disableWorkerPool={disableWorkerPool}
                 options={options}
                 commentHandlers={commentHandlers}
                 theme={theme}
@@ -334,6 +338,7 @@ interface CommentableFileDiffInnerProps {
     className?: string
     diffStyle: DiffStyle
     disableFileHeader?: boolean
+    disableWorkerPool?: boolean
     options?: {
         lineDiffType?: LineDiffTypes
         maxLineDiffLength?: number
@@ -349,6 +354,7 @@ const CommentableFileDiffInner = observer(function CommentableFileDiffInner({
     className,
     diffStyle,
     disableFileHeader,
+    disableWorkerPool,
     options,
     commentHandlers,
     theme,
@@ -377,13 +383,14 @@ const CommentableFileDiffInner = observer(function CommentableFileDiffInner({
         readOnly,
     })
 
-    const copyContent = fileDiff.newLines?.join("\n") ?? ""
+    const copyContent = getFileDiffCopyContent(fileDiff)
 
     return (
         <CopyOverlay content={copyContent}>
             <PierreFileDiff<CommentAnnotationMeta>
                 fileDiff={fileDiff}
                 className={className}
+                disableWorkerPool={disableWorkerPool}
                 options={{
                     overflow: "wrap",
                     diffStyle,

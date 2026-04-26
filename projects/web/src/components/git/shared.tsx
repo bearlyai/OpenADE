@@ -35,7 +35,7 @@ export function DiffContextSelect({ value, onChange }: { value: DiffContextSetti
             entries={DIFF_CONTEXT_OPTIONS.map((option) => ({ id: option.id, content: option.label }))}
             onSelect={(entry) => onChange(entry.id)}
             className={{
-                trigger: "h-8 px-2 text-xs border border-border bg-base-100 hover:bg-base-200 transition-colors min-w-[7.5rem]",
+                trigger: "h-8 px-2 text-xs border border-border bg-base-100 hover:bg-base-200 transition-colors min-w-[6.25rem]",
                 value: "text-xs truncate",
             }}
         />

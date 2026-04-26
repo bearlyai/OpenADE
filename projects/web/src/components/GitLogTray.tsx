@@ -5,7 +5,7 @@ import { type ReactNode, useEffect, useMemo, useState } from "react"
 import { twMerge } from "tailwind-merge"
 import { type ChangedFileInfo, type GetFilePatchResponse, type GitLogEntry, type WorkTreeInfo, gitApi } from "../electronAPI/git"
 import { useCodeStore } from "../store/context"
-import { getPatchContextLines, isWholeFileDiffContext, shouldUsePatchDiff } from "../utils/gitDiffContext"
+import { getPatchContextLines, shouldUsePatchDiff } from "../utils/gitDiffContext"
 import { FileDiffViewer, FileViewer, MultiFileDiffViewer } from "./FilesAndDiffs"
 import { DiffContextSelect, FileListItem, StatusIcon, type ViewMode, ViewModeToggle } from "./git/shared"
 import { Select } from "./ui/Select"
@@ -128,11 +128,16 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
     const viewMode = codeStore.ui.viewMode
     const diffContext = codeStore.ui.diffContext
     const setViewMode = (mode: ViewMode) => codeStore.ui.setViewMode(mode)
-    const setDiffContext = (context: typeof diffContext) => codeStore.ui.setDiffContext(context)
     const usePatchDiff = shouldUsePatchDiff(viewMode, diffContext)
     const patchContextLines = getPatchContextLines(diffContext)
     const patchDiffStyle = viewMode === "split" ? "split" : "unified"
-    const shouldLoadFilePair = viewMode === "current" || isWholeFileDiffContext(diffContext)
+    const shouldLoadFilePair = viewMode === "current"
+    const setDiffContext = (context: typeof diffContext) => {
+        if (viewMode !== "current") {
+            setPatchLoading(true)
+        }
+        codeStore.ui.setDiffContext(context)
+    }
 
     const selectedScope = useMemo(() => scopeOptions.find((option) => option.id === selectedScopeId) ?? null, [scopeOptions, selectedScopeId])
 
@@ -573,6 +578,7 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
                             fileDiff={patchView.fileDiff}
                             diffStyle={patchDiffStyle}
                             disableFileHeader
+                            disableWorkerPool
                             commentHandlers={null}
                             options={
                                 filePatch?.heavy ? { lineDiffType: "none", maxLineDiffLength: 0, tokenizeMaxLineLength: 0, overflow: "scroll" } : undefined
