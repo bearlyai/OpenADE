@@ -4,6 +4,7 @@ import { observer } from "mobx-react"
 import { useMemo, useState } from "react"
 import { HARNESS_META, MODEL_REGISTRY } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
+import { getVisibleModelEntries, getVisibleModelId } from "../modelVisibility"
 import type { ReviewType } from "../prompts/reviewPrompts"
 import { useCodeStore } from "../store/context"
 import { Modal } from "./ui"
@@ -58,9 +59,9 @@ export const ReviewPickerModal = NiceModal.create(
 
         const options = useMemo<ReviewAgentOption[]>(() => {
             const pairs: ReviewAgentOption[] = []
-            for (const [harnessId, config] of Object.entries(MODEL_REGISTRY) as Array<[HarnessId, (typeof MODEL_REGISTRY)[HarnessId]]>) {
+            for (const harnessId of Object.keys(MODEL_REGISTRY) as HarnessId[]) {
                 const harnessLabel = HARNESS_META[harnessId]?.name ?? harnessId
-                for (const model of config.models) {
+                for (const model of getVisibleModelEntries(harnessId)) {
                     pairs.push({
                         id: `${harnessId}:${model.id}`,
                         harnessId,
@@ -94,8 +95,11 @@ export const ReviewPickerModal = NiceModal.create(
         const otherOptions = options.filter((option) => !option.isTop)
         const orderedOptions = [...topOptions, ...otherOptions]
         const hasOtherHarness = taskModel ? options.some((option) => option.harnessId !== taskModel.harnessId) : false
+        const currentVisibleModelId = taskModel ? getVisibleModelId(taskModel.model, taskModel.harnessId) : undefined
         const currentOption =
-            taskModel && hasOtherHarness ? options.find((option) => option.harnessId === taskModel.harnessId && option.modelId === taskModel.model) : undefined
+            taskModel && hasOtherHarness
+                ? options.find((option) => option.harnessId === taskModel.harnessId && option.modelId === currentVisibleModelId)
+                : undefined
         const reviewOptions = currentOption ? orderedOptions.filter((option) => option.id !== currentOption.id) : orderedOptions
 
         return (
