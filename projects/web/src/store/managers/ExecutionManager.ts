@@ -59,6 +59,52 @@ interface RunActionResult {
 
 const HYPERPLAN_MAIN_THREAD_CONTEXT_MAX_BYTES = 240_000
 
+interface SessionContextSnapshot {
+    sessionId: string
+    harnessId: HarnessId
+    modelId?: string
+}
+
+interface ResolvedExecutionSession {
+    parentSessionId?: string
+    effectiveHarnessId: HarnessId
+    effectiveModel: string
+}
+
+export function resolveExecutionSession(args: {
+    freshSession?: boolean
+    overrideHarnessId?: HarnessId
+    overrideModel?: string
+    taskHarnessId: HarnessId
+    taskModel: string
+    sessionContext?: SessionContextSnapshot
+}): ResolvedExecutionSession {
+    const requestedHarnessId = args.overrideHarnessId ?? args.taskHarnessId
+    const requestedModel = args.overrideModel ?? args.taskModel
+
+    if (args.freshSession || !args.sessionContext?.sessionId) {
+        return {
+            effectiveHarnessId: requestedHarnessId,
+            effectiveModel: requestedModel,
+        }
+    }
+
+    const { sessionContext } = args
+    if (sessionContext.harnessId !== requestedHarnessId) {
+        return {
+            parentSessionId: sessionContext.sessionId,
+            effectiveHarnessId: sessionContext.harnessId,
+            effectiveModel: sessionContext.modelId ?? requestedModel,
+        }
+    }
+
+    return {
+        parentSessionId: sessionContext.sessionId,
+        effectiveHarnessId: requestedHarnessId,
+        effectiveModel: requestedModel,
+    }
+}
+
 export class ExecutionManager {
     private afterEventCallbacks: AfterEventCallback[] = []
 
@@ -139,14 +185,22 @@ export class ExecutionManager {
             return { started: false, success: false }
         }
 
-        // When resuming a session, use the harness/model that created it — the
-        // session and its creator must stay consistent (e.g., don't resume a
-        // codex session with claude-code).  Falls back to TaskModel defaults
-        // for fresh sessions or when no prior session exists.
+        // Keep the existing session/harness pairing intact, but let the selected
+        // model flow through when the harness is unchanged. That makes model
+        // switches take effect on resume instead of being silently overwritten
+        // by the session's original model.
         const sessionContext = freshSession ? undefined : this.store.events.getLastEventSessionContext(taskId)
-        const parentSessionId = sessionContext?.sessionId
-        const effectiveHarnessId = overrideHarnessId ?? (parentSessionId ? sessionContext.harnessId : taskModel.harnessId)
-        const effectiveModel = overrideModel ?? (parentSessionId ? (sessionContext.modelId ?? taskModel.model) : taskModel.model)
+        const resolvedSession = resolveExecutionSession({
+            freshSession,
+            overrideHarnessId,
+            overrideModel,
+            taskHarnessId: taskModel.harnessId,
+            taskModel: taskModel.model,
+            sessionContext,
+        })
+        const parentSessionId = resolvedSession.parentSessionId
+        const effectiveHarnessId = resolvedSession.effectiveHarnessId
+        const effectiveModel = resolvedSession.effectiveModel
 
         // Get pending comments - the prompt builder decides which to consume
         const pendingComments = includeComments ? this.store.comments.getUnsubmittedComments(taskId) : []

@@ -161,7 +161,7 @@ describe("buildCodexArgs", () => {
         expect(cIndices.length).toBeGreaterThanOrEqual(2)
     })
 
-    it("resume does not include exec-level flags (--sandbox, -m, -C, --add-dir, -c)", async () => {
+    it("resume keeps model/config overrides but omits cwd/sandbox/add-dir flags", async () => {
         const result = await buildCodexArgs(
             makeQuery({
                 mode: "read-only",
@@ -173,18 +173,22 @@ describe("buildCodexArgs", () => {
             }),
             {}
         )
-        // Resume subcommand should only accept --json, session ID, and prompt
+
         expect(result.args).not.toContain("--sandbox")
-        expect(result.args).not.toContain("-m")
         expect(result.args).not.toContain("-C")
         expect(result.args).not.toContain("--add-dir")
-        // -c for thinking/config should also be excluded
+
+        const modelIdx = result.args.indexOf("-m")
+        expect(modelIdx).toBeGreaterThanOrEqual(0)
+        expect(result.args[modelIdx + 1]).toBe("o3")
+
         const cIndices = result.args.reduce<number[]>((acc, arg, i) => {
             if (arg === "-c") acc.push(i)
             return acc
         }, [])
-        expect(cIndices).toHaveLength(0)
-        // But should still have the basics
+        expect(cIndices.length).toBeGreaterThanOrEqual(1)
+        expect(result.args).toContain("model_reasoning_effort=high")
+
         expect(result.args).toContain("--json")
         expect(result.args).toContain("resume")
         expect(result.args).toContain("abc-123")

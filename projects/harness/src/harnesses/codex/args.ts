@@ -62,17 +62,32 @@ export async function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessC
     // Skip git repo check — the app manages directory context
     execArgs.push("--skip-git-repo-check")
 
-    // `codex exec resume` accepts a smaller flag set than `codex exec`.
-    // Keep resume-safe flags outside this block, and gate the rest here.
+    // Resume supports model/config overrides, but not cwd/sandbox/add-dir flags.
+
+    // Model
+    if (query.model) {
+        execArgs.push("-m", query.model)
+    }
+
+    // Thinking / reasoning effort
+    if (query.thinking) {
+        const effort = THINKING_EFFORT_MAP[query.thinking]
+        if (effort) {
+            execArgs.push("-c", `model_reasoning_effort=${effort}`)
+        }
+    }
+
+    // MCP config overrides (passed through from the harness class)
+    if (mcpConfigArgs) {
+        for (const arg of mcpConfigArgs) {
+            execArgs.push("-c", arg)
+        }
+    }
+
     if (!query.resumeSessionId) {
         // Sandbox for read-only
         if (query.mode === "read-only") {
             execArgs.push("--sandbox", "read-only")
-        }
-
-        // Model
-        if (query.model) {
-            execArgs.push("-m", query.model)
         }
 
         // Working directory
@@ -84,21 +99,6 @@ export async function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessC
         if (query.additionalDirectories) {
             for (const dir of query.additionalDirectories) {
                 execArgs.push("--add-dir", dir)
-            }
-        }
-
-        // Thinking / reasoning effort
-        if (query.thinking) {
-            const effort = THINKING_EFFORT_MAP[query.thinking]
-            if (effort) {
-                execArgs.push("-c", `model_reasoning_effort=${effort}`)
-            }
-        }
-
-        // MCP config overrides (passed through from the harness class)
-        if (mcpConfigArgs) {
-            for (const arg of mcpConfigArgs) {
-                execArgs.push("-c", arg)
             }
         }
     }
