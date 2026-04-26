@@ -8,6 +8,17 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.73.0",
+        title: "Smarter Resumes & Review Diffs",
+        date: "2026-04-26",
+        highlights: [
+            "Changing the model on a resumed Codex task now takes effect instead of silently sticking to the original model",
+            "Review and changes trays now switch diff context reliably without showing stale partial patches, with bounded context options that stay responsive",
+            "Review model pickers now stay aligned with the models you can actually select, and the redundant Claude Opus latest alias is hidden",
+            "Closed tasks now show a GitHub-style [Closed] marker before the title so status is easier to spot",
+        ],
+    },
+    {
         version: "0.72.1",
         title: "Claude Opus Selection Fix",
         date: "2026-04-25",
