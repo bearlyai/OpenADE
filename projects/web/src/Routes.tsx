@@ -250,6 +250,7 @@ export const CodeWorkspaceTaskRoute = observer(() => {
     }
     const navbarTitle = taskModel ? (
         <div className="flex items-center gap-1.5 min-w-0">
+            {isTaskClosed && <span className="font-mono text-[11px] text-muted flex-shrink-0">[Closed]</span>}
             {isEditingTitle ? (
                 <>
                     <input
@@ -280,7 +281,6 @@ export const CodeWorkspaceTaskRoute = observer(() => {
                     {taskTitle}
                 </span>
             )}
-            {isTaskClosed && <span className="text-[11px] text-muted flex-shrink-0">Closed</span>}
         </div>
     ) : (
         taskTitle
