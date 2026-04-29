@@ -192,6 +192,7 @@ Your job is to produce a single, optimal final plan.
 </constraints>
 
 <guidelines>
+- Keep explicit user asks in User-Specified Requirements; keep agent-created synthesis in Decisions, Plan, or Reconciliation Notes.
 ${PLANNING_GUIDELINES}
 </guidelines>
 
@@ -213,6 +214,9 @@ or merge the strongest elements from multiple plans.
 <output_format>
 ## Overview
 Brief summary of the plan.
+
+## User-Specified Requirements
+Explicit requests, constraints, preferences, or acceptance criteria from the user. Do not include agent-created ideas here.
 
 ## Outcomes
 A bulleted list of outcomes to expect when the task is completed.

@@ -54,14 +54,18 @@ Generate a clear, actionable implementation plan for the task provided.
 <guidelines>
 - Plans can be as short as a few lines for simple tasks
 - When a step changes or creates interfaces, types, or function signatures, include the code inline
+- Include a "User-Specified Requirements" section that lists only explicit user asks; keep inferred agent decisions in Decisions or Plan.
 ${PLANNING_GUIDELINES}
 </guidelines>
 
 <output_format>
-For trivial changes (under ~10 lines, no meaningful decisions), skip to ## 📝 Plan with a one-line goal.
+For trivial changes (under ~10 lines, no meaningful decisions), use only ## 🎯 User-Specified Requirements and ## 📝 Plan.
 
 ## 📋 Overview
 What we're doing and why, in a few lines.
+
+## 🎯 User-Specified Requirements
+Explicit requests, constraints, preferences, or acceptance criteria from the user. Do not include agent-created ideas here.
 
 ## ✅ Outcomes
 What the user should expect when done.
@@ -104,13 +108,14 @@ Revise the existing plan based on user feedback and inline comments.
 - When feedback conflicts with existing content, prefer the feedback
 - If feedback reveals uncertainty, explore the codebase to clarify before revising
 - When adding new steps, verify file paths and interfaces exist
+- Preserve and update the "User-Specified Requirements" section; list only explicit user asks there.
 - Explain significant changes briefly if helpful
 ${PLANNING_GUIDELINES}
 </guidelines>
 
 <output_format>
 Output the complete revised plan in markdown format, maintaining the same structure:
-## 📋 Overview, ## ✅ Outcomes, ## 🔀 Decisions [OPTIONAL], ## 📝 Plan
+## 📋 Overview, ## 🎯 User-Specified Requirements, ## ✅ Outcomes, ## 🔀 Decisions [OPTIONAL], ## 📝 Plan
 
 Preserve and update code blocks from the original plan. Add new code blocks when feedback requires interface or signature changes.
 Do NOT include line numbers in your output.

@@ -63,11 +63,12 @@ All modes share `COMPACT_STYLE_RULES` (bullets > paragraphs, no filler, tradeoff
 ### Plan
 ```markdown
 ## 📋 Overview (Goal / Scope / Non-goals)
+## 🎯 User-Specified Requirements (explicit user asks only)
 ## ✅ Outcomes (bulleted expected results)
 ## 🔀 Decisions (Pick / Rejected / Depends on)
 ## 📝 Plan (steps with files, additions/deletions, tests)
 ```
-Trivial changes skip straight to `## 📝 Plan`.
+Trivial changes use only `## 🎯 User-Specified Requirements` and `## 📝 Plan`.
 
 ### Ask
 No required sections. Lead with the answer, use whatever format fits. Make tradeoffs explicit when they exist.
