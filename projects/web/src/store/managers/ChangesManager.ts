@@ -1,15 +1,15 @@
 import { makeAutoObservable, reaction, runInAction } from "mobx"
-import { type ChangedFileInfo, type GetFilePairResponse, type GetFilePatchResponse, type GitSummaryResponse, gitApi } from "../../electronAPI/git"
-import type { PatchContextLines } from "../../utils/gitDiffContext"
 import {
+    type FileTreeNode,
+    type FlatTreeEntry,
     buildFileTree,
     collectAllDirPaths,
     collectAncestorDirPaths,
     collectInitialDirPaths,
     flattenFileTree,
-    type FileTreeNode,
-    type FlatTreeEntry,
 } from "../../components/utils/changesTree"
+import { type ChangedFileInfo, type GetFilePairResponse, type GetFilePatchResponse, type GitSummaryResponse, gitApi } from "../../electronAPI/git"
+import type { PatchContextLines } from "../../utils/gitDiffContext"
 import type { TaskModel } from "../TaskModel"
 
 type DiffSource = "uncommitted" | "from-base"
@@ -37,6 +37,7 @@ export class ChangesManager {
     selectedFilePath: string | null = null
     diffSource: DiffSource = "uncommitted"
     expandedPaths: Set<string> = new Set()
+    private manuallyCollapsedPaths: Set<string> = new Set()
 
     filePair: GetFilePairResponse | null = null
     filePatch: GetFilePatchResponse | null = null
@@ -138,8 +139,10 @@ export class ChangesManager {
     toggleExpanded(path: string): void {
         if (this.expandedPaths.has(path)) {
             this.expandedPaths.delete(path)
+            this.manuallyCollapsedPaths.add(path)
         } else {
             this.expandedPaths.add(path)
+            this.manuallyCollapsedPaths.delete(path)
         }
     }
 
@@ -383,10 +386,11 @@ export class ChangesManager {
 
     private buildExpandedPaths(tree: FileTreeNode[]): Set<string> {
         const allDirPaths = collectAllDirPaths(tree)
-        const nextExpanded = new Set<string>([...this.expandedPaths].filter((path) => allDirPaths.has(path)))
+        this.manuallyCollapsedPaths = new Set([...this.manuallyCollapsedPaths].filter((path) => allDirPaths.has(path)))
+        const nextExpanded = new Set<string>([...this.expandedPaths].filter((path) => allDirPaths.has(path) && !this.manuallyCollapsedPaths.has(path)))
 
-        if (nextExpanded.size === 0) {
-            for (const path of collectInitialDirPaths(tree, 200)) {
+        for (const path of collectInitialDirPaths(tree, 200)) {
+            if (!this.manuallyCollapsedPaths.has(path)) {
                 nextExpanded.add(path)
             }
         }
