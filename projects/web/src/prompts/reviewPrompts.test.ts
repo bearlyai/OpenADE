@@ -8,6 +8,7 @@ function extractTag(text: string, tagName: string): string | undefined {
 function expectSharedReviewGuidance(userMessage: string): void {
     expect(userMessage.includes(REVIEW_DIMENSIONS)).toBe(true)
     expect(userMessage.includes(REVIEW_ENGINEERING_GUIDANCE)).toBe(true)
+    expect(userMessage).toContain("ignore unrelated changes from other agents or concurrent threads")
 }
 
 function expectTextUserMessage(userMessage: ReturnType<typeof buildPlanReviewPrompt>["userMessage"]): string {

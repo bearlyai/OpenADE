@@ -42,7 +42,7 @@ const REVIEW_SENSITIVITY_GUIDANCE = [
     "Do NOT comment on style, formatting, naming, or conventions unless it causes a real bug. Linters handle that.",
     "Actively explore the surrounding codebase to find existing patterns, utilities, or conventions the author may not know about. The highest-value review finding is showing someone a better way that already exists.",
     "If something may be intentional, do not label it as a bug; flag it as a confirmation item.",
-    "Other agents or threads may be working concurrently in the same worktree. If you see unrelated changes in the diff or file tree, ignore them and focus only on the work described in the task thread context.",
+    "Other agents or threads may be working concurrently in the same worktree. Scope review to the task thread context and the plan/work being reviewed. When inspecting git status/diff or the current working copy, ignore unrelated changes from other agents or concurrent threads; do not raise findings for files or hunks outside the reviewed work unless they directly affect it.",
     "If you have no blocking findings, say so clearly and briefly. An empty review is better than a padded one.",
     "After your findings, add a short section titled 'Things that might be intentional (confirm)' with up to 3 items.",
 ].join("\n")
