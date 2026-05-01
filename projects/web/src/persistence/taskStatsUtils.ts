@@ -15,6 +15,7 @@ export function computeTaskUsage(events: Array<CodeEvent & { id: string }>): Tas
     let outputTokens = 0
     let totalCostUsd = 0
     let eventCount = 0
+    let durationMs = 0
     const costByModel: Record<string, number> = {}
     const codexSessionTotals = new Map<string, CodexUsageSnapshot>()
 
@@ -31,6 +32,7 @@ export function computeTaskUsage(events: Array<CodeEvent & { id: string }>): Tas
                 inputTokens += usage?.input_tokens ?? 0
                 outputTokens += usage?.output_tokens ?? 0
                 costByModel[modelId] = (costByModel[modelId] ?? 0) + (evt.message.total_cost_usd ?? 0)
+                durationMs += evt.message.duration_ms ?? 0
             }
         }
 
@@ -56,6 +58,11 @@ export function computeTaskUsage(events: Array<CodeEvent & { id: string }>): Tas
                     costByModel[modelId] = (costByModel[modelId] ?? 0) + usageToAdd.costUsd
                 }
             }
+
+            const completeUsage = extractCompleteUsage(event.execution.events)
+            if (completeUsage?.durationMs) {
+                durationMs += completeUsage.durationMs
+            }
         }
 
         // HyperPlan sub-executions: aggregate cost/tokens from each sub-plan
@@ -71,6 +78,7 @@ export function computeTaskUsage(events: Array<CodeEvent & { id: string }>): Tas
                         inputTokens += usage?.input_tokens ?? 0
                         outputTokens += usage?.output_tokens ?? 0
                         costByModel[subModelId] = (costByModel[subModelId] ?? 0) + (evt.message.total_cost_usd ?? 0)
+                        durationMs += evt.message.duration_ms ?? 0
                     }
                 }
 
@@ -93,12 +101,45 @@ export function computeTaskUsage(events: Array<CodeEvent & { id: string }>): Tas
                             costByModel[subModelId] = (costByModel[subModelId] ?? 0) + usageToAdd.costUsd
                         }
                     }
+
+                    const subCompleteUsage = extractCompleteUsage(sub.events)
+                    if (subCompleteUsage?.durationMs) {
+                        durationMs += subCompleteUsage.durationMs
+                    }
                 }
             }
         }
     }
 
-    return { inputTokens, outputTokens, totalCostUsd, eventCount, costByModel }
+    return { inputTokens, outputTokens, totalCostUsd, eventCount, costByModel, durationMs }
+}
+
+/**
+ * Format a duration in ms as a compact human-readable string.
+ *
+ *   < 1s     → "0.0s" (1 decimal)
+ *   < 1min   → "12.3s" (1 decimal)
+ *   < 1hr    → "5m 23s"
+ *   < 1day   → "2h 14m"
+ *   ≥ 1day   → "1.5h" (decimal hours)
+ */
+export function formatDuration(durationMs: number): string {
+    if (!Number.isFinite(durationMs) || durationMs <= 0) return "0s"
+    const totalSeconds = durationMs / 1000
+    if (totalSeconds < 60) return `${totalSeconds.toFixed(1)}s`
+    const totalMinutes = totalSeconds / 60
+    if (totalMinutes < 60) {
+        const m = Math.floor(totalMinutes)
+        const s = Math.round(totalSeconds - m * 60)
+        return s === 0 ? `${m}m` : `${m}m ${s}s`
+    }
+    const totalHours = totalMinutes / 60
+    if (totalHours < 24) {
+        const h = Math.floor(totalHours)
+        const m = Math.round(totalMinutes - h * 60)
+        return m === 0 ? `${h}h` : `${h}h ${m}m`
+    }
+    return `${totalHours.toFixed(1)}h`
 }
 
 function extractCompleteUsage(events: HarnessStreamEvent[]): HarnessUsage | undefined {

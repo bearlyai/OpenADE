@@ -1,5 +1,6 @@
 import { Clock, Zap } from "lucide-react"
 import { observer } from "mobx-react"
+import { formatDuration } from "../persistence/taskStatsUtils"
 import type { TaskModel } from "../store/TaskModel"
 
 interface TaskStatsBarProps {
@@ -15,10 +16,6 @@ export const TaskStatsBar = observer(({ taskModel }: TaskStatsBarProps) => {
     }
 
     const cost = totalCostUsd < 0.01 ? `$${totalCostUsd.toFixed(4)}` : `$${totalCostUsd.toFixed(2)}`
-
-    const seconds = durationMs / 1000
-    const duration = seconds < 60 ? `${seconds.toFixed(1)}s` : `${Math.floor(seconds / 60)}m ${(seconds % 60).toFixed(0)}s`
-
     const totalTokens = inputTokens + outputTokens
 
     return (
@@ -26,7 +23,7 @@ export const TaskStatsBar = observer(({ taskModel }: TaskStatsBarProps) => {
             <span>{cost}</span>
             <span className="flex items-center gap-1">
                 <Clock size="0.85em" />
-                {duration}
+                {formatDuration(durationMs)}
             </span>
             <span className="flex items-center gap-1">
                 <Zap size="0.85em" />

@@ -34,6 +34,8 @@ export interface TaskPreviewUsage {
     totalCostUsd: number
     eventCount: number
     costByModel: Record<string, number>
+    // Optional for backward compat with previews persisted before duration tracking.
+    durationMs?: number
 }
 
 /**

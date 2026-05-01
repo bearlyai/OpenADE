@@ -4,6 +4,7 @@ import { observer } from "mobx-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { normalizeModelClass } from "../../constants"
 import type { RepoItem, TaskPreviewUsage } from "../../persistence/repoStore"
+import { formatDuration } from "../../persistence/taskStatsUtils"
 import type { CodeStore } from "../../store/store"
 import { StatsShareCard } from "./StatsShareCard"
 import { type RelativePeriodKey, getRelativePeriodRanges } from "./statsPeriodUtils"
@@ -21,6 +22,7 @@ interface MonthStats {
     outputTokens: number
     totalCostUsd: number
     eventCount: number
+    durationMs: number
     costByModel: Record<string, number>
 }
 
@@ -33,6 +35,7 @@ function createEmptyStats(label: string, sortKey: string): MonthStats {
         outputTokens: 0,
         totalCostUsd: 0,
         eventCount: 0,
+        durationMs: 0,
         costByModel: {},
     }
 }
@@ -43,6 +46,7 @@ function addUsage(stats: MonthStats, usage: TaskPreviewUsage): void {
     stats.outputTokens += usage.outputTokens
     stats.totalCostUsd += usage.totalCostUsd
     stats.eventCount += usage.eventCount
+    stats.durationMs += usage.durationMs ?? 0
     for (const [model, cost] of Object.entries(usage.costByModel)) {
         const cls = normalizeModelClass(model)
         stats.costByModel[cls] = (stats.costByModel[cls] ?? 0) + cost
@@ -92,14 +96,14 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     const [copyState, setCopyState] = useState<"idle" | "copying" | "copied" | "error">("idle")
     const [selectedPeriod, setSelectedPeriod] = useState<string | null>(null)
 
-    // Backfill task stores missing usage data
+    // Backfill task stores missing usage data (or missing newer fields like durationMs)
     useEffect(() => {
         if (!store.repoStore) return
 
         const tasksToBackfill: Array<{ repoId: string; taskId: string }> = []
         for (const repo of store.repoStore.repos.all()) {
             for (const task of repo.tasks) {
-                if (!task.usage) {
+                if (!task.usage || task.usage.durationMs === undefined) {
                     tasksToBackfill.push({ repoId: repo.id, taskId: task.id })
                 }
             }
@@ -152,6 +156,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     let totalOut = 0
     let totalCost = 0
     let totalEvents = 0
+    let totalDurationMs = 0
     const totalByModel: Record<string, number> = {}
 
     const relativePeriods = getRelativePeriodRanges()
@@ -160,11 +165,12 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     for (const repo of repos) {
         for (const task of repo.tasks) {
             totalTasks++
-            const u: TaskPreviewUsage = task.usage ?? { inputTokens: 0, outputTokens: 0, totalCostUsd: 0, eventCount: 0, costByModel: {} }
+            const u: TaskPreviewUsage = task.usage ?? { inputTokens: 0, outputTokens: 0, totalCostUsd: 0, eventCount: 0, costByModel: {}, durationMs: 0 }
             totalIn += u.inputTokens
             totalOut += u.outputTokens
             totalCost += u.totalCostUsd
             totalEvents += u.eventCount
+            totalDurationMs += u.durationMs ?? 0
             for (const [m, c] of Object.entries(u.costByModel)) {
                 const cls = normalizeModelClass(m)
                 totalByModel[cls] = (totalByModel[cls] ?? 0) + c
@@ -210,6 +216,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                     outputTokens: totalOut,
                     totalCostUsd: totalCost,
                     eventCount: totalEvents,
+                    durationMs: totalDurationMs,
                     costByModel: totalByModel,
                 }
 
@@ -241,6 +248,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                                 outputTokens: featured.outputTokens,
                                 taskCount: featured.taskCount,
                                 eventCount: featured.eventCount,
+                                durationMs: featured.durationMs,
                                 costByModel: featured.costByModel,
                             }}
                         />
@@ -332,9 +340,10 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                         </div>
 
                         {/* Stat grid */}
-                        <div className="grid grid-cols-4 gap-px bg-border">
+                        <div className="grid grid-cols-5 gap-px bg-border">
                             <MiniStat label="Tasks" value={featured.taskCount.toLocaleString()} />
                             <MiniStat label="Runs" value={featured.eventCount.toLocaleString()} />
+                            <MiniStat label="Time" value={formatDuration(featured.durationMs)} />
                             <MiniStat label="Input" value={formatTokens(featured.inputTokens)} />
                             <MiniStat label="Output" value={formatTokens(featured.outputTokens)} />
                         </div>
@@ -360,10 +369,11 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                             <div className="text-[10px] font-medium text-muted uppercase tracking-widest mb-2">Monthly</div>
                             <div className="border border-border">
                                 {/* Header */}
-                                <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 px-3 py-1.5 bg-base-200 border-b border-border text-[10px] text-muted uppercase tracking-wide font-medium">
+                                <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-x-4 px-3 py-1.5 bg-base-200 border-b border-border text-[10px] text-muted uppercase tracking-wide font-medium">
                                     <span>Month</span>
                                     <span className="text-right w-10">Tasks</span>
                                     <span className="text-right w-10">Runs</span>
+                                    <span className="text-right w-14">Time</span>
                                     <span className="text-right w-14">Tokens</span>
                                     <span className="text-right w-14">Cost</span>
                                 </div>
@@ -375,7 +385,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                                             key={m.sortKey}
                                             type="button"
                                             className={cx(
-                                                "btn grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 w-full px-3 py-1.5 text-xs transition-colors border-b border-border/40 last:border-b-0",
+                                                "btn grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-x-4 w-full px-3 py-1.5 text-xs transition-colors border-b border-border/40 last:border-b-0",
                                                 isActive ? "bg-primary/8" : "hover:bg-base-200/60"
                                             )}
                                             onClick={() => setSelectedPeriod(m.sortKey)}
@@ -383,6 +393,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                                             <span className={cx("font-semibold text-left", isActive ? "text-primary" : "text-base-content")}>{m.label}</span>
                                             <span className="text-right text-muted w-10">{m.taskCount}</span>
                                             <span className="text-right text-muted w-10">{m.eventCount}</span>
+                                            <span className="text-right text-muted w-14">{formatDuration(m.durationMs)}</span>
                                             <span className="text-right text-muted w-14">{formatTokens(tokens)}</span>
                                             <span className={cx("text-right font-semibold w-14", isActive ? "text-primary" : "text-base-content")}>
                                                 {formatCost(m.totalCostUsd)}

@@ -8,7 +8,6 @@
 import { makeAutoObservable, runInAction } from "mobx"
 import { DEFAULT_MODEL, getDefaultModelForHarness, resolveModelForHarness } from "../constants"
 import type { GitSummaryResponse } from "../electronAPI/git"
-import { extractRawMessageEvents } from "../electronAPI/harnessEventTypes"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { computeTaskUsage } from "../persistence/taskStatsUtils"
 import { type TaskThreadFormat, type TaskThreadJson, buildTaskThreadJson, buildTaskThreadXml } from "../prompts/taskThreadSerializer"
@@ -436,19 +435,12 @@ export class TaskModel {
     get stats(): { totalCostUsd: number; durationMs: number; inputTokens: number; outputTokens: number } {
         const events = this.task?.events ?? []
         const usage = computeTaskUsage(events)
-
-        let durationMs = 0
-        for (const event of events) {
-            if (event.type !== "action") continue
-            const messageEvents = extractRawMessageEvents(event.execution.events)
-            for (const evt of messageEvents) {
-                if (evt.harnessId === "claude-code" && evt.message.type === "result") {
-                    durationMs += evt.message.duration_ms ?? 0
-                }
-            }
+        return {
+            totalCostUsd: usage.totalCostUsd,
+            durationMs: usage.durationMs ?? 0,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
         }
-
-        return { totalCostUsd: usage.totalCostUsd, durationMs, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
     }
 
     // === Actions ===

@@ -9,6 +9,7 @@
  */
 
 import type { Ref } from "react"
+import { formatDuration } from "../../persistence/taskStatsUtils"
 
 export interface ShareStats {
     periodLabel: string
@@ -18,6 +19,7 @@ export interface ShareStats {
     outputTokens: number
     taskCount: number
     eventCount: number
+    durationMs: number
     costByModel: Record<string, number>
 }
 
@@ -94,6 +96,7 @@ export function StatsShareCard({ cardRef, stats }: StatsShareCardProps) {
                     {/* Stat pills */}
                     <div className="flex gap-6">
                         <BottomStat label="Runs" value={stats.eventCount.toLocaleString()} />
+                        <BottomStat label="Time" value={formatDuration(stats.durationMs)} />
                         <BottomStat label="Tokens" value={formatTokens(stats.totalTokens)} />
                         <BottomStat label="In" value={formatTokens(stats.inputTokens)} />
                         <BottomStat label="Out" value={formatTokens(stats.outputTokens)} />
