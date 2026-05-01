@@ -10,8 +10,8 @@
  * - Reconcile prompts randomly order inputs to avoid anchoring bias.
  */
 
-import { PLAN_MODE_INSTRUCTIONS, PLANNING_GUIDELINES } from "../prompts/prompts"
-import { REVIEW_DIMENSIONS } from "../prompts/reviewPrompts"
+import { PLANNING_GUIDELINES, PLAN_MODE_INSTRUCTIONS } from "../prompts/prompts"
+import { REVIEW_DIMENSIONS, REVIEW_ENGINEERING_GUIDANCE } from "../prompts/reviewPrompts"
 
 // ============================================================================
 // Plan Step Prompt — same as standard plan but with Risks & Alternatives
@@ -106,6 +106,10 @@ You are NOT producing a new plan — only evaluating the given one.
 <review_dimensions>
 ${REVIEW_DIMENSIONS}
 </review_dimensions>
+
+<engineering_guidance>
+${REVIEW_ENGINEERING_GUIDANCE}
+</engineering_guidance>
 
 <guidelines>
 ${PLANNING_GUIDELINES}

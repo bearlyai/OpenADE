@@ -32,6 +32,7 @@ Review-specific helpers live in `reviewPrompts.ts`:
 - `buildPlanReviewPrompt(...)` - one-off external review of active plan
 - `buildWorkReviewPrompt(...)` - one-off external review of recent work
 - `buildReviewHandoffPrompt(...)` - asks main thread to agree/disagree and request user approval
+- Review prompts share criteria for correctness, security, better approaches, test quality, robustness, tight contracts, modularity, production readiness, infrastructure/data safety, and comments/docs/local-instruction hygiene
 
 Execution-context helpers:
 - `buildWorktreeExecutionInstruction(...)` - Appends a worktree safety instruction when isolation type is `worktree`

@@ -27,6 +27,17 @@ Evaluate through these lenses:
 4. **Test quality** — Tests that don't actually catch regressions: excessive mocking that hides real behavior, assertions on trivial/tautological conditions, tests that mirror the implementation, and missing coverage of edge cases that matter.
 5. **Robustness** — Will this code behave correctly under unexpected inputs, concurrency, partial failures, or edge cases? Unhandled errors, race conditions, missing guards at system boundaries, and assumptions that could silently break.`
 
+export const REVIEW_ENGINEERING_GUIDANCE = `Engineering standards to enforce when they affect correctness, maintainability, or test confidence:
+
+- **Tight contracts** — Flag loose typing, unnecessary casts, unvalidated inputs, broad object shapes, or public interfaces that can be narrowed with concrete types, schemas, parsers, validators, discriminated unions, or smaller module boundaries.
+- **Modularity** — Point out interfaces that can be tightened to make code cleaner, easier to test, and less coupled. Prefer the smallest contract that expresses the real dependency.
+- **Simplicity** — Prefer surgical fixes and existing patterns. Do not push abstractions unless they remove real duplication, clarify multiple call sites, or prevent a class of bugs.
+- **High-signal tests** — Flag tests that over-mock production behavior, mirror implementation details, assert brittle internals, or would pass when behavior is broken. Prefer regression-detecting unit tests and integration tests that exercise the real path.
+- **Robustness** — Flag broad catch blocks, swallowed errors, unchecked status codes, missing permissions/error handling/retries where they matter, and schema changes that ignore existing production data.
+- **Operational visibility** — For user-facing or production-critical paths, flag missing structured logs, metrics, analytics, or docs explaining how to investigate failures.
+- **Infrastructure & data safety** — Flag hidden setup steps, fragmented verification commands, database mutations without explicit intent/transactions/destructive-query checks, and migrations that do not protect existing production data.
+- **Comments, docs & local instructions** — Check CLAUDE.md and AGENT.md in touched directories. Flag filler comments, stale docs, and missing rationale for non-obvious tradeoffs. When behavior or workflow changes, point out docs that should be updated.`
+
 const REVIEW_SENSITIVITY_GUIDANCE = [
     "Do NOT comment on style, formatting, naming, or conventions unless it causes a real bug. Linters handle that.",
     "Actively explore the surrounding codebase to find existing patterns, utilities, or conventions the author may not know about. The highest-value review finding is showing someone a better way that already exists.",
@@ -67,6 +78,7 @@ export function buildPlanReviewPrompt({
             "Prioritize correctness gaps and blockers first.\n" +
             "If relevant, verify assumptions against the current code and recent diffs/commits.\n\n" +
             `${REVIEW_DIMENSIONS}\n\n` +
+            `${REVIEW_ENGINEERING_GUIDANCE}\n\n` +
             `${REVIEW_SENSITIVITY_GUIDANCE}` +
             buildChangedFilesBlock(changedFiles) +
             buildCustomInstructionsBlock(customInstructions),
@@ -92,6 +104,7 @@ export function buildWorkReviewPrompt({
             "For each finding: Location, Issue, Suggestion. Bullets only, no prose.\n" +
             "Prioritize bugs, regressions, and risky complexity.\n\n" +
             `${REVIEW_DIMENSIONS}\n\n` +
+            `${REVIEW_ENGINEERING_GUIDANCE}\n\n` +
             `${REVIEW_SENSITIVITY_GUIDANCE}` +
             buildChangedFilesBlock(changedFiles) +
             buildCustomInstructionsBlock(customInstructions),

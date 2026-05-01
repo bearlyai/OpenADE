@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { REVIEW_ENGINEERING_GUIDANCE } from "../prompts/reviewPrompts"
 import { type ReconcileInput, buildHyperPlanStepPrompt, buildReconcileStepPrompt, buildReviewStepPrompt, buildReviseStepPrompt } from "./prompts"
 
 describe("buildHyperPlanStepPrompt", () => {
@@ -40,6 +41,7 @@ describe("buildReviewStepPrompt", () => {
         expect(taskMatch?.[1]).toBe("task desc")
         expect(planMatch?.[1]).toBe("plan_0")
         expect(planMatch?.[2]).toBe("The plan content")
+        expect(result.systemPrompt.includes(REVIEW_ENGINEERING_GUIDANCE)).toBe(true)
         expect(result.systemPrompt.length).toBeGreaterThan(0)
     })
 })
