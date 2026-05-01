@@ -29,6 +29,7 @@ export interface TaskPreviewLastEvent {
  * Aggregated usage stats for a task, synced from TaskStore.
  */
 export interface TaskPreviewUsage {
+    usageVersion?: number
     inputTokens: number
     outputTokens: number
     totalCostUsd: number

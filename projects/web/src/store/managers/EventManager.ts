@@ -629,6 +629,32 @@ export class EventManager {
         })
     }
 
+    /** Update a sub-execution's session lineage */
+    updateSubExecutionSessionIds({
+        taskId,
+        eventId,
+        stepId,
+        sessionId,
+        parentSessionId,
+    }: {
+        taskId: string
+        eventId: string
+        stepId: string
+        sessionId: string
+        parentSessionId?: string
+    }): void {
+        const taskStore = this.store.getCachedTaskStore(taskId)
+        if (!taskStore) return
+
+        taskStore.events.update(eventId, (draft) => {
+            if (draft.type !== "action") return
+            const sub = draft.hyperplanSubExecutions?.find((s) => s.stepId === stepId)
+            if (!sub) return
+            sub.sessionId = sessionId
+            sub.parentSessionId = parentSessionId
+        })
+    }
+
     /** Set reconciliation labels on sub-executions */
     setHyperPlanReconcileLabels({
         taskId,

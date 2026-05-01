@@ -73,6 +73,8 @@ export interface HyperPlanSubExecution {
     harnessId: HarnessId
     modelId: string
     executionId: string
+    sessionId?: string
+    parentSessionId?: string
     status: "in_progress" | "completed" | "error"
     events: HarnessStreamEvent[]
     /** Extracted plan/review text. Set on completion. */

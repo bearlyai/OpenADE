@@ -831,6 +831,16 @@ export class ExecutionManager {
                     })
                 },
 
+                onSubPlanSessionId: (stepId, sessionId, parentSessionId) => {
+                    this.store.events.updateSubExecutionSessionIds({
+                        taskId,
+                        eventId,
+                        stepId,
+                        sessionId,
+                        parentSessionId,
+                    })
+                },
+
                 onSubPlanStatusChange: (stepId, status, resultText, error) => {
                     this.store.events.updateSubExecutionStatus({
                         taskId,

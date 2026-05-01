@@ -13,7 +13,6 @@ const CODEX_PRICING: Record<string, ModelPricing> = {
     "gpt-5.1-codex-mini": { inputPerMillion: 0.25, outputPerMillion: 2.0, cacheReadPerMillion: 0.025 },
     "gpt-5.2-codex": { inputPerMillion: 1.75, outputPerMillion: 14.0, cacheReadPerMillion: 0.175 },
     "gpt-5.3-codex": { inputPerMillion: 1.75, outputPerMillion: 14.0, cacheReadPerMillion: 0.175 },
-    "gpt-5.3-codex-spark": { inputPerMillion: 1.75, outputPerMillion: 14.0, cacheReadPerMillion: 0.175 },
     "gpt-5.5": { inputPerMillion: 5.0, outputPerMillion: 30.0, cacheReadPerMillion: 0.5 },
     "gpt-5.4": { inputPerMillion: 2.50, outputPerMillion: 15.0, cacheReadPerMillion: 0.25 },
 }
@@ -21,26 +20,25 @@ const CODEX_PRICING: Record<string, ModelPricing> = {
 // Suffixes appended by model_reasoning_effort config — don't affect per-token pricing
 const EFFORT_SUFFIXES = ["-xhigh", "-high", "-medium", "-low"]
 
-export function calculateCostUsd(
+export function calculateCodexCostUsd(
     model: string | undefined,
     inputTokens: number,
     outputTokens: number,
-    cacheReadTokens?: number,
+    cacheReadTokens = 0,
 ): number | undefined {
     if (!model) return undefined
 
     const pricing = resolvePricing(model)
     if (!pricing) return undefined
 
-    let cost =
-        (inputTokens / 1_000_000) * pricing.inputPerMillion +
+    const cachedInputTokens = Math.min(Math.max(cacheReadTokens, 0), Math.max(inputTokens, 0))
+    const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens)
+
+    return (
+        (uncachedInputTokens / 1_000_000) * pricing.inputPerMillion +
+        (cachedInputTokens / 1_000_000) * (pricing.cacheReadPerMillion ?? pricing.inputPerMillion) +
         (outputTokens / 1_000_000) * pricing.outputPerMillion
-
-    if (cacheReadTokens && pricing.cacheReadPerMillion) {
-        cost += (cacheReadTokens / 1_000_000) * pricing.cacheReadPerMillion
-    }
-
-    return cost
+    )
 }
 
 function resolvePricing(model: string): ModelPricing | undefined {

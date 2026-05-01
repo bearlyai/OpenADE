@@ -107,3 +107,4 @@ export type {
 } from "./harnesses/codex/types.js"
 
 export { parseCodexEvent } from "./harnesses/codex/types.js"
+export { calculateCodexCostUsd } from "./harnesses/codex/pricing.js"

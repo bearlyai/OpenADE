@@ -35,6 +35,8 @@ export interface HyperPlanCallbacks {
     onSubPlanStarted(stepId: string, executionId: string): void
     /** Called when a sub-plan step emits a stream event */
     onSubPlanEvent(stepId: string, event: HarnessStreamEvent): void
+    /** Called when a sub-plan step's session ID is known */
+    onSubPlanSessionId(stepId: string, sessionId: string, parentSessionId?: string): void
     /** Called when a sub-plan step completes or fails */
     onSubPlanStatusChange(stepId: string, status: SubPlanState["status"], resultText?: string, error?: string): void
     /** Called when the terminal step emits a stream event (persisted as main execution events) */
@@ -316,6 +318,8 @@ export class HyperPlanExecutor {
             sessionId = sid
             if (isTerminal) {
                 callbacks.onTerminalSessionId(sid, resumeSessionId)
+            } else {
+                callbacks.onSubPlanSessionId(step.id, sid, resumeSessionId)
             }
         })
 

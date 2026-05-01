@@ -69,9 +69,13 @@ const codex: AgentCouplet = { harnessId: "codex", modelId: "gpt-5.3-codex" }
 
 function createCallbacks() {
     const terminalSessions: Array<{ sessionId: string; parentSessionId?: string }> = []
+    const subPlanSessions: Array<{ stepId: string; sessionId: string; parentSessionId?: string }> = []
     const callbacks: HyperPlanCallbacks = {
         onSubPlanStarted: () => {},
         onSubPlanEvent: () => {},
+        onSubPlanSessionId: (stepId, sessionId, parentSessionId) => {
+            subPlanSessions.push({ stepId, sessionId, parentSessionId })
+        },
         onSubPlanStatusChange: () => {},
         onTerminalEvent: () => {},
         onTerminalSessionId: (sessionId, parentSessionId) => {
@@ -79,7 +83,7 @@ function createCallbacks() {
         },
         onLabelMapping: () => {},
     }
-    return { callbacks, terminalSessions }
+    return { callbacks, terminalSessions, subPlanSessions }
 }
 
 beforeEach(() => {
@@ -91,7 +95,7 @@ beforeEach(() => {
 describe("HyperPlanExecutor peer-review revise flow", () => {
     it("passes resumeSessionId to revise and reports terminal parentSessionId", async () => {
         harnessMockState.sessionSequence = ["plan-session-1", "review-session-1", "plan-session-1"]
-        const { callbacks, terminalSessions } = createCallbacks()
+        const { callbacks, terminalSessions, subPlanSessions } = createCallbacks()
         const abortController = new AbortController()
 
         const executor = new HyperPlanExecutor({
@@ -108,6 +112,10 @@ describe("HyperPlanExecutor peer-review revise flow", () => {
         expect(harnessMockState.calls).toHaveLength(3)
         expect(harnessMockState.calls[2].options.resumeSessionId).toBe("plan-session-1")
         expect(harnessMockState.calls[2].options.forkSession).toBe(false)
+        expect(subPlanSessions).toEqual([
+            { stepId: "plan_a", sessionId: "plan-session-1", parentSessionId: undefined },
+            { stepId: "review_b", sessionId: "review-session-1", parentSessionId: undefined },
+        ])
         expect(terminalSessions).toEqual([{ sessionId: "plan-session-1", parentSessionId: "plan-session-1" }])
     })
 

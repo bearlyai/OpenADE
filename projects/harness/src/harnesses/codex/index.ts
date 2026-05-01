@@ -30,7 +30,7 @@ import { startToolServer, type ToolServerHandle } from "../../util/tool-server.j
 import { buildUserPromptTool, USER_PROMPT_SYSTEM_HINT } from "../../util/user-prompt.js"
 import { buildCodexArgs, type CodexHarnessConfig } from "./args.js"
 import { buildCodexMcpConfigOverrides } from "./config-overrides.js"
-import { calculateCostUsd } from "./pricing.js"
+import { calculateCodexCostUsd } from "./pricing.js"
 import { parseCodexEvent, type CodexEvent, type CodexTurnCompletedEvent } from "./types.js"
 import { listCodexSessions, readCodexSession, writeCodexSession, deleteCodexSession, isCodexSessionActive } from "./sessions.js"
 
@@ -304,7 +304,7 @@ export class CodexHarness implements Harness<CodexEvent> {
                             inputTokens,
                             outputTokens,
                             cacheReadTokens,
-                            costUsd: calculateCostUsd(q.model, inputTokens, outputTokens, cacheReadTokens),
+                            costUsd: calculateCodexCostUsd(q.model, inputTokens, outputTokens, cacheReadTokens),
                             durationMs,
                         }
                         return { type: "complete", usage, structuredOutput }

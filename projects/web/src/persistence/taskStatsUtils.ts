@@ -1,13 +1,28 @@
-import type { HarnessUsage } from "@openade/harness/browser"
+import { calculateCodexCostUsd, type HarnessUsage } from "@openade/harness/browser"
 import type { HarnessRawMessageEvent, HarnessStreamEvent } from "../electronAPI/harnessEventTypes"
 import { extractRawMessageEvents } from "../electronAPI/harnessEventTypes"
-import type { CodeEvent } from "../types"
+import type { ActionEvent, CodeEvent, HarnessId } from "../types"
 import type { TaskPreviewUsage } from "./repoStore"
+
+export const TASK_USAGE_STATS_VERSION = 2
 
 interface CodexUsageSnapshot {
     inputTokens: number
     outputTokens: number
-    costUsd?: number
+    cacheReadTokens: number
+}
+
+interface UsageEntry {
+    harnessId: HarnessId
+    modelId: string
+    events: HarnessStreamEvent[]
+    sessionId?: string
+    parentSessionId?: string
+    allowLegacySameSessionDelta?: boolean
+}
+
+export function needsTaskUsageBackfill(usage?: TaskPreviewUsage): boolean {
+    return !usage || usage.durationMs === undefined || usage.usageVersion !== TASK_USAGE_STATS_VERSION
 }
 
 export function computeTaskUsage(events: Array<CodeEvent & { id: string }>): TaskPreviewUsage {
@@ -22,96 +37,53 @@ export function computeTaskUsage(events: Array<CodeEvent & { id: string }>): Tas
     for (const event of events) {
         if (event.type !== "action") continue
         eventCount++
-        const modelId = event.execution.modelId ?? "unknown"
-        const messageEvents = extractRawMessageEvents(event.execution.events)
-        for (const evt of messageEvents) {
-            // Usage/cost data is only in Claude Code result events currently
-            if (evt.harnessId === "claude-code" && evt.message.type === "result") {
-                totalCostUsd += evt.message.total_cost_usd ?? 0
-                const usage = evt.message.usage as { input_tokens?: number; output_tokens?: number } | undefined
-                inputTokens += usage?.input_tokens ?? 0
-                outputTokens += usage?.output_tokens ?? 0
-                costByModel[modelId] = (costByModel[modelId] ?? 0) + (evt.message.total_cost_usd ?? 0)
-                durationMs += evt.message.duration_ms ?? 0
-            }
-        }
 
-        // Codex usage snapshots are session-based and can be cumulative across resumed runs.
-        // Track per-session totals and only add the delta when we detect cumulative snapshots.
-        const harnessId = event.execution.harnessId ?? "claude-code"
-        if (harnessId === "codex") {
-            const codexUsage = extractCodexUsageSnapshot(messageEvents, event.execution.events)
+        for (const entry of getUsageEntries(event)) {
+            const messageEvents = extractRawMessageEvents(entry.events)
+            if (entry.harnessId === "claude-code") {
+                for (const evt of messageEvents) {
+                    if (evt.harnessId === "claude-code" && evt.message.type === "result") {
+                        const resultCostUsd = evt.message.total_cost_usd ?? 0
+                        totalCostUsd += resultCostUsd
+                        const usage = evt.message.usage as { input_tokens?: number; output_tokens?: number } | undefined
+                        inputTokens += usage?.input_tokens ?? 0
+                        outputTokens += usage?.output_tokens ?? 0
+                        costByModel[entry.modelId] = (costByModel[entry.modelId] ?? 0) + resultCostUsd
+                        durationMs += evt.message.duration_ms ?? 0
+                    }
+                }
+                continue
+            }
+
+            const codexUsage = extractCodexUsageSnapshot(messageEvents, entry.events)
             if (codexUsage) {
-                const sessionId = event.execution.sessionId ?? extractCodexSessionId(messageEvents)
+                const sessionId = entry.sessionId ?? extractCodexSessionId(messageEvents)
                 const usageToAdd = normalizeCodexUsage({
                     snapshot: codexUsage,
                     sessionId,
-                    parentSessionId: event.execution.parentSessionId,
+                    parentSessionId: entry.parentSessionId,
+                    allowLegacySameSessionDelta: entry.allowLegacySameSessionDelta,
                     sessionTotals: codexSessionTotals,
                 })
 
                 inputTokens += usageToAdd.inputTokens
                 outputTokens += usageToAdd.outputTokens
 
-                if (usageToAdd.costUsd !== undefined) {
-                    totalCostUsd += usageToAdd.costUsd
-                    costByModel[modelId] = (costByModel[modelId] ?? 0) + usageToAdd.costUsd
+                const computedCostUsd = calculateCodexCostUsd(entry.modelId, usageToAdd.inputTokens, usageToAdd.outputTokens, usageToAdd.cacheReadTokens)
+                if (computedCostUsd !== undefined) {
+                    totalCostUsd += computedCostUsd
+                    costByModel[entry.modelId] = (costByModel[entry.modelId] ?? 0) + computedCostUsd
                 }
             }
 
-            const completeUsage = extractCompleteUsage(event.execution.events)
+            const completeUsage = extractCompleteUsage(entry.events)
             if (completeUsage?.durationMs) {
                 durationMs += completeUsage.durationMs
             }
         }
-
-        // HyperPlan sub-executions: aggregate cost/tokens from each sub-plan
-        if (event.hyperplanSubExecutions) {
-            for (const sub of event.hyperplanSubExecutions) {
-                const subModelId = sub.modelId ?? modelId
-                const subHarnessId = sub.harnessId ?? "claude-code"
-                const subMessageEvents = extractRawMessageEvents(sub.events)
-                for (const evt of subMessageEvents) {
-                    if (evt.harnessId === "claude-code" && evt.message.type === "result") {
-                        totalCostUsd += evt.message.total_cost_usd ?? 0
-                        const usage = evt.message.usage as { input_tokens?: number; output_tokens?: number } | undefined
-                        inputTokens += usage?.input_tokens ?? 0
-                        outputTokens += usage?.output_tokens ?? 0
-                        costByModel[subModelId] = (costByModel[subModelId] ?? 0) + (evt.message.total_cost_usd ?? 0)
-                        durationMs += evt.message.duration_ms ?? 0
-                    }
-                }
-
-                if (subHarnessId === "codex") {
-                    const codexUsage = extractCodexUsageSnapshot(subMessageEvents, sub.events)
-                    if (codexUsage) {
-                        const sessionId = extractCodexSessionId(subMessageEvents)
-                        const usageToAdd = normalizeCodexUsage({
-                            snapshot: codexUsage,
-                            sessionId,
-                            parentSessionId: undefined,
-                            sessionTotals: codexSessionTotals,
-                        })
-
-                        inputTokens += usageToAdd.inputTokens
-                        outputTokens += usageToAdd.outputTokens
-
-                        if (usageToAdd.costUsd !== undefined) {
-                            totalCostUsd += usageToAdd.costUsd
-                            costByModel[subModelId] = (costByModel[subModelId] ?? 0) + usageToAdd.costUsd
-                        }
-                    }
-
-                    const subCompleteUsage = extractCompleteUsage(sub.events)
-                    if (subCompleteUsage?.durationMs) {
-                        durationMs += subCompleteUsage.durationMs
-                    }
-                }
-            }
-        }
     }
 
-    return { inputTokens, outputTokens, totalCostUsd, eventCount, costByModel, durationMs }
+    return { usageVersion: TASK_USAGE_STATS_VERSION, inputTokens, outputTokens, totalCostUsd, eventCount, costByModel, durationMs }
 }
 
 /**
@@ -142,6 +114,34 @@ export function formatDuration(durationMs: number): string {
     return `${totalHours.toFixed(1)}h`
 }
 
+function getUsageEntries(event: ActionEvent & { id: string }): UsageEntry[] {
+    const entries: UsageEntry[] = []
+    const mainModelId = event.execution.modelId ?? "unknown"
+
+    // HyperPlan terminal executions can resume a sub-plan session. Process
+    // sub-executions first so cumulative Codex snapshots delta correctly.
+    for (const sub of event.hyperplanSubExecutions ?? []) {
+        entries.push({
+            harnessId: sub.harnessId ?? "claude-code",
+            modelId: sub.modelId ?? mainModelId,
+            events: sub.events,
+            sessionId: sub.sessionId,
+            parentSessionId: sub.parentSessionId,
+        })
+    }
+
+    entries.push({
+        harnessId: event.execution.harnessId ?? "claude-code",
+        modelId: mainModelId,
+        events: event.execution.events,
+        sessionId: event.execution.sessionId,
+        parentSessionId: event.execution.parentSessionId,
+        allowLegacySameSessionDelta: (event.hyperplanSubExecutions?.length ?? 0) === 0,
+    })
+
+    return entries
+}
+
 function extractCompleteUsage(events: HarnessStreamEvent[]): HarnessUsage | undefined {
     for (const e of events) {
         if (e.direction === "execution" && e.type === "complete" && e.usage) {
@@ -152,12 +152,13 @@ function extractCompleteUsage(events: HarnessStreamEvent[]): HarnessUsage | unde
 }
 
 function extractCodexUsageSnapshot(messageEvents: HarnessRawMessageEvent[], streamEvents: HarnessStreamEvent[]): CodexUsageSnapshot | undefined {
-    let latestTurnUsage: { inputTokens: number; outputTokens: number } | undefined
+    let latestTurnUsage: { inputTokens: number; outputTokens: number; cacheReadTokens: number } | undefined
     for (const evt of messageEvents) {
         if (evt.harnessId === "codex" && evt.message.type === "turn.completed") {
             latestTurnUsage = {
                 inputTokens: evt.message.usage.input_tokens ?? 0,
                 outputTokens: evt.message.usage.output_tokens ?? 0,
+                cacheReadTokens: evt.message.usage.cached_input_tokens ?? 0,
             }
         }
     }
@@ -165,13 +166,14 @@ function extractCodexUsageSnapshot(messageEvents: HarnessRawMessageEvent[], stre
     const completeUsage = extractCompleteUsage(streamEvents)
     const input = completeUsage?.inputTokens ?? latestTurnUsage?.inputTokens
     const output = completeUsage?.outputTokens ?? latestTurnUsage?.outputTokens
+    const cacheRead = completeUsage?.cacheReadTokens ?? latestTurnUsage?.cacheReadTokens ?? 0
 
     if (input === undefined && output === undefined) return undefined
 
     return {
         inputTokens: input ?? 0,
         outputTokens: output ?? 0,
-        costUsd: completeUsage?.costUsd,
+        cacheReadTokens: cacheRead,
     }
 }
 
@@ -188,11 +190,13 @@ function normalizeCodexUsage({
     snapshot,
     sessionId,
     parentSessionId,
+    allowLegacySameSessionDelta,
     sessionTotals,
 }: {
     snapshot: CodexUsageSnapshot
     sessionId?: string
     parentSessionId?: string
+    allowLegacySameSessionDelta?: boolean
     sessionTotals: Map<string, CodexUsageSnapshot>
 }): CodexUsageSnapshot {
     if (!sessionId) return snapshot
@@ -201,19 +205,16 @@ function normalizeCodexUsage({
     sessionTotals.set(sessionId, snapshot)
     if (!prev) return snapshot
 
-    const resumedSameSession = parentSessionId === sessionId
-    const looksCumulative =
-        snapshot.inputTokens >= prev.inputTokens &&
-        snapshot.outputTokens >= prev.outputTokens &&
-        (snapshot.costUsd === undefined || prev.costUsd === undefined || snapshot.costUsd >= prev.costUsd)
+    const canDeltaSameSession = parentSessionId === sessionId || (parentSessionId === undefined && allowLegacySameSessionDelta === true)
+    const looksCumulative = snapshot.inputTokens >= prev.inputTokens && snapshot.outputTokens >= prev.outputTokens
 
-    if (!looksCumulative || !resumedSameSession) {
+    if (!looksCumulative || !canDeltaSameSession) {
         return snapshot
     }
 
     return {
         inputTokens: Math.max(0, snapshot.inputTokens - prev.inputTokens),
         outputTokens: Math.max(0, snapshot.outputTokens - prev.outputTokens),
-        costUsd: snapshot.costUsd !== undefined && prev.costUsd !== undefined ? Math.max(0, snapshot.costUsd - prev.costUsd) : snapshot.costUsd,
+        cacheReadTokens: Math.max(0, snapshot.cacheReadTokens - prev.cacheReadTokens),
     }
 }

@@ -4,7 +4,7 @@ import { observer } from "mobx-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { normalizeModelClass } from "../../constants"
 import type { RepoItem, TaskPreviewUsage } from "../../persistence/repoStore"
-import { formatDuration } from "../../persistence/taskStatsUtils"
+import { formatDuration, needsTaskUsageBackfill } from "../../persistence/taskStatsUtils"
 import type { CodeStore } from "../../store/store"
 import { StatsShareCard } from "./StatsShareCard"
 import { type RelativePeriodKey, getRelativePeriodRanges } from "./statsPeriodUtils"
@@ -90,6 +90,19 @@ function formatTokens(n: number): string {
     return n.toLocaleString()
 }
 
+const BACKFILL_BATCH_SIZE = 10
+
+function yieldToBrowser(): Promise<void> {
+    return new Promise((resolve) => {
+        if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
+            setTimeout(resolve, 0)
+            return
+        }
+
+        window.requestAnimationFrame(() => resolve())
+    })
+}
+
 export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     const cardRef = useRef<HTMLDivElement>(null)
     const [backfillProgress, setBackfillProgress] = useState<{ loaded: number; total: number } | null>(null)
@@ -103,7 +116,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
         const tasksToBackfill: Array<{ repoId: string; taskId: string }> = []
         for (const repo of store.repoStore.repos.all()) {
             for (const task of repo.tasks) {
-                if (!task.usage || task.usage.durationMs === undefined) {
+                if (needsTaskUsageBackfill(task.usage)) {
                     tasksToBackfill.push({ repoId: repo.id, taskId: task.id })
                 }
             }
@@ -124,6 +137,9 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                     console.warn("[StatsTab] Failed to load task for backfill:", taskId, err)
                 }
                 if (!cancelled) setBackfillProgress({ loaded: i + 1, total: tasksToBackfill.length })
+                if (!cancelled && (i + 1) % BACKFILL_BATCH_SIZE === 0 && i + 1 < tasksToBackfill.length) {
+                    await yieldToBrowser()
+                }
             }
             if (!cancelled) setBackfillProgress(null)
         }

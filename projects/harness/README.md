@@ -182,10 +182,12 @@ interface HarnessUsage {
     outputTokens: number
     cacheReadTokens?: number
     cacheWriteTokens?: number
-    costUsd?: number       // Claude Code only
+    costUsd?: number       // Claude Code reported cost, Codex estimated cost when pricing is known
     durationMs?: number
 }
 ```
+
+For Codex/OpenAI usage, cached input tokens are a discounted subset of input tokens, not an additional token bucket.
 
 ### `HarnessCapabilities`
 

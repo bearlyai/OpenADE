@@ -72,7 +72,7 @@ src/
 │       ├── args.test.ts
 │       ├── config-overrides.ts # buildCodexMcpConfigOverrides() — -c flag generation
 │       ├── config-overrides.test.ts
-│       ├── pricing.ts          # calculateCostUsd() — token-based cost for Codex models
+│       ├── pricing.ts          # calculateCodexCostUsd() — token-based cost for Codex models
 │       ├── pricing.test.ts
 │       ├── sessions.ts         # Session read/write/delete/list for ~/.codex on-disk format
 │       ├── sessions.test.ts

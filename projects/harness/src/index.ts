@@ -64,6 +64,7 @@ export type { ClaudeCodeHarnessConfig, ClaudeEvent } from "./harnesses/claude-co
 
 export { CodexHarness } from "./harnesses/codex/index.js"
 export type { CodexHarnessConfig, CodexEvent } from "./harnesses/codex/index.js"
+export { calculateCodexCostUsd } from "./harnesses/codex/pricing.js"
 
 // ── Utilities ──
 export { startToolServer } from "./util/tool-server.js"
