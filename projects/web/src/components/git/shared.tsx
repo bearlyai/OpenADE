@@ -45,13 +45,13 @@ export function DiffContextSelect({ value, onChange }: { value: DiffContextSetti
 export function StatusIcon({ status }: { status: ChangedFileInfo["status"] }) {
     switch (status) {
         case "added":
-            return <Plus size="1em" className="text-success" />
+            return <Plus size="1em" className="flex-shrink-0 text-success" />
         case "deleted":
-            return <Minus size="1em" className="text-error" />
+            return <Minus size="1em" className="flex-shrink-0 text-error" />
         case "renamed":
-            return <ArrowRight size="1em" className="text-warning" />
+            return <ArrowRight size="1em" className="flex-shrink-0 text-warning" />
         default:
-            return <Pencil size="1em" className="text-primary" />
+            return <Pencil size="1em" className="flex-shrink-0 text-primary" />
     }
 }
 
