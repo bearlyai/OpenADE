@@ -62,36 +62,34 @@ function createManager(initialStatus: GitSummaryResponse): {
 }
 
 describe("ChangesManager expansion state", () => {
-    it("auto-expands newly introduced directories when changes refresh", () => {
-        const { manager, setStatus } = createManager(gitSummary(["src/a.ts"]))
+    it("expands every directory when changes refresh", () => {
+        const { manager, setStatus } = createManager(gitSummary(["src/a.ts", "src/components/Button.tsx"]))
 
         try {
             manager.initializeForTray()
             expect(manager.expandedPaths.has("src")).toBe(true)
+            expect(manager.expandedPaths.has("src/components")).toBe(true)
 
-            setStatus(gitSummary(["src/a.ts", "docs/guide.md"]))
+            setStatus(gitSummary(["src/a.ts", "src/components/Button.tsx", "docs/api/reference.md"]))
             manager.initializeForTray()
 
             expect(manager.expandedPaths.has("src")).toBe(true)
             expect(manager.expandedPaths.has("docs")).toBe(true)
+            expect(manager.expandedPaths.has("docs/api")).toBe(true)
         } finally {
             manager.dispose()
         }
     })
 
-    it("does not reopen a directory the user collapsed", () => {
-        const { manager, setStatus } = createManager(gitSummary(["src/a.ts", "docs/guide.md"]))
+    it("keeps directories open when a directory row is toggled", () => {
+        const { manager } = createManager(gitSummary(["src/a.ts", "docs/api/reference.md"]))
 
         try {
             manager.initializeForTray()
             manager.toggleExpanded("docs")
 
-            expect(manager.expandedPaths.has("docs")).toBe(false)
-
-            setStatus(gitSummary(["src/a.ts", "docs/guide.md", "docs/api/reference.md"]))
-            manager.initializeForTray()
-
-            expect(manager.expandedPaths.has("docs")).toBe(false)
+            expect(manager.expandedPaths.has("docs")).toBe(true)
+            expect(manager.expandedPaths.has("docs/api")).toBe(true)
         } finally {
             manager.dispose()
         }
