@@ -1,10 +1,10 @@
 import { parsePatchFiles } from "@pierre/diffs"
-import { ArrowRight, ChevronDown, ChevronRight, FileCode, FileImage, Folder, RefreshCw } from "lucide-react"
+import { ArrowRight, FileCode, FileImage, Folder, RefreshCw } from "lucide-react"
 import { observer } from "mobx-react"
 import { useEffect, useMemo, useState } from "react"
 import { twMerge } from "tailwind-merge"
-import type { ChangesManager } from "../store/managers/ChangesManager"
 import { useCodeStore } from "../store/context"
+import type { ChangesManager } from "../store/managers/ChangesManager"
 import { getChangesLoadMode, getPatchContextLines, shouldUsePatchDiff } from "../utils/gitDiffContext"
 import { type AnnotationSide, type CommentHandlers, FileDiffViewer, FileViewer, MultiFileDiffViewer } from "./FilesAndDiffs"
 import { DiffContextSelect, StatusIcon, type ViewMode, ViewModeToggle } from "./git/shared"
@@ -35,32 +35,24 @@ function DiffSourceSelect({ value, onChange }: { value: DiffSource; onChange: (v
 
 interface ChangesTreeItemProps {
     entry: FlatTreeEntry
-    expanded: boolean
     selected: boolean
     onSelect: () => void
-    onToggle: () => void
 }
 
-function ChangesTreeItem({ entry, expanded, selected, onSelect, onToggle }: ChangesTreeItemProps) {
+function ChangesTreeItem({ entry, selected, onSelect }: ChangesTreeItemProps) {
     const { node, depth } = entry
 
     if (node.isDir) {
         return (
-            <button
-                type="button"
-                onClick={onToggle}
-                className={twMerge(
-                    "btn w-full flex items-center gap-1 py-1 pr-2 text-sm text-left transition-colors",
-                    "text-muted hover:text-base-content hover:bg-base-200"
-                )}
-                style={{ paddingLeft: `${depth * 12 + 8}px` }}
+            <div
+                className={twMerge("w-full flex items-center gap-1 py-1 pr-2 text-sm text-left", "text-muted")}
+                style={{ paddingLeft: `${depth * 10 + 6}px` }}
                 title={node.path}
             >
-                {expanded ? <ChevronDown size={14} className="flex-shrink-0 text-muted" /> : <ChevronRight size={14} className="flex-shrink-0 text-muted" />}
                 <Folder size={14} className="flex-shrink-0 text-muted" />
                 <span className="truncate font-mono text-xs">{node.name}</span>
                 <span className="ml-auto flex-shrink-0 text-xs text-muted">{node.fileCount}</span>
-            </button>
+            </div>
         )
     }
 
@@ -79,7 +71,7 @@ function ChangesTreeItem({ entry, expanded, selected, onSelect, onToggle }: Chan
                 "btn w-full flex items-center gap-1 py-1 pr-2 text-sm text-left transition-colors",
                 selected ? "bg-primary/10 text-base-content" : "text-muted hover:text-base-content hover:bg-base-200"
             )}
-            style={{ paddingLeft: `${depth * 12 + 8}px` }}
+            style={{ paddingLeft: `${depth * 10 + 6}px` }}
             title={file.binary ? `${file.path} (binary)` : file.path}
         >
             <StatusIcon status={file.status} />
@@ -112,7 +104,7 @@ export const ChangesViewer = observer(function ChangesViewer({ changesManager, i
         codeStore.ui.setDiffContext(context)
     }
 
-    const { files, selectedFile, filePair, filePatch, filePairLoading, filePatchLoading, diffSource, flatEntries, expandedPaths, isLoading } = changesManager
+    const { files, selectedFile, filePair, filePatch, filePairLoading, filePatchLoading, diffSource, flatEntries, isLoading } = changesManager
     const largeDiffKey = selectedFile && filePatch ? `${selectedFile.path}:${filePatch.stats.changedLines}:${filePatch.stats.hunkCount}` : null
     const deferLargeDiff = filePatch?.heavy === true && renderLargeDiffKey !== largeDiffKey
 
@@ -325,16 +317,11 @@ export const ChangesViewer = observer(function ChangesViewer({ changesManager, i
                         <div className="py-1">
                             <ChangesTreeItem
                                 entry={entry}
-                                expanded={entry.node.isDir && expandedPaths.has(entry.node.path)}
                                 selected={!entry.node.isDir && entry.node.file?.path === selectedFile?.path}
                                 onSelect={() => {
                                     if (!entry.node.isDir && entry.node.file) {
                                         changesManager.selectFile(entry.node.file.path)
                                     }
-                                }}
-                                onToggle={() => {
-                                    if (!entry.node.isDir) return
-                                    changesManager.toggleExpanded(entry.node.path)
                                 }}
                             />
                         </div>

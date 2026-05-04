@@ -127,10 +127,6 @@ export class ChangesManager {
         }
     }
 
-    toggleExpanded(_path: string): void {
-        this.expandedPaths = this.buildExpandedPaths(this.fileTree)
-    }
-
     refresh(): void {
         this.taskModel.refreshGitState()
     }

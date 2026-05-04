@@ -81,15 +81,13 @@ describe("ChangesManager expansion state", () => {
         }
     })
 
-    it("keeps directories open when a directory row is toggled", () => {
+    it("flattens nested files without expansion toggles", () => {
         const { manager } = createManager(gitSummary(["src/a.ts", "docs/api/reference.md"]))
 
         try {
             manager.initializeForTray()
-            manager.toggleExpanded("docs")
 
-            expect(manager.expandedPaths.has("docs")).toBe(true)
-            expect(manager.expandedPaths.has("docs/api")).toBe(true)
+            expect(manager.flatEntries.map((entry) => entry.node.path)).toEqual(["docs", "docs/api", "docs/api/reference.md", "src", "src/a.ts"])
         } finally {
             manager.dispose()
         }
