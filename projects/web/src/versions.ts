@@ -8,6 +8,18 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.74.0",
+        title: "Usage Stats & Sharper Reviews",
+        date: "2026-05-03",
+        highlights: [
+            "Stats now include agent runtime totals in task stats, monthly breakdowns, and share cards",
+            "Codex usage costs are calculated more accurately with cached-token pricing and resumed-session deltas",
+            "Reviews and plans now separate explicit user requirements from agent decisions more clearly",
+            "The changes tray keeps newly appearing directories expanded while still respecting directories you collapsed",
+            "Diff status icons stay readable in dense file lists instead of shrinking",
+        ],
+    },
+    {
         version: "0.73.0",
         title: "Smarter Resumes & Review Diffs",
         date: "2026-04-26",
