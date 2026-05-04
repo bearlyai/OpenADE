@@ -8,6 +8,15 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.74.1",
+        title: "Always-Expanded Git Tray",
+        date: "2026-05-04",
+        highlights: [
+            "Changes tray directories now stay expanded automatically so nested files are visible without extra clicks",
+            "Directory collapse controls were removed for a simpler, scan-first git review flow",
+        ],
+    },
+    {
         version: "0.74.0",
         title: "Usage Stats & Sharper Reviews",
         date: "2026-05-03",
