@@ -6,9 +6,11 @@ import * as path from "path"
 import { isDev, getMainUrl } from "./config"
 import { manageWindowsAutoHide } from "./modules/windowControls"
 import { getLastFrameColors } from "./modules/windowFrame"
+import { getWindowKeyboardShortcutAction } from "./modules/windowKeyboardShortcuts"
 import { waitFor } from "./utils"
 
 let executorWindow: BrowserWindow | null = null
+let terminalKeyboardCapture = false
 
 const cantLoadPath = (): string => {
     // Note: this path is used in
@@ -103,6 +105,7 @@ const startExecutor = () => {
         return
     }
     executorWindow = null
+    terminalKeyboardCapture = false
     const executorUrl = getMainUrl()
     const mbExecutor = new BrowserWindow({
         title: "OpenADE",
@@ -136,10 +139,11 @@ const startExecutor = () => {
     // Intercept Cmd+R / Ctrl+R to do a graceful reload instead of Electron's default
     // which causes a transient did-fail-load and briefly shows the cantLoad page
     mbExecutor.webContents.on("before-input-event", (event, input) => {
-        if (input.key.toLowerCase() === "w" && (input.meta || input.control) && !input.alt && !input.shift) {
+        const shortcutAction = getWindowKeyboardShortcutAction(input, process.platform, terminalKeyboardCapture)
+        if (shortcutAction === "block-window-close") {
             event.preventDefault()
         }
-        if (input.key.toLowerCase() === "r" && (input.meta || input.control) && !input.alt && !input.shift && input.type === "keyDown") {
+        if (shortcutAction === "reload") {
             event.preventDefault()
             loadSite()
         }
@@ -150,6 +154,8 @@ const startExecutor = () => {
     let isHandlingFailedLoad = false
 
     const loadSite = () => {
+        terminalKeyboardCapture = false
+        mbExecutor.webContents.setIgnoreMenuShortcuts(false)
         isHandlingFailedLoad = false
         mbExecutor.loadURL(executorUrl)
     }
@@ -267,5 +273,13 @@ export const load = () => {
     // override as it is deabled on prod.
     ipcMain.handle("force-enable-dev-tools", () => {
         forceEnableDevTools()
+    })
+
+    ipcMain.handle("app:set-terminal-keyboard-capture", (event, captured: unknown) => {
+        const win = executorWindow
+        if (!win || win.isDestroyed() || event.sender !== win.webContents) return
+
+        terminalKeyboardCapture = captured === true
+        win.webContents.setIgnoreMenuShortcuts(terminalKeyboardCapture && process.platform !== "darwin")
     })
 }

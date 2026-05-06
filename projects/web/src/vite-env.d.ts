@@ -9,6 +9,7 @@ interface OpenADEAPI {
         applyUpdate: () => Promise<void>
         forceEnableDevTools: () => Promise<void>
         isWindowedWithFrame: () => Promise<boolean>
+        setTerminalKeyboardCapture: (captured: boolean) => Promise<void>
         onUpdateAvailable: (cb: () => void) => () => void
         onUpdateError: (cb: () => void) => () => void
         retryUpdateCheck: () => Promise<void>

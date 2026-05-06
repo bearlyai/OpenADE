@@ -27,6 +27,7 @@ const openadeAPI = {
         applyUpdate: () => ipcRenderer.invoke("apply-update"),
         forceEnableDevTools: () => ipcRenderer.invoke("force-enable-dev-tools"),
         isWindowedWithFrame: () => ipcRenderer.invoke("is-windowed-with-frame"),
+        setTerminalKeyboardCapture: (captured: boolean) => ipcRenderer.invoke("app:set-terminal-keyboard-capture", captured),
         onUpdateAvailable: (cb: () => void) =>
             createListener("app:update-available", cb as (...args: unknown[]) => void),
         onUpdateError: (cb: () => void) =>

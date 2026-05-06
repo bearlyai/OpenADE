@@ -24,3 +24,8 @@ export async function retryUpdateCheck(): Promise<void> {
     if (!window.openadeAPI) return
     await window.openadeAPI.app.retryUpdateCheck()
 }
+
+export async function setTerminalKeyboardCapture(captured: boolean): Promise<void> {
+    if (!window.openadeAPI) return
+    await window.openadeAPI.app.setTerminalKeyboardCapture(captured)
+}

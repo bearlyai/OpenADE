@@ -5,6 +5,7 @@ import { RotateCcw } from "lucide-react"
 import { useCallback, useEffect, useRef } from "react"
 import { twMerge } from "tailwind-merge"
 import "@xterm/xterm/css/xterm.css"
+import { setTerminalKeyboardCapture } from "../electronAPI/app"
 import { PtyHandle, type PtyOutputEvent } from "../electronAPI/pty"
 import { useTerminalTheme } from "../hooks/useTerminalTheme"
 import { DEFAULT_TERMINAL_THEME } from "../themes/terminalThemes"
@@ -87,6 +88,17 @@ export function Terminal({ ptyId, cwd, className, onClose }: TerminalProps) {
         if (!container) return
 
         let resizeObserver: ResizeObserver | null = null
+        const handleFocusIn = () => {
+            setTerminalKeyboardCapture(true).catch(() => {})
+        }
+        const handleFocusOut = (event: FocusEvent) => {
+            const nextTarget = event.relatedTarget
+            if (nextTarget instanceof Node && container.contains(nextTarget)) return
+            setTerminalKeyboardCapture(false).catch(() => {})
+        }
+
+        container.addEventListener("focusin", handleFocusIn)
+        container.addEventListener("focusout", handleFocusOut)
 
         async function setup() {
             if (!mounted || !container) return
@@ -151,6 +163,11 @@ export function Terminal({ ptyId, cwd, className, onClose }: TerminalProps) {
             // Double-Escape to unfocus terminal and close tray
             // In xterm.js: return true = process key normally, return false = prevent key
             terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+                const isMac = navigator.platform.toUpperCase().includes("MAC")
+                if (event.key === "Escape" || event.ctrlKey || event.altKey || (!isMac && event.metaKey)) {
+                    event.stopPropagation()
+                }
+
                 if (event.key === "Escape" && event.type === "keydown") {
                     const now = Date.now()
                     const inst = terminalInstances.get(ptyId)
@@ -221,6 +238,9 @@ export function Terminal({ ptyId, cwd, className, onClose }: TerminalProps) {
         return () => {
             mounted = false
             resizeObserver?.disconnect()
+            container.removeEventListener("focusin", handleFocusIn)
+            container.removeEventListener("focusout", handleFocusOut)
+            setTerminalKeyboardCapture(false).catch(() => {})
         }
     }, [ptyId, cwd])
 
