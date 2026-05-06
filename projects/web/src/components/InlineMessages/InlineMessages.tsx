@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react"
-import type { HarnessStreamEvent, HarnessId } from "../../electronAPI/harnessEventTypes"
+import type { HarnessId, HarnessStreamEvent } from "../../electronAPI/harnessEventTypes"
 import type { ActionEventSource } from "../../types"
 import { FileViewer } from "../FilesAndDiffs"
 import { type CommentContext, type DisplayContext, type GroupWithMeta, type MergedGroup, groupStreamEvents } from "../events/messageGroups"
@@ -32,6 +32,8 @@ function getGroupId(group: MergedGroup, index: number): string {
         case "bash":
         case "todoWrite":
             return `${group.type}-${group.toolUseId}`
+        case "fileChange":
+            return `${group.type}-${group.toolUseId}-${group.changeIndex}-${group.filePath}`
         case "text":
         case "thinking":
         case "system":
@@ -39,6 +41,8 @@ function getGroupId(group: MergedGroup, index: number): string {
             return `${group.type}-${group.messageIndex}`
         case "stderr":
             return `stderr-${group.eventId}`
+        case "unknown":
+            return `${group.type}-${group.harnessId}-${group.messageIndex}-${group.originalType ?? index}`
         default:
             return `unknown-${index}`
     }

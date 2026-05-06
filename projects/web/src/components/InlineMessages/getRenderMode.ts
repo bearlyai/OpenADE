@@ -10,10 +10,12 @@ export function getRenderMode(group: MergedGroup, ctx: DisplayContext): RenderMo
         tool: () => "pill",
         edit: () => (isPlanMode ? "pill" : "row"),
         write: () => (isPlanMode ? "pill" : "row"),
+        fileChange: () => (isPlanMode ? "pill" : "row"),
         bash: () => "pill",
         system: () => "pill",
         result: () => (isPlanMode ? "row" : "row"),
         stderr: () => (isPlanMode ? "pill" : "row"),
+        unknown: () => (isPlanMode ? "pill" : "row"),
         todoWrite: () => (isPlanMode ? "pill" : "row"),
     })
 }

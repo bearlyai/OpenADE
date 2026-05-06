@@ -13,7 +13,7 @@
 
 import type { HarnessUsage } from "@openade/harness/browser"
 import type { ReactNode } from "react"
-import type { HarnessStreamEvent, HarnessId, HarnessRawMessageEvent } from "../../electronAPI/harnessEventTypes"
+import type { HarnessId, HarnessRawMessageEvent, HarnessStreamEvent } from "../../electronAPI/harnessEventTypes"
 import { extractRawMessageEvents } from "../../electronAPI/harnessEventTypes"
 import type { ActionEventSource } from "../../types"
 import { groupClaudeCodeMessages } from "./parsers/claudeCodeParser"
@@ -94,6 +94,19 @@ export interface WriteGroup {
     messageIndices: [number, number | undefined]
 }
 
+export interface FileChangeGroup {
+    type: "fileChange"
+    toolUseId: string
+    filePath: string
+    kind: string
+    status: string
+    diff?: string
+    isError: boolean
+    isPending: boolean
+    messageIndex: number
+    changeIndex: number
+}
+
 export interface BashGroup {
     type: "bash"
     toolUseId: string
@@ -130,6 +143,15 @@ export interface StderrGroup {
     eventId: string
 }
 
+export interface UnknownGroup {
+    type: "unknown"
+    harnessId: HarnessId
+    label: string
+    originalType?: string
+    raw: unknown
+    messageIndex: number
+}
+
 export interface TodoItem {
     content: string
     status: "pending" | "in_progress" | "completed"
@@ -151,7 +173,19 @@ export interface ThinkingGroup {
     messageIndex: number
 }
 
-export type MessageGroup = TextGroup | ThinkingGroup | ToolGroup | EditGroup | WriteGroup | BashGroup | SystemGroup | ResultGroup | StderrGroup | TodoWriteGroup
+export type MessageGroup =
+    | TextGroup
+    | ThinkingGroup
+    | ToolGroup
+    | EditGroup
+    | WriteGroup
+    | FileChangeGroup
+    | BashGroup
+    | SystemGroup
+    | ResultGroup
+    | StderrGroup
+    | UnknownGroup
+    | TodoWriteGroup
 
 // MergedGroup is now just MessageGroup - no tool merging needed
 // The groupByRenderMode function handles grouping consecutive pills

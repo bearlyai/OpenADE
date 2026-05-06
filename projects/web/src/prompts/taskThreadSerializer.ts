@@ -1,9 +1,9 @@
+import { type MessageGroup, groupStreamEvents } from "../components/events/messageGroups"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
-import { groupStreamEvents, type MessageGroup } from "../components/events/messageGroups"
 import type { ActionEvent, ActionEventSource, Task } from "../types"
 
 type TaskLike = Pick<Task, "id" | "repoId" | "title" | "description" | "events">
-import { makeXml, type XmlNode } from "../utils/makeXML"
+import { type XmlNode, makeXml } from "../utils/makeXML"
 
 export interface TaskThreadFormat {
     includeFunctionInputs: boolean
@@ -406,6 +406,21 @@ function groupsToItems(event: ActionEvent, groups: MessageGroup[], format: TaskT
                     })
                 }
                 break
+            case "fileChange":
+                if (format.includeFunctionInputs) {
+                    items.push({
+                        kind: "functionCall",
+                        name: "FileChange",
+                        callId: group.toolUseId,
+                        input: {
+                            filePath: group.filePath,
+                            kind: group.kind,
+                            status: group.status,
+                        },
+                        isPending: group.isPending,
+                    })
+                }
+                break
             case "bash":
                 if (format.includeFunctionInputs) {
                     items.push({
@@ -451,6 +466,7 @@ function groupsToItems(event: ActionEvent, groups: MessageGroup[], format: TaskT
                 break
             case "stderr":
             case "system":
+            case "unknown":
                 // Skip noisy envelope/system messages in v1 serializer output.
                 break
             default: {

@@ -8,8 +8,10 @@ export type CodexEvent =
     | CodexTurnCompletedEvent
     | CodexTurnFailedEvent
     | CodexItemStartedEvent
+    | CodexItemUpdatedEvent
     | CodexItemCompletedEvent
     | CodexErrorEvent
+    | CodexRawJsonEvent
 
 export interface CodexThreadStartedEvent {
     type: "thread.started"
@@ -45,9 +47,20 @@ export interface CodexItemCompletedEvent {
     item: CodexItem
 }
 
+export interface CodexItemUpdatedEvent {
+    type: "item.updated"
+    item: CodexItem
+}
+
 export interface CodexErrorEvent {
     type: "error"
     message: string
+}
+
+export interface CodexRawJsonEvent {
+    type: "raw_json"
+    original_type?: string
+    raw: Record<string, unknown>
 }
 
 export interface CodexUsage {
@@ -56,7 +69,14 @@ export interface CodexUsage {
     output_tokens: number
 }
 
-export type CodexItem = CodexReasoningItem | CodexAgentMessageItem | CodexCommandExecutionItem
+export type CodexItem =
+    | CodexReasoningItem
+    | CodexAgentMessageItem
+    | CodexCommandExecutionItem
+    | CodexFileChangeItem
+    | CodexTodoListItem
+    | CodexErrorItem
+    | CodexUnsupportedItem
 
 export interface CodexReasoningItem {
     id: string
@@ -76,18 +96,61 @@ export interface CodexCommandExecutionItem {
     command: string
     aggregated_output: string
     exit_code: number | null
-    status: "in_progress" | "completed"
+    status: "in_progress" | "completed" | "failed" | "declined" | string
+}
+
+export interface CodexFileChangeItem {
+    id: string
+    type: "file_change"
+    changes: CodexFileChange[]
+    status: "in_progress" | "completed" | "failed" | "declined" | string
+}
+
+export interface CodexFileChange {
+    path: string
+    kind: "add" | "delete" | "update" | string
+    diff?: string
+}
+
+export interface CodexTodoListItem {
+    id: string
+    type: "todo_list"
+    items: Array<{ text: string; completed: boolean }>
+}
+
+export interface CodexErrorItem {
+    id: string
+    type: "error"
+    message: string
+}
+
+export interface CodexUnsupportedItem {
+    id: string
+    type: "unsupported"
+    original_type?: string
+    raw: Record<string, unknown>
 }
 
 // ============================================================================
 // Parser
 // ============================================================================
 
-const KNOWN_TOP_TYPES = new Set<string>(["thread.started", "turn.started", "turn.completed", "turn.failed", "item.started", "item.completed", "error"])
+const KNOWN_TOP_TYPES = new Set<string>([
+    "thread.started",
+    "turn.started",
+    "turn.completed",
+    "turn.failed",
+    "item.started",
+    "item.updated",
+    "item.completed",
+    "error",
+])
+
+const KNOWN_ITEM_TYPES = new Set<string>(["reasoning", "agent_message", "command_execution", "file_change", "todo_list", "error"])
 
 /**
  * Parses a raw JSON object into a typed CodexEvent.
- * Returns null for unknown event types (forward-compatible).
+ * Preserves unknown event types as raw_json so consumers can surface them.
  */
 export function parseCodexEvent(json: unknown): CodexEvent | null {
     if (!json || typeof json !== "object") return null
@@ -97,11 +160,37 @@ export function parseCodexEvent(json: unknown): CodexEvent | null {
 
     if (!type) return null
 
+    if ((type === "item.started" || type === "item.updated" || type === "item.completed") && obj.item && typeof obj.item === "object") {
+        return {
+            ...obj,
+            item: parseCodexItem(obj.item),
+        } as unknown as CodexEvent
+    }
+
     // Known types are parsed directly
     if (KNOWN_TOP_TYPES.has(type)) {
         return obj as unknown as CodexEvent
     }
 
-    // Unknown types — return null (forward-compatible)
-    return null
+    return {
+        type: "raw_json",
+        original_type: type,
+        raw: obj,
+    }
+}
+
+function parseCodexItem(item: object): CodexItem {
+    const obj = item as Record<string, unknown>
+    const type = obj.type as string | undefined
+
+    if (type && KNOWN_ITEM_TYPES.has(type)) {
+        return obj as unknown as CodexItem
+    }
+
+    return {
+        id: typeof obj.id === "string" ? obj.id : "",
+        type: "unsupported",
+        original_type: type,
+        raw: obj,
+    }
 }

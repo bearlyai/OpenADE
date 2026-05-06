@@ -10,8 +10,16 @@
  *   - turn.failed / error → ResultGroup (error)
  */
 
-import type { CodexEvent, CodexItem, CodexTurnCompletedEvent, CodexTurnFailedEvent, CodexErrorEvent } from "@openade/harness/browser"
-import type { MessageGroup } from "../messageGroups"
+import type {
+    CodexErrorEvent,
+    CodexEvent,
+    CodexFileChangeItem,
+    CodexItem,
+    CodexRawJsonEvent,
+    CodexTurnCompletedEvent,
+    CodexTurnFailedEvent,
+} from "@openade/harness/browser"
+import type { MessageGroup, TodoItem } from "../messageGroups"
 
 /**
  * Group Codex messages into MessageGroups for inline rendering.
@@ -41,6 +49,12 @@ export function groupCodexMessages(messages: CodexEvent[], completionUsage?: { c
         if (msg.type === "item.started") {
             if (completedItemIds.has(msg.item.id)) continue
             pushItemGroup(groups, msg.item, i, true)
+            continue
+        }
+
+        if (msg.type === "item.updated") {
+            if (completedItemIds.has(msg.item.id)) continue
+            pushItemGroup(groups, msg.item, i, false)
             continue
         }
 
@@ -112,6 +126,11 @@ export function groupCodexMessages(messages: CodexEvent[], completionUsage?: { c
             continue
         }
 
+        if (msg.type === "raw_json") {
+            pushCodexUnknownEventGroup(groups, msg, i)
+            continue
+        }
+
         // turn.started — no visual representation
     }
 
@@ -148,5 +167,84 @@ function pushItemGroup(groups: MessageGroup[], item: CodexItem, messageIndex: nu
                 messageIndices: [messageIndex, undefined],
             })
             break
+
+        case "file_change":
+            pushFileChangeGroups(groups, item, messageIndex, isPending)
+            break
+
+        case "todo_list": {
+            const todos: TodoItem[] = item.items.map((todo) => ({
+                content: todo.text,
+                status: todo.completed ? "completed" : "pending",
+                activeForm: todo.text,
+            }))
+            groups.push({
+                type: "todoWrite",
+                toolUseId: item.id,
+                todos,
+                isError: false,
+                isPending,
+                messageIndices: [messageIndex, undefined],
+            })
+            break
+        }
+
+        case "error":
+            groups.push({
+                type: "result",
+                subtype: "error_during_execution",
+                durationMs: 0,
+                totalCostUsd: 0,
+                usage: { inputTokens: 0, outputTokens: 0 },
+                isError: true,
+                errors: [item.message],
+                messageIndex,
+            })
+            break
+
+        case "unsupported":
+            groups.push({
+                type: "unknown",
+                harnessId: "codex",
+                label: `Unknown Codex item: ${item.original_type ?? "item"}`,
+                originalType: item.original_type,
+                raw: item.raw,
+                messageIndex,
+            })
+            break
     }
+}
+
+function pushCodexUnknownEventGroup(groups: MessageGroup[], event: CodexRawJsonEvent, messageIndex: number): void {
+    groups.push({
+        type: "unknown",
+        harnessId: "codex",
+        label: `Unknown Codex event: ${event.original_type ?? "event"}`,
+        originalType: event.original_type,
+        raw: event.raw,
+        messageIndex,
+    })
+}
+
+function pushFileChangeGroups(groups: MessageGroup[], item: CodexFileChangeItem, messageIndex: number, isPendingEvent: boolean): void {
+    const status = item.status.toLowerCase()
+    const isPending = isPendingEvent || status === "in_progress" || status === "inprogress"
+    const isError = status === "failed" || status === "declined"
+
+    const changes = Array.isArray(item.changes) ? item.changes : []
+
+    changes.forEach((change, changeIndex) => {
+        groups.push({
+            type: "fileChange",
+            toolUseId: item.id,
+            filePath: change.path,
+            kind: change.kind,
+            status: item.status,
+            diff: change.diff,
+            isError,
+            isPending,
+            messageIndex,
+            changeIndex,
+        })
+    })
 }

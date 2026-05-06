@@ -91,6 +91,7 @@ export type {
     ClaudeToolProgressEvent,
     ClaudeToolUseSummaryEvent,
     ClaudeAuthStatusEvent,
+    ClaudeRawJsonEvent,
     ClaudeContentBlock,
     ClaudeUserContentBlock,
 } from "./harnesses/claude-code/types.js"
@@ -104,13 +105,20 @@ export type {
     CodexTurnCompletedEvent,
     CodexTurnFailedEvent,
     CodexItemStartedEvent,
+    CodexItemUpdatedEvent,
     CodexItemCompletedEvent,
     CodexErrorEvent,
+    CodexRawJsonEvent,
     CodexUsage,
     CodexItem,
     CodexReasoningItem,
     CodexAgentMessageItem,
     CodexCommandExecutionItem,
+    CodexFileChangeItem,
+    CodexFileChange,
+    CodexTodoListItem,
+    CodexErrorItem,
+    CodexUnsupportedItem,
 } from "./harnesses/codex/types.js"
 
 export { parseCodexEvent } from "./harnesses/codex/types.js"

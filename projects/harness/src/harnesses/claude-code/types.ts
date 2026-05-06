@@ -17,6 +17,7 @@ export type ClaudeEvent =
     | ClaudeToolProgressEvent
     | ClaudeToolUseSummaryEvent
     | ClaudeAuthStatusEvent
+    | ClaudeRawJsonEvent
 
 // ── system:init ──
 export interface ClaudeSystemInitEvent {
@@ -164,6 +165,14 @@ export interface ClaudeAuthStatusEvent {
     [key: string]: unknown
 }
 
+// ── raw_json (unknown future event) ──
+export interface ClaudeRawJsonEvent {
+    type: "raw_json"
+    original_type?: string
+    original_subtype?: string
+    raw: Record<string, unknown>
+}
+
 // ============================================================================
 // Parser
 // ============================================================================
@@ -183,7 +192,7 @@ const KNOWN_TOP_TYPES = new Set<string>(["system", "assistant", "user", "result"
 
 /**
  * Parses a raw JSON object into a typed ClaudeEvent.
- * Returns null for unknown event types (forward-compatible).
+ * Preserves unknown event types as raw_json so consumers can surface them.
  */
 export function parseClaudeEvent(json: unknown): ClaudeEvent | null {
     if (!json || typeof json !== "object") return null
@@ -192,13 +201,24 @@ export function parseClaudeEvent(json: unknown): ClaudeEvent | null {
     const type = obj.type as string | undefined
 
     if (!type || !KNOWN_TOP_TYPES.has(type)) {
-        return null
+        return type
+            ? {
+                  type: "raw_json",
+                  original_type: type,
+                  raw: obj,
+              }
+            : null
     }
 
     if (type === "system") {
         const subtype = obj.subtype as string | undefined
         if (!subtype || !KNOWN_SYSTEM_SUBTYPES.has(subtype)) {
-            return null
+            return {
+                type: "raw_json",
+                original_type: type,
+                original_subtype: subtype,
+                raw: obj,
+            }
         }
         // Trust the structure — the CLI output is the source of truth
         return obj as unknown as ClaudeEvent

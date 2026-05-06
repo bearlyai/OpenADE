@@ -204,16 +204,25 @@ describe("parseClaudeEvent", () => {
         expect(event!.type).toBe("auth_status")
     })
 
-    it("returns null for unknown top-level type", () => {
+    it("preserves unknown top-level types as raw_json", () => {
         const raw = { type: "unknown_future_type", data: "..." }
         const event = parseClaudeEvent(raw)
-        expect(event).toBeNull()
+        expect(event).toEqual({
+            type: "raw_json",
+            original_type: "unknown_future_type",
+            raw,
+        })
     })
 
-    it("returns null for unknown system subtype", () => {
+    it("preserves unknown system subtypes as raw_json", () => {
         const raw = { type: "system", subtype: "unknown_future_subtype" }
         const event = parseClaudeEvent(raw)
-        expect(event).toBeNull()
+        expect(event).toEqual({
+            type: "raw_json",
+            original_type: "system",
+            original_subtype: "unknown_future_subtype",
+            raw,
+        })
     })
 
     it("returns null for null input", () => {
@@ -230,8 +239,14 @@ describe("parseClaudeEvent", () => {
         expect(parseClaudeEvent({ data: "no type" })).toBeNull()
     })
 
-    it("returns null for system without subtype", () => {
-        expect(parseClaudeEvent({ type: "system" })).toBeNull()
+    it("preserves system events without subtype as raw_json", () => {
+        const raw = { type: "system" }
+        expect(parseClaudeEvent(raw)).toEqual({
+            type: "raw_json",
+            original_type: "system",
+            original_subtype: undefined,
+            raw,
+        })
     })
 
     it("handles extra fields gracefully (forward-compatible)", () => {

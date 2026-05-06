@@ -124,10 +124,64 @@ describe("parseCodexEvent", () => {
         }
     })
 
-    it("returns null for unknown event type", () => {
+    it("parses item.completed with file_change item", () => {
+        const raw = {
+            type: "item.completed",
+            item: {
+                id: "item-4",
+                type: "file_change",
+                changes: [{ path: "src/app.ts", kind: "update", diff: "diff --git a/src/app.ts b/src/app.ts\n" }],
+                status: "completed",
+            },
+        }
+        const event = parseCodexEvent(raw)
+        expect(event).not.toBeNull()
+        expect(event!.type).toBe("item.completed")
+        if (event!.type === "item.completed" && event!.item.type === "file_change") {
+            expect(event!.item.changes[0].path).toBe("src/app.ts")
+            expect(event!.item.changes[0].diff).toContain("diff --git")
+        }
+    })
+
+    it("parses item.updated events", () => {
+        const raw = {
+            type: "item.updated",
+            item: { id: "item-5", type: "todo_list", items: [{ text: "Ship", completed: false }] },
+        }
+        const event = parseCodexEvent(raw)
+        expect(event).not.toBeNull()
+        expect(event!.type).toBe("item.updated")
+        if (event!.type === "item.updated") {
+            expect(event!.item.type).toBe("todo_list")
+        }
+    })
+
+    it("preserves unknown event types as raw_json", () => {
         const raw = { type: "future.event", data: "something new" }
         const event = parseCodexEvent(raw)
-        expect(event).toBeNull()
+        expect(event).toEqual({
+            type: "raw_json",
+            original_type: "future.event",
+            raw,
+        })
+    })
+
+    it("preserves unknown item types as unsupported items", () => {
+        const raw = {
+            type: "item.completed",
+            item: { id: "item-6", type: "future_item", value: 123 },
+        }
+        const event = parseCodexEvent(raw)
+        expect(event).not.toBeNull()
+        expect(event!.type).toBe("item.completed")
+        if (event!.type === "item.completed") {
+            expect(event!.item).toEqual({
+                id: "item-6",
+                type: "unsupported",
+                original_type: "future_item",
+                raw: raw.item,
+            })
+        }
     })
 
     it("returns null for null input", () => {

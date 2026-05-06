@@ -9,6 +9,7 @@ import type {
     ClaudeAssistantEvent,
     ClaudeContentBlock,
     ClaudeEvent,
+    ClaudeRawJsonEvent,
     ClaudeResultEvent,
     ClaudeUserContentBlock,
     ClaudeUserEvent,
@@ -128,6 +129,8 @@ export function groupClaudeCodeMessages(messages: ClaudeEvent[]): MessageGroup[]
                     metadata,
                     messageIndex: i,
                 })
+            } else {
+                pushClaudeUnknownGroup(groups, msg, i)
             }
             continue
         }
@@ -159,9 +162,11 @@ export function groupClaudeCodeMessages(messages: ClaudeEvent[]): MessageGroup[]
 
         // Handle assistant messages
         if (msg.type === "assistant") {
+            const groupCountBeforeAssistant = groups.length
             const thinking = getThinkingText(msg)
             const text = getAssistantText(msg)
             const toolUse = getToolUse(msg)
+            const unknownContentBlocks = getUnknownAssistantContentBlocks(msg)
 
             // If has thinking, create thinking group (before text)
             if (thinking) {
@@ -270,8 +275,62 @@ export function groupClaudeCodeMessages(messages: ClaudeEvent[]): MessageGroup[]
                     })
                 }
             }
+
+            if (unknownContentBlocks.length > 0) {
+                groups.push({
+                    type: "unknown",
+                    harnessId: "claude-code",
+                    label: "Unknown Claude content",
+                    originalType: "assistant.content",
+                    raw: unknownContentBlocks,
+                    messageIndex: i,
+                })
+            } else if (groups.length === groupCountBeforeAssistant) {
+                pushClaudeUnknownGroup(groups, msg, i)
+            }
+
+            continue
         }
+
+        pushClaudeUnknownGroup(groups, msg, i)
     }
 
     return groups
+}
+
+function getUnknownAssistantContentBlocks(msg: ClaudeEvent): unknown[] {
+    if (msg.type !== "assistant") return []
+    const { content } = msg.message
+    if (!Array.isArray(content)) return []
+    return content.filter((block) => {
+        const type = (block as { type?: unknown }).type
+        return type !== "text" && type !== "thinking" && type !== "tool_use"
+    })
+}
+
+function pushClaudeUnknownGroup(groups: MessageGroup[], msg: ClaudeEvent, messageIndex: number): void {
+    const rawMsg = msg as unknown as Record<string, unknown>
+    const rawJson = msg.type === "raw_json" ? (msg as ClaudeRawJsonEvent) : null
+    const originalType = rawJson ? formatRawJsonType(rawJson) : formatClaudeType(rawMsg)
+
+    groups.push({
+        type: "unknown",
+        harnessId: "claude-code",
+        label: `Unknown Claude event: ${originalType ?? "event"}`,
+        originalType,
+        raw: rawJson?.raw ?? msg,
+        messageIndex,
+    })
+}
+
+function formatRawJsonType(event: ClaudeRawJsonEvent): string | undefined {
+    if (event.original_type === "system" && event.original_subtype) return `system:${event.original_subtype}`
+    return event.original_type
+}
+
+function formatClaudeType(raw: Record<string, unknown>): string | undefined {
+    const type = typeof raw.type === "string" ? raw.type : undefined
+    const subtype = typeof raw.subtype === "string" ? raw.subtype : undefined
+    if (type === "system" && subtype) return `system:${subtype}`
+    return type
 }
