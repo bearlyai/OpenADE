@@ -6,6 +6,7 @@ import { getTaskPtyId, ptyApi } from "../../electronAPI/pty"
 import { snapshotsApi } from "../../electronAPI/snapshots"
 import { deleteTaskPreview, syncTaskPreviewFromStore, taskFromStore, updateTaskPreview } from "../../persistence"
 import { getStorageDriver } from "../../persistence/storage"
+import type { TaskStore } from "../../persistence/taskStore"
 import { fallbackTitle, generateTitle } from "../../prompts/titleExtractor"
 import type { Task, TaskDeviceEnvironment } from "../../types"
 import { TaskModel } from "../TaskModel"
@@ -497,8 +498,19 @@ export class TaskManager {
     }
 
     async setTaskClosed(taskId: string, closed: boolean): Promise<void> {
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) return
+        const repoId = this.resolveRepoId(taskId)
+        if (!repoId) {
+            console.warn("[TaskManager] Cannot update task closed state - not found in task store or repo previews:", taskId)
+            return
+        }
+
+        let taskStore: TaskStore
+        try {
+            taskStore = await this.ensureTaskStore(taskId, repoId)
+        } catch (error) {
+            console.error("[TaskManager] Failed to load task store before updating closed state:", error)
+            return
+        }
 
         // Kill terminal when closing task
         if (closed) {
@@ -512,7 +524,7 @@ export class TaskManager {
 
         // Sync to RepoStore
         if (this.store.repoStore) {
-            syncTaskPreviewFromStore(this.store.repoStore, taskStore.meta.current.repoId, taskStore)
+            syncTaskPreviewFromStore(this.store.repoStore, repoId, taskStore)
         }
     }
 
