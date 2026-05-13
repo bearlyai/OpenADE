@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { REVIEW_DIMENSIONS, REVIEW_ENGINEERING_GUIDANCE, buildPlanReviewPrompt, buildWorkReviewPrompt } from "./reviewPrompts"
+import {
+    REVIEW_DIMENSIONS,
+    REVIEW_ENGINEERING_GUIDANCE,
+    REVIEW_FINDING_FORMAT,
+    buildPlanReviewPrompt,
+    buildReviewHandoffPrompt,
+    buildWorkReviewPrompt,
+} from "./reviewPrompts"
 
 function extractTag(text: string, tagName: string): string | undefined {
     return text.match(new RegExp(`<${tagName}>\\n([\\s\\S]*?)\\n</${tagName}>`))?.[1]
@@ -8,6 +15,7 @@ function extractTag(text: string, tagName: string): string | undefined {
 function expectSharedReviewGuidance(userMessage: string): void {
     expect(userMessage.includes(REVIEW_DIMENSIONS)).toBe(true)
     expect(userMessage.includes(REVIEW_ENGINEERING_GUIDANCE)).toBe(true)
+    expect(userMessage.includes(REVIEW_FINDING_FORMAT)).toBe(true)
     expect(userMessage).toContain("ignore unrelated changes from other agents or concurrent threads")
     expect(userMessage).toContain("objectively much better ways to achieve the same goal")
 }
@@ -55,5 +63,16 @@ describe("buildWorkReviewPrompt", () => {
         expect(extractTag(userMessage, "plan_to_review")).toBeUndefined()
         expect(result.consumedCommentIds).toEqual([])
         expect(result.systemPrompt).toBeDefined()
+    })
+})
+
+describe("buildReviewHandoffPrompt", () => {
+    it("asks follow-up agents to rate finding criticality", () => {
+        const prompt = buildReviewHandoffPrompt({
+            reviewType: "work",
+            reviewText: "Finding content",
+        })
+
+        expect(prompt).toContain("- Criticality: <1-10>/10")
     })
 })

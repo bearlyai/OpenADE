@@ -17,7 +17,11 @@ const REVIEW_MODE_INSTRUCTIONS = `<current_operating_mode mode="review">
 </constraints>
 </current_operating_mode>`
 
+export const REVIEW_FINDING_FORMAT = "For each finding: Location, Issue, Criticality (1-10), Suggestion. Bullets only, no prose."
+
 export const REVIEW_DIMENSIONS = `Only raise findings you would be comfortable blocking a PR on. Do not make trivial, nitpicky, or speculative comments. Every finding should be a real bug, a real risk, or a meaningfully better approach.
+
+Every finding must include a Criticality score from 1-10 so the user can decide whether the fix is worth the engineering effort. Score by severity, likelihood, user impact, and engineering risk: 10 is a release blocker, 7-9 is high risk, 4-6 is meaningful but not necessarily blocking, and 1-3 is low importance.
 
 Evaluate through these lenses:
 
@@ -74,7 +78,7 @@ export function buildPlanReviewPrompt({
         userMessage:
             `<task_thread_context>\n${threadXml}\n</task_thread_context>\n\n` +
             `<plan_to_review>\n${planText}\n</plan_to_review>\n\n` +
-            "Review this plan. For each finding: Location, Issue, Suggestion. Bullets only, no prose.\n" +
+            `Review this plan. ${REVIEW_FINDING_FORMAT}\n` +
             "Prioritize correctness gaps and blockers first.\n" +
             "If relevant, verify assumptions against the current code and recent diffs/commits.\n\n" +
             `${REVIEW_DIMENSIONS}\n\n` +
@@ -101,7 +105,7 @@ export function buildWorkReviewPrompt({
             `<task_thread_context>\n${threadXml}\n</task_thread_context>\n\n` +
             "Review the recent work. Use read-only exploration as needed.\n" +
             "Inspect relevant git status/diff, recent commits, and touched files before writing conclusions.\n" +
-            "For each finding: Location, Issue, Suggestion. Bullets only, no prose.\n" +
+            `${REVIEW_FINDING_FORMAT}\n` +
             "Prioritize bugs, regressions, and risky complexity.\n\n" +
             `${REVIEW_DIMENSIONS}\n\n` +
             `${REVIEW_ENGINEERING_GUIDANCE}\n\n` +
@@ -124,6 +128,7 @@ export function buildReviewHandoffPrompt({
         `<review_feedback>\n${reviewText}\n</review_feedback>\n\n` +
         `A reviewer shared the feedback above on ${reviewedSubject}. For each finding, respond in this exact format:\n\n` +
         "### Finding N: <short bug summary>\n" +
+        "- Criticality: <1-10>/10, preserving the reviewer's score if present or assigning one from severity, likelihood, user impact, and engineering risk\n" +
         "- Decision: Agree | Disagree\n" +
         "- Why: <brief reasoning>\n" +
         "- Fix: <specific change you would make, or N/A if disagree>\n\n" +
