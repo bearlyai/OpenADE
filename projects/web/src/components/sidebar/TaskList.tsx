@@ -366,6 +366,7 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     const pinnedClosed = closedPreviews.filter((t) => pinnedSet.has(t.id))
     const unpinnedClosed = closedPreviews.filter((t) => !pinnedSet.has(t.id))
     const sortedPreviews = [...pinnedOpen, ...unpinnedOpen, ...pinnedClosed, ...unpinnedClosed]
+    const selectedOpenIds = sortedPreviews.filter((preview) => selectedIds.has(preview.id) && !preview.closed).map((preview) => preview.id)
     const creations = codeStore.creation.getCreationsForRepo(workspaceId)
 
     // ── Keyboard shortcuts for selection mode ──
@@ -430,6 +431,12 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
         await showDeleteConfirm(ids, exitSelectionMode)
     }
     handleBulkDeleteRef.current = handleBulkDelete
+
+    const handleBulkClose = async () => {
+        if (selectedOpenIds.length === 0) return
+        await Promise.all(selectedOpenIds.map((id) => codeStore.tasks.setTaskClosed(id, true)))
+        exitSelectionMode()
+    }
 
     const handleCancelCreation = async (cancelledCreationId: string) => {
         await codeStore.creation.cancelCreation(cancelledCreationId)
@@ -498,6 +505,15 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
                     <div className="flex items-center gap-1.5">
                         <button type="button" className="btn px-2 py-1 text-xs hover:bg-base-300 transition-colors" onClick={selectAll}>
                             All
+                        </button>
+                        <button
+                            type="button"
+                            className="btn flex items-center gap-1 px-2 py-1 text-xs hover:bg-base-300 transition-colors"
+                            onClick={handleBulkClose}
+                            disabled={selectedOpenIds.length === 0}
+                        >
+                            <CheckCircle className="w-3 h-3" />
+                            Close
                         </button>
                         <button
                             type="button"
