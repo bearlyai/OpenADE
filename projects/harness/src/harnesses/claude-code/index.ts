@@ -66,6 +66,7 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
             supportsClientTools: true,
             supportsStreamingTokens: false,
             supportsCostTracking: true,
+            supportsFastMode: true,
             supportsNamedTools: true,
             supportsImages: true,
             supportsSessionReplay: true,

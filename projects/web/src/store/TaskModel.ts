@@ -29,6 +29,7 @@ export class TaskModel {
     gitStatus: GitSummaryResponse | null = null
     model: string = DEFAULT_MODEL
     thinking: ThinkingLevel = "max"
+    fastMode = false
     harnessId: HarnessId = "claude-code"
     private gitStateLoading = false
     private _environmentCache: TaskEnvironment | null = null
@@ -144,6 +145,10 @@ export class TaskModel {
         this.thinking = level
     }
 
+    setFastMode(enabled: boolean): void {
+        this.fastMode = enabled
+    }
+
     setHarnessId(id: HarnessId): void {
         if (this.hasActionHistory) return
         if (id === this.harnessId) return
@@ -179,6 +184,7 @@ export class TaskModel {
             this.harnessId = harnessId
             const persistedModelId = event.execution.modelId
             this.model = persistedModelId ? this.normalizeModelForHarness(persistedModelId, harnessId) : getDefaultModelForHarness(harnessId)
+            this.fastMode = event.execution.fastMode ?? false
             return
         }
     }

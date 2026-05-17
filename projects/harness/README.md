@@ -90,6 +90,7 @@ Normalized input accepted by every harness.
 | `appendSystemPrompt?` | `string` | System prompt (appended) |
 | `model?` | `string` | Model ID override |
 | `thinking?` | `"low" \| "med" \| "high" \| "max"` | Thinking/reasoning effort |
+| `fastMode?` | `boolean` | Request the harness's fast service tier when supported |
 | `resumeSessionId?` | `string` | Resume a previous session |
 | `forkSession?` | `boolean` | Fork instead of resume |
 | `additionalDirectories?` | `string[]` | Extra directories to include |
@@ -129,6 +130,7 @@ type StructuredQueryBase = Pick<
     | "env"
     | "model"
     | "thinking"
+    | "fastMode"
     | "resumeSessionId"
     | "mode"
     | "mcpServers"
@@ -204,6 +206,7 @@ interface HarnessCapabilities {
     supportsClientTools: boolean
     supportsStreamingTokens: boolean
     supportsCostTracking: boolean
+    supportsFastMode: boolean
     supportsNamedTools: boolean
     supportsImages: boolean
     supportsSessionReplay: boolean

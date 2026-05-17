@@ -12,15 +12,15 @@
 import { exhaustive } from "exhaustive"
 import { makeAutoObservable } from "mobx"
 import { track } from "../../analytics"
+import type { HarnessId } from "../../electronAPI/harnessEventTypes"
 import { addTaskPreview, syncTaskPreviewFromStore, taskFromStore, updateTaskPreview } from "../../persistence"
 import { fallbackTitle, generateSlug, generateTitle } from "../../prompts/titleExtractor"
-import type { HarnessId } from "../../electronAPI/harnessEventTypes"
 import type { IsolationStrategy, RunCmdArgs, RunCmdResult, SetupEnvironmentEvent, TaskDeviceEnvironment, UserInputContext } from "../../types"
 import { getDeviceId } from "../../utils/deviceId"
 import { ulid } from "../../utils/ulid"
 import { TaskEnvironment } from "../TaskEnvironment"
-import { buildTaskCreationInput } from "./TaskCreationManager"
 import type { CodeStore } from "../store"
+import { buildTaskCreationInput } from "./TaskCreationManager"
 
 export class RunCmdManager {
     constructor(private store: CodeStore) {
@@ -43,6 +43,11 @@ export class RunCmdManager {
 
         // Validate task exists
         await this.store.getTaskStore(args.repoId, taskId)
+
+        const taskModel = this.store.tasks.getTaskModel(taskId)
+        if (taskModel && args.fastMode !== undefined) {
+            taskModel.setFastMode(args.fastMode)
+        }
 
         const input = buildTaskCreationInput(args.input, args.images ?? [])
         this.dispatchExecution(taskId, args.type, input, args.appendSystemPrompt)
@@ -161,11 +166,12 @@ export class RunCmdManager {
             source: "runCmd",
         })
 
-        // Set harness and thinking on TaskModel
+        // Set harness, thinking, and fast mode on TaskModel
         const taskModel = this.store.tasks.getTaskModel(task.id)
         if (taskModel) {
             if (args.harnessId) taskModel.setHarnessId(args.harnessId)
             if (args.thinking) taskModel.setThinking(args.thinking)
+            taskModel.setFastMode(args.fastMode ?? false)
         }
 
         // Generate title async if not provided

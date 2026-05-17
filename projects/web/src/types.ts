@@ -28,6 +28,7 @@ export interface Execution {
     sessionId?: string
     parentSessionId?: string
     modelId?: string
+    fastMode?: boolean
     events: HarnessStreamEvent[]
     gitRefsBefore?: GitRefs
     gitRefsAfter?: GitRefs
@@ -210,6 +211,7 @@ export interface RunCmdArgs {
     enabledMcpServerIds?: string[]
     harnessId?: HarnessId
     thinking?: "low" | "med" | "high" | "max"
+    fastMode?: boolean
     title?: string // if set, skip LLM title generation
 }
 

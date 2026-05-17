@@ -1,14 +1,14 @@
 import { exhaustive } from "exhaustive"
 import { makeAutoObservable, runInAction } from "mobx"
 import { track } from "../../analytics"
+import type { HarnessId } from "../../electronAPI/harnessEventTypes"
 import { addTaskPreview, syncTaskPreviewFromStore, taskFromStore, updateTaskPreview } from "../../persistence"
 import { fallbackTitle, generateSlug, generateTitle } from "../../prompts/titleExtractor"
-import type { HarnessId } from "../../electronAPI/harnessEventTypes"
-import type { ThinkingLevel } from "../TaskModel"
 import type { ImageAttachment, IsolationStrategy, SetupEnvironmentEvent, TaskDeviceEnvironment, UserInputContext } from "../../types"
 import { getDeviceId } from "../../utils/deviceId"
 import { ulid } from "../../utils/ulid"
 import { TaskEnvironment } from "../TaskEnvironment"
+import type { ThinkingLevel } from "../TaskModel"
 import type { CodeStore } from "../store"
 
 export type CreationPhase = "workspace"
@@ -23,6 +23,7 @@ export interface TaskCreationOptions {
     harnessId?: HarnessId
     modelId?: string
     thinking?: ThinkingLevel
+    fastMode?: boolean
 }
 
 export interface TaskCreation {
@@ -36,6 +37,7 @@ export interface TaskCreation {
     harnessId?: HarnessId
     modelId?: string
     thinking?: ThinkingLevel
+    fastMode?: boolean
     phase: CreationPhase | "pending" | "completing"
     error: string | null
     slug: string | null
@@ -73,6 +75,7 @@ export class TaskCreationManager {
             harnessId: options.harnessId,
             modelId: options.modelId,
             thinking: options.thinking,
+            fastMode: options.fastMode,
             phase: "pending",
             error: null,
             slug: null,
@@ -317,7 +320,7 @@ export class TaskCreationManager {
                 hasMcpServers: (creation.enabledMcpServerIds?.length ?? 0) > 0,
             })
 
-            // Set harness, model, and thinking level on the TaskModel before execution starts
+            // Set harness, model, thinking level, and fast mode before execution starts
             {
                 const taskModel = this.store.tasks.getTaskModel(task.id)
                 if (taskModel) {
@@ -330,6 +333,7 @@ export class TaskCreationManager {
                     if (creation.thinking) {
                         taskModel.setThinking(creation.thinking)
                     }
+                    taskModel.setFastMode(creation.fastMode ?? false)
                 }
             }
 

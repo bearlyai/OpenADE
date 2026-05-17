@@ -70,6 +70,11 @@ describe("buildCodexArgs", () => {
         expect(result.args).toContain("model_reasoning_effort=xhigh")
     })
 
+    it("fastMode: true → -c service_tier fast", async () => {
+        const result = await buildCodexArgs(makeQuery({ fastMode: true }), {})
+        expect(result.args).toContain('service_tier="fast"')
+    })
+
     it("resumeSessionId changes subcommand to exec resume", async () => {
         const result = await buildCodexArgs(makeQuery({ resumeSessionId: "abc-123" }), {})
         const execIdx = result.args.indexOf("exec")

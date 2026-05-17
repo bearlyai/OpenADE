@@ -263,6 +263,7 @@ export class ExecutionManager {
                 includesCommentIds: consumedCommentIds,
                 modelId: effectiveModel,
                 harnessId: effectiveHarnessId,
+                fastMode: taskModel.fastMode,
                 gitRefsBefore,
             })
             if (!eventResult) {
@@ -292,6 +293,7 @@ export class ExecutionManager {
                 readOnly,
                 createSnapshot,
                 mcpServerConfigs,
+                fastMode: taskModel.fastMode,
             })
             const actionEvent = actionEventId ? this.store.getCachedTaskStore(taskId)?.events.get(actionEventId) : undefined
             executionSuccess = actionEvent?.type === "action" ? (actionEvent.result?.success ?? false) : false
@@ -390,6 +392,7 @@ export class ExecutionManager {
         readOnly?: boolean
         createSnapshot?: boolean
         mcpServerConfigs?: Record<string, McpServerConfig>
+        fastMode?: boolean
     }): Promise<void> {
         console.debug("[ExecutionManager] runExecutionLoop called", {
             taskId: ctx.taskId,
@@ -417,6 +420,7 @@ export class ExecutionManager {
                 additionalDirectories: ctx.additionalDirectories,
                 model: fullModelId,
                 thinking: taskModel?.thinking ?? "high",
+                fastMode: ctx.fastMode,
                 resumeSessionId: ctx.parentSessionId,
                 // Forking disabled for now — resume continues the session in-place
                 forkSession: false,
@@ -768,6 +772,7 @@ export class ExecutionManager {
                 includesCommentIds: [],
                 modelId: terminalStep.agent.modelId,
                 harnessId: terminalStep.agent.harnessId,
+                fastMode: taskModel.fastMode,
                 gitRefsBefore,
             })
 
@@ -888,6 +893,7 @@ export class ExecutionManager {
                 additionalDirectories,
                 appendSystemPromptSuffix: worktreeInstruction,
                 thinking: taskModel?.thinking,
+                fastMode: taskModel.fastMode,
                 mcpServerConfigs,
                 callbacks,
                 signal: abortController.signal,

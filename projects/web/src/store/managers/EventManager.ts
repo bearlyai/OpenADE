@@ -188,6 +188,7 @@ export class EventManager {
         includesCommentIds = [],
         modelId,
         harnessId,
+        fastMode,
         gitRefsBefore,
     }: {
         taskId: string
@@ -198,6 +199,7 @@ export class EventManager {
         includesCommentIds?: string[]
         modelId?: string
         harnessId: HarnessId
+        fastMode?: boolean
         gitRefsBefore?: GitRefs
     }): { eventId: string } | null {
         const taskStore = this.store.getCachedTaskStore(taskId)
@@ -216,6 +218,7 @@ export class EventManager {
                 harnessId,
                 executionId,
                 modelId,
+                fastMode,
                 events: [],
                 gitRefsBefore,
             },

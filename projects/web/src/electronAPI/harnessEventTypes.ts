@@ -54,6 +54,7 @@ export interface HarnessQueryOptions {
     mode?: "read-only" | "yolo"
     model?: string
     thinking?: "low" | "med" | "high" | "max"
+    fastMode?: boolean
     appendSystemPrompt?: string
     resumeSessionId?: string
     forkSession?: boolean

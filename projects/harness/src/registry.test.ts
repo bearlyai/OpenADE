@@ -21,6 +21,7 @@ function makeFakeHarness(id: string, installStatus?: Partial<HarnessInstallStatu
                 supportsClientTools: true,
                 supportsStreamingTokens: false,
                 supportsCostTracking: false,
+                supportsFastMode: false,
                 supportsNamedTools: false,
                 supportsImages: false,
                 supportsSessionReplay: false,

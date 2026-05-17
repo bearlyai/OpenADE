@@ -65,6 +65,7 @@ export class CodexHarness implements Harness<CodexEvent> {
             supportsClientTools: true,
             supportsStreamingTokens: false,
             supportsCostTracking: true,
+            supportsFastMode: true,
             supportsNamedTools: false,
             supportsImages: true,
             supportsSessionReplay: true,

@@ -60,6 +60,7 @@ export interface HyperPlanExecutorConfig {
     additionalDirectories?: string[]
     appendSystemPromptSuffix?: string
     thinking?: ThinkingLevel
+    fastMode?: boolean
     mcpServerConfigs?: Record<string, McpServerConfig>
     callbacks: HyperPlanCallbacks
     signal: AbortSignal
@@ -384,7 +385,7 @@ export class HyperPlanExecutor {
         executionId?: string,
         resumeSessionId?: string
     ): Promise<HarnessQuery | null> {
-        const { cwd, additionalDirectories, appendSystemPromptSuffix, thinking, mcpServerConfigs } = this.config
+        const { cwd, additionalDirectories, appendSystemPromptSuffix, thinking, fastMode, mcpServerConfigs } = this.config
         const manager = getHarnessQueryManager()
 
         const options: ClientHarnessQueryOptions = {
@@ -393,6 +394,7 @@ export class HyperPlanExecutor {
             additionalDirectories,
             model: getModelFullId(step.agent.modelId, step.agent.harnessId),
             thinking: thinking ?? "high",
+            fastMode,
             mode: "read-only",
             appendSystemPrompt: mergeAppendSystemPrompt(appendSystemPrompt, appendSystemPromptSuffix),
             mcpServerConfigs,

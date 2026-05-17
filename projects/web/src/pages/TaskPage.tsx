@@ -146,6 +146,8 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
                 onModelChange={(m) => taskModel.setModel(m)}
                 thinking={taskModel.thinking}
                 onThinkingChange={(t) => taskModel.setThinking(t)}
+                fastMode={taskModel.fastMode}
+                onFastModeChange={(enabled) => taskModel.setFastMode(enabled)}
                 harnessId={taskModel.harnessId}
                 allowHarnessSwitch={false}
                 hideTray={codeStore.personalSettingsStore?.settings.current.devHideTray}

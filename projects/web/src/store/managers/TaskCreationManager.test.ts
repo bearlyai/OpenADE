@@ -105,6 +105,7 @@ describe("TaskCreationManager creation plumbing", () => {
             setHarnessId: vi.fn(),
             setModel: vi.fn(),
             setThinking: vi.fn(),
+            setFastMode: vi.fn(),
         }
         const executeAction = vi.fn()
         const taskStore = {
@@ -152,6 +153,7 @@ describe("TaskCreationManager creation plumbing", () => {
             harnessId: "codex",
             modelId: "gpt-5.5",
             thinking: "max",
+            fastMode: true,
             phase: "pending",
             error: null,
             slug: null,
@@ -165,6 +167,7 @@ describe("TaskCreationManager creation plumbing", () => {
         expect(generateTitleSpy).toHaveBeenCalled()
         expect(taskModel.setHarnessId).toHaveBeenCalledWith("codex")
         expect(taskModel.setModel).toHaveBeenCalledWith("gpt-5.5")
+        expect(taskModel.setFastMode).toHaveBeenCalledWith(true)
 
         await vi.runAllTimersAsync()
 

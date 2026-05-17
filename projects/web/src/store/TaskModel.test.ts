@@ -10,10 +10,12 @@ function createActionEvent({
     id,
     harnessId,
     modelId,
+    fastMode,
 }: {
     id: string
     harnessId: HarnessId
     modelId?: string
+    fastMode?: boolean
 }): ActionEvent {
     return {
         id,
@@ -26,6 +28,7 @@ function createActionEvent({
             harnessId,
             executionId: `${id}-exec`,
             modelId,
+            fastMode,
             events: [],
         },
         source: { type: "do", userLabel: "Do" },
@@ -82,6 +85,14 @@ describe("TaskModel harness lock", () => {
 
         expect(model.harnessId).toBe("codex")
         expect(model.model).toBe("gpt-5.3-codex")
+    })
+
+    it("hydrates fast mode from latest action event", () => {
+        const task = createTask([createActionEvent({ id: "a1", harnessId: "codex", modelId: "gpt-5.5", fastMode: true })])
+
+        const model = new TaskModel(createStore(task), task.id)
+
+        expect(model.fastMode).toBe(true)
     })
 
     it("skips review events when restoring harness/model from history", () => {

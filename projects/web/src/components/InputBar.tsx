@@ -21,6 +21,7 @@ import { ModelPicker } from "./ModelPicker"
 import { SmartEditor, type SmartEditorRef } from "./SmartEditor"
 import { ThinkingPicker } from "./ThinkingPicker"
 import { CommentsSection } from "./events/CommentsSection"
+import { FastModeToggle } from "./FastModeToggle"
 import { TaskMcpSelector } from "./mcp/TaskMcpSelector"
 import { TrayButtons, TraySlideOut, getTrayConfig } from "./tray"
 
@@ -104,6 +105,8 @@ export const InputBar = observer(function InputBar({
     onModelChange,
     thinking,
     onThinkingChange,
+    fastMode,
+    onFastModeChange,
     harnessId,
     onHarnessChange,
     allowHarnessSwitch = true,
@@ -128,6 +131,8 @@ export const InputBar = observer(function InputBar({
     onModelChange?: (model: string) => void
     thinking?: ThinkingLevel
     onThinkingChange?: (level: ThinkingLevel) => void
+    fastMode?: boolean
+    onFastModeChange?: (enabled: boolean) => void
     harnessId?: HarnessId
     onHarnessChange?: (harnessId: HarnessId) => void
     allowHarnessSwitch?: boolean
@@ -197,6 +202,11 @@ export const InputBar = observer(function InputBar({
                         {thinking && onThinkingChange && (
                             <div className="shrink-0">
                                 <ThinkingPicker value={thinking} onChange={onThinkingChange} />
+                            </div>
+                        )}
+                        {fastMode !== undefined && onFastModeChange && (
+                            <div className="shrink-0">
+                                <FastModeToggle enabled={fastMode} onChange={onFastModeChange} />
                             </div>
                         )}
                         {enabledMcpServerIds && onMcpServerIdsChange && (

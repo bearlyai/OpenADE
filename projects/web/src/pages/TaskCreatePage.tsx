@@ -23,6 +23,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { HarnessPicker } from "../components/HarnessPicker"
 import { ImageDropOverlay } from "../components/ImageDropOverlay"
 import { ModelPicker } from "../components/ModelPicker"
+import { FastModeToggle } from "../components/FastModeToggle"
 import { ThinkingPicker } from "../components/ThinkingPicker"
 import { SmartEditor, type SmartEditorRef } from "../components/SmartEditor"
 import { StrategyPicker } from "../components/hyperplan/StrategyPicker"
@@ -427,6 +428,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
             harnessId: codeStore.defaultHarnessId,
             modelId: codeStore.defaultModel,
             thinking: codeStore.defaultThinking,
+            fastMode: codeStore.defaultFastMode,
         })
 
         editorManager.clear()
@@ -585,6 +587,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                         <HarnessPicker value={codeStore.defaultHarnessId} onChange={(id) => codeStore.setDefaultHarnessId(id)} />
                         <ModelPicker value={codeStore.defaultModel} onChange={(m) => codeStore.setDefaultModel(m)} harnessId={codeStore.defaultHarnessId} />
                         <ThinkingPicker value={codeStore.defaultThinking} onChange={(t) => codeStore.setDefaultThinking(t)} />
+                        <FastModeToggle enabled={codeStore.defaultFastMode} onChange={(enabled) => codeStore.setDefaultFastMode(enabled)} />
                     </div>
 
                     {/* Center section: Worktree toggle + branch selector */}

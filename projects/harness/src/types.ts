@@ -94,6 +94,7 @@ export interface HarnessQuery {
     // ── Model ──
     model?: string
     thinking?: "low" | "med" | "high" | "max"
+    fastMode?: boolean
 
     // ── Session ──
     resumeSessionId?: string
@@ -155,6 +156,7 @@ export type StructuredQueryBase = Pick<
     | "env"
     | "model"
     | "thinking"
+    | "fastMode"
     | "resumeSessionId"
     | "mode"
     | "mcpServers"
@@ -208,6 +210,7 @@ export interface HarnessCapabilities {
     supportsClientTools: boolean
     supportsStreamingTokens: boolean
     supportsCostTracking: boolean
+    supportsFastMode: boolean
     supportsNamedTools: boolean
     supportsImages: boolean
     supportsSessionReplay: boolean

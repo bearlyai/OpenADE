@@ -1,12 +1,11 @@
 import { makeAutoObservable, reaction, runInAction } from "mobx"
 import { analytics, track } from "../analytics"
 import { DEFAULT_MODEL, getDefaultModelForHarness } from "../constants"
+import { getDeviceConfig, setTelemetryDisabled } from "../electronAPI/deviceConfig"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
-import type { ThinkingLevel } from "./TaskModel"
+import { setGlobalEnv } from "../electronAPI/subprocess"
 import { crossReviewStrategy, ensembleStrategy, peerReviewStrategy, standardStrategy } from "../hyperplan/strategies"
 import type { AgentCouplet, HyperPlanStrategy } from "../hyperplan/types"
-import { getDeviceConfig, setTelemetryDisabled } from "../electronAPI/deviceConfig"
-import { setGlobalEnv } from "../electronAPI/subprocess"
 import type { McpServerStore } from "../persistence/mcpServerStore"
 import { type McpServerStoreConnection, connectMcpServerStore } from "../persistence/mcpServerStoreBootstrap"
 import type { PersonalSettingsStore } from "../persistence/personalSettingsStore"
@@ -17,15 +16,16 @@ import { type TaskStoreConnection, loadTaskStore } from "../persistence/taskLoad
 import { needsTaskUsageBackfill, normalizeTaskPreviewUsage } from "../persistence/taskStatsUtils"
 import { type TaskStore, syncTaskPreviewFromStore, syncTaskPreviewUsageFromStore } from "../persistence/taskStore"
 import type { User } from "../types"
+import type { ThinkingLevel } from "./TaskModel"
 
 import { CommentManager } from "./managers/CommentManager"
 import { CronManager } from "./managers/CronManager"
-import { RepeatManager } from "./managers/RepeatManager"
 import { EventManager } from "./managers/EventManager"
 import { ExecutionManager } from "./managers/ExecutionManager"
 import { McpServerManager } from "./managers/McpServerManager"
 import { NotificationManager } from "./managers/NotificationManager"
 import { QueryManager } from "./managers/QueryManager"
+import { RepeatManager } from "./managers/RepeatManager"
 import { RepoManager } from "./managers/RepoManager"
 import { RepoProcessesManager } from "./managers/RepoProcessesManager"
 import { RunCmdManager } from "./managers/RunCmdManager"
@@ -46,6 +46,7 @@ export class CodeStore {
     readonly config: CodeStoreConfig
     defaultModel: string = DEFAULT_MODEL
     defaultThinking: ThinkingLevel = "max"
+    defaultFastMode = false
     defaultHarnessId: HarnessId = "claude-code"
     workingTaskIds: Set<string> = new Set()
 
@@ -419,6 +420,10 @@ export class CodeStore {
 
     setDefaultThinking(level: ThinkingLevel): void {
         this.defaultThinking = level
+    }
+
+    setDefaultFastMode(enabled: boolean): void {
+        this.defaultFastMode = enabled
     }
 
     setDefaultHarnessId(harnessId: HarnessId): void {

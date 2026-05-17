@@ -67,6 +67,7 @@ interface HarnessQueryOptions {
     mode?: "read-only" | "yolo"
     model?: string
     thinking?: "low" | "med" | "high" | "max"
+    fastMode?: boolean
     appendSystemPrompt?: string
     resumeSessionId?: string
     forkSession?: boolean
@@ -544,6 +545,7 @@ async function handleStartQuery(
         mode: options.mode ?? "yolo",
         model: options.model,
         thinking: options.thinking,
+        fastMode: options.fastMode,
         appendSystemPrompt: options.appendSystemPrompt,
         resumeSessionId: options.resumeSessionId,
         forkSession: options.forkSession,
@@ -627,6 +629,7 @@ async function handleStructuredQuery(
             mode: options.mode ?? "read-only",
             model: options.model,
             thinking: options.thinking,
+            fastMode: options.fastMode,
             appendSystemPrompt: options.appendSystemPrompt,
             resumeSessionId: options.resumeSessionId,
             processLabel: options.processLabel,

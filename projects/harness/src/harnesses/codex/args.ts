@@ -77,6 +77,11 @@ export async function buildCodexArgs(query: HarnessQuery, _config: CodexHarnessC
         }
     }
 
+    // Fast mode / service tier. Codex reads this as a config override.
+    if (query.fastMode) {
+        execArgs.push("-c", 'service_tier="fast"')
+    }
+
     // MCP config overrides (passed through from the harness class)
     if (mcpConfigArgs) {
         for (const arg of mcpConfigArgs) {

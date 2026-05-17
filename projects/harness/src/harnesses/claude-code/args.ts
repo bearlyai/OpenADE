@@ -172,6 +172,14 @@ function hasConfiguredMcp(query: HarnessQuery): boolean {
     return hasExternalMcp || hasClientTools || hasUserPromptHandler
 }
 
+function getFastModeEnv(model: string | undefined): Record<string, string> {
+    if (model?.toLowerCase().includes("4-6")) {
+        return { CLAUDE_CODE_OPUS_4_6_FAST_MODE_OVERRIDE: "1" }
+    }
+
+    return { CLAUDE_CODE_ENABLE_OPUS_4_7_FAST_MODE: "1" }
+}
+
 function getReadOnlyAllowedMcpToolPatterns(query: HarnessQuery): string[] {
     const serverNames = new Set<string>()
     if (query.mcpServers) {
@@ -214,6 +222,10 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
     // ── Setting sources ──
     const settingSources = config.settingSources ?? ["user", "project", "local"]
     args.push("--setting-sources", settingSources.join(","))
+
+    if (query.fastMode !== undefined) {
+        args.push("--settings", JSON.stringify({ fastMode: query.fastMode }))
+    }
 
     // ── Model ──
     if (query.model) {
@@ -304,6 +316,10 @@ export function buildClaudeArgs(query: HarnessQuery, config: ClaudeCodeHarnessCo
 
     // Prevent nested-session detection when the harness itself runs inside Claude Code
     env.CLAUDECODE = ""
+
+    if (query.fastMode) {
+        Object.assign(env, getFastModeEnv(query.model))
+    }
 
     // Telemetry
     const disableTelemetry = config.disableTelemetry ?? true

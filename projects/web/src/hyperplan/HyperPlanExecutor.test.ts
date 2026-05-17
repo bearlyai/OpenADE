@@ -102,6 +102,7 @@ describe("HyperPlanExecutor peer-review revise flow", () => {
             strategy: peerReviewStrategy(claude, codex),
             taskDescription: "Implement feature X",
             cwd: "/tmp",
+            fastMode: true,
             callbacks,
             signal: abortController.signal,
         })
@@ -110,6 +111,7 @@ describe("HyperPlanExecutor peer-review revise flow", () => {
 
         expect(result.success).toBe(true)
         expect(harnessMockState.calls).toHaveLength(3)
+        expect(harnessMockState.calls.every((call) => call.options.fastMode === true)).toBe(true)
         expect(harnessMockState.calls[2].options.resumeSessionId).toBe("plan-session-1")
         expect(harnessMockState.calls[2].options.forkSession).toBe(false)
         expect(subPlanSessions).toEqual([
