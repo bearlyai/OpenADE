@@ -11,10 +11,11 @@ import type { McpServerStore } from "../persistence/mcpServerStore"
 import { type McpServerStoreConnection, connectMcpServerStore } from "../persistence/mcpServerStoreBootstrap"
 import type { PersonalSettingsStore } from "../persistence/personalSettingsStore"
 import { type PersonalSettingsStoreConnection, connectPersonalSettingsStore } from "../persistence/personalSettingsStoreBootstrap"
-import { type RepoStore, getTaskPreview } from "../persistence/repoStore"
+import { type RepoStore, getTaskPreview, updateTaskPreview } from "../persistence/repoStore"
 import { type RepoStoreConnection, connectRepoStore } from "../persistence/repoStoreBootstrap"
 import { type TaskStoreConnection, loadTaskStore } from "../persistence/taskLoader"
-import { type TaskStore, syncTaskPreviewFromStore } from "../persistence/taskStore"
+import { needsTaskUsageBackfill, normalizeTaskPreviewUsage } from "../persistence/taskStatsUtils"
+import { type TaskStore, syncTaskPreviewFromStore, syncTaskPreviewUsageFromStore } from "../persistence/taskStore"
 import type { User } from "../types"
 
 import { CommentManager } from "./managers/CommentManager"
@@ -248,9 +249,14 @@ export class CodeStore {
         window.addEventListener("focus", this.focusHandler)
     }
 
-    async getTaskStore(repoId: string, taskId: string): Promise<TaskStore> {
+    async getTaskStore(repoId: string, taskId: string, options?: { allowUninitialized?: boolean }): Promise<TaskStore> {
         const cached = this.taskStoreConnections.get(taskId)
         if (cached) {
+            const meta = cached.store.meta.current
+            if (!options?.allowUninitialized && meta.id !== taskId) {
+                this.disconnectTaskStore(taskId)
+                throw new Error(`Task document ${taskId} is missing or has mismatched metadata id ${meta.id || "<empty>"}`)
+            }
             return cached.store
         }
 
@@ -266,12 +272,52 @@ export class CodeStore {
         const connection = await loadTaskStore({
             taskId,
         })
-        await connection.sync()
+
+        const meta = connection.store.meta.current
+        if (!options?.allowUninitialized && meta.id !== taskId) {
+            connection.disconnect()
+            throw new Error(`Task document ${taskId} is missing or has mismatched metadata id ${meta.id || "<empty>"}`)
+        }
 
         this.taskStoreConnections.set(taskId, connection)
-        syncTaskPreviewFromStore(this.repoStore, repoId, connection.store)
+        if (meta.id === taskId) {
+            syncTaskPreviewFromStore(this.repoStore, repoId, connection.store)
+        }
 
         return connection.store
+    }
+
+    async backfillTaskUsagePreview(repoId: string, taskId: string): Promise<void> {
+        if (!this.repoStore) {
+            throw new Error("RepoStore not initialized")
+        }
+
+        const preview = getTaskPreview(this.repoStore, repoId, taskId)
+        if (!preview || !needsTaskUsageBackfill(preview.usage)) return
+
+        const cached = this.taskStoreConnections.get(taskId)
+        if (cached) {
+            if (cached.store.meta.current.id === taskId) {
+                syncTaskPreviewUsageFromStore(this.repoStore, repoId, taskId, cached.store)
+            } else {
+                updateTaskPreview(this.repoStore, repoId, taskId, { usage: normalizeTaskPreviewUsage(preview.usage) })
+                this.disconnectTaskStore(taskId)
+            }
+            return
+        }
+
+        const connection = await loadTaskStore({ taskId })
+        try {
+            if (connection.store.meta.current.id === taskId) {
+                syncTaskPreviewUsageFromStore(this.repoStore, repoId, taskId, connection.store)
+            } else {
+                updateTaskPreview(this.repoStore, repoId, taskId, { usage: normalizeTaskPreviewUsage(preview.usage) })
+            }
+        } finally {
+            if (!this.taskStoreConnections.has(taskId)) {
+                connection.disconnect()
+            }
+        }
     }
 
     getCachedTaskStore(taskId: string): TaskStore | null {

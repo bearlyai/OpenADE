@@ -1,4 +1,4 @@
-import { calculateCodexCostUsd, type HarnessUsage } from "@openade/harness/browser"
+import { type HarnessUsage, calculateCodexCostUsd } from "@openade/harness/browser"
 import type { HarnessRawMessageEvent, HarnessStreamEvent } from "../electronAPI/harnessEventTypes"
 import { extractRawMessageEvents } from "../electronAPI/harnessEventTypes"
 import type { ActionEvent, CodeEvent, HarnessId } from "../types"
@@ -23,6 +23,18 @@ interface UsageEntry {
 
 export function needsTaskUsageBackfill(usage?: TaskPreviewUsage): boolean {
     return !usage || usage.durationMs === undefined || usage.usageVersion !== TASK_USAGE_STATS_VERSION
+}
+
+export function normalizeTaskPreviewUsage(usage?: TaskPreviewUsage): TaskPreviewUsage {
+    return {
+        usageVersion: TASK_USAGE_STATS_VERSION,
+        inputTokens: usage?.inputTokens ?? 0,
+        outputTokens: usage?.outputTokens ?? 0,
+        totalCostUsd: usage?.totalCostUsd ?? 0,
+        eventCount: usage?.eventCount ?? 0,
+        costByModel: usage?.costByModel ?? {},
+        durationMs: usage?.durationMs ?? 0,
+    }
 }
 
 export function computeTaskUsage(events: Array<CodeEvent & { id: string }>): TaskPreviewUsage {

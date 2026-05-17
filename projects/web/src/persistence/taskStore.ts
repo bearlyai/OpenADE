@@ -174,6 +174,17 @@ export function syncTaskPreviewFromStore(repoStore: RepoStore, repoId: string, t
     })
 }
 
+export function syncTaskPreviewUsageFromStore(repoStore: RepoStore, repoId: string, taskId: string, taskStore: TaskStore): void {
+    const meta = taskStore.meta.current
+    if (meta.id !== taskId) {
+        throw new Error(`Task document ${taskId} has mismatched metadata id ${meta.id || "<empty>"}`)
+    }
+
+    updateTaskPreview(repoStore, repoId, taskId, {
+        usage: computeTaskUsage(taskStore.events.all()),
+    })
+}
+
 // ============================================================================
 // Export Helper
 // ============================================================================

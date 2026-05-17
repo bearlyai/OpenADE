@@ -132,7 +132,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                 if (cancelled) break
                 const { repoId, taskId } = tasksToBackfill[i]
                 try {
-                    await store.getTaskStore(repoId, taskId)
+                    await store.backfillTaskUsagePreview(repoId, taskId)
                 } catch (err) {
                     console.warn("[StatsTab] Failed to load task for backfill:", taskId, err)
                 }
@@ -140,6 +140,11 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                 if (!cancelled && (i + 1) % BACKFILL_BATCH_SIZE === 0 && i + 1 < tasksToBackfill.length) {
                     await yieldToBrowser()
                 }
+            }
+            try {
+                await store.syncRepoStore()
+            } catch (err) {
+                console.warn("[StatsTab] Failed to sync stats backfill:", err)
             }
             if (!cancelled) setBackfillProgress(null)
         }

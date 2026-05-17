@@ -129,7 +129,7 @@ export class RunCmdManager {
         addTaskPreview(this.store.repoStore, args.repoId, { id: taskId, slug, title })
 
         // Load TaskStore and populate
-        const taskStore = await this.store.getTaskStore(args.repoId, taskId)
+        const taskStore = await this.store.getTaskStore(args.repoId, taskId, { allowUninitialized: true })
         if (taskStore.meta.current.id === "" || taskStore.meta.current.id !== taskId) {
             const metaFields: Parameters<typeof taskStore.meta.set>[0] = {
                 id: taskId,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { HarnessStreamEvent } from "../electronAPI/harnessEventTypes"
 import type { ActionEvent } from "../types"
-import { TASK_USAGE_STATS_VERSION, computeTaskUsage, needsTaskUsageBackfill } from "./taskStatsUtils"
+import { TASK_USAGE_STATS_VERSION, computeTaskUsage, needsTaskUsageBackfill, normalizeTaskPreviewUsage } from "./taskStatsUtils"
 
 function codexEvents({
     executionId,
@@ -466,5 +466,26 @@ describe("computeTaskUsage - codex", () => {
                 durationMs: 0,
             })
         ).toBe(true)
+    })
+
+    it("normalizes stale preview usage without losing existing totals", () => {
+        const usage = normalizeTaskPreviewUsage({
+            inputTokens: 100,
+            outputTokens: 40,
+            totalCostUsd: 0.25,
+            eventCount: 3,
+            costByModel: { "claude-sonnet": 0.25 },
+        })
+
+        expect(usage).toEqual({
+            usageVersion: TASK_USAGE_STATS_VERSION,
+            inputTokens: 100,
+            outputTokens: 40,
+            totalCostUsd: 0.25,
+            eventCount: 3,
+            costByModel: { "claude-sonnet": 0.25 },
+            durationMs: 0,
+        })
+        expect(needsTaskUsageBackfill(usage)).toBe(false)
     })
 })

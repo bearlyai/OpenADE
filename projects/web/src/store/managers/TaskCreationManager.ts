@@ -269,7 +269,7 @@ export class TaskCreationManager {
             })
 
             // 2. Load TaskStore and cache the connection
-            const taskStore = await this.store.getTaskStore(creation.repoId, taskId)
+            const taskStore = await this.store.getTaskStore(creation.repoId, taskId, { allowUninitialized: true })
 
             // 3. Populate TaskStore if empty (for fresh creates)
             if (taskStore.meta.current.id === "" || taskStore.meta.current.id !== taskId) {
