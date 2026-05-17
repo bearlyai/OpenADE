@@ -26,9 +26,7 @@ export function FastModeToggle({ enabled, onChange }: { enabled: boolean; onChan
             <Tooltip.Trigger render={button} />
             <Tooltip.Portal container={portalContainer}>
                 <Tooltip.Positioner sideOffset={6} side="top">
-                    <Tooltip.Popup className="bg-base-300 text-base-content text-xs px-2 py-1 shadow-lg border border-border">
-                        Fast mode
-                    </Tooltip.Popup>
+                    <Tooltip.Popup className="bg-base-300 text-base-content text-xs px-2 py-1 shadow-lg border border-border">Fast mode</Tooltip.Popup>
                 </Tooltip.Positioner>
             </Tooltip.Portal>
         </Tooltip.Root>

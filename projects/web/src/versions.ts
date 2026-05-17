@@ -8,6 +8,18 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.75.0",
+        title: "Fast Mode & Agent Event Visibility",
+        date: "2026-05-17",
+        highlights: [
+            "Fast mode can now be toggled for supported Claude Code and Codex tasks, including new tasks, resumed runs, run commands, and HyperPlan executions",
+            "Sidebar selection mode can close multiple selected open tasks, and closing works even for tasks that were not already loaded",
+            "Terminal-focused keyboard shortcuts now stay with the terminal instead of being intercepted by the app window",
+            "Harness file changes, todo updates, unsupported items, and unknown Codex/Claude events now render in task timelines instead of disappearing",
+            "Stats usage backfill is more reliable for stale task documents, and review handoffs now include criticality scores",
+        ],
+    },
+    {
         version: "0.74.1",
         title: "Always-Expanded Git Tray",
         date: "2026-05-04",
