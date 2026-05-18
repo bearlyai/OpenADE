@@ -35,16 +35,29 @@ function FileChangeContent({ group }: { group: FileChangeGroup }) {
 function getIcon(kind: string) {
     switch (kind) {
         case "add":
-            return <FilePlus size="0.85em" className="text-muted flex-shrink-0" />
+            return <FilePlus size="0.85em" className="text-success flex-shrink-0" />
         case "delete":
-            return <FileMinus size="0.85em" className="text-muted flex-shrink-0" />
+            return <FileMinus size="0.85em" className="text-error flex-shrink-0" />
         default:
-            return <Pencil size="0.85em" className="text-muted flex-shrink-0" />
+            return <Pencil size="0.85em" className="text-primary flex-shrink-0" />
+    }
+}
+
+function getKindLabel(kind: string): string {
+    switch (kind) {
+        case "add":
+            return "Add"
+        case "delete":
+            return "Delete"
+        case "update":
+            return "Update"
+        default:
+            return kind ? kind[0].toUpperCase() + kind.slice(1) : "Change"
     }
 }
 
 export const fileChangeRenderer: GroupRenderer<FileChangeGroup> = {
-    getLabel: (group) => getFileName(group.filePath),
+    getLabel: (group) => `${getKindLabel(group.kind)} ${getFileName(group.filePath)}`,
     getIcon: (group) => getIcon(group.kind),
     getStatusIcon: (group) => {
         if (group.isError) return <AlertCircle size="1em" className="text-error flex-shrink-0" />
