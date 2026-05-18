@@ -1,4 +1,6 @@
-// Initialize Sentry first, before any other code that might throw
+import "./runtimeProfile"
+
+// Initialize Sentry before the rest of the app loads.
 import { initSentry, load as loadSentry, cleanup as cleanupSentry } from "./modules/sentry"
 initSentry()
 
