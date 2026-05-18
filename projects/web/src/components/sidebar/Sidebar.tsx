@@ -13,20 +13,8 @@ import { TasksSidebarContent } from "./TaskList"
 import { codeSidebarManager } from "./sidebarManager"
 import SidebarIcon from "./static/sidebar.svg?react"
 
-const SidebarLogo = () => (
-    <span
-        className="font-bold text-xl tracking-tight select-none"
-        style={{
-            background:
-                "linear-gradient(135deg, var(--color-primary) 0%, color-mix(in oklch, var(--color-primary) 80%, var(--color-accent) 20%) 50%, color-mix(in oklch, var(--color-primary) 60%, var(--color-accent) 40%) 100%)",
-            WebkitBackgroundClip: "text",
-            WebkitTextFillColor: "transparent",
-            backgroundClip: "text",
-        }}
-    >
-        OpenADE
-    </span>
-)
+const ELECTRON_DRAG_REGION_CLASS = "electron-drag-region"
+const ELECTRON_NO_DRAG_REGION_CLASS = "electron-no-drag-region"
 
 const SidebarContent = observer(() => {
     const manager = codeSidebarManager
@@ -42,22 +30,19 @@ const SidebarContent = observer(() => {
 
     return (
         <>
-            <div className="flex pr-2 pl-3">
-                <div className="pt-1">
-                    <SidebarLogo />
-                </div>
+            <div className={`${ELECTRON_DRAG_REGION_CLASS} flex items-center pr-2 pl-3 h-11 flex-shrink-0`}>
                 <div className="ml-auto flex gap-1">
                     <button
                         type="button"
-                        className="btn flex items-center p-2 mt-[-5px] text-lg rounded-md"
+                        className={`${ELECTRON_NO_DRAG_REGION_CLASS} btn flex h-7 w-7 items-center justify-center rounded-md text-muted hover:text-base-content hover:bg-base-300/60`}
                         onClick={manager.toggleSidebar}
                         title="Close sidebar"
                     >
-                        <SidebarIcon />
+                        <SidebarIcon className="h-4 w-4" />
                     </button>
                 </div>
             </div>
-            <ScrollArea className="flex-1 mt-2" viewportClassName="h-full">
+            <ScrollArea className="flex-1" viewportClassName="h-full">
                 <div className="flex flex-col gap-2">
                     <ReposSidebarContent workspaceId={workspaceId} />
                     {workspaceId && <CronsSidebarContent workspaceId={workspaceId} />}
@@ -93,14 +78,14 @@ const BaseSidebar = observer(() => {
     const hidden = !manager.showSidebar
 
     const containerClasses = cx(
-        "flex flex-col bg-base-100 flex-shrink-0 transition-[width] duration-300 border-r border-border overflow-hidden h-full",
-        hidden ? "w-0 border-r-0" : "w-[300px]"
+        "absolute left-0 top-0 flex flex-col bg-base-200 flex-shrink-0 transition-[transform,opacity] duration-300 ease-in-out overflow-hidden h-full w-[300px]",
+        hidden ? "invisible -translate-x-4 opacity-0 pointer-events-none" : "visible translate-x-0 opacity-100"
     )
 
-    const contentClasses = cx("flex flex-col pt-2 h-full min-w-[300px] transition-opacity duration-0", hidden ? "opacity-0" : "opacity-100")
+    const contentClasses = cx("flex flex-col h-full min-w-[300px] transition-opacity duration-300", hidden ? "opacity-0" : "opacity-100")
 
     return (
-        <div className={containerClasses}>
+        <div className={containerClasses} aria-hidden={hidden}>
             <div className={contentClasses}>
                 <SidebarContent />
             </div>
@@ -113,10 +98,10 @@ const DrawerBaseSidebar = observer(() => {
     const hidden = !manager.showSidebar
 
     const containerClasses = cx(
-        "absolute left-0 top-0 h-full bg-base-100 z-50 transition-transform duration-300 border-r border-border",
+        "absolute left-0 top-0 h-full bg-base-200 z-50 transition-transform duration-300 border-r border-border",
         "w-[300px]",
         "max-[900px]:block hidden",
-        hidden ? "-translate-x-full" : "translate-x-0"
+        hidden ? "invisible -translate-x-full" : "visible translate-x-0"
     )
 
     const innerClasses = "flex flex-col pt-2 h-full"
@@ -132,7 +117,7 @@ const DrawerBaseSidebar = observer(() => {
                 />
             )}
 
-            <div className={containerClasses}>
+            <div className={containerClasses} aria-hidden={hidden}>
                 <div className={innerClasses}>
                     <SidebarContent />
                 </div>

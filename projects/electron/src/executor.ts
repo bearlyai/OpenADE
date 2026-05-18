@@ -116,8 +116,8 @@ const startExecutor = () => {
             ...getLastFrameColors(),
         },
         trafficLightPosition: {
-            x: 16,
-            y: 14,
+            x: 18,
+            y: 15,
         },
         show: false,
         backgroundColor: "#202124",

@@ -75,3 +75,7 @@ button:focus {
 
     -webkit-app-region: drag;
 }
+
+.electron-no-drag-region {
+    -webkit-app-region: no-drag;
+}
