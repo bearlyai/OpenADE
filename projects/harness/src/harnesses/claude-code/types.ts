@@ -10,12 +10,14 @@ export type ClaudeEvent =
     | ClaudeSystemHookProgressEvent
     | ClaudeSystemHookResponseEvent
     | ClaudeSystemTaskNotificationEvent
+    | ClaudeSystemTaskProgressEvent
     | ClaudeSystemFilesPersistedEvent
     | ClaudeAssistantEvent
     | ClaudeUserEvent
     | ClaudeResultEvent
     | ClaudeToolProgressEvent
     | ClaudeToolUseSummaryEvent
+    | ClaudeRateLimitEvent
     | ClaudeAuthStatusEvent
     | ClaudeRawJsonEvent
 
@@ -75,6 +77,25 @@ export interface ClaudeSystemHookResponseEvent {
 export interface ClaudeSystemTaskNotificationEvent {
     type: "system"
     subtype: "task_notification"
+    [key: string]: unknown
+}
+
+// ── system:task_progress ──
+export interface ClaudeSystemTaskProgressEvent {
+    type: "system"
+    subtype: "task_progress"
+    task_id?: string
+    tool_use_id?: string
+    description?: string
+    usage?: {
+        total_tokens?: number
+        tool_uses?: number
+        duration_ms?: number
+        [key: string]: unknown
+    }
+    last_tool_name?: string
+    uuid?: string
+    session_id?: string
     [key: string]: unknown
 }
 
@@ -159,6 +180,23 @@ export interface ClaudeToolUseSummaryEvent {
     [key: string]: unknown
 }
 
+// ── rate_limit_event ──
+export interface ClaudeRateLimitEvent {
+    type: "rate_limit_event"
+    rate_limit_info?: {
+        status?: string
+        resetsAt?: number
+        rateLimitType?: string
+        overageStatus?: string
+        overageResetsAt?: number
+        isUsingOverage?: boolean
+        [key: string]: unknown
+    }
+    uuid?: string
+    session_id?: string
+    [key: string]: unknown
+}
+
 // ── auth_status ──
 export interface ClaudeAuthStatusEvent {
     type: "auth_status"
@@ -185,10 +223,20 @@ const KNOWN_SYSTEM_SUBTYPES = new Set<string>([
     "hook_progress",
     "hook_response",
     "task_notification",
+    "task_progress",
     "files_persisted",
 ])
 
-const KNOWN_TOP_TYPES = new Set<string>(["system", "assistant", "user", "result", "tool_progress", "tool_use_summary", "auth_status"])
+const KNOWN_TOP_TYPES = new Set<string>([
+    "system",
+    "assistant",
+    "user",
+    "result",
+    "tool_progress",
+    "tool_use_summary",
+    "rate_limit_event",
+    "auth_status",
+])
 
 /**
  * Parses a raw JSON object into a typed ClaudeEvent.

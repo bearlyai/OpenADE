@@ -111,6 +111,10 @@ export function groupClaudeCodeMessages(messages: ClaudeEvent[]): MessageGroup[]
     for (let i = 0; i < messages.length; i++) {
         const msg = messages[i]
 
+        if (isIgnoredClaudeTelemetryEvent(msg)) {
+            continue
+        }
+
         // Handle system messages
         if (msg.type === "system") {
             const subtype = msg.subtype as SystemGroup["subtype"] | string
@@ -296,6 +300,21 @@ export function groupClaudeCodeMessages(messages: ClaudeEvent[]): MessageGroup[]
     }
 
     return groups
+}
+
+function isIgnoredClaudeTelemetryEvent(msg: ClaudeEvent): boolean {
+    const raw = msg as unknown as {
+        type?: unknown
+        subtype?: unknown
+        original_type?: unknown
+        original_subtype?: unknown
+    }
+    return (
+        raw.type === "rate_limit_event" ||
+        (raw.type === "system" && raw.subtype === "task_progress") ||
+        (raw.type === "raw_json" && raw.original_type === "rate_limit_event") ||
+        (raw.type === "raw_json" && raw.original_type === "system" && raw.original_subtype === "task_progress")
+    )
 }
 
 function getUnknownAssistantContentBlocks(msg: ClaudeEvent): unknown[] {

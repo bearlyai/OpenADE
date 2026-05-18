@@ -222,6 +222,74 @@ describe("groupStreamEvents unknown harness events", () => {
         ])
     })
 
+    it("ignores Claude telemetry events that are not transcript content", () => {
+        const groups = groupStreamEvents(
+            [
+                claudeMessageEvent(
+                    {
+                        type: "rate_limit_event",
+                        rate_limit_info: {
+                            status: "allowed",
+                            resetsAt: 1779137400,
+                            rateLimitType: "five_hour",
+                            overageStatus: "allowed",
+                            overageResetsAt: 1779127200,
+                            isUsingOverage: false,
+                        },
+                        uuid: "c8169bce-1d40-4f3a-a0f8-9e339aa403ac",
+                        session_id: "1e3e7c52-0da2-404b-b30f-c51641575f32",
+                    },
+                    "msg-1"
+                ),
+                claudeMessageEvent(
+                    {
+                        type: "system",
+                        subtype: "task_progress",
+                        task_id: "aa6c4249c1723694f",
+                        tool_use_id: "toolu_01Nz3nyuFCq5PHarAELVEBej",
+                        description: "Reading projects/dashboard/src/pages/funktionalChat/state/roomStats.ts",
+                        usage: {
+                            total_tokens: 70644,
+                            tool_uses: 34,
+                            duration_ms: 96978,
+                        },
+                        last_tool_name: "Read",
+                        uuid: "c33bcbb9-be72-422a-b171-7489fdc5e87a",
+                        session_id: "1e3e7c52-0da2-404b-b30f-c51641575f32",
+                    },
+                    "msg-2"
+                ),
+                claudeMessageEvent(
+                    {
+                        type: "raw_json",
+                        original_type: "rate_limit_event",
+                        raw: {
+                            type: "rate_limit_event",
+                            rate_limit_info: { status: "allowed" },
+                        },
+                    },
+                    "msg-3"
+                ),
+                claudeMessageEvent(
+                    {
+                        type: "raw_json",
+                        original_type: "system",
+                        original_subtype: "task_progress",
+                        raw: {
+                            type: "system",
+                            subtype: "task_progress",
+                            description: "Reading projects/dashboard/src/pages/funktionalChat/state/roomStats.ts",
+                        },
+                    },
+                    "msg-4"
+                ),
+            ],
+            "claude-code"
+        )
+
+        expect(groups).toEqual([])
+    })
+
     it("renders known-but-unhandled Claude events as unknown groups", () => {
         const raw = { type: "tool_progress", tool_use_id: "tool-1", progress: "still running" }
         const groups = groupStreamEvents([claudeMessageEvent(raw, "msg-1")], "claude-code")

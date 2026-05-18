@@ -75,6 +75,27 @@ describe("parseClaudeEvent", () => {
         expect(event).not.toBeNull()
     })
 
+    it("parses system:task_progress event", () => {
+        const raw = {
+            type: "system",
+            subtype: "task_progress",
+            task_id: "aa6c4249c1723694f",
+            tool_use_id: "toolu_01Nz3nyuFCq5PHarAELVEBej",
+            description: "Reading projects/dashboard/src/pages/funktionalChat/state/roomStats.ts",
+            usage: {
+                total_tokens: 70644,
+                tool_uses: 34,
+                duration_ms: 96978,
+            },
+            last_tool_name: "Read",
+            uuid: "c33bcbb9-be72-422a-b171-7489fdc5e87a",
+            session_id: "1e3e7c52-0da2-404b-b30f-c51641575f32",
+        }
+
+        const event = parseClaudeEvent(raw)
+        expect(event).toEqual(raw)
+    })
+
     it("parses assistant event", () => {
         const raw = {
             type: "assistant",
@@ -195,6 +216,25 @@ describe("parseClaudeEvent", () => {
         const event = parseClaudeEvent(raw)
         expect(event).not.toBeNull()
         expect(event!.type).toBe("tool_use_summary")
+    })
+
+    it("parses rate_limit_event", () => {
+        const raw = {
+            type: "rate_limit_event",
+            rate_limit_info: {
+                status: "allowed",
+                resetsAt: 1779137400,
+                rateLimitType: "five_hour",
+                overageStatus: "allowed",
+                overageResetsAt: 1779127200,
+                isUsingOverage: false,
+            },
+            uuid: "c8169bce-1d40-4f3a-a0f8-9e339aa403ac",
+            session_id: "1e3e7c52-0da2-404b-b30f-c51641575f32",
+        }
+
+        const event = parseClaudeEvent(raw)
+        expect(event).toEqual(raw)
     })
 
     it("parses auth_status event", () => {
