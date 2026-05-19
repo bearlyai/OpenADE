@@ -10,11 +10,27 @@ import { useEffect, useState } from "react"
 import { type ThemeClass, type ThemeSetting, defaultDarkTheme, defaultLightTheme, themeClasses } from "../persistence/personalSettingsStore"
 
 /**
- * Resolves a ThemeSetting to an actual theme class name.
+ * Resolves a stored theme setting to an actual theme class name.
  * - "system": Uses OS preference to select defaultDarkTheme or defaultLightTheme
+ * - "light"/"dark": Legacy stored values mapped to current theme classes
  * - Other values: Validated against themeClasses, falls back to defaultDarkTheme if invalid
  */
-export function useResolvedTheme(setting: ThemeSetting): ThemeClass {
+export function resolveThemeSetting(setting: ThemeSetting | string | null | undefined, systemPreference: "light" | "dark"): ThemeClass {
+    if (!setting || setting === "system") {
+        return systemPreference === "dark" ? defaultDarkTheme : defaultLightTheme
+    }
+
+    if (setting === "light") return defaultLightTheme
+    if (setting === "dark") return defaultDarkTheme
+
+    if (setting in themeClasses) {
+        return setting as ThemeClass
+    }
+
+    return defaultDarkTheme
+}
+
+export function useResolvedTheme(setting: ThemeSetting | string | null | undefined): ThemeClass {
     const [systemPreference, setSystemPreference] = useState<"light" | "dark">(() => {
         if (typeof window === "undefined") return "light"
         return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
@@ -29,16 +45,5 @@ export function useResolvedTheme(setting: ThemeSetting): ThemeClass {
         return () => mediaQuery.removeEventListener("change", handler)
     }, [])
 
-    // System mode: use OS preference to pick default light/dark theme
-    if (setting === "system") {
-        return systemPreference === "dark" ? defaultDarkTheme : defaultLightTheme
-    }
-
-    // Validate that the theme exists in available theme classes
-    if (setting in themeClasses) {
-        return setting as ThemeClass
-    }
-
-    // Fallback to default dark theme if the saved theme is no longer available
-    return defaultDarkTheme
+    return resolveThemeSetting(setting, systemPreference)
 }

@@ -16,8 +16,9 @@ import { type YObjectHandle, objectOfType } from "./storage"
 /**
  * Theme setting options.
  * - "system": Follow OS preference (prefers-color-scheme)
- * - "light": Always use light theme
- * - "dark": Always use dark theme
+ * - "code-theme-*": Always use a specific theme
+ *
+ * Legacy persisted values "light" and "dark" are normalized at store creation.
  * Additional themes can be added here in the future.
  */
 
@@ -119,7 +120,17 @@ export interface PersonalSettingsStore {
 export function createPersonalSettingsStore(doc: Y.Doc): PersonalSettingsStore {
     const settings = objectOfType<PersonalSettings>(doc, "personal_settings", () => ({
         envVars: {},
-        theme: "code-theme-black",
+        theme: "system",
     }))
+
+    const storedTheme = settings.current.theme as string | undefined
+    if (storedTheme === "light") {
+        settings.set({ theme: defaultLightTheme })
+    } else if (storedTheme === "dark") {
+        settings.set({ theme: defaultDarkTheme })
+    } else if (storedTheme === undefined) {
+        settings.set({ theme: "system" })
+    }
+
     return { settings }
 }

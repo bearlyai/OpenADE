@@ -72,7 +72,7 @@ interface OnboardingThemeStepProps {
 
 export const OnboardingThemeStep = observer(({ store }: OnboardingThemeStepProps) => {
     const personalSettings = store.personalSettingsStore
-    const currentTheme = personalSettings?.settings.current.theme ?? "code-theme-black"
+    const currentTheme = personalSettings?.settings.current.theme ?? "system"
 
     const handleThemeChange = (theme: ThemeSetting) => {
         personalSettings?.settings.set({ theme })
