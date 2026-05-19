@@ -116,6 +116,22 @@ jobs:
       - name: Bundle web UI into electron
         run: cp -r projects/web/dist projects/electron/dist/web
 
+      - name: Build signed artifacts (no publish)
+        working-directory: projects/electron
+        env:
+          CSC_LINK: ${{ secrets.MACOS_SIGNING_CERT_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_NOTARIZATION_EMAIL }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_NOTARIZATION_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder --mac --universal --publish never
+
+      - name: Smoke test the signed artifact
+        working-directory: projects/electron
+        env:
+          OPENADE_SMOKE_BINARY: ${{ github.workspace }}/projects/electron/dist/electron/mac-universal/OpenADE.app/Contents/MacOS/OpenADE
+        run: yarn test:smoke
+
       - name: Build & Publish
         working-directory: projects/electron
         env:
@@ -178,6 +194,21 @@ jobs:
         shell: bash
         run: cp -r projects/web/dist projects/electron/dist/web
 
+      - name: Build signed artifacts (no publish)
+        working-directory: projects/electron
+        env:
+          AZURE_TENANT_ID: ${{ secrets.WINDOWS_AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.WINDOWS_AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.WINDOWS_AZURE_CLIENT_SECRET }}
+        run: npx electron-builder --win --x64 --publish never
+
+      - name: Smoke test the signed artifact
+        working-directory: projects/electron
+        shell: bash
+        env:
+          OPENADE_SMOKE_BINARY: ${{ github.workspace }}/projects/electron/dist/electron/win-unpacked/OpenADE.exe
+        run: yarn test:smoke
+
       - name: Build & Publish
         working-directory: projects/electron
         env:
@@ -235,6 +266,18 @@ jobs:
       # Copy web build into electron
       - name: Bundle web UI into electron
         run: cp -r projects/web/dist projects/electron/dist/web
+
+      - name: Build artifacts (no publish)
+        working-directory: projects/electron
+        run: npx electron-builder --linux --x64 --arm64 --publish never
+
+      - name: Smoke test the artifact
+        working-directory: projects/electron
+        env:
+          OPENADE_SMOKE_BINARY: ${{ github.workspace }}/projects/electron/dist/electron/linux-unpacked/openade
+        run: |
+          # ubuntu-latest has no display server; xvfb-run gives Electron a virtual one.
+          xvfb-run --auto-servernum --server-args='-screen 0 1280x1024x24' yarn test:smoke
 
       - name: Build & Publish
         working-directory: projects/electron

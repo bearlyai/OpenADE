@@ -3,7 +3,7 @@ import { isDev } from "../config"
 
 export const load = () => {
     app.on("ready", () => {
-        if (process.platform !== "darwin" || isDev || app.isInApplicationsFolder()) {
+        if (process.platform !== "darwin" || isDev || app.isInApplicationsFolder() || process.env.OPENADE_SMOKE_TEST) {
             return
         }
         const respId = dialog.showMessageBoxSync({

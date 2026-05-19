@@ -33,10 +33,13 @@ import { load as loadBinaries, cleanup as cleanupBinaries } from "./modules/code
 import { load as loadCodeWindowFrame, cleanup as cleanupCodeWindowFrame } from "./modules/code/windowFrame"
 
 const main = () => {
-    const gotLock = app.requestSingleInstanceLock()
-    if (!gotLock) {
-        app.quit()
-        return
+    // OPENADE_SMOKE_TEST runs packaged smoke tests alongside any local production instance.
+    if (!process.env.OPENADE_SMOKE_TEST) {
+        const gotLock = app.requestSingleInstanceLock()
+        if (!gotLock) {
+            app.quit()
+            return
+        }
     }
     logger.info("OpenADE starting with versions:", process.versions)
     loadSentry() // Register IPC handlers for device config

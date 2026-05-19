@@ -10,6 +10,7 @@
     "start": "npm run build:harness && npm install && RELEASE=head DEBUG=1 npm run build && npx electron dist/main.js",
     "typecheck": "tsgo --noEmit",
     "test": "vitest run",
+    "test:smoke": "playwright test --config=playwright.config.ts",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
@@ -36,6 +37,7 @@
   },
   "devDependencies": {
     "@electron/notarize": "^3.1.1",
+    "@playwright/test": "^1.60.0",
     "@types/lodash": "^4.14.186",
     "@typescript/native-preview": "^7.0.0-dev.20260107.1",
     "@vitest/ui": "^4.0.16",

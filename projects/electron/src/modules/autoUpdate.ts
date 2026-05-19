@@ -80,7 +80,7 @@ function checkForUpdatesAndNotify() {
 
 export const load = () => {
     // Check for updates
-    if (!isDev) {
+    if (!isDev && !process.env.OPENADE_SMOKE_TEST) {
         checkForUpdatesAndNotify()
         setInterval(checkForUpdatesAndNotify, 60000 * 30) // Check for updates every 30 minutes
     }
