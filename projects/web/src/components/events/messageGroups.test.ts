@@ -222,7 +222,7 @@ describe("groupStreamEvents unknown harness events", () => {
         ])
     })
 
-    it("ignores Claude telemetry events that are not transcript content", () => {
+    it("ignores Claude rate-limit telemetry events that are not transcript content", () => {
         const groups = groupStreamEvents(
             [
                 claudeMessageEvent(
@@ -243,6 +243,27 @@ describe("groupStreamEvents unknown harness events", () => {
                 ),
                 claudeMessageEvent(
                     {
+                        type: "raw_json",
+                        original_type: "rate_limit_event",
+                        raw: {
+                            type: "rate_limit_event",
+                            rate_limit_info: { status: "allowed" },
+                        },
+                    },
+                    "msg-2"
+                ),
+            ],
+            "claude-code"
+        )
+
+        expect(groups).toEqual([])
+    })
+
+    it("renders Claude task_progress events as task system groups", () => {
+        const groups = groupStreamEvents(
+            [
+                claudeMessageEvent(
+                    {
                         type: "system",
                         subtype: "task_progress",
                         task_id: "aa6c4249c1723694f",
@@ -257,18 +278,7 @@ describe("groupStreamEvents unknown harness events", () => {
                         uuid: "c33bcbb9-be72-422a-b171-7489fdc5e87a",
                         session_id: "1e3e7c52-0da2-404b-b30f-c51641575f32",
                     },
-                    "msg-2"
-                ),
-                claudeMessageEvent(
-                    {
-                        type: "raw_json",
-                        original_type: "rate_limit_event",
-                        raw: {
-                            type: "rate_limit_event",
-                            rate_limit_info: { status: "allowed" },
-                        },
-                    },
-                    "msg-3"
+                    "msg-1"
                 ),
                 claudeMessageEvent(
                     {
@@ -279,15 +289,298 @@ describe("groupStreamEvents unknown harness events", () => {
                             type: "system",
                             subtype: "task_progress",
                             description: "Reading projects/dashboard/src/pages/funktionalChat/state/roomStats.ts",
+                            last_tool_name: "Read",
                         },
                     },
-                    "msg-4"
+                    "msg-2"
                 ),
             ],
             "claude-code"
         )
 
-        expect(groups).toEqual([])
+        expect(groups).toEqual([
+            {
+                type: "system",
+                subtype: "task_progress",
+                metadata: {
+                    task_id: "aa6c4249c1723694f",
+                    tool_use_id: "toolu_01Nz3nyuFCq5PHarAELVEBej",
+                    description: "Reading projects/dashboard/src/pages/funktionalChat/state/roomStats.ts",
+                    usage: {
+                        total_tokens: 70644,
+                        tool_uses: 34,
+                        duration_ms: 96978,
+                    },
+                    last_tool_name: "Read",
+                    uuid: "c33bcbb9-be72-422a-b171-7489fdc5e87a",
+                    session_id: "1e3e7c52-0da2-404b-b30f-c51641575f32",
+                },
+                messageIndex: 0,
+            },
+            {
+                type: "system",
+                subtype: "task_progress",
+                metadata: {
+                    description: "Reading projects/dashboard/src/pages/funktionalChat/state/roomStats.ts",
+                    last_tool_name: "Read",
+                },
+                messageIndex: 1,
+            },
+        ])
+    })
+
+    it("renders Claude task lifecycle events as task system groups", () => {
+        const groups = groupStreamEvents(
+            [
+                claudeMessageEvent(
+                    {
+                        type: "system",
+                        subtype: "task_started",
+                        task_id: "bfnq7cq4u",
+                        tool_use_id: "toolu_01GWjh3CwGWJypAA8rmQjvCU",
+                        description: "Show context around the bug pattern",
+                        task_type: "local_bash",
+                        uuid: "b8b514b2-06a0-4e91-8c71-7e605b35203d",
+                        session_id: "a6e94e71-7457-4191-b20a-8d154a9b0ed8",
+                    },
+                    "msg-1"
+                ),
+                claudeMessageEvent(
+                    {
+                        type: "system",
+                        subtype: "task_notification",
+                        task_id: "bfnq7cq4u",
+                        tool_use_id: "toolu_01GWjh3CwGWJypAA8rmQjvCU",
+                        status: "completed",
+                        output_file: "",
+                        summary: "Show context around the bug pattern",
+                        uuid: "019f04f4-9b57-4499-88f3-18470e037063",
+                        session_id: "a6e94e71-7457-4191-b20a-8d154a9b0ed8",
+                    },
+                    "msg-2"
+                ),
+                claudeMessageEvent(
+                    {
+                        type: "raw_json",
+                        original_type: "system",
+                        original_subtype: "task_started",
+                        raw: {
+                            type: "system",
+                            subtype: "task_started",
+                            description: "Show context around the bug pattern",
+                            task_type: "local_bash",
+                        },
+                    },
+                    "msg-3"
+                ),
+            ],
+            "claude-code"
+        )
+
+        expect(groups).toEqual([
+            {
+                type: "system",
+                subtype: "task_started",
+                metadata: {
+                    task_id: "bfnq7cq4u",
+                    tool_use_id: "toolu_01GWjh3CwGWJypAA8rmQjvCU",
+                    description: "Show context around the bug pattern",
+                    task_type: "local_bash",
+                    uuid: "b8b514b2-06a0-4e91-8c71-7e605b35203d",
+                    session_id: "a6e94e71-7457-4191-b20a-8d154a9b0ed8",
+                },
+                messageIndex: 0,
+            },
+            {
+                type: "system",
+                subtype: "task_notification",
+                metadata: {
+                    task_id: "bfnq7cq4u",
+                    tool_use_id: "toolu_01GWjh3CwGWJypAA8rmQjvCU",
+                    status: "completed",
+                    output_file: "",
+                    summary: "Show context around the bug pattern",
+                    uuid: "019f04f4-9b57-4499-88f3-18470e037063",
+                    session_id: "a6e94e71-7457-4191-b20a-8d154a9b0ed8",
+                },
+                messageIndex: 1,
+            },
+            {
+                type: "system",
+                subtype: "task_started",
+                metadata: {
+                    description: "Show context around the bug pattern",
+                    task_type: "local_bash",
+                },
+                messageIndex: 2,
+            },
+        ])
+    })
+
+    it("renders Claude api_retry events as system groups", () => {
+        const raw = {
+            type: "system",
+            subtype: "api_retry",
+            attempt: 10,
+            max_retries: 10,
+            retry_delay_ms: 35624.81064789373,
+            error_status: 529,
+            error: "rate_limit",
+            session_id: "0848323a-5269-439c-9411-1decd4b8dc5f",
+            uuid: "e1d4c18f-ba8a-4fd4-a393-b269470a074d",
+        }
+        const groups = groupStreamEvents([claudeMessageEvent(raw, "msg-1")], "claude-code")
+
+        expect(groups).toEqual([
+            {
+                type: "system",
+                subtype: "api_retry",
+                metadata: {
+                    attempt: 10,
+                    max_retries: 10,
+                    retry_delay_ms: 35624.81064789373,
+                    error_status: 529,
+                    error: "rate_limit",
+                    session_id: "0848323a-5269-439c-9411-1decd4b8dc5f",
+                    uuid: "e1d4c18f-ba8a-4fd4-a393-b269470a074d",
+                },
+                messageIndex: 0,
+            },
+        ])
+    })
+
+    it("renders raw_json-wrapped Claude api_retry events as system groups", () => {
+        const raw = {
+            type: "system",
+            subtype: "api_retry",
+            attempt: 1,
+            max_retries: 10,
+            retry_delay_ms: 1000,
+            error_status: 529,
+            error: "rate_limit",
+        }
+        const groups = groupStreamEvents(
+            [claudeMessageEvent({ type: "raw_json", original_type: "system", original_subtype: "api_retry", raw }, "msg-1")],
+            "claude-code"
+        )
+
+        expect(groups).toEqual([
+            {
+                type: "system",
+                subtype: "api_retry",
+                metadata: {
+                    attempt: 1,
+                    max_retries: 10,
+                    retry_delay_ms: 1000,
+                    error_status: 529,
+                    error: "rate_limit",
+                },
+                messageIndex: 0,
+            },
+        ])
+    })
+
+    it("renders Claude web_search events as tool groups", () => {
+        const raw = {
+            id: "ws_06a733061430c941016a0bc0dafe9481909d2a5c65720110ba",
+            type: "web_search",
+            query: "React Router Vercel deployment server-index.mjs ERR_MODULE_NOT_FOUND react-router dist development index.mjs",
+            action: {
+                type: "search",
+                query: "React Router Vercel deployment server-index.mjs ERR_MODULE_NOT_FOUND react-router dist development index.mjs",
+                queries: [
+                    "React Router Vercel deployment server-index.mjs ERR_MODULE_NOT_FOUND react-router dist development index.mjs",
+                    "site:vercel.com/docs react-router Vercel React Router 7 server-index.mjs",
+                    "site:reactrouter.com Vercel React Router deployment",
+                ],
+            },
+        }
+        const groups = groupStreamEvents([claudeMessageEvent(raw, "msg-1")], "claude-code")
+
+        expect(groups).toEqual([
+            {
+                type: "tool",
+                toolUseId: "ws_06a733061430c941016a0bc0dafe9481909d2a5c65720110ba",
+                toolName: "WebSearch",
+                input: {
+                    query: "React Router Vercel deployment server-index.mjs ERR_MODULE_NOT_FOUND react-router dist development index.mjs",
+                    action: {
+                        type: "search",
+                        query: "React Router Vercel deployment server-index.mjs ERR_MODULE_NOT_FOUND react-router dist development index.mjs",
+                        queries: [
+                            "React Router Vercel deployment server-index.mjs ERR_MODULE_NOT_FOUND react-router dist development index.mjs",
+                            "site:vercel.com/docs react-router Vercel React Router 7 server-index.mjs",
+                            "site:reactrouter.com Vercel React Router deployment",
+                        ],
+                    },
+                },
+                isError: false,
+                messageIndices: [0, undefined],
+            },
+        ])
+    })
+
+    it("renders raw_json-wrapped Claude web_search events as tool groups", () => {
+        const raw = {
+            id: "ws_1",
+            type: "web_search",
+            query: "React Router Vercel deployment",
+            action: { type: "search", queries: ["React Router Vercel deployment"] },
+        }
+        const groups = groupStreamEvents([claudeMessageEvent({ type: "raw_json", original_type: "web_search", raw }, "msg-1")], "claude-code")
+
+        expect(groups).toEqual([
+            {
+                type: "tool",
+                toolUseId: "ws_1",
+                toolName: "WebSearch",
+                input: {
+                    query: "React Router Vercel deployment",
+                    action: { type: "search", queries: ["React Router Vercel deployment"] },
+                },
+                isError: false,
+                messageIndices: [0, undefined],
+            },
+        ])
+    })
+
+    it("renders Claude assistant messages with only empty thinking signatures as thinking groups", () => {
+        const groups = groupStreamEvents(
+            [
+                claudeMessageEvent(
+                    {
+                        type: "assistant",
+                        message: {
+                            model: "claude-opus-4-7",
+                            id: "msg_01LpMEPux1L4gd8htanB2Kgx",
+                            type: "message",
+                            role: "assistant",
+                            content: [{ type: "thinking", thinking: "", signature: "EvobClkIDRgCKkDYqw2JzyDrf0txtaHYyXoymZfc5IbjiB" }],
+                            stop_reason: null,
+                            usage: {
+                                input_tokens: 1342,
+                                cache_creation_input_tokens: 5989,
+                                cache_read_input_tokens: 77866,
+                                output_tokens: 40,
+                            },
+                        },
+                        parent_tool_use_id: null,
+                        session_id: "a6e94e71-7457-4191-b20a-8d154a9b0ed8",
+                        uuid: "c5a66af9-f73c-42c5-8c28-cceba0e823af",
+                    },
+                    "msg-1"
+                ),
+            ],
+            "claude-code"
+        )
+
+        expect(groups).toEqual([
+            {
+                type: "thinking",
+                text: "Thinking",
+                messageIndex: 0,
+            },
+        ])
     })
 
     it("renders known-but-unhandled Claude events as unknown groups", () => {

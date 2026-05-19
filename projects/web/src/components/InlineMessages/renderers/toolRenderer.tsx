@@ -1,11 +1,15 @@
 import cx from "classnames"
-import { AlertCircle, Wrench } from "lucide-react"
+import { AlertCircle, Search, Wrench } from "lucide-react"
 import type { CommentContext, GroupRenderer, ToolGroup } from "../../events/messageGroups"
 import { getFileName } from "../../utils/paths"
 
 function getToolLabel(group: ToolGroup): string {
     const input = group.input as Record<string, unknown> | undefined
     if (input) {
+        if (group.toolName === "WebSearch" && typeof input.query === "string") {
+            const query = input.query.length > 48 ? `${input.query.slice(0, 48)}…` : input.query
+            return `${group.toolName}: ${query}`
+        }
         // Tools with file_path: Read, Glob, etc.
         if (typeof input.file_path === "string") {
             return `${group.toolName}: ${getFileName(input.file_path)}`
@@ -52,7 +56,12 @@ function ToolContent({ group }: { group: ToolGroup; ctx: CommentContext }) {
 
 export const toolRenderer: GroupRenderer<ToolGroup> = {
     getLabel: getToolLabel,
-    getIcon: () => <Wrench size="0.85em" className="text-muted flex-shrink-0" />,
+    getIcon: (group) =>
+        group.toolName === "WebSearch" ? (
+            <Search size="0.85em" className="text-info flex-shrink-0" />
+        ) : (
+            <Wrench size="0.85em" className="text-muted flex-shrink-0" />
+        ),
     getStatusIcon: (group) => {
         if (group.isError) return <AlertCircle size="1em" className="text-error flex-shrink-0" />
         return null

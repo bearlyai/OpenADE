@@ -14,7 +14,7 @@ import type {
     ClaudeUserContentBlock,
     ClaudeUserEvent,
 } from "@openade/harness/browser"
-import type { MessageGroup, ResultGroup, SystemGroup, TodoItem } from "../messageGroups"
+import type { MessageGroup, ResultGroup, SystemGroup, TodoItem, ToolGroup } from "../messageGroups"
 
 /** Extract text content from assistant message */
 function getAssistantText(msg: ClaudeEvent): string | null {
@@ -115,6 +115,18 @@ export function groupClaudeCodeMessages(messages: ClaudeEvent[]): MessageGroup[]
             continue
         }
 
+        const webSearchGroup = getWebSearchToolGroup(msg, i)
+        if (webSearchGroup) {
+            groups.push(webSearchGroup)
+            continue
+        }
+
+        const rawJsonSystemGroup = getRawJsonVisibleSystemGroup(msg, i)
+        if (rawJsonSystemGroup) {
+            groups.push(rawJsonSystemGroup)
+            continue
+        }
+
         // Handle system messages
         if (msg.type === "system") {
             const subtype = msg.subtype as SystemGroup["subtype"] | string
@@ -125,11 +137,11 @@ export function groupClaudeCodeMessages(messages: ClaudeEvent[]): MessageGroup[]
             }
 
             // Only include specific subtypes we want to display
-            if (subtype === "compact_boundary" || subtype === "status" || subtype === "init" || subtype === "hook_response") {
+            if (isVisibleSystemSubtype(subtype)) {
                 const { type: _type, subtype: _subtype, ...metadata } = msg as Record<string, unknown>
                 groups.push({
                     type: "system",
-                    subtype: subtype as SystemGroup["subtype"],
+                    subtype,
                     metadata,
                     messageIndex: i,
                 })
@@ -290,7 +302,15 @@ export function groupClaudeCodeMessages(messages: ClaudeEvent[]): MessageGroup[]
                     messageIndex: i,
                 })
             } else if (groups.length === groupCountBeforeAssistant) {
-                pushClaudeUnknownGroup(groups, msg, i)
+                if (hasEmptyThinkingBlock(msg)) {
+                    groups.push({
+                        type: "thinking",
+                        text: "Thinking",
+                        messageIndex: i,
+                    })
+                } else if (!hasOnlyEmptyAssistantContent(msg)) {
+                    pushClaudeUnknownGroup(groups, msg, i)
+                }
             }
 
             continue
@@ -302,6 +322,56 @@ export function groupClaudeCodeMessages(messages: ClaudeEvent[]): MessageGroup[]
     return groups
 }
 
+function getWebSearchToolGroup(msg: ClaudeEvent, messageIndex: number): ToolGroup | null {
+    const event = msg as unknown as { type?: unknown; original_type?: unknown; raw?: unknown }
+    let raw: Record<string, unknown> | null = null
+
+    if (event.type === "web_search") {
+        raw = event as Record<string, unknown>
+    } else if (event.type === "raw_json" && event.original_type === "web_search" && event.raw && typeof event.raw === "object") {
+        raw = event.raw as Record<string, unknown>
+    }
+
+    if (!raw) return null
+
+    const { type: _type, id: rawId, ...input } = raw
+    const toolUseId = typeof rawId === "string" ? rawId : `web-search-${messageIndex}`
+    return {
+        type: "tool",
+        toolUseId,
+        toolName: "WebSearch",
+        input,
+        isError: false,
+        messageIndices: [messageIndex, undefined],
+    }
+}
+
+function getRawJsonVisibleSystemGroup(msg: ClaudeEvent, messageIndex: number): SystemGroup | null {
+    if (msg.type !== "raw_json") return null
+    if (msg.original_type !== "system" || !isVisibleSystemSubtype(msg.original_subtype)) return null
+
+    const { type: _type, subtype: _subtype, ...metadata } = msg.raw
+    return {
+        type: "system",
+        subtype: msg.original_subtype,
+        metadata,
+        messageIndex,
+    }
+}
+
+function isVisibleSystemSubtype(subtype: string | undefined): subtype is SystemGroup["subtype"] {
+    return (
+        subtype === "compact_boundary" ||
+        subtype === "status" ||
+        subtype === "init" ||
+        subtype === "hook_response" ||
+        subtype === "api_retry" ||
+        subtype === "task_started" ||
+        subtype === "task_progress" ||
+        subtype === "task_notification"
+    )
+}
+
 function isIgnoredClaudeTelemetryEvent(msg: ClaudeEvent): boolean {
     const raw = msg as unknown as {
         type?: unknown
@@ -309,12 +379,7 @@ function isIgnoredClaudeTelemetryEvent(msg: ClaudeEvent): boolean {
         original_type?: unknown
         original_subtype?: unknown
     }
-    return (
-        raw.type === "rate_limit_event" ||
-        (raw.type === "system" && raw.subtype === "task_progress") ||
-        (raw.type === "raw_json" && raw.original_type === "rate_limit_event") ||
-        (raw.type === "raw_json" && raw.original_type === "system" && raw.original_subtype === "task_progress")
-    )
+    return raw.type === "rate_limit_event" || (raw.type === "raw_json" && raw.original_type === "rate_limit_event")
 }
 
 function getUnknownAssistantContentBlocks(msg: ClaudeEvent): unknown[] {
@@ -324,6 +389,30 @@ function getUnknownAssistantContentBlocks(msg: ClaudeEvent): unknown[] {
     return content.filter((block) => {
         const type = (block as { type?: unknown }).type
         return type !== "text" && type !== "thinking" && type !== "tool_use"
+    })
+}
+
+function hasOnlyEmptyAssistantContent(msg: ClaudeEvent): boolean {
+    if (msg.type !== "assistant") return false
+    const { content } = msg.message
+    if (!Array.isArray(content)) return false
+    if (content.length === 0) return true
+
+    return content.every((block) => {
+        const raw = block as { type?: unknown; text?: unknown; thinking?: unknown }
+        if (raw.type === "text") return typeof raw.text !== "string" || raw.text.trim() === ""
+        if (raw.type === "thinking") return typeof raw.thinking !== "string" || raw.thinking.trim() === ""
+        return false
+    })
+}
+
+function hasEmptyThinkingBlock(msg: ClaudeEvent): boolean {
+    if (msg.type !== "assistant") return false
+    const { content } = msg.message
+    if (!Array.isArray(content)) return false
+    return content.some((block) => {
+        const raw = block as { type?: unknown; thinking?: unknown }
+        return raw.type === "thinking" && (typeof raw.thinking !== "string" || raw.thinking.trim() === "")
     })
 }
 

@@ -9,14 +9,17 @@ export type ClaudeEvent =
     | ClaudeSystemHookStartedEvent
     | ClaudeSystemHookProgressEvent
     | ClaudeSystemHookResponseEvent
+    | ClaudeSystemTaskStartedEvent
     | ClaudeSystemTaskNotificationEvent
     | ClaudeSystemTaskProgressEvent
+    | ClaudeSystemApiRetryEvent
     | ClaudeSystemFilesPersistedEvent
     | ClaudeAssistantEvent
     | ClaudeUserEvent
     | ClaudeResultEvent
     | ClaudeToolProgressEvent
     | ClaudeToolUseSummaryEvent
+    | ClaudeWebSearchEvent
     | ClaudeRateLimitEvent
     | ClaudeAuthStatusEvent
     | ClaudeRawJsonEvent
@@ -73,10 +76,30 @@ export interface ClaudeSystemHookResponseEvent {
     outcome: string
 }
 
+// ── system:task_started ──
+export interface ClaudeSystemTaskStartedEvent {
+    type: "system"
+    subtype: "task_started"
+    task_id?: string
+    tool_use_id?: string
+    description?: string
+    task_type?: string
+    uuid?: string
+    session_id?: string
+    [key: string]: unknown
+}
+
 // ── system:task_notification ──
 export interface ClaudeSystemTaskNotificationEvent {
     type: "system"
     subtype: "task_notification"
+    task_id?: string
+    tool_use_id?: string
+    status?: string
+    output_file?: string
+    summary?: string
+    uuid?: string
+    session_id?: string
     [key: string]: unknown
 }
 
@@ -96,6 +119,20 @@ export interface ClaudeSystemTaskProgressEvent {
     last_tool_name?: string
     uuid?: string
     session_id?: string
+    [key: string]: unknown
+}
+
+// ── system:api_retry ──
+export interface ClaudeSystemApiRetryEvent {
+    type: "system"
+    subtype: "api_retry"
+    attempt?: number
+    max_retries?: number
+    retry_delay_ms?: number
+    error_status?: number
+    error?: string
+    session_id?: string
+    uuid?: string
     [key: string]: unknown
 }
 
@@ -130,7 +167,7 @@ export interface ClaudeAssistantEvent {
 
 export type ClaudeContentBlock =
     | { type: "text"; text: string }
-    | { type: "thinking"; thinking: string }
+    | { type: "thinking"; thinking: string; signature?: string }
     | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
 
 // ── user (tool results) ──
@@ -180,6 +217,20 @@ export interface ClaudeToolUseSummaryEvent {
     [key: string]: unknown
 }
 
+// ── web_search ──
+export interface ClaudeWebSearchEvent {
+    type: "web_search"
+    id?: string
+    query?: string
+    action?: {
+        type?: string
+        query?: string
+        queries?: string[]
+        [key: string]: unknown
+    }
+    [key: string]: unknown
+}
+
 // ── rate_limit_event ──
 export interface ClaudeRateLimitEvent {
     type: "rate_limit_event"
@@ -222,8 +273,10 @@ const KNOWN_SYSTEM_SUBTYPES = new Set<string>([
     "hook_started",
     "hook_progress",
     "hook_response",
+    "task_started",
     "task_notification",
     "task_progress",
+    "api_retry",
     "files_persisted",
 ])
 
@@ -234,6 +287,7 @@ const KNOWN_TOP_TYPES = new Set<string>([
     "result",
     "tool_progress",
     "tool_use_summary",
+    "web_search",
     "rate_limit_event",
     "auth_status",
 ])

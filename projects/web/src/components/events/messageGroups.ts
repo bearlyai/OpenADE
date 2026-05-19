@@ -120,7 +120,7 @@ export interface BashGroup {
 
 export interface SystemGroup {
     type: "system"
-    subtype: "compact_boundary" | "status" | "init" | "hook_response"
+    subtype: "compact_boundary" | "status" | "init" | "hook_response" | "api_retry" | "task_started" | "task_progress" | "task_notification"
     metadata: Record<string, unknown>
     messageIndex: number
 }

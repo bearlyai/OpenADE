@@ -1,4 +1,4 @@
-import { Info, Minimize2, Play, Webhook } from "lucide-react"
+import { AlertTriangle, Info, ListChecks, Minimize2, Play, Webhook } from "lucide-react"
 import type { ReactNode } from "react"
 import type { CommentContext, GroupRenderer, SystemGroup } from "../../events/messageGroups"
 
@@ -7,10 +7,14 @@ const SYSTEM_DISPLAY_NAMES: Record<SystemGroup["subtype"], string> = {
     status: "Status",
     init: "Session",
     hook_response: "Hook",
+    api_retry: "API retry",
+    task_started: "Task",
+    task_progress: "Task",
+    task_notification: "Task",
 }
 
-function getSystemIcon(subtype: SystemGroup["subtype"]): ReactNode {
-    switch (subtype) {
+function getSystemIcon(group: SystemGroup): ReactNode {
+    switch (group.subtype) {
         case "compact_boundary":
             return <Minimize2 size="0.85em" className="text-warning flex-shrink-0" />
         case "status":
@@ -19,6 +23,12 @@ function getSystemIcon(subtype: SystemGroup["subtype"]): ReactNode {
             return <Play size="0.85em" className="text-success flex-shrink-0" />
         case "hook_response":
             return <Webhook size="0.85em" className="text-muted flex-shrink-0" />
+        case "api_retry":
+            return <AlertTriangle size="0.85em" className={`${isFinalApiRetry(group.metadata) ? "text-error" : "text-warning"} flex-shrink-0`} />
+        case "task_started":
+        case "task_progress":
+        case "task_notification":
+            return <ListChecks size="0.85em" className="text-info flex-shrink-0" />
     }
 }
 
@@ -26,6 +36,65 @@ function formatMetadataValue(value: unknown): string {
     if (typeof value === "number") return value.toLocaleString()
     if (typeof value === "string") return value
     return JSON.stringify(value)
+}
+
+function getNumber(value: unknown): number | undefined {
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined
+}
+
+function isFinalApiRetry(metadata: Record<string, unknown>): boolean {
+    const attempt = getNumber(metadata.attempt)
+    const maxRetries = getNumber(metadata.max_retries)
+    return attempt !== undefined && maxRetries !== undefined && attempt >= maxRetries
+}
+
+function formatApiRetryError(metadata: Record<string, unknown>): string | undefined {
+    const error = typeof metadata.error === "string" ? metadata.error.replaceAll("_", " ") : undefined
+    const status = getNumber(metadata.error_status)
+    if (error && status !== undefined) return `${error} (${status})`
+    return error ?? (status !== undefined ? `HTTP ${status}` : undefined)
+}
+
+function formatRetryDelay(metadata: Record<string, unknown>): string | undefined {
+    const retryDelayMs = getNumber(metadata.retry_delay_ms)
+    if (retryDelayMs === undefined) return undefined
+    return `${(retryDelayMs / 1000).toFixed(1)}s`
+}
+
+function formatApiRetryLabel(metadata: Record<string, unknown>): string {
+    const attempt = getNumber(metadata.attempt)
+    const maxRetries = getNumber(metadata.max_retries)
+    const base =
+        attempt !== undefined && maxRetries !== undefined
+            ? `${isFinalApiRetry(metadata) ? "Final API retry" : "API retry"} ${attempt}/${maxRetries}`
+            : "API retry"
+    const parts = [base, formatApiRetryError(metadata), formatRetryDelay(metadata)].filter((part): part is string => Boolean(part))
+    return parts.join(" - ")
+}
+
+function getString(metadata: Record<string, unknown>, key: string): string | undefined {
+    const value = metadata[key]
+    return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
+function formatStatus(value: string): string {
+    return `${value[0].toUpperCase()}${value.slice(1)}`
+}
+
+function formatTaskLabel(group: SystemGroup): string {
+    if (group.subtype === "task_started") {
+        return `Task: ${getString(group.metadata, "description") ?? "started"}`
+    }
+    if (group.subtype === "task_progress") {
+        return `Task: ${getString(group.metadata, "description") ?? getString(group.metadata, "last_tool_name") ?? "working"}`
+    }
+
+    const status = getString(group.metadata, "status")
+    const summary = getString(group.metadata, "summary")
+    if (status && summary) return `Task ${formatStatus(status)}: ${summary}`
+    if (summary) return `Task: ${summary}`
+    if (status) return `Task ${formatStatus(status)}`
+    return "Task"
 }
 
 function SystemContent({ group }: { group: SystemGroup; ctx: CommentContext }) {
@@ -63,10 +132,16 @@ export const systemRenderer: GroupRenderer<SystemGroup> = {
             const sessionId = group.metadata.session_id as string | undefined
             if (sessionId) return `Session ${sessionId.slice(0, 8)}`
         }
+        if (group.subtype === "api_retry") {
+            return formatApiRetryLabel(group.metadata)
+        }
+        if (group.subtype === "task_started" || group.subtype === "task_progress" || group.subtype === "task_notification") {
+            return formatTaskLabel(group)
+        }
 
         return displayName
     },
-    getIcon: (group) => getSystemIcon(group.subtype),
+    getIcon: (group) => getSystemIcon(group),
     getStatusIcon: () => null,
     getHeaderInfo: () => null,
     renderContent: (group, ctx) => <SystemContent group={group} ctx={ctx} />,

@@ -75,6 +75,39 @@ describe("parseClaudeEvent", () => {
         expect(event).not.toBeNull()
     })
 
+    it("parses system:task_started event", () => {
+        const raw = {
+            type: "system",
+            subtype: "task_started",
+            task_id: "bfnq7cq4u",
+            tool_use_id: "toolu_01GWjh3CwGWJypAA8rmQjvCU",
+            description: "Show context around the bug pattern",
+            task_type: "local_bash",
+            uuid: "b8b514b2-06a0-4e91-8c71-7e605b35203d",
+            session_id: "a6e94e71-7457-4191-b20a-8d154a9b0ed8",
+        }
+
+        const event = parseClaudeEvent(raw)
+        expect(event).toEqual(raw)
+    })
+
+    it("parses system:task_notification event", () => {
+        const raw = {
+            type: "system",
+            subtype: "task_notification",
+            task_id: "bfnq7cq4u",
+            tool_use_id: "toolu_01GWjh3CwGWJypAA8rmQjvCU",
+            status: "completed",
+            output_file: "",
+            summary: "Show context around the bug pattern",
+            uuid: "019f04f4-9b57-4499-88f3-18470e037063",
+            session_id: "a6e94e71-7457-4191-b20a-8d154a9b0ed8",
+        }
+
+        const event = parseClaudeEvent(raw)
+        expect(event).toEqual(raw)
+    })
+
     it("parses system:task_progress event", () => {
         const raw = {
             type: "system",
@@ -90,6 +123,23 @@ describe("parseClaudeEvent", () => {
             last_tool_name: "Read",
             uuid: "c33bcbb9-be72-422a-b171-7489fdc5e87a",
             session_id: "1e3e7c52-0da2-404b-b30f-c51641575f32",
+        }
+
+        const event = parseClaudeEvent(raw)
+        expect(event).toEqual(raw)
+    })
+
+    it("parses system:api_retry event", () => {
+        const raw = {
+            type: "system",
+            subtype: "api_retry",
+            attempt: 10,
+            max_retries: 10,
+            retry_delay_ms: 35624.81064789373,
+            error_status: 529,
+            error: "rate_limit",
+            session_id: "0848323a-5269-439c-9411-1decd4b8dc5f",
+            uuid: "e1d4c18f-ba8a-4fd4-a393-b269470a074d",
         }
 
         const event = parseClaudeEvent(raw)
@@ -216,6 +266,26 @@ describe("parseClaudeEvent", () => {
         const event = parseClaudeEvent(raw)
         expect(event).not.toBeNull()
         expect(event!.type).toBe("tool_use_summary")
+    })
+
+    it("parses web_search event", () => {
+        const raw = {
+            id: "ws_06a733061430c941016a0bc0dafe9481909d2a5c65720110ba",
+            type: "web_search",
+            query: "React Router Vercel deployment server-index.mjs ERR_MODULE_NOT_FOUND react-router dist development index.mjs",
+            action: {
+                type: "search",
+                query: "React Router Vercel deployment server-index.mjs ERR_MODULE_NOT_FOUND react-router dist development index.mjs",
+                queries: [
+                    "React Router Vercel deployment server-index.mjs ERR_MODULE_NOT_FOUND react-router dist development index.mjs",
+                    "site:vercel.com/docs react-router Vercel React Router 7 server-index.mjs",
+                    "site:reactrouter.com Vercel React Router deployment",
+                ],
+            },
+        }
+
+        const event = parseClaudeEvent(raw)
+        expect(event).toEqual(raw)
     })
 
     it("parses rate_limit_event", () => {
