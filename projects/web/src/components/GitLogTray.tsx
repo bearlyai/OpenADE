@@ -1,5 +1,5 @@
 import { parsePatchFiles } from "@pierre/diffs"
-import { FileCode, GitBranch, GitCommitHorizontal, RefreshCw } from "lucide-react"
+import { RefreshCw } from "lucide-react"
 import { observer } from "mobx-react"
 import { type ReactNode, useEffect, useMemo, useState } from "react"
 import { twMerge } from "tailwind-merge"
@@ -635,7 +635,7 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
 
     return (
         <div className={twMerge("flex flex-col h-full", className)}>
-            <div className="px-3 py-2 border-b border-border flex items-center gap-2 justify-between bg-base-200">
+            <div className="px-3 py-2 border-b border-border flex items-center gap-3 bg-base-200 min-w-0">
                 <Select
                     selectedId={selectedScopeId}
                     entries={scopeOptions}
@@ -646,7 +646,23 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
                         value: "text-xs truncate",
                     }}
                 />
-                <div className="flex items-center gap-2">
+                <div
+                    className="flex-1 min-w-0 flex items-center gap-2 text-sm"
+                    title={selectedCommit ? `${selectedCommit.shortSha} ${selectedCommit.message}` : undefined}
+                >
+                    {selectedCommit ? (
+                        <>
+                            <span className="font-mono text-xs text-muted flex-shrink-0">{selectedCommit.shortSha}</span>
+                            <span className="truncate text-base-content">{selectedCommit.message}</span>
+                            <span className="hidden lg:block text-xs text-muted truncate shrink min-w-0 max-w-44">
+                                {selectedCommit.author} · {selectedCommit.relativeDate}
+                            </span>
+                        </>
+                    ) : (
+                        <span className="text-sm text-muted truncate">Select a commit to view changes</span>
+                    )}
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
                     <button
                         type="button"
                         onClick={refresh}
@@ -662,10 +678,6 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
             </div>
             <div className="flex-1 min-h-0 flex">
                 <div className="w-72 border-r border-border bg-base-200 flex flex-col">
-                    <div className="px-3 py-2 border-b border-border text-xs text-muted flex items-center gap-1">
-                        <GitCommitHorizontal size={12} />
-                        Commits
-                    </div>
                     <div className="flex-1 overflow-y-auto">
                         {logLoading && commits.length === 0 ? (
                             <div className="py-12 text-center text-sm text-muted">Loading commits...</div>
@@ -713,16 +725,6 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
                 <div className="flex-1 min-w-0 flex flex-col">
                     {selectedCommit ? (
                         <>
-                            <div className="px-3 py-2 border-b border-border text-sm bg-base-200 flex items-center justify-between gap-2">
-                                <div className="truncate">
-                                    <span className="font-mono text-xs text-muted mr-2">{selectedCommit.shortSha}</span>
-                                    <span>{selectedCommit.message}</span>
-                                </div>
-                                <div className="text-xs text-muted flex items-center gap-1 flex-shrink-0">
-                                    <GitBranch size={12} />
-                                    <span>{selectedCommit.author}</span>
-                                </div>
-                            </div>
                             {commitFilesLoading ? (
                                 <div className="flex-1 flex items-center justify-center py-12 text-muted text-sm">Loading commit files...</div>
                             ) : commitFiles.length === 0 ? (
@@ -757,23 +759,6 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
                                                     />
                                                 ))}
                                             </div>
-                                        </div>
-                                    )}
-                                    {selectedFile && (
-                                        <div className="px-3 py-2 border-b border-border bg-base-100 flex items-center gap-2 text-sm">
-                                            <StatusIcon status={selectedFile.status} />
-                                            <FileCode size={13} className="text-muted flex-shrink-0" />
-                                            <span className="truncate" title={selectedFile.path}>
-                                                {selectedFile.oldPath ? (
-                                                    <>
-                                                        <span className="text-muted">{shortCommitPaths.get(selectedFile.oldPath) ?? selectedFile.oldPath}</span>
-                                                        <span className="mx-1">→</span>
-                                                        {shortCommitPaths.get(selectedFile.path) ?? selectedFile.path}
-                                                    </>
-                                                ) : (
-                                                    (shortCommitPaths.get(selectedFile.path) ?? selectedFile.path)
-                                                )}
-                                            </span>
                                         </div>
                                     )}
                                     <div className="flex-1 min-h-0 overflow-auto">{renderFileContent()}</div>
