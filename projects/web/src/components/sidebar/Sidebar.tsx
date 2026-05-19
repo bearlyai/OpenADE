@@ -42,7 +42,11 @@ const SidebarContent = observer(() => {
                     </button>
                 </div>
             </div>
-            <ScrollArea className="flex-1" viewportClassName="h-full">
+            <ScrollArea
+                className="flex-1"
+                viewportClassName="h-full"
+                scrollbarClassName="pointer-events-none opacity-0 transition-[background-color,opacity] data-[scrolling]:pointer-events-auto data-[scrolling]:opacity-100"
+            >
                 <div className="flex flex-col gap-2">
                     <ReposSidebarContent workspaceId={workspaceId} />
                     {workspaceId && <CronsSidebarContent workspaceId={workspaceId} />}

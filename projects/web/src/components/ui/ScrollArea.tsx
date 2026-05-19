@@ -7,11 +7,20 @@ interface ScrollAreaProps {
     children: React.ReactNode
     className?: string
     viewportClassName?: string
+    scrollbarClassName?: string
     viewportRef?: React.RefObject<HTMLDivElement>
     orientation?: "vertical" | "horizontal"
 }
 
-export const ScrollArea: React.FC<ScrollAreaProps> = ({ viewPortId, children, className, viewportClassName, viewportRef, orientation = "vertical" }) => (
+export const ScrollArea: React.FC<ScrollAreaProps> = ({
+    viewPortId,
+    children,
+    className,
+    viewportClassName,
+    scrollbarClassName,
+    viewportRef,
+    orientation = "vertical",
+}) => (
     <ScrollAreaBase.Root className={twMerge("relative overflow-hidden w-full h-full", className)}>
         <ScrollAreaBase.Viewport
             id={viewPortId}
@@ -24,7 +33,8 @@ export const ScrollArea: React.FC<ScrollAreaProps> = ({ viewPortId, children, cl
             className={twMerge(
                 "flex select-none touch-none p-0.5 bg-transparent transition-colors duration-150",
                 "hover:bg-base-300",
-                orientation === "vertical" ? "w-2.5" : "flex-col h-2.5"
+                orientation === "vertical" ? "w-2.5" : "flex-col h-2.5",
+                scrollbarClassName
             )}
             orientation={orientation}
         >
