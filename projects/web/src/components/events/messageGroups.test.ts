@@ -162,6 +162,147 @@ describe("groupStreamEvents codex file changes", () => {
     })
 })
 
+describe("groupStreamEvents codex web search", () => {
+    it("renders Codex web_search events as tool groups", () => {
+        const raw = {
+            id: "ws_0443fd158f7546df016a0cd69b8c6c8190abc468d794688059",
+            type: "web_search",
+            query: "https://developer.apple.com/app-store/review/guidelines/",
+            action: {
+                type: "other",
+            },
+        }
+        const groups = groupStreamEvents([codexMessageEvent(raw, "msg-1")], "codex")
+
+        expect(groups).toEqual([
+            {
+                type: "tool",
+                toolUseId: "ws_0443fd158f7546df016a0cd69b8c6c8190abc468d794688059",
+                toolName: "WebSearch",
+                input: {
+                    query: "https://developer.apple.com/app-store/review/guidelines/",
+                    action: {
+                        type: "other",
+                    },
+                },
+                isError: false,
+                messageIndices: [0, undefined],
+            },
+        ])
+    })
+
+    it("renders raw_json-wrapped Codex web_search events as tool groups", () => {
+        const raw = {
+            id: "ws_0443fd158f7546df016a0cd69b8c6c8190abc468d794688059",
+            type: "web_search",
+            query: "https://developer.apple.com/app-store/review/guidelines/",
+            action: {
+                type: "other",
+            },
+        }
+        const groups = groupStreamEvents([codexMessageEvent({ type: "raw_json", original_type: "web_search", raw }, "msg-1")], "codex")
+
+        expect(groups).toEqual([
+            {
+                type: "tool",
+                toolUseId: "ws_0443fd158f7546df016a0cd69b8c6c8190abc468d794688059",
+                toolName: "WebSearch",
+                input: {
+                    query: "https://developer.apple.com/app-store/review/guidelines/",
+                    action: {
+                        type: "other",
+                    },
+                },
+                isError: false,
+                messageIndices: [0, undefined],
+            },
+        ])
+    })
+
+    it("renders Codex web_search items as tool groups", () => {
+        const raw = {
+            id: "ws_0443fd158f7546df016a0cd6946cd881908cb6484aeb14abb5",
+            type: "web_search",
+            query: "Apple App Review Guidelines 3.1.1 in-app purchase digital goods credits external payment link 2026 official Apple",
+            action: {
+                type: "search",
+                query: "Apple App Review Guidelines 3.1.1 in-app purchase digital goods credits external payment link 2026 official Apple",
+                queries: [
+                    "Apple App Review Guidelines 3.1.1 in-app purchase digital goods credits external payment link 2026 official Apple",
+                    "Apple App Review Guidelines 3.1.3(b) multiplatform services external purchases official Apple",
+                    "Apple StoreKit External Purchase Link Entitlement United States guidelines official Apple 2026",
+                ],
+            },
+        }
+        const groups = groupStreamEvents([codexMessageEvent({ type: "item.completed", item: raw }, "msg-1")], "codex")
+
+        expect(groups).toEqual([
+            {
+                type: "tool",
+                toolUseId: "ws_0443fd158f7546df016a0cd6946cd881908cb6484aeb14abb5",
+                toolName: "WebSearch",
+                input: {
+                    query: "Apple App Review Guidelines 3.1.1 in-app purchase digital goods credits external payment link 2026 official Apple",
+                    action: {
+                        type: "search",
+                        query: "Apple App Review Guidelines 3.1.1 in-app purchase digital goods credits external payment link 2026 official Apple",
+                        queries: [
+                            "Apple App Review Guidelines 3.1.1 in-app purchase digital goods credits external payment link 2026 official Apple",
+                            "Apple App Review Guidelines 3.1.3(b) multiplatform services external purchases official Apple",
+                            "Apple StoreKit External Purchase Link Entitlement United States guidelines official Apple 2026",
+                        ],
+                    },
+                },
+                isError: false,
+                messageIndices: [0, undefined],
+            },
+        ])
+    })
+
+    it("renders unsupported Codex web_search items as tool groups", () => {
+        const raw = {
+            id: "ws_0443fd158f7546df016a0cd6946cd881908cb6484aeb14abb5",
+            type: "web_search",
+            query: "Apple App Review Guidelines 3.1.1 in-app purchase digital goods credits external payment link 2026 official Apple",
+            action: {
+                type: "search",
+                query: "Apple App Review Guidelines 3.1.1 in-app purchase digital goods credits external payment link 2026 official Apple",
+                queries: [
+                    "Apple App Review Guidelines 3.1.1 in-app purchase digital goods credits external payment link 2026 official Apple",
+                    "Apple App Review Guidelines 3.1.3(b) multiplatform services external purchases official Apple",
+                    "Apple StoreKit External Purchase Link Entitlement United States guidelines official Apple 2026",
+                ],
+            },
+        }
+        const groups = groupStreamEvents(
+            [codexMessageEvent({ type: "item.completed", item: { id: raw.id, type: "unsupported", original_type: "web_search", raw } }, "msg-1")],
+            "codex"
+        )
+
+        expect(groups).toEqual([
+            {
+                type: "tool",
+                toolUseId: "ws_0443fd158f7546df016a0cd6946cd881908cb6484aeb14abb5",
+                toolName: "WebSearch",
+                input: {
+                    query: "Apple App Review Guidelines 3.1.1 in-app purchase digital goods credits external payment link 2026 official Apple",
+                    action: {
+                        type: "search",
+                        query: "Apple App Review Guidelines 3.1.1 in-app purchase digital goods credits external payment link 2026 official Apple",
+                        queries: [
+                            "Apple App Review Guidelines 3.1.1 in-app purchase digital goods credits external payment link 2026 official Apple",
+                            "Apple App Review Guidelines 3.1.3(b) multiplatform services external purchases official Apple",
+                            "Apple StoreKit External Purchase Link Entitlement United States guidelines official Apple 2026",
+                        ],
+                    },
+                },
+                isError: false,
+                messageIndices: [0, undefined],
+            },
+        ])
+    })
+})
+
 describe("groupStreamEvents unknown harness events", () => {
     it("renders Codex raw_json events as unknown groups", () => {
         const raw = { type: "future.event", data: "new shape" }

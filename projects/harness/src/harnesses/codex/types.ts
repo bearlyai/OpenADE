@@ -11,6 +11,7 @@ export type CodexEvent =
     | CodexItemUpdatedEvent
     | CodexItemCompletedEvent
     | CodexErrorEvent
+    | CodexWebSearchEvent
     | CodexRawJsonEvent
 
 export interface CodexThreadStartedEvent {
@@ -57,6 +58,19 @@ export interface CodexErrorEvent {
     message: string
 }
 
+export interface CodexWebSearchEvent {
+    type: "web_search"
+    id?: string
+    query?: string
+    action?: {
+        type?: string
+        query?: string
+        queries?: string[]
+        [key: string]: unknown
+    }
+    [key: string]: unknown
+}
+
 export interface CodexRawJsonEvent {
     type: "raw_json"
     original_type?: string
@@ -76,6 +90,7 @@ export type CodexItem =
     | CodexFileChangeItem
     | CodexTodoListItem
     | CodexErrorItem
+    | CodexWebSearchItem
     | CodexUnsupportedItem
 
 export interface CodexReasoningItem {
@@ -124,6 +139,19 @@ export interface CodexErrorItem {
     message: string
 }
 
+export interface CodexWebSearchItem {
+    id: string
+    type: "web_search"
+    query?: string
+    action?: {
+        type?: string
+        query?: string
+        queries?: string[]
+        [key: string]: unknown
+    }
+    [key: string]: unknown
+}
+
 export interface CodexUnsupportedItem {
     id: string
     type: "unsupported"
@@ -144,9 +172,10 @@ const KNOWN_TOP_TYPES = new Set<string>([
     "item.updated",
     "item.completed",
     "error",
+    "web_search",
 ])
 
-const KNOWN_ITEM_TYPES = new Set<string>(["reasoning", "agent_message", "command_execution", "file_change", "todo_list", "error"])
+const KNOWN_ITEM_TYPES = new Set<string>(["reasoning", "agent_message", "command_execution", "file_change", "todo_list", "error", "web_search"])
 
 /**
  * Parses a raw JSON object into a typed CodexEvent.

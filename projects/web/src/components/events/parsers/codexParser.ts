@@ -19,7 +19,7 @@ import type {
     CodexTurnCompletedEvent,
     CodexTurnFailedEvent,
 } from "@openade/harness/browser"
-import type { MessageGroup, TodoItem } from "../messageGroups"
+import type { MessageGroup, TodoItem, ToolGroup } from "../messageGroups"
 
 /**
  * Group Codex messages into MessageGroups for inline rendering.
@@ -44,6 +44,12 @@ export function groupCodexMessages(messages: CodexEvent[], completionUsage?: { c
     // Second pass: build groups
     for (let i = 0; i < messages.length; i++) {
         const msg = messages[i]
+
+        const webSearchGroup = getWebSearchToolGroup(msg, i)
+        if (webSearchGroup) {
+            groups.push(webSearchGroup)
+            continue
+        }
 
         // item.started — only process if no corresponding item.completed exists
         if (msg.type === "item.started") {
@@ -137,8 +143,46 @@ export function groupCodexMessages(messages: CodexEvent[], completionUsage?: { c
     return groups
 }
 
+function getWebSearchToolGroup(msg: CodexEvent, messageIndex: number): ToolGroup | null {
+    const event = msg as unknown as { type?: unknown; original_type?: unknown; raw?: unknown }
+    let raw: Record<string, unknown> | null = null
+
+    if (event.type === "web_search") {
+        raw = event as Record<string, unknown>
+    } else if (event.type === "raw_json" && event.original_type === "web_search" && event.raw && typeof event.raw === "object") {
+        raw = event.raw as Record<string, unknown>
+    }
+
+    if (!raw) return null
+
+    return buildWebSearchToolGroup(raw, messageIndex)
+}
+
+function buildWebSearchToolGroup(raw: Record<string, unknown>, messageIndex: number): ToolGroup {
+    const { type: _type, id: rawId, ...input } = raw
+    const toolUseId = typeof rawId === "string" ? rawId : `web-search-${messageIndex}`
+    return {
+        type: "tool",
+        toolUseId,
+        toolName: "WebSearch",
+        input,
+        isError: false,
+        messageIndices: [messageIndex, undefined],
+    }
+}
+
 /** Convert a CodexItem into the appropriate MessageGroup and push it. */
 function pushItemGroup(groups: MessageGroup[], item: CodexItem, messageIndex: number, isPending: boolean): void {
+    const rawItem = item as unknown as { type?: string; original_type?: string; raw?: Record<string, unknown> }
+    if (rawItem.type === "web_search") {
+        groups.push(buildWebSearchToolGroup(rawItem as Record<string, unknown>, messageIndex))
+        return
+    }
+    if (rawItem.type === "unsupported" && rawItem.original_type === "web_search" && rawItem.raw) {
+        groups.push(buildWebSearchToolGroup(rawItem.raw, messageIndex))
+        return
+    }
+
     switch (item.type) {
         case "reasoning":
             groups.push({

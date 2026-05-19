@@ -117,6 +117,8 @@ export type {
     CodexFileChange,
     CodexTodoListItem,
     CodexErrorItem,
+    CodexWebSearchEvent,
+    CodexWebSearchItem,
     CodexUnsupportedItem,
 } from "./harnesses/codex/types.js"
 

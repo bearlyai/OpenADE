@@ -57,6 +57,41 @@ describe("parseCodexEvent", () => {
         }
     })
 
+    it("parses web_search event", () => {
+        const raw = {
+            id: "ws_0443fd158f7546df016a0cd69b8c6c8190abc468d794688059",
+            type: "web_search",
+            query: "https://developer.apple.com/app-store/review/guidelines/",
+            action: {
+                type: "other",
+            },
+        }
+        const event = parseCodexEvent(raw)
+        expect(event).toEqual(raw)
+    })
+
+    it("parses item.completed with web_search item", () => {
+        const raw = {
+            type: "item.completed",
+            item: {
+                id: "ws_0443fd158f7546df016a0cd6946cd881908cb6484aeb14abb5",
+                type: "web_search",
+                query: "Apple App Review Guidelines 3.1.1 in-app purchase digital goods credits external payment link 2026 official Apple",
+                action: {
+                    type: "search",
+                    query: "Apple App Review Guidelines 3.1.1 in-app purchase digital goods credits external payment link 2026 official Apple",
+                    queries: [
+                        "Apple App Review Guidelines 3.1.1 in-app purchase digital goods credits external payment link 2026 official Apple",
+                        "Apple App Review Guidelines 3.1.3(b) multiplatform services external purchases official Apple",
+                        "Apple StoreKit External Purchase Link Entitlement United States guidelines official Apple 2026",
+                    ],
+                },
+            },
+        }
+        const event = parseCodexEvent(raw)
+        expect(event).toEqual(raw)
+    })
+
     it("parses item.started with reasoning item", () => {
         const raw = {
             type: "item.started",
