@@ -79,3 +79,7 @@ button:focus {
 .electron-no-drag-region {
     -webkit-app-region: no-drag;
 }
+
+.electron-window-controls-region {
+    padding-right: max(144px, calc(12px + 100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
+}

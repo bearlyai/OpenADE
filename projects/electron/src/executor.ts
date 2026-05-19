@@ -5,7 +5,7 @@ import debounce from "lodash/debounce"
 import * as path from "path"
 import { isDev, getMainUrl } from "./config"
 import { manageWindowsAutoHide } from "./modules/windowControls"
-import { getLastFrameColors } from "./modules/windowFrame"
+import { getTitleBarOverlayOptions } from "./modules/windowFrame"
 import { getWindowKeyboardShortcutAction } from "./modules/windowKeyboardShortcuts"
 import { waitFor } from "./utils"
 
@@ -111,14 +111,15 @@ const startExecutor = () => {
         title: "OpenADE",
         resizable: true,
         titleBarStyle: "hidden",
-        titleBarOverlay: {
-            height: 0,
-            ...getLastFrameColors(),
-        },
-        trafficLightPosition: {
-            x: 18,
-            y: 15,
-        },
+        titleBarOverlay: getTitleBarOverlayOptions(),
+        ...(process.platform === "darwin"
+            ? {
+                  trafficLightPosition: {
+                      x: 18,
+                      y: 15,
+                  },
+              }
+            : {}),
         show: false,
         backgroundColor: "#202124",
         alwaysOnTop: false,

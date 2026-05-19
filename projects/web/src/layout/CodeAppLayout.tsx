@@ -10,6 +10,7 @@ import { codeSidebarManager } from "../components/sidebar/sidebarManager"
 import SidebarIcon from "../components/sidebar/static/sidebar.svg?react"
 import { onUpdateAvailable, onUpdateError } from "../electronAPI/app"
 import { hasElectronIpc } from "../electronAPI/capabilities"
+import { type PlatformInfo, fetchPlatformInfo } from "../electronAPI/platform"
 import { type FrameColors, windowFrameEnabled, windowFrameSetColors } from "../electronAPI/windowFrame"
 import { PortalContainerProvider } from "../hooks/usePortalContainer"
 import { useResolvedTheme } from "../hooks/useResolvedTheme"
@@ -18,6 +19,8 @@ import "../tw.css"
 
 const ELECTRON_DRAG_REGION_CLASS = "electron-drag-region"
 const ELECTRON_NO_DRAG_REGION_CLASS = "electron-no-drag-region"
+const ELECTRON_WINDOW_CONTROLS_REGION_CLASS = "electron-window-controls-region"
+type ShellPlatform = PlatformInfo["platform"]
 
 interface NavbarProps {
     title: string | ReactNode | null
@@ -32,10 +35,40 @@ interface CodeAppLayoutProps {
     frameCenter?: ReactNode
 }
 
+const detectRendererPlatform = (): ShellPlatform | null => {
+    if (typeof navigator === "undefined") return null
+    const platform = navigator.platform.toLowerCase()
+    if (platform.includes("mac")) return "darwin"
+    if (platform.includes("win")) return "win32"
+    if (platform.includes("linux")) return "linux"
+    return null
+}
+
+const useElectronPlatform = (): ShellPlatform | null => {
+    const [platform, setPlatform] = useState<ShellPlatform | null>(() => (hasElectronIpc() ? detectRendererPlatform() : null))
+
+    useEffect(() => {
+        if (!hasElectronIpc()) return
+
+        let cancelled = false
+        fetchPlatformInfo().then((platformInfo) => {
+            if (!cancelled) setPlatform(platformInfo.platform)
+        })
+
+        return () => {
+            cancelled = true
+        }
+    }, [])
+
+    return platform
+}
+
 const WithNavbar = observer((props: { children: ReactNode; navbar: NavbarProps }) => {
     const { children, navbar } = props
     const sidebarManager = codeSidebarManager
-    const insetForTrafficLights = hasElectronIpc() && !sidebarManager.showSidebar
+    const shellPlatform = useElectronPlatform()
+    const insetForTrafficLights = shellPlatform === "darwin" && !sidebarManager.showSidebar
+    const insetForWindowControls = shellPlatform === "win32" || shellPlatform === "linux"
 
     return (
         <div className="flex flex-col h-full w-full bg-base-100">
@@ -43,7 +76,8 @@ const WithNavbar = observer((props: { children: ReactNode; navbar: NavbarProps }
                 className={twMerge(
                     ELECTRON_DRAG_REGION_CLASS,
                     "h-11 px-3 bg-base-100 w-full min-w-0 overflow-hidden flex items-center flex-shrink-0",
-                    insetForTrafficLights ? "pl-[90px]" : ""
+                    insetForTrafficLights ? "pl-[90px]" : "",
+                    insetForWindowControls ? ELECTRON_WINDOW_CONTROLS_REGION_CLASS : ""
                 )}
             >
                 <div

@@ -28,6 +28,7 @@ interface FrameColors {
 const frameColorStore = new Store<Record<string, FrameColors>>()
 
 const storageKey = "code-window-frame-colors"
+const titleBarOverlayHeight = 44
 
 
 // ============================================================================
@@ -54,9 +55,11 @@ function checkAllowed(e: IpcMainInvokeEvent): boolean {
 
 const updateColorsOnExecutorWindow = (color: FrameColors) => {
     const executorWindow = currentExecutor().window
-    if (process.platform === "win32") {
-        // this method is only available on windows.
-        executorWindow?.setTitleBarOverlay(color)
+    if (process.platform !== "darwin") {
+        executorWindow?.setTitleBarOverlay({
+            ...color,
+            height: titleBarOverlayHeight,
+        })
     }
     frameColorStore.set(storageKey, color)
 }

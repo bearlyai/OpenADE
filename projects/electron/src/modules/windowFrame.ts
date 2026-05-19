@@ -9,6 +9,8 @@ interface FrameColors {
     color: string
 }
 
+const titleBarOverlayHeight = 44
+
 const defaultFrameColors: FrameColors = {
     // var(--secondaryBg) and var(--textLight)
     // set dynamically by javascript app
@@ -25,11 +27,15 @@ export const getLastFrameColors = (): FrameColors => {
     return defaultFrameColors
 }
 
+export const getTitleBarOverlayOptions = (color: FrameColors = getLastFrameColors()) => ({
+    ...color,
+    height: process.platform === "darwin" ? 0 : titleBarOverlayHeight,
+})
+
 const updateColorsOnExecutorWindow = (color: FrameColors) => {
     const executorWindow = currentExecutor().window
-    if (process.platform === "win32") {
-        // this method is only available on windows.
-        executorWindow?.setTitleBarOverlay(color)
+    if (process.platform !== "darwin") {
+        executorWindow?.setTitleBarOverlay(getTitleBarOverlayOptions(color))
     }
     frameColorStore.set(storageKey, color)
 }
