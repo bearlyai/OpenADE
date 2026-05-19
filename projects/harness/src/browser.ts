@@ -76,6 +76,7 @@ export type {
     ClaudeSystemTaskStartedEvent,
     ClaudeSystemTaskNotificationEvent,
     ClaudeSystemTaskProgressEvent,
+    ClaudeSystemTaskUpdatedEvent,
     ClaudeSystemApiRetryEvent,
     ClaudeSystemFilesPersistedEvent,
     ClaudeAssistantEvent,

@@ -12,6 +12,7 @@ export type ClaudeEvent =
     | ClaudeSystemTaskStartedEvent
     | ClaudeSystemTaskNotificationEvent
     | ClaudeSystemTaskProgressEvent
+    | ClaudeSystemTaskUpdatedEvent
     | ClaudeSystemApiRetryEvent
     | ClaudeSystemFilesPersistedEvent
     | ClaudeAssistantEvent
@@ -117,6 +118,22 @@ export interface ClaudeSystemTaskProgressEvent {
         [key: string]: unknown
     }
     last_tool_name?: string
+    uuid?: string
+    session_id?: string
+    [key: string]: unknown
+}
+
+// ── system:task_updated ──
+export interface ClaudeSystemTaskUpdatedEvent {
+    type: "system"
+    subtype: "task_updated"
+    task_id?: string
+    patch?: {
+        status?: string
+        start_time?: number
+        end_time?: number
+        [key: string]: unknown
+    }
     uuid?: string
     session_id?: string
     [key: string]: unknown
@@ -276,6 +293,7 @@ const KNOWN_SYSTEM_SUBTYPES = new Set<string>([
     "task_started",
     "task_notification",
     "task_progress",
+    "task_updated",
     "api_retry",
     "files_persisted",
 ])

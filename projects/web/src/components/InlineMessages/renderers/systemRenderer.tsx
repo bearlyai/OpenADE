@@ -11,6 +11,7 @@ const SYSTEM_DISPLAY_NAMES: Record<SystemGroup["subtype"], string> = {
     task_started: "Task",
     task_progress: "Task",
     task_notification: "Task",
+    task_updated: "Task",
 }
 
 function getSystemIcon(group: SystemGroup): ReactNode {
@@ -28,6 +29,7 @@ function getSystemIcon(group: SystemGroup): ReactNode {
         case "task_started":
         case "task_progress":
         case "task_notification":
+        case "task_updated":
             return <ListChecks size="0.85em" className="text-info flex-shrink-0" />
     }
 }
@@ -77,6 +79,11 @@ function getString(metadata: Record<string, unknown>, key: string): string | und
     return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
 
+function getPatch(metadata: Record<string, unknown>): Record<string, unknown> | undefined {
+    const patch = metadata.patch
+    return patch && typeof patch === "object" && !Array.isArray(patch) ? (patch as Record<string, unknown>) : undefined
+}
+
 function formatStatus(value: string): string {
     return `${value[0].toUpperCase()}${value.slice(1)}`
 }
@@ -87,6 +94,11 @@ function formatTaskLabel(group: SystemGroup): string {
     }
     if (group.subtype === "task_progress") {
         return `Task: ${getString(group.metadata, "description") ?? getString(group.metadata, "last_tool_name") ?? "working"}`
+    }
+    if (group.subtype === "task_updated") {
+        const patch = getPatch(group.metadata)
+        const status = patch ? getString(patch, "status") : undefined
+        return status ? `Task ${formatStatus(status)}` : "Task Updated"
     }
 
     const status = getString(group.metadata, "status")
@@ -135,7 +147,12 @@ export const systemRenderer: GroupRenderer<SystemGroup> = {
         if (group.subtype === "api_retry") {
             return formatApiRetryLabel(group.metadata)
         }
-        if (group.subtype === "task_started" || group.subtype === "task_progress" || group.subtype === "task_notification") {
+        if (
+            group.subtype === "task_started" ||
+            group.subtype === "task_progress" ||
+            group.subtype === "task_notification" ||
+            group.subtype === "task_updated"
+        ) {
             return formatTaskLabel(group)
         }
 

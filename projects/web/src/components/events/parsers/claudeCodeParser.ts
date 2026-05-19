@@ -368,7 +368,8 @@ function isVisibleSystemSubtype(subtype: string | undefined): subtype is SystemG
         subtype === "api_retry" ||
         subtype === "task_started" ||
         subtype === "task_progress" ||
-        subtype === "task_notification"
+        subtype === "task_notification" ||
+        subtype === "task_updated"
     )
 }
 

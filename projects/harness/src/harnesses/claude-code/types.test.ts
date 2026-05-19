@@ -129,6 +129,23 @@ describe("parseClaudeEvent", () => {
         expect(event).toEqual(raw)
     })
 
+    it("parses system:task_updated event", () => {
+        const raw = {
+            type: "system",
+            subtype: "task_updated",
+            task_id: "bhmrg4eco",
+            patch: {
+                status: "completed",
+                end_time: 1779216586597,
+            },
+            uuid: "c6a59719-b446-41c1-aed0-b0b82cffe62d",
+            session_id: "a6e94e71-7457-4191-b20a-8d154a9b0ed8",
+        }
+
+        const event = parseClaudeEvent(raw)
+        expect(event).toEqual(raw)
+    })
+
     it("parses system:api_retry event", () => {
         const raw = {
             type: "system",
