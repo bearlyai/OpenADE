@@ -59,7 +59,7 @@ Source types: plan, file, diff, patch, llm_output, edit_diff, write_diff, bash_o
 
 ## Output Formats
 
-All modes share `COMPACT_STYLE_RULES` (bullets > paragraphs, no filler, tradeoffs on labeled lines).
+All modes share `COMPACT_STYLE_RULES` (bullets > paragraphs, no filler, tradeoffs on labeled lines). Plan and ask prompts add tighter brevity rules for short sections and fewer supporting details.
 
 ### Plan
 ```markdown
@@ -68,11 +68,12 @@ All modes share `COMPACT_STYLE_RULES` (bullets > paragraphs, no filler, tradeoff
 ## ✅ Outcomes (bulleted expected results)
 ## 🔀 Decisions (Pick / Rejected / Depends on)
 ## 📝 Plan (steps with files, additions/deletions, tests)
+## TL;DR (exactly four short bullet lines)
 ```
-Trivial changes use only `## 🎯 User-Specified Requirements` and `## 📝 Plan`.
+Trivial changes use only `## 🎯 User-Specified Requirements`, `## 📝 Plan`, and `## TL;DR`.
 
 ### Ask
-No required sections. Lead with the answer, use whatever format fits. Make tradeoffs explicit when they exist.
+No required sections. Lead with the answer, use whatever format fits, and keep supporting detail to what is needed to trust the answer. Non-trivial answers end with `## TL;DR` containing exactly four short bullet lines. Tiny factual answers can stay as a single direct answer with no TL;DR.
 
 ### Execute
 No required sections. Cover what was done, what was verified, and any risks or blockers.
