@@ -12,6 +12,8 @@
 export interface DeviceConfig {
     deviceId: string
     telemetryDisabled?: boolean
+    wasGenerated?: boolean
+    readFailed?: boolean
 }
 
 // ============================================================================
@@ -33,6 +35,25 @@ export async function getDeviceConfig(): Promise<DeviceConfig | null> {
         return response
     } catch (error) {
         console.error("[DeviceConfigAPI] Failed to get device config:", error)
+        return null
+    }
+}
+
+/**
+ * Restore or replace the device ID in ~/.openade/device.json.
+ * Used when renderer-side backups prove the main config regenerated.
+ */
+export async function setDeviceId(deviceId: string): Promise<DeviceConfig | null> {
+    if (!window.openadeAPI) {
+        console.warn("[DeviceConfigAPI] Not running in Electron, cannot set device ID")
+        return null
+    }
+
+    try {
+        const response = (await window.openadeAPI.settings.setDeviceId(deviceId)) as DeviceConfig
+        return response
+    } catch (error) {
+        console.error("[DeviceConfigAPI] Failed to set device ID:", error)
         return null
     }
 }

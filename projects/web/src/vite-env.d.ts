@@ -24,6 +24,7 @@ interface OpenADEAPI {
     }
     settings: {
         getDeviceConfig: () => Promise<unknown>
+        setDeviceId: (deviceId: string) => Promise<unknown>
         setTelemetryDisabled: (disabled: boolean) => Promise<void>
     }
     dir: {

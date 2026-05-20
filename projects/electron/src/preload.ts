@@ -52,6 +52,7 @@ const openadeAPI = {
     // ========================================================================
     settings: {
         getDeviceConfig: () => ipcRenderer.invoke("get-device-config"),
+        setDeviceId: (deviceId: string) => ipcRenderer.invoke("set-device-id", deviceId),
         setTelemetryDisabled: (disabled: boolean) => ipcRenderer.invoke("set-telemetry-disabled", disabled),
     },
 

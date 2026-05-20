@@ -7,12 +7,18 @@
 
 import * as Sentry from "@sentry/electron/main"
 import { app, ipcMain } from "electron"
-import { getDeviceConfig, setTelemetryDisabled } from "./deviceConfig"
+import { getDeviceConfig, setDeviceId, setTelemetryDisabled, type DeviceConfigResult } from "./deviceConfig"
 
 // Sentry DSN - safe to expose (only allows sending events, not reading)
 const SENTRY_DSN = "https://b4bc0904eefb535e3f528d7722b3e7f8@o4510828830720000.ingest.us.sentry.io/4510828832227328"
 
 let initialized = false
+let activeConfig: DeviceConfigResult | null = null
+
+function refreshDeviceConfig(): DeviceConfigResult {
+	activeConfig = getDeviceConfig()
+	return activeConfig
+}
 
 /**
  * Initialize Sentry for the main process.
@@ -21,7 +27,7 @@ let initialized = false
 export function initSentry(): void {
 	if (initialized) return
 
-	const config = getDeviceConfig()
+	const config = refreshDeviceConfig()
 
 	Sentry.init({
 		dsn: SENTRY_DSN,
@@ -38,7 +44,7 @@ export function initSentry(): void {
 
 		beforeSend(event) {
 			// Attach device ID for correlation with Amplitude
-			event.user = { id: config.deviceId }
+			event.user = { id: activeConfig?.deviceId ?? config.deviceId }
 			return event
 		},
 	})
@@ -53,7 +59,13 @@ export function initSentry(): void {
 export function load(): void {
 	// IPC handler for renderer to get device config
 	ipcMain.handle("get-device-config", () => {
-		return getDeviceConfig()
+		return refreshDeviceConfig()
+	})
+
+	// IPC handler for renderer to restore device ID from a backup
+	ipcMain.handle("set-device-id", (_, deviceId: string) => {
+		activeConfig = setDeviceId(deviceId)
+		return activeConfig
 	})
 
 	// IPC handler for renderer to update telemetry preference
@@ -69,5 +81,6 @@ export function load(): void {
  */
 export function cleanup(): void {
 	ipcMain.removeHandler("get-device-config")
+	ipcMain.removeHandler("set-device-id")
 	ipcMain.removeHandler("set-telemetry-disabled")
 }

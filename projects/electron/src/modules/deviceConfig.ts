@@ -23,35 +23,55 @@ export interface DeviceConfig {
 	telemetryDisabled?: boolean
 }
 
+export interface DeviceConfigResult extends DeviceConfig {
+	/** True when this process had to generate a device ID because no valid config was found. */
+	wasGenerated: boolean
+	/** True when the config file existed but could not be parsed or read. */
+	readFailed: boolean
+}
+
+let wasGeneratedThisRun = false
+let readFailedThisRun = false
+
+function withMetadata(config: DeviceConfig): DeviceConfigResult {
+	return {
+		...config,
+		wasGenerated: wasGeneratedThisRun,
+		readFailed: readFailedThisRun,
+	}
+}
+
 /**
  * Get the device configuration, creating it if it doesn't exist.
  * Generates a new device ID on first run.
  */
-export function getDeviceConfig(): DeviceConfig {
+export function getDeviceConfig(): DeviceConfigResult {
 	const configPath = getConfigPath()
 
 	try {
 		if (fs.existsSync(configPath)) {
 			const data = JSON.parse(fs.readFileSync(configPath, "utf-8"))
 			if (data.deviceId) {
-				return data as DeviceConfig
+				return withMetadata(data as DeviceConfig)
 			}
 		}
 	} catch (err) {
 		console.error("[DeviceConfig] Failed to read config:", err)
-		// Fall through to create new config
+		readFailedThisRun = true
+		// Fall through to create new config.
 	}
 
 	// Generate new device ID
 	const config: DeviceConfig = { deviceId: randomUUID() }
+	wasGeneratedThisRun = true
 	saveDeviceConfig(config)
-	return config
+	return withMetadata(config)
 }
 
 /**
  * Save device configuration, merging with existing values.
  */
-function saveDeviceConfig(updates: Partial<DeviceConfig>): void {
+function saveDeviceConfig(updates: Partial<DeviceConfig>): boolean {
 	const configPath = getConfigPath()
 	const dir = path.dirname(configPath)
 
@@ -73,10 +93,34 @@ function saveDeviceConfig(updates: Partial<DeviceConfig>): void {
 
 		// Merge and save
 		const merged = { ...existing, ...updates }
-		fs.writeFileSync(configPath, JSON.stringify(merged, null, 2))
+		const tempPath = `${configPath}.${process.pid}.tmp`
+		fs.writeFileSync(tempPath, JSON.stringify(merged, null, 2))
+		fs.renameSync(tempPath, configPath)
+		return true
 	} catch (err) {
 		console.error("[DeviceConfig] Failed to save config:", err)
+		return false
 	}
+}
+
+/**
+ * Restore or replace the device ID from a trusted renderer-side backup.
+ */
+export function setDeviceId(deviceId: string): DeviceConfigResult {
+	if (!deviceId.trim()) {
+		throw new Error("Device ID cannot be empty")
+	}
+
+	if (!saveDeviceConfig({ deviceId })) {
+		throw new Error("Failed to save device ID")
+	}
+	wasGeneratedThisRun = false
+	readFailedThisRun = false
+	const config = getDeviceConfig()
+	if (config.deviceId !== deviceId) {
+		throw new Error("Saved device ID did not match requested device ID")
+	}
+	return config
 }
 
 /**

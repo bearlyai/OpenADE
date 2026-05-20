@@ -1,7 +1,7 @@
 import { makeAutoObservable, reaction, runInAction } from "mobx"
 import { analytics, track } from "../analytics"
 import { DEFAULT_MODEL, getDefaultModelForHarness } from "../constants"
-import { getDeviceConfig, setTelemetryDisabled } from "../electronAPI/deviceConfig"
+import { getDeviceConfig, setDeviceId as setDeviceConfigDeviceId, setTelemetryDisabled } from "../electronAPI/deviceConfig"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { setGlobalEnv } from "../electronAPI/subprocess"
 import { crossReviewStrategy, ensembleStrategy, peerReviewStrategy, standardStrategy } from "../hyperplan/strategies"
@@ -40,6 +40,43 @@ export type { CreationPhase, TaskCreationOptions, TaskCreation, ViewMode }
 export interface CodeStoreConfig {
     getCurrentUser: () => User
     navigateToTask: (workspaceId: string, taskId: string) => void
+}
+
+const ANALYTICS_DEVICE_ID_BACKUP_KEY = "openade-analytics-device-id"
+
+type AnalyticsDeviceIdSource =
+    | "device_config_existing"
+    | "device_config_generated"
+    | "personal_settings_backup"
+    | "local_storage_backup"
+    | "personal_settings"
+    | "local_storage"
+    | "generated"
+
+function getLocalAnalyticsDeviceIdBackup(): string | null {
+    if (typeof window === "undefined") return null
+
+    try {
+        const storage = window.localStorage
+        if (!storage) return null
+        const value = storage.getItem(ANALYTICS_DEVICE_ID_BACKUP_KEY)?.trim()
+        return value || null
+    } catch (err) {
+        console.warn("[Analytics] Failed to read local device ID backup:", err)
+        return null
+    }
+}
+
+function setLocalAnalyticsDeviceIdBackup(deviceId: string): void {
+    if (typeof window === "undefined") return
+
+    try {
+        const storage = window.localStorage
+        if (!storage) return
+        storage.setItem(ANALYTICS_DEVICE_ID_BACKUP_KEY, deviceId)
+    } catch (err) {
+        console.warn("[Analytics] Failed to write local device ID backup:", err)
+    }
 }
 
 export class CodeStore {
@@ -200,25 +237,53 @@ export class CodeStore {
     private async initializeAnalytics(personalSettings: PersonalSettingsStore): Promise<void> {
         const settings = personalSettings.settings.get()
         const deviceConfig = await getDeviceConfig()
+        const settingsDeviceId = settings?.deviceId?.trim() || null
+        const localStorageDeviceId = getLocalAnalyticsDeviceIdBackup()
+        const backupDeviceId = settingsDeviceId ?? localStorageDeviceId
+        const backupSource: AnalyticsDeviceIdSource | null = settingsDeviceId
+            ? "personal_settings_backup"
+            : localStorageDeviceId
+              ? "local_storage_backup"
+              : null
         let deviceId: string
+        let deviceIdSource: AnalyticsDeviceIdSource
 
         if (deviceConfig) {
-            deviceId = deviceConfig.deviceId
-            if (settings?.deviceId !== deviceId) {
-                personalSettings.settings.set({ deviceId })
+            if (deviceConfig.wasGenerated && backupDeviceId && backupDeviceId !== deviceConfig.deviceId) {
+                deviceId = backupDeviceId
+                deviceIdSource = backupSource ?? "personal_settings_backup"
+                const restoredConfig = await setDeviceConfigDeviceId(deviceId)
+                if (!restoredConfig) {
+                    console.warn("[Analytics] Failed to restore device ID from backup; using backup for renderer analytics")
+                }
+            } else {
+                deviceId = deviceConfig.deviceId
+                deviceIdSource = deviceConfig.wasGenerated ? "device_config_generated" : "device_config_existing"
             }
         } else {
-            deviceId = settings?.deviceId ?? crypto.randomUUID()
-            if (!settings?.deviceId) {
-                personalSettings.settings.set({ deviceId })
+            if (backupDeviceId) {
+                deviceId = backupDeviceId
+                deviceIdSource = backupSource === "local_storage_backup" ? "local_storage" : "personal_settings"
+            } else {
+                deviceId = crypto.randomUUID()
+                deviceIdSource = "generated"
             }
         }
+
+        if (settings?.deviceId !== deviceId) {
+            personalSettings.settings.set({ deviceId })
+        }
+        setLocalAnalyticsDeviceIdBackup(deviceId)
 
         analytics.init(deviceId)
 
         const telemetryDisabled = settings?.telemetryDisabled ?? false
         analytics.setEnabled(!telemetryDisabled)
-        track("app_opened")
+        track("app_opened", {
+            deviceIdSource,
+            deviceConfigWasGenerated: deviceConfig?.wasGenerated ?? false,
+            deviceConfigReadFailed: deviceConfig?.readFailed ?? false,
+        })
 
         this.telemetryReactionDisposer = reaction(
             () => this.personalSettingsStore?.settings.get()?.telemetryDisabled,
