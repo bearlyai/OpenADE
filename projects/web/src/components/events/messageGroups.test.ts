@@ -301,6 +301,37 @@ describe("groupStreamEvents codex web search", () => {
             },
         ])
     })
+
+    it("renders Codex mcp_tool_call items as tool groups", () => {
+        const raw = {
+            id: "mcp-1",
+            type: "mcp_tool_call",
+            server: "linear",
+            tool: "list_issues",
+            arguments: { assignee: "me" },
+            result: {
+                content: [{ type: "text", text: "ISSUE-1" }],
+                structured_content: { count: 1 },
+            },
+            status: "completed",
+        }
+        const groups = groupStreamEvents([codexMessageEvent({ type: "item.completed", item: raw }, "msg-1")], "codex")
+
+        expect(groups).toEqual([
+            {
+                type: "tool",
+                toolUseId: "mcp-1",
+                toolName: "MCP: linear.list_issues",
+                input: { assignee: "me" },
+                result: JSON.stringify({
+                    content: [{ type: "text", text: "ISSUE-1" }],
+                    structured_content: { count: 1 },
+                }),
+                isError: false,
+                messageIndices: [0, undefined],
+            },
+        ])
+    })
 })
 
 describe("groupStreamEvents unknown harness events", () => {

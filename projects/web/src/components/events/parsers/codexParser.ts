@@ -21,6 +21,19 @@ import type {
 } from "@openade/harness/browser"
 import type { MessageGroup, TodoItem, ToolGroup } from "../messageGroups"
 
+type RenderableCodexItemType = Exclude<CodexItem["type"], "unsupported">
+
+const CODEX_ITEM_RENDER_POLICIES = {
+    reasoning: "thinking",
+    agent_message: "text",
+    command_execution: "bash",
+    file_change: "fileChange",
+    mcp_tool_call: "tool",
+    web_search: "tool",
+    todo_list: "todoWrite",
+    error: "error",
+} satisfies Record<RenderableCodexItemType, "thinking" | "text" | "bash" | "fileChange" | "tool" | "todoWrite" | "error">
+
 /**
  * Group Codex messages into MessageGroups for inline rendering.
  *
@@ -171,15 +184,42 @@ function buildWebSearchToolGroup(raw: Record<string, unknown>, messageIndex: num
     }
 }
 
+function buildMcpToolCallGroup(raw: Record<string, unknown>, messageIndex: number): ToolGroup {
+    const server = typeof raw.server === "string" ? raw.server : "mcp"
+    const tool = typeof raw.tool === "string" ? raw.tool : "tool"
+    const error = raw.error && typeof raw.error === "object" ? (raw.error as { message?: unknown }) : undefined
+    const result = error?.message ? String(error.message) : raw.result === undefined ? undefined : JSON.stringify(raw.result)
+
+    return {
+        type: "tool",
+        toolUseId: typeof raw.id === "string" ? raw.id : `mcp-tool-${messageIndex}`,
+        toolName: `MCP: ${server}.${tool}`,
+        input: raw.arguments,
+        result,
+        isError: Boolean(error) || raw.status === "failed",
+        messageIndices: [messageIndex, undefined],
+    }
+}
+
 /** Convert a CodexItem into the appropriate MessageGroup and push it. */
 function pushItemGroup(groups: MessageGroup[], item: CodexItem, messageIndex: number, isPending: boolean): void {
     const rawItem = item as unknown as { type?: string; original_type?: string; raw?: Record<string, unknown> }
-    if (rawItem.type === "web_search") {
+    const renderPolicy = rawItem.type && rawItem.type !== "unsupported" ? CODEX_ITEM_RENDER_POLICIES[rawItem.type as RenderableCodexItemType] : undefined
+
+    if (renderPolicy === "tool" && rawItem.type === "web_search") {
         groups.push(buildWebSearchToolGroup(rawItem as Record<string, unknown>, messageIndex))
+        return
+    }
+    if (renderPolicy === "tool" && rawItem.type === "mcp_tool_call") {
+        groups.push(buildMcpToolCallGroup(rawItem as Record<string, unknown>, messageIndex))
         return
     }
     if (rawItem.type === "unsupported" && rawItem.original_type === "web_search" && rawItem.raw) {
         groups.push(buildWebSearchToolGroup(rawItem.raw, messageIndex))
+        return
+    }
+    if (rawItem.type === "unsupported" && rawItem.original_type === "mcp_tool_call" && rawItem.raw) {
+        groups.push(buildMcpToolCallGroup(rawItem.raw, messageIndex))
         return
     }
 

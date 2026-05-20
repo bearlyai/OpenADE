@@ -2,6 +2,8 @@
 // ClaudeEvent — types for Claude CLI --output-format stream-json --verbose
 // ============================================================================
 
+import type { SDKMessage as ClaudeSdkMessage } from "@anthropic-ai/claude-agent-sdk"
+
 export type ClaudeEvent =
     | ClaudeSystemInitEvent
     | ClaudeSystemStatusEvent
@@ -283,32 +285,45 @@ export interface ClaudeRawJsonEvent {
 // Parser
 // ============================================================================
 
-const KNOWN_SYSTEM_SUBTYPES = new Set<string>([
-    "init",
-    "status",
-    "compact_boundary",
-    "hook_started",
-    "hook_progress",
-    "hook_response",
-    "task_started",
-    "task_notification",
-    "task_progress",
-    "task_updated",
-    "api_retry",
-    "files_persisted",
-])
+const CLAUDE_SDK_SYSTEM_SUBTYPES = {
+    init: true,
+    status: true,
+    compact_boundary: true,
+    hook_started: true,
+    hook_progress: true,
+    hook_response: true,
+    local_command_output: true,
+    plugin_install: true,
+    task_started: true,
+    task_notification: true,
+    task_progress: true,
+    task_updated: true,
+    api_retry: true,
+    session_state_changed: true,
+    notification: true,
+    files_persisted: true,
+    memory_recall: true,
+    elicitation_complete: true,
+    permission_denied: true,
+    mirror_error: true,
+} satisfies Record<Extract<ClaudeSdkMessage, { type: "system" }>["subtype"], true>
 
-const KNOWN_TOP_TYPES = new Set<string>([
-    "system",
-    "assistant",
-    "user",
-    "result",
-    "tool_progress",
-    "tool_use_summary",
-    "web_search",
-    "rate_limit_event",
-    "auth_status",
-])
+const CLAUDE_SDK_TOP_TYPES = {
+    assistant: true,
+    user: true,
+    result: true,
+    system: true,
+    stream_event: true,
+    tool_progress: true,
+    tool_use_summary: true,
+    rate_limit_event: true,
+    auth_status: true,
+    prompt_suggestion: true,
+} satisfies Record<ClaudeSdkMessage["type"], true>
+
+const KNOWN_SYSTEM_SUBTYPES = new Set<string>(Object.keys(CLAUDE_SDK_SYSTEM_SUBTYPES))
+
+const KNOWN_TOP_TYPES = new Set<string>([...Object.keys(CLAUDE_SDK_TOP_TYPES), "web_search"])
 
 /**
  * Parses a raw JSON object into a typed ClaudeEvent.

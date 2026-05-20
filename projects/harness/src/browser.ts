@@ -115,6 +115,7 @@ export type {
     CodexCommandExecutionItem,
     CodexFileChangeItem,
     CodexFileChange,
+    CodexMcpToolCallItem,
     CodexTodoListItem,
     CodexErrorItem,
     CodexWebSearchEvent,

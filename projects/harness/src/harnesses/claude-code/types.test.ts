@@ -163,6 +163,20 @@ describe("parseClaudeEvent", () => {
         expect(event).toEqual(raw)
     })
 
+    it("parses SDK-known system subtypes that do not have custom renderers", () => {
+        const raw = {
+            type: "system",
+            subtype: "permission_denied",
+            tool_name: "Read",
+            message: "User denied permission",
+            uuid: "perm-1",
+            session_id: "sess-123",
+        }
+
+        const event = parseClaudeEvent(raw)
+        expect(event).toEqual(raw)
+    })
+
     it("parses assistant event", () => {
         const raw = {
             type: "assistant",

@@ -92,6 +92,26 @@ describe("parseCodexEvent", () => {
         expect(event).toEqual(raw)
     })
 
+    it("parses item.completed with mcp_tool_call item", () => {
+        const raw = {
+            type: "item.completed",
+            item: {
+                id: "mcp-1",
+                type: "mcp_tool_call",
+                server: "linear",
+                tool: "list_issues",
+                arguments: { assignee: "me" },
+                result: {
+                    content: [{ type: "text", text: "ISSUE-1" }],
+                    structured_content: { count: 1 },
+                },
+                status: "completed",
+            },
+        }
+        const event = parseCodexEvent(raw)
+        expect(event).toEqual(raw)
+    })
+
     it("parses item.started with reasoning item", () => {
         const raw = {
             type: "item.started",

@@ -2,6 +2,8 @@
 // CodexEvent — types for Codex CLI --json JSONL output
 // ============================================================================
 
+import type { ThreadEvent as CodexSdkThreadEvent, ThreadItem as CodexSdkThreadItem } from "@openai/codex-sdk"
+
 export type CodexEvent =
     | CodexThreadStartedEvent
     | CodexTurnStartedEvent
@@ -88,6 +90,7 @@ export type CodexItem =
     | CodexAgentMessageItem
     | CodexCommandExecutionItem
     | CodexFileChangeItem
+    | CodexMcpToolCallItem
     | CodexTodoListItem
     | CodexErrorItem
     | CodexWebSearchItem
@@ -127,6 +130,22 @@ export interface CodexFileChange {
     diff?: string
 }
 
+export interface CodexMcpToolCallItem {
+    id: string
+    type: "mcp_tool_call"
+    server: string
+    tool: string
+    arguments: unknown
+    result?: {
+        content: unknown[]
+        structured_content: unknown
+    }
+    error?: {
+        message: string
+    }
+    status: "in_progress" | "completed" | "failed" | string
+}
+
 export interface CodexTodoListItem {
     id: string
     type: "todo_list"
@@ -163,19 +182,31 @@ export interface CodexUnsupportedItem {
 // Parser
 // ============================================================================
 
-const KNOWN_TOP_TYPES = new Set<string>([
-    "thread.started",
-    "turn.started",
-    "turn.completed",
-    "turn.failed",
-    "item.started",
-    "item.updated",
-    "item.completed",
-    "error",
-    "web_search",
-])
+const CODEX_SDK_TOP_TYPES = {
+    "thread.started": true,
+    "turn.started": true,
+    "turn.completed": true,
+    "turn.failed": true,
+    "item.started": true,
+    "item.updated": true,
+    "item.completed": true,
+    error: true,
+} satisfies Record<CodexSdkThreadEvent["type"], true>
 
-const KNOWN_ITEM_TYPES = new Set<string>(["reasoning", "agent_message", "command_execution", "file_change", "todo_list", "error", "web_search"])
+const CODEX_SDK_ITEM_TYPES = {
+    reasoning: true,
+    agent_message: true,
+    command_execution: true,
+    file_change: true,
+    mcp_tool_call: true,
+    web_search: true,
+    todo_list: true,
+    error: true,
+} satisfies Record<CodexSdkThreadItem["type"], true>
+
+const KNOWN_TOP_TYPES = new Set<string>([...Object.keys(CODEX_SDK_TOP_TYPES), "web_search"])
+
+const KNOWN_ITEM_TYPES = new Set<string>(Object.keys(CODEX_SDK_ITEM_TYPES))
 
 /**
  * Parses a raw JSON object into a typed CodexEvent.
