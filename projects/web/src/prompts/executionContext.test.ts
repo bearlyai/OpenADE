@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { buildActionResponseStyleInstruction, buildRawRendererStyleInstruction, buildWorktreeExecutionInstruction, mergeAppendSystemPrompt } from "./executionContext"
+import {
+    buildActionResponseStyleInstruction,
+    buildRawRendererStyleInstruction,
+    buildWorktreeExecutionInstruction,
+    mergeAppendSystemPrompt,
+} from "./executionContext"
 
 // NOTE: No string-containment tests on prompt text. Test logic (conditional returns, merging), not wording.
 

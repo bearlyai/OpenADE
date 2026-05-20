@@ -18,7 +18,12 @@ import { HyperPlanExecutor, type HyperPlanCallbacks } from "../../hyperplan/Hype
 import { extractPlanText } from "../../hyperplan/extractPlanText"
 import type { HyperPlanStrategy } from "../../hyperplan/types"
 import { isStandardStrategy } from "../../hyperplan/strategies"
-import { buildActionResponseStyleInstruction, buildRawRendererStyleInstruction, buildWorktreeExecutionInstruction, mergeAppendSystemPrompt } from "../../prompts/executionContext"
+import {
+    buildActionResponseStyleInstruction,
+    buildRawRendererStyleInstruction,
+    buildWorktreeExecutionInstruction,
+    mergeAppendSystemPrompt,
+} from "../../prompts/executionContext"
 import { buildPlanReviewPrompt, buildReviewHandoffPrompt, buildWorkReviewPrompt, type ReviewType } from "../../prompts/reviewPrompts"
 import { buildTaskThreadXmlWithBudget } from "../../prompts/taskThreadSerializer"
 import {

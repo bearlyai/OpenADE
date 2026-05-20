@@ -144,3 +144,5 @@ dist
 
 # Vitest browser screenshot artifacts
 __screenshots__/
+
+external_repos
