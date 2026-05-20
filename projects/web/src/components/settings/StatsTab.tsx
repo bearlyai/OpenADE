@@ -8,6 +8,7 @@ import { formatDuration, needsTaskUsageBackfill } from "../../persistence/taskSt
 import type { CodeStore } from "../../store/store"
 import { StatsShareCard } from "./StatsShareCard"
 import { type RelativePeriodKey, getRelativePeriodRanges } from "./statsPeriodUtils"
+import { type StatsRecapPeriod, type StatsRecapTone, buildStatsRecap, buildStatsRecapText } from "./statsRecapUtils"
 import { copyCardToClipboard } from "./statsShare"
 
 /** The earliest real month in the project — legacy "Unknown" dates get folded into this. */
@@ -91,6 +92,7 @@ function formatTokens(n: number): string {
 }
 
 const BACKFILL_BATCH_SIZE = 10
+const MAX_VISIBLE_RECAP_TASKS = 12
 
 function yieldToBrowser(): Promise<void> {
     return new Promise((resolve) => {
@@ -103,10 +105,75 @@ function yieldToBrowser(): Promise<void> {
     })
 }
 
+function getMonthRange(sortKey: string): { start: Date; end: Date } | null {
+    const [yearStr, monthStr] = sortKey.split("-")
+    const year = Number(yearStr)
+    const month = Number(monthStr)
+    if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) return null
+    return {
+        start: new Date(year, month - 1, 1),
+        end: new Date(year, month, 1),
+    }
+}
+
+function getRecapPeriod(
+    effectiveSelected: string | null,
+    relativePeriods: ReturnType<typeof getRelativePeriodRanges>,
+    monthsMap: Map<string, MonthStats>
+): StatsRecapPeriod {
+    if (effectiveSelected === null) return { label: "All Time" }
+
+    const relative = relativePeriods.find((period) => period.key === effectiveSelected)
+    if (relative) {
+        return {
+            label: relative.label,
+            start: relative.start,
+            end: relative.end,
+        }
+    }
+
+    const month = monthsMap.get(effectiveSelected)
+    const range = month ? getMonthRange(month.sortKey) : null
+    return {
+        label: month?.label ?? "All Time",
+        start: range?.start,
+        end: range?.end,
+    }
+}
+
+function formatActivityTime(value: string): string {
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return ""
+    return date.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+    })
+}
+
+function statusBadgeClass(tone: StatsRecapTone): string {
+    switch (tone) {
+        case "success":
+            return "bg-success/10 text-success border-success/20"
+        case "warning":
+            return "bg-warning/10 text-warning border-warning/20"
+        case "error":
+            return "bg-error/10 text-error border-error/20"
+        case "muted":
+            return "bg-base-200 text-muted border-border"
+    }
+}
+
+function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+    return `${count.toLocaleString()} ${count === 1 ? singular : plural}`
+}
+
 export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     const cardRef = useRef<HTMLDivElement>(null)
     const [backfillProgress, setBackfillProgress] = useState<{ loaded: number; total: number } | null>(null)
     const [copyState, setCopyState] = useState<"idle" | "copying" | "copied" | "error">("idle")
+    const [copyRecapState, setCopyRecapState] = useState<"idle" | "copying" | "copied" | "error">("idle")
     const [selectedPeriod, setSelectedPeriod] = useState<string | null>(null)
 
     // Backfill task stores missing usage data (or missing newer fields like durationMs)
@@ -242,6 +309,31 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                 }
 
     const featuredTokens = featured.inputTokens + featured.outputTokens
+    const recapPeriod = getRecapPeriod(effectiveSelected, relativePeriods, monthsMap)
+    const recap = buildStatsRecap(repos, recapPeriod)
+    const visibleRecapTaskIds = new Set(recap.tasks.slice(0, MAX_VISIBLE_RECAP_TASKS).map((task) => task.taskId))
+    const visibleRecapRepos = recap.repos
+        .map((repo) => ({
+            ...repo,
+            tasks: repo.tasks.filter((task) => visibleRecapTaskIds.has(task.taskId)),
+        }))
+        .filter((repo) => repo.tasks.length > 0)
+    const hiddenRecapTaskCount = Math.max(0, recap.taskCount - MAX_VISIBLE_RECAP_TASKS)
+    const recapText = buildStatsRecapText(recap)
+
+    const handleCopyRecap = async () => {
+        if (copyRecapState === "copying" || recap.taskCount === 0) return
+        setCopyRecapState("copying")
+        try {
+            await navigator.clipboard.writeText(recapText)
+            setCopyRecapState("copied")
+            setTimeout(() => setCopyRecapState("idle"), 1500)
+        } catch (err) {
+            console.error("[StatsTab] Failed to copy recap:", err)
+            setCopyRecapState("error")
+            setTimeout(() => setCopyRecapState("idle"), 2000)
+        }
+    }
 
     return (
         <div className="flex flex-col gap-4">
@@ -380,6 +472,94 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                                             <span className="text-muted">{formatCost(cost)}</span>
                                         </div>
                                     ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Work recap */}
+                    <div className="bg-base-200 border border-border p-4 flex flex-col gap-3">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <div className="text-[10px] text-muted uppercase tracking-widest font-medium">Recap</div>
+                                <div className="text-sm font-semibold text-base-content mt-0.5">
+                                    {recap.taskCount > 0
+                                        ? `${countLabel(recap.taskCount, "task")} across ${countLabel(recap.projectCount, "project")}`
+                                        : `No task activity for ${recap.periodLabel.toLowerCase()}`}
+                                </div>
+                                {recap.taskCount > 0 && (
+                                    <div className="text-xs text-muted mt-0.5">
+                                        {countLabel(recap.completedCount, "done item")} · {formatDuration(recap.durationMs)} · {formatTokens(recap.totalTokens)}{" "}
+                                        tokens
+                                    </div>
+                                )}
+                            </div>
+                            <button
+                                type="button"
+                                className={cx(
+                                    "btn flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium transition-colors border shrink-0",
+                                    copyRecapState === "copied"
+                                        ? "bg-success text-success-content border-success"
+                                        : "bg-base-100 text-muted hover:text-base-content border-border disabled:opacity-50"
+                                )}
+                                onClick={handleCopyRecap}
+                                disabled={copyRecapState === "copying" || recap.taskCount === 0}
+                            >
+                                {copyRecapState === "copied" ? (
+                                    <>
+                                        <Check size={12} />
+                                        <span>Copied!</span>
+                                    </>
+                                ) : copyRecapState === "error" ? (
+                                    <span>Failed</span>
+                                ) : (
+                                    <>
+                                        <Copy size={12} />
+                                        <span>Copy Recap</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+
+                        {visibleRecapRepos.length > 0 && (
+                            <div className="border border-border bg-base-100">
+                                {visibleRecapRepos.map((repo) => (
+                                    <div key={repo.repoId} className="border-b border-border last:border-b-0">
+                                        <div className="flex items-center justify-between gap-3 bg-base-200/70 px-3 py-1.5">
+                                            <div className="min-w-0 truncate text-xs font-semibold text-base-content">{repo.repoName}</div>
+                                            <div className="text-[10px] text-muted uppercase tracking-wide">{countLabel(repo.tasks.length, "task")}</div>
+                                        </div>
+                                        <div>
+                                            {repo.tasks.map((task) => (
+                                                <button
+                                                    key={task.taskId}
+                                                    type="button"
+                                                    className="btn grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t border-border/40 px-3 py-2 text-left transition-colors first:border-t-0 hover:bg-base-200/60"
+                                                    onClick={() => store.config.navigateToTask(repo.repoId, task.taskId)}
+                                                    title={`Open ${task.title}`}
+                                                >
+                                                    <span className="min-w-0">
+                                                        <span className="block truncate text-xs font-medium text-base-content">{task.title}</span>
+                                                        <span className="mt-0.5 block truncate text-[10px] text-muted">
+                                                            {formatActivityTime(task.activityAt)}
+                                                            {task.eventCount > 0 ? ` · ${countLabel(task.eventCount, "run")}` : ""}
+                                                            {task.durationMs > 0 ? ` · ${formatDuration(task.durationMs)}` : ""}
+                                                            {task.totalCostUsd > 0 ? ` · ${formatCost(task.totalCostUsd)}` : ""}
+                                                        </span>
+                                                    </span>
+                                                    <span className={cx("border px-1.5 py-0.5 text-[10px] font-semibold", statusBadgeClass(task.statusTone))}>
+                                                        {task.statusLabel}
+                                                    </span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {hiddenRecapTaskCount > 0 && (
+                            <div className="text-xs text-muted">
+                                {countLabel(hiddenRecapTaskCount, "more task")} in this period. Copy the recap for the full report.
                             </div>
                         )}
                     </div>
