@@ -29,9 +29,24 @@ const CODEX_RAW_RENDERER_STYLE_HINT = [
     "</raw_renderer_response_style>",
 ].join("\n")
 
+const ACTION_RESPONSE_STYLE_SOURCE_TYPES: ReadonlySet<ActionEventSource["type"]> = new Set(["do", "run_plan"])
+
+const ACTION_RESPONSE_STYLE_INSTRUCTION = [
+    "<action_response_style>",
+    "Keep final user-facing completion reports compact.",
+    "For non-trivial completions, end with ## TL;DR containing exactly four short bullet lines: result, main files or area, verification, and any risk or next action.",
+    "For tiny completions, a single direct answer is allowed with no TL;DR.",
+    "</action_response_style>",
+].join("\n")
+
 export function buildRawRendererStyleInstruction(harnessId: HarnessId, _sourceType: ActionEventSource["type"]): string | undefined {
     if (harnessId !== "codex") return undefined
     return CODEX_RAW_RENDERER_STYLE_HINT
+}
+
+export function buildActionResponseStyleInstruction(sourceType: ActionEventSource["type"]): string | undefined {
+    if (!ACTION_RESPONSE_STYLE_SOURCE_TYPES.has(sourceType)) return undefined
+    return ACTION_RESPONSE_STYLE_INSTRUCTION
 }
 
 /** Merge two appendSystemPrompt fragments, preserving undefined when both are empty. */

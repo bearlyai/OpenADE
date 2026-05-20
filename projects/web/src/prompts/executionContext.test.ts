@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { buildRawRendererStyleInstruction, buildWorktreeExecutionInstruction, mergeAppendSystemPrompt } from "./executionContext"
+import { buildActionResponseStyleInstruction, buildRawRendererStyleInstruction, buildWorktreeExecutionInstruction, mergeAppendSystemPrompt } from "./executionContext"
 
 // NOTE: No string-containment tests on prompt text. Test logic (conditional returns, merging), not wording.
 
@@ -40,5 +40,18 @@ describe("buildRawRendererStyleInstruction", () => {
         expect(buildRawRendererStyleInstruction("codex", "plan")).toBeDefined()
         expect(buildRawRendererStyleInstruction("codex", "revise")).toBeDefined()
         expect(buildRawRendererStyleInstruction("codex", "hyperplan")).toBeDefined()
+    })
+})
+
+describe("buildActionResponseStyleInstruction", () => {
+    it("returns defined hint for execution-style actions", () => {
+        expect(buildActionResponseStyleInstruction("do")).toBeDefined()
+        expect(buildActionResponseStyleInstruction("run_plan")).toBeDefined()
+    })
+
+    it("does not add extra hint for modes with dedicated output contracts", () => {
+        expect(buildActionResponseStyleInstruction("plan")).toBeUndefined()
+        expect(buildActionResponseStyleInstruction("ask")).toBeUndefined()
+        expect(buildActionResponseStyleInstruction("review")).toBeUndefined()
     })
 })

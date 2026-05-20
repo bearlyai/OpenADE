@@ -18,7 +18,7 @@ import { HyperPlanExecutor, type HyperPlanCallbacks } from "../../hyperplan/Hype
 import { extractPlanText } from "../../hyperplan/extractPlanText"
 import type { HyperPlanStrategy } from "../../hyperplan/types"
 import { isStandardStrategy } from "../../hyperplan/strategies"
-import { buildRawRendererStyleInstruction, buildWorktreeExecutionInstruction, mergeAppendSystemPrompt } from "../../prompts/executionContext"
+import { buildActionResponseStyleInstruction, buildRawRendererStyleInstruction, buildWorktreeExecutionInstruction, mergeAppendSystemPrompt } from "../../prompts/executionContext"
 import { buildPlanReviewPrompt, buildReviewHandoffPrompt, buildWorkReviewPrompt, type ReviewType } from "../../prompts/reviewPrompts"
 import { buildTaskThreadXmlWithBudget } from "../../prompts/taskThreadSerializer"
 import {
@@ -235,6 +235,8 @@ export class ExecutionManager {
 
             const worktreeInstruction = buildWorktreeExecutionInstruction(task.isolationStrategy, cwd)
             appendSystemPrompt = mergeAppendSystemPrompt(mergeAppendSystemPrompt(systemPrompt, worktreeInstruction), extraSystemPrompt)
+            const actionResponseStyleInstruction = buildActionResponseStyleInstruction(source.type)
+            appendSystemPrompt = mergeAppendSystemPrompt(appendSystemPrompt, actionResponseStyleInstruction)
             const rawRendererStyleInstruction = buildRawRendererStyleInstruction(effectiveHarnessId, source.type)
             appendSystemPrompt = mergeAppendSystemPrompt(appendSystemPrompt, rawRendererStyleInstruction)
 
