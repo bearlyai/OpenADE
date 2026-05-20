@@ -11,6 +11,10 @@ function setMetaKeyPressed(pressed: boolean) {
     }
 }
 
+export function resetMetaKeyPressed() {
+    setMetaKeyPressed(false)
+}
+
 function handleKeyDown(event: KeyboardEvent) {
     if (event.key === "Meta" || event.metaKey) {
         setMetaKeyPressed(true)

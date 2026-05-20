@@ -3,13 +3,14 @@ import { Tooltip } from "@base-ui-components/react/tooltip"
 import cx from "classnames"
 import { ExternalLink, GitBranch, ImagePlus, Plug, X } from "lucide-react"
 import { observer } from "mobx-react"
-import { useEffect, useRef } from "react"
+import { useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { Z_INDEX } from "../constants"
 import { onFocusInputShortcut } from "../electronAPI/app"
 import type { GitSummaryResponse } from "../electronAPI/git"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { openUrlInNativeBrowser } from "../electronAPI/shell"
 import { usePortalContainer } from "../hooks/usePortalContainer"
+import { resetMetaKeyPressed } from "../hooks/useMetaKeyPressed"
 import { useShortcutHintsVisible } from "../hooks/useShortcutHintsVisible"
 import type { ThinkingLevel } from "../store/TaskModel"
 import type { Command, InputManager } from "../store/managers/InputManager"
@@ -18,7 +19,12 @@ import type { SmartEditorManager } from "../store/managers/SmartEditorManager"
 import type { TrayManager } from "../store/managers/TrayManager"
 import type { Comment } from "../types"
 import { processImageBlob } from "../utils/imageAttachment"
-import { getMetaDigitShortcutIndex, isMetaOnlyShortcut } from "../utils/keyboardShortcuts"
+import {
+    getMetaDigitShortcutIndex,
+    isMetaOnlyShortcut,
+    onKeyboardNavigationSettled,
+    shouldSuppressEditorAutoFocusForKeyboardNavigation,
+} from "../utils/keyboardShortcuts"
 import { HarnessPicker } from "./HarnessPicker"
 import { ModelPicker } from "./ModelPicker"
 import { SmartEditor, type SmartEditorRef } from "./SmartEditor"
@@ -155,6 +161,7 @@ export const InputBar = observer(function InputBar({
     hideTray = false,
     enabledMcpServerIds,
     onMcpServerIdsChange,
+    autoFocusKey,
 }: {
     input: InputManager
     editorManager: SmartEditorManager
@@ -182,6 +189,7 @@ export const InputBar = observer(function InputBar({
     hideTray?: boolean
     enabledMcpServerIds?: string[]
     onMcpServerIdsChange?: (serverIds: string[]) => void
+    autoFocusKey?: string
 }) {
     const portalContainer = usePortalContainer()
     const editorRef = useRef<SmartEditorRef>(null)
@@ -192,6 +200,22 @@ export const InputBar = observer(function InputBar({
     const { commands } = input
     const hasComments = unsubmittedComments.length > 0
     const hasPendingImages = editorManager.pendingImages.length > 0
+    const focusEditorAtEnd = useCallback(() => {
+        if (input.isDisabled) return
+
+        requestAnimationFrame(() => {
+            editorRef.current?.focusEnd()
+        })
+    }, [input.isDisabled])
+    const handleEditorKeyDown = useCallback(
+        (event: ReactKeyboardEvent) => {
+            if (event.key !== "Escape" || tray.isOpen) return
+
+            event.preventDefault()
+            editorRef.current?.blur()
+        },
+        [tray.isOpen]
+    )
 
     useEffect(() => {
         const handleCommandShortcut = (event: KeyboardEvent) => {
@@ -216,22 +240,35 @@ export const InputBar = observer(function InputBar({
             if (!isMetaOnlyShortcut(event, "KeyL")) return
 
             event.preventDefault()
-            if (!input.isDisabled) {
-                editorRef.current?.focusEnd()
-            }
+            resetMetaKeyPressed()
+            focusEditorAtEnd()
         }
 
         window.addEventListener("keydown", handleFocusShortcut, true)
         return () => window.removeEventListener("keydown", handleFocusShortcut, true)
-    }, [input])
+    }, [focusEditorAtEnd])
 
     useEffect(() => {
         return onFocusInputShortcut(() => {
-            if (!input.isDisabled) {
-                editorRef.current?.focusEnd()
-            }
+            resetMetaKeyPressed()
+            focusEditorAtEnd()
         })
-    }, [input])
+    }, [focusEditorAtEnd])
+
+    useEffect(() => {
+        if (autoFocusKey === undefined || input.isDisabled) return
+        if (shouldSuppressEditorAutoFocusForKeyboardNavigation()) return
+
+        const frame = requestAnimationFrame(() => {
+            editorRef.current?.focusEnd()
+        })
+
+        return () => cancelAnimationFrame(frame)
+    }, [autoFocusKey, input.isDisabled])
+
+    useEffect(() => {
+        return onKeyboardNavigationSettled(focusEditorAtEnd)
+    }, [focusEditorAtEnd])
 
     // Strip "openade/" worktree prefix from branch display
     const displayBranch = gitStatus?.branch?.replace(/^openade\//, "")
@@ -327,6 +364,8 @@ export const InputBar = observer(function InputBar({
                         fileMentionsDir={fileMentionsDir}
                         slashCommandsDir={slashCommandsDir}
                         sdkCapabilities={sdkCapabilities}
+                        onKeyDown={handleEditorKeyDown}
+                        allowGlobalShortcutsWhenEmpty
                         placeholder={input.isDisabled ? "Task is closed. Click Reopen to continue." : "What would you like to do?"}
                         className={cx(
                             "min-h-[58px] max-h-[150px] overflow-y-auto text-sm leading-[20px] border-x-0 focus-within:border-border",

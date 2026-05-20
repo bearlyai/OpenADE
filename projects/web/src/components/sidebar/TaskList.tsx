@@ -12,7 +12,7 @@ import { useCodeNavigate } from "../../routing"
 import { useCodeStore } from "../../store/context"
 import type { TaskCreation } from "../../store/managers/TaskCreationManager"
 import type { CodeEvent } from "../../types"
-import { isEventFromTerminal, isMetaShortcut } from "../../utils/keyboardShortcuts"
+import { isEventFromEditable, isEventFromTerminal, isMetaShortcut, suppressEditorAutoFocusForKeyboardNavigation } from "../../utils/keyboardShortcuts"
 import { ScrollArea, ShortcutBadge } from "../ui"
 import { TaskDeleteConfirm } from "./TaskDeleteConfirm"
 import { resolveTaskCopyPath } from "./sidebarPathUtils"
@@ -435,14 +435,18 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
 
     useEffect(() => {
         const handleTaskNavigationShortcut = (event: KeyboardEvent) => {
+            if (isEventFromEditable(event)) return
+
             if (isMetaShortcut(event, "ArrowLeft")) {
                 event.preventDefault()
+                suppressEditorAutoFocusForKeyboardNavigation()
                 navigateTaskByOffset(-1)
                 return
             }
 
             if (isMetaShortcut(event, "ArrowRight")) {
                 event.preventDefault()
+                suppressEditorAutoFocusForKeyboardNavigation()
                 navigateTaskByOffset(1)
             }
         }

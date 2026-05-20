@@ -1,5 +1,5 @@
 import cx from "classnames"
-import { ArrowBigUp, ArrowDown, ArrowUp, Command, Option, type LucideIcon } from "lucide-react"
+import { ArrowBigUp, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Command, Option, type LucideIcon } from "lucide-react"
 import type { ReactNode } from "react"
 
 export type ShortcutBadgeVariant = "corner" | "bottomCorner" | "row" | "floating"
@@ -17,6 +17,8 @@ const SHORTCUT_ICONS: Record<string, LucideIcon> = {
     "⇧": ArrowBigUp,
     "↑": ArrowUp,
     "↓": ArrowDown,
+    "←": ArrowLeft,
+    "→": ArrowRight,
 }
 
 export function ShortcutBadge({

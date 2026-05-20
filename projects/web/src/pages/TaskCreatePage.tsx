@@ -19,7 +19,7 @@ import {
     Zap,
 } from "lucide-react"
 import { observer } from "mobx-react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { HarnessPicker } from "../components/HarnessPicker"
 import { ImageDropOverlay } from "../components/ImageDropOverlay"
 import { ModelPicker } from "../components/ModelPicker"
@@ -32,6 +32,7 @@ import { Select, ShortcutBadge, Switch } from "../components/ui"
 import { onFocusInputShortcut } from "../electronAPI/app"
 import type { BranchInfo, GitSummaryResponse } from "../electronAPI/git"
 import { useImageDropZone } from "../hooks/useImageDropZone"
+import { resetMetaKeyPressed } from "../hooks/useMetaKeyPressed"
 import { usePortalContainer } from "../hooks/usePortalContainer"
 import { useShortcutHintsVisible } from "../hooks/useShortcutHintsVisible"
 import { useCodeNavigate } from "../routing"
@@ -41,7 +42,13 @@ import type { CreationPhase, TaskCreation } from "../store/managers/TaskCreation
 import { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager"
 import type { Repo } from "../types"
 import { processImageBlob } from "../utils/imageAttachment"
-import { getMetaDigitShortcutIndex, isMetaOnlyShortcut, isMetaShortcut } from "../utils/keyboardShortcuts"
+import {
+    getMetaDigitShortcutIndex,
+    isMetaOnlyShortcut,
+    isMetaShortcut,
+    onKeyboardNavigationSettled,
+    shouldSuppressEditorAutoFocusForKeyboardNavigation,
+} from "../utils/keyboardShortcuts"
 
 interface TaskCreatePageProps {
     workspaceId: string
@@ -327,6 +334,17 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
 
     // SDK capabilities for slash command autocomplete
     const sdkCapabilities = useMemo(() => new SdkCapabilitiesManager(), [])
+    const focusEditorAtEnd = useCallback(() => {
+        requestAnimationFrame(() => {
+            editorRef.current?.focusEnd()
+        })
+    }, [])
+    const handleEditorKeyDown = useCallback((event: ReactKeyboardEvent) => {
+        if (event.key !== "Escape") return
+
+        event.preventDefault()
+        editorRef.current?.blur()
+    }, [])
 
     // Track if git info has been loaded
     const [gitInfoLoaded, setGitInfoLoaded] = useState(false)
@@ -413,26 +431,34 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
     }
 
     useEffect(() => {
+        if (shouldSuppressEditorAutoFocusForKeyboardNavigation()) return
+
         editorRef.current?.focus()
     }, [repo?.path, editorManager])
+
+    useEffect(() => {
+        return onKeyboardNavigationSettled(focusEditorAtEnd)
+    }, [focusEditorAtEnd])
 
     useEffect(() => {
         const handleFocusShortcut = (event: KeyboardEvent) => {
             if (!isMetaOnlyShortcut(event, "KeyL")) return
 
             event.preventDefault()
-            editorRef.current?.focusEnd()
+            resetMetaKeyPressed()
+            focusEditorAtEnd()
         }
 
         window.addEventListener("keydown", handleFocusShortcut, true)
         return () => window.removeEventListener("keydown", handleFocusShortcut, true)
-    }, [])
+    }, [focusEditorAtEnd])
 
     useEffect(() => {
         return onFocusInputShortcut(() => {
-            editorRef.current?.focusEnd()
+            resetMetaKeyPressed()
+            focusEditorAtEnd()
         })
-    }, [])
+    }, [focusEditorAtEnd])
 
     // Prune favorites that reference deleted files
     useEffect(() => {
@@ -559,6 +585,8 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                     fileMentionsDir={repo?.path ?? null}
                     slashCommandsDir={repo?.path ?? null}
                     sdkCapabilities={sdkCapabilities}
+                    onKeyDown={handleEditorKeyDown}
+                    allowGlobalShortcutsWhenEmpty
                     placeholder="Describe your task... Use @ to reference files, / for commands"
                     className="h-full text-base border-0 bg-transparent [&>div]:h-full [&>div]:border-0 [&>div]:border-l-2 [&>div]:border-l-transparent [&>div:focus-within]:border-l-primary [&>div]:transition-colors"
                     editorClassName="h-full"

@@ -32,6 +32,7 @@ interface SmartEditorProps {
     className?: string
     editorClassName?: string
     onKeyDown?: (e: React.KeyboardEvent) => void
+    allowGlobalShortcutsWhenEmpty?: boolean
     /** Directory for @file mention autocomplete, null to disable */
     fileMentionsDir: string | null
     /** Directory for /slash command autocomplete, null to disable */
@@ -43,6 +44,7 @@ interface SmartEditorProps {
 export interface SmartEditorRef {
     focus: () => void
     focusEnd: () => void
+    blur: () => void
     clear: () => void
 }
 
@@ -243,7 +245,21 @@ interface SlashSuggestionPopupState {
 
 export const SmartEditor = observer(
     forwardRef<SmartEditorRef, SmartEditorProps>(
-        ({ manager, placeholder, disabled, className, editorClassName, onKeyDown, fileMentionsDir, slashCommandsDir, sdkCapabilities }, ref) => {
+        (
+            {
+                manager,
+                placeholder,
+                disabled,
+                className,
+                editorClassName,
+                onKeyDown,
+                allowGlobalShortcutsWhenEmpty,
+                fileMentionsDir,
+                slashCommandsDir,
+                sdkCapabilities,
+            },
+            ref
+        ) => {
             const portalContainer = usePortalContainer()
 
             // --- File mention suggestion state (@ trigger) ---
@@ -760,6 +776,9 @@ export const SmartEditor = observer(
                     focusEnd: () => {
                         editor?.commands.focus("end")
                     },
+                    blur: () => {
+                        editor?.commands.blur()
+                    },
                     clear: () => {
                         // Just call manager.clear() - it will trigger the registered callback to clear the editor
                         manager.clear()
@@ -802,10 +821,12 @@ export const SmartEditor = observer(
                 setIsDragOver(false)
                 // Actual drop handling is done by TipTap's handleDrop in editorProps
             }, [])
+            const allowGlobalShortcuts = !!allowGlobalShortcutsWhenEmpty && manager.value.trim().length === 0 && manager.pendingImages.length === 0
 
             return (
                 <div className="relative w-full">
                     <div
+                        data-allow-global-shortcuts={allowGlobalShortcuts ? "true" : undefined}
                         className={twMerge(
                             "w-full bg-input text-base-content border border-border cursor-text",
                             "focus-within:border-primary transition-colors",

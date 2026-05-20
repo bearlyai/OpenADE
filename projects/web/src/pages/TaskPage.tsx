@@ -16,8 +16,6 @@ import type { TaskModel } from "../store/TaskModel"
 import { useCodeStore } from "../store/context"
 import { isEventFromTerminal } from "../utils/keyboardShortcuts"
 
-const SCROLL_SHORTCUTS = "mod+alt+up,mod+alt+down"
-
 function InputWrapper({ trayOpen, onClose, children }: { trayOpen: boolean; onClose: () => void; children: ReactNode }) {
     return (
         <>
@@ -75,19 +73,18 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
             ignoreEventWhen: isEventFromTerminal,
         }
     )
-    useHotkeys(
-        SCROLL_SHORTCUTS,
-        (event) => {
-            scrollByPage(event.key === "ArrowUp" ? -1 : 1)
-        },
-        {
-            preventDefault: true,
-            enableOnContentEditable: true,
-            enableOnFormTags: true,
-            ignoreEventWhen: isEventFromTerminal,
-        },
-        [scrollByPage]
-    )
+    useEffect(() => {
+        const handleScrollShortcut = (event: KeyboardEvent) => {
+            const direction = event.code === "BracketLeft" ? -1 : event.code === "BracketRight" ? 1 : null
+            if (direction === null || !event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || isEventFromTerminal(event)) return
+
+            event.preventDefault()
+            scrollByPage(direction)
+        }
+
+        window.addEventListener("keydown", handleScrollShortcut, true)
+        return () => window.removeEventListener("keydown", handleScrollShortcut, true)
+    }, [scrollByPage])
     useHotkeys("escape", () => tray.close(), {
         enabled: tray.isOpen,
         enableOnContentEditable: true,
@@ -173,8 +170,8 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
             </InputWrapper>
             {showKeyboardHints && (
                 <div className="absolute right-4 top-1/2 flex -translate-y-1/2 flex-col gap-1" style={{ zIndex: Z_INDEX.INPUT_BAR - 1 }} aria-hidden>
-                    <ShortcutBadge label="⌥↑" visible variant="floating" />
-                    <ShortcutBadge label="⌥↓" visible variant="floating" />
+                    <ShortcutBadge label="[" visible variant="floating" />
+                    <ShortcutBadge label="]" visible variant="floating" />
                 </div>
             )}
             <InputBar
@@ -198,6 +195,7 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
                 hideTray={codeStore.personalSettingsStore?.settings.current.devHideTray}
                 enabledMcpServerIds={taskModel.enabledMcpServerIds}
                 onMcpServerIdsChange={(ids) => taskModel.setEnabledMcpServerIds(ids)}
+                autoFocusKey={taskId}
             />
         </div>
     )

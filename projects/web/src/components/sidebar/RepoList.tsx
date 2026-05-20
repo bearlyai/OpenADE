@@ -9,7 +9,7 @@ import { useShortcutHintsVisible } from "../../hooks/useShortcutHintsVisible"
 import { useCodeNavigate } from "../../routing"
 import { useCodeStore } from "../../store/context"
 import type { Repo } from "../../types"
-import { isMetaShortcut } from "../../utils/keyboardShortcuts"
+import { isEventFromEditable, isMetaShortcut, suppressEditorAutoFocusForKeyboardNavigation } from "../../utils/keyboardShortcuts"
 import { Menu, ShortcutBadge, type MenuItem } from "../ui"
 
 const PREVIOUS_PROJECT_SHORTCUT_LABEL = "↑"
@@ -231,6 +231,8 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
 
     useEffect(() => {
         const handleProjectShortcut = (event: KeyboardEvent) => {
+            if (isEventFromEditable(event)) return
+
             const direction = isMetaShortcut(event, "ArrowUp") ? -1 : isMetaShortcut(event, "ArrowDown") ? 1 : null
             if (direction === null || visibleRepos.length === 0) return
 
@@ -239,6 +241,7 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
             const nextIndex = (baseIndex + direction + visibleRepos.length) % visibleRepos.length
 
             event.preventDefault()
+            suppressEditorAutoFocusForKeyboardNavigation()
             handleSelectRepo(visibleRepos[nextIndex].id)
         }
 
