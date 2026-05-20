@@ -12,6 +12,7 @@ interface OpenADEAPI {
         setTerminalKeyboardCapture: (captured: boolean) => Promise<void>
         onUpdateAvailable: (cb: () => void) => () => void
         onUpdateError: (cb: () => void) => () => void
+        onFocusInputShortcut: (cb: () => void) => () => void
         retryUpdateCheck: () => Promise<void>
     }
     window: {

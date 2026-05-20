@@ -42,6 +42,7 @@ interface SmartEditorProps {
 
 export interface SmartEditorRef {
     focus: () => void
+    focusEnd: () => void
     clear: () => void
 }
 
@@ -755,6 +756,9 @@ export const SmartEditor = observer(
                 () => ({
                     focus: () => {
                         editor?.commands.focus()
+                    },
+                    focusEnd: () => {
+                        editor?.commands.focus("end")
                     },
                     clear: () => {
                         // Just call manager.clear() - it will trigger the registered callback to clear the editor

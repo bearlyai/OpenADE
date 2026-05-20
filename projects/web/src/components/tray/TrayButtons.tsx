@@ -4,7 +4,9 @@
 
 import cx from "classnames"
 import { observer } from "mobx-react"
+import { useShortcutHintsVisible } from "../../hooks/useShortcutHintsVisible"
 import type { TrayManager } from "../../store/managers/TrayManager"
+import { ShortcutBadge } from "../ui"
 import { TrayBadge } from "./TrayBadge"
 import { TRAY_CONFIGS } from "./trayConfigs"
 
@@ -14,6 +16,7 @@ interface TrayButtonsProps {
 
 export const TrayButtons = observer(function TrayButtons({ tray }: TrayButtonsProps) {
     const visibleConfigs = TRAY_CONFIGS.filter((config) => config.isVisible?.(tray) !== false)
+    const showKeyboardHints = useShortcutHintsVisible()
 
     // Auto-close tray if the currently open tray becomes hidden
     if (tray.openTray && !visibleConfigs.some((c) => c.id === tray.openTray)) {
@@ -26,6 +29,7 @@ export const TrayButtons = observer(function TrayButtons({ tray }: TrayButtonsPr
                 const badge = config.renderBadge?.(tray)
                 const isOpen = tray.openTray === config.id
                 const Icon = config.icon
+                const shortcutHint = config.shortcut?.display.replace(/^⌘/, "")
 
                 return (
                     <button
@@ -39,6 +43,7 @@ export const TrayButtons = observer(function TrayButtons({ tray }: TrayButtonsPr
                         )}
                     >
                         <Icon size={14} />
+                        <ShortcutBadge label={shortcutHint} visible={showKeyboardHints} variant="bottomCorner" />
                         {badge !== null && badge !== undefined && (
                             <span className="absolute -top-1 -right-1">
                                 <TrayBadge>{badge}</TrayBadge>

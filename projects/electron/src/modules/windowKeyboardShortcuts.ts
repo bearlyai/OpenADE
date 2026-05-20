@@ -7,7 +7,7 @@ export interface BeforeInputLike {
     shift: boolean
 }
 
-export type WindowKeyboardShortcutAction = "block-window-close" | "reload" | null
+export type WindowKeyboardShortcutAction = "block-window-close" | "focus-input" | "reload" | null
 
 export function getWindowKeyboardShortcutAction(input: BeforeInputLike, platform: NodeJS.Platform, terminalKeyboardCapture = false): WindowKeyboardShortcutAction {
     const key = input.key.toLowerCase()
@@ -23,6 +23,10 @@ export function getWindowKeyboardShortcutAction(input: BeforeInputLike, platform
 
     if (key === "w") {
         return "block-window-close"
+    }
+
+    if (key === "l" && input.type === "keyDown") {
+        return "focus-input"
     }
 
     if (key === "r" && input.type === "keyDown") {

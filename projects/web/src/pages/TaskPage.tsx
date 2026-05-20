@@ -7,11 +7,16 @@ import { EventLog } from "../components/EventLog"
 import { ImageDropOverlay } from "../components/ImageDropOverlay"
 import { InputBar } from "../components/InputBar"
 import { TRAY_SHORTCUTS, getTrayConfig, matchShortcutToTray } from "../components/tray"
+import { ShortcutBadge } from "../components/ui"
 import { ScrollArea } from "../components/ui/ScrollArea"
 import { Z_INDEX } from "../constants"
 import { useImageDropZone } from "../hooks/useImageDropZone"
+import { useShortcutHintsVisible } from "../hooks/useShortcutHintsVisible"
 import type { TaskModel } from "../store/TaskModel"
 import { useCodeStore } from "../store/context"
+import { isEventFromTerminal } from "../utils/keyboardShortcuts"
+
+const SCROLL_SHORTCUTS = "mod+alt+up,mod+alt+down"
 
 function InputWrapper({ trayOpen, onClose, children }: { trayOpen: boolean; onClose: () => void; children: ReactNode }) {
     return (
@@ -31,6 +36,7 @@ interface TaskPageProps {
 export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPageProps) => {
     const codeStore = useCodeStore()
     const scrollViewportRef = useRef<HTMLDivElement>(null)
+    const showKeyboardHints = useShortcutHintsVisible()
     const { input, tray } = taskModel
 
     const scrollToBottom = useCallback(() => {
@@ -38,6 +44,16 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
             if (scrollViewportRef.current) {
                 scrollViewportRef.current.scrollTop = scrollViewportRef.current.scrollHeight
             }
+        })
+    }, [])
+
+    const scrollByPage = useCallback((direction: 1 | -1) => {
+        const viewport = scrollViewportRef.current
+        if (!viewport) return
+
+        viewport.scrollBy({
+            top: direction * viewport.clientHeight * 0.8,
+            behavior: "smooth",
         })
     }, [])
 
@@ -52,9 +68,32 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
                 tray.toggle(trayType)
             }
         },
-        { preventDefault: true }
+        {
+            preventDefault: true,
+            enableOnContentEditable: true,
+            enableOnFormTags: true,
+            ignoreEventWhen: isEventFromTerminal,
+        }
     )
-    useHotkeys("escape", () => tray.close(), { enabled: tray.isOpen })
+    useHotkeys(
+        SCROLL_SHORTCUTS,
+        (event) => {
+            scrollByPage(event.key === "ArrowUp" ? -1 : 1)
+        },
+        {
+            preventDefault: true,
+            enableOnContentEditable: true,
+            enableOnFormTags: true,
+            ignoreEventWhen: isEventFromTerminal,
+        },
+        [scrollByPage]
+    )
+    useHotkeys("escape", () => tray.close(), {
+        enabled: tray.isOpen,
+        enableOnContentEditable: true,
+        enableOnFormTags: true,
+        ignoreEventWhen: isEventFromTerminal,
+    })
 
     const rawTask = codeStore.tasks.getTask(taskId)
     const events = rawTask?.events ?? []
@@ -132,6 +171,12 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
                     <EventLog taskId={taskId} events={events} />
                 </ScrollArea>
             </InputWrapper>
+            {showKeyboardHints && (
+                <div className="absolute right-4 top-1/2 flex -translate-y-1/2 flex-col gap-1" style={{ zIndex: Z_INDEX.INPUT_BAR - 1 }} aria-hidden>
+                    <ShortcutBadge label="⌥↑" visible variant="floating" />
+                    <ShortcutBadge label="⌥↓" visible variant="floating" />
+                </div>
+            )}
             <InputBar
                 input={input}
                 editorManager={editorManager}

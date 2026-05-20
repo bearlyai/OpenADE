@@ -148,6 +148,10 @@ const startExecutor = () => {
             event.preventDefault()
             loadSite()
         }
+        if (shortcutAction === "focus-input") {
+            event.preventDefault()
+            mbExecutor.webContents.send("app:focus-input-shortcut")
+        }
     })
 
     manageWindowsAutoHide(mbExecutor)

@@ -17,8 +17,11 @@ import type { HarnessId } from "../../electronAPI/harnessEventTypes"
 import { type HarnessInstallStatus, type HarnessStatusMap, getHarnessStatuses } from "../../electronAPI/harnessStatus"
 import { STRATEGY_PRESETS } from "../../hyperplan/strategies"
 import type { AgentCouplet } from "../../hyperplan/types"
+import { useShortcutHintsVisible } from "../../hooks/useShortcutHintsVisible"
 import { useCodeStore } from "../../store/context"
+import { getMetaDigitShortcutIndex } from "../../utils/keyboardShortcuts"
 import { getHarnessDisplayName } from "../settings/harnessStatusUtils"
+import { ShortcutBadge } from "../ui"
 
 // ─── Flow Diagram SVGs ──────────────────────────────────────────────────────
 
@@ -132,6 +135,7 @@ interface StrategyPickerProps {
 export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun }: StrategyPickerProps) {
     const store = useCodeStore()
     const settings = store.personalSettingsStore?.settings.get()
+    const showKeyboardHints = useShortcutHintsVisible()
 
     // Local state
     const [selectedStrategyId, setSelectedStrategyId] = useState(settings?.hyperplanStrategyId ?? "ensemble")
@@ -265,6 +269,34 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
         [store, selectedAgents, reconcilerIndex, plannerIndex, reviewerIndex, onRun]
     )
 
+    useEffect(() => {
+        const handleShortcut = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                event.preventDefault()
+                onClose()
+                return
+            }
+
+            if (event.key === "Enter" && canRun) {
+                event.preventDefault()
+                handleRun(selectedStrategyId)
+                return
+            }
+
+            const shortcutIndex = getMetaDigitShortcutIndex(event)
+            if (shortcutIndex === null) return
+
+            const preset = STRATEGY_PRESETS[shortcutIndex]
+            if (!preset) return
+
+            event.preventDefault()
+            setSelectedStrategyId(preset.id)
+        }
+
+        window.addEventListener("keydown", handleShortcut, true)
+        return () => window.removeEventListener("keydown", handleShortcut, true)
+    }, [canRun, handleRun, onClose, selectedStrategyId])
+
     return (
         <div
             className="fixed inset-0 z-50 flex items-start justify-center bg-black/50"
@@ -297,7 +329,7 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                     <div className="px-5 pt-4 pb-2">
                         <div className="text-xs font-semibold text-muted uppercase tracking-wider mb-3">Strategy</div>
                         <div className="space-y-2">
-                            {STRATEGY_PRESETS.map((preset) => {
+                            {STRATEGY_PRESETS.map((preset, index) => {
                                 const isSelected = selectedStrategyId === preset.id
                                 const Diagram = STRATEGY_DIAGRAMS[preset.id]
                                 return (
@@ -306,10 +338,11 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                                         type="button"
                                         onClick={() => setSelectedStrategyId(preset.id)}
                                         className={cx(
-                                            "btn w-full text-left border transition-colors cursor-pointer",
+                                            "btn relative w-full text-left border transition-colors cursor-pointer",
                                             isSelected ? "border-primary bg-primary/5" : "border-border hover:border-base-300 hover:bg-base-200/50"
                                         )}
                                     >
+                                        <ShortcutBadge label={String(index + 1)} visible={showKeyboardHints} variant="corner" />
                                         <div className="px-4 py-3">
                                             <div className="flex items-center gap-2 mb-0.5">
                                                 <span className={cx("text-sm font-semibold", isSelected ? "text-primary" : "text-base-content")}>
@@ -488,7 +521,7 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                         <button
                             type="button"
                             className={cx(
-                                "btn flex items-center gap-2 px-4 h-9 text-sm font-semibold transition-all",
+                                "btn relative flex items-center gap-2 px-4 h-9 text-sm font-semibold transition-all",
                                 canRun
                                     ? "bg-primary text-primary-content hover:bg-primary/80 cursor-pointer active:scale-95"
                                     : "bg-primary/30 text-primary-content/40 cursor-not-allowed"
@@ -498,6 +531,7 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
                         >
                             <Play size={13} className="fill-current" />
                             {selectedStrategyId === "standard" ? "Plan" : "HyperPlan"}
+                            <ShortcutBadge label="↵" visible={showKeyboardHints} variant="corner" className="bg-base-100/20 text-current shadow-none" />
                         </button>
                     </div>
                 </div>

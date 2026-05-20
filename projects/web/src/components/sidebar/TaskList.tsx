@@ -5,14 +5,21 @@ import cx from "classnames"
 import { CheckCircle, CheckSquare, Copy, ListTodo, Loader2, Pencil, Pin, Plus, RotateCcw, Square, Trash2, X } from "lucide-react"
 import { observer } from "mobx-react"
 import { useCallback, useEffect, useRef, useState } from "react"
+import { useHotkeys } from "react-hotkeys-hook"
 import { usePortalContainer } from "../../hooks/usePortalContainer"
+import { useShortcutHintsVisible } from "../../hooks/useShortcutHintsVisible"
 import { useCodeNavigate } from "../../routing"
 import { useCodeStore } from "../../store/context"
 import type { TaskCreation } from "../../store/managers/TaskCreationManager"
 import type { CodeEvent } from "../../types"
-import { ScrollArea } from "../ui"
+import { isEventFromTerminal, isMetaShortcut } from "../../utils/keyboardShortcuts"
+import { ScrollArea, ShortcutBadge } from "../ui"
 import { TaskDeleteConfirm } from "./TaskDeleteConfirm"
 import { resolveTaskCopyPath } from "./sidebarPathUtils"
+
+const NEW_TASK_SHORTCUT = "mod+n"
+const PREVIOUS_TASK_SHORTCUT_LABEL = "←"
+const NEXT_TASK_SHORTCUT_LABEL = "→"
 
 function isPlanType(lastEvent: TaskPreviewLastEvent): boolean {
     return lastEvent.sourceType === "plan" || lastEvent.sourceType === "revise"
@@ -319,6 +326,7 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     const codeStore = useCodeStore()
     const navigate = useCodeNavigate()
     const deleteConfirmModal = useModal(TaskDeleteConfirm)
+    const showKeyboardHints = useShortcutHintsVisible()
 
     // ── Selection mode ──
     const [selectionMode, setSelectionMode] = useState(false)
@@ -369,6 +377,18 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     const selectedOpenIds = sortedPreviews.filter((preview) => selectedIds.has(preview.id) && !preview.closed).map((preview) => preview.id)
     const creations = codeStore.creation.getCreationsForRepo(workspaceId)
 
+    const navigateTaskByOffset = useCallback(
+        (offset: 1 | -1) => {
+            if (sortedPreviews.length === 0) return
+
+            const currentIndex = taskId ? sortedPreviews.findIndex((preview) => preview.id === taskId) : -1
+            const baseIndex = currentIndex >= 0 ? currentIndex : offset === 1 ? -1 : 0
+            const nextIndex = (baseIndex + offset + sortedPreviews.length) % sortedPreviews.length
+            navigate.go("CodeWorkspaceTask", { workspaceId, taskId: sortedPreviews[nextIndex].id })
+        },
+        [navigate, sortedPreviews, taskId, workspaceId]
+    )
+
     // ── Keyboard shortcuts for selection mode ──
     const sortedPreviewsRef = useRef(sortedPreviews)
     sortedPreviewsRef.current = sortedPreviews
@@ -398,6 +418,38 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     const handleAddTask = () => {
         navigate.go("CodeWorkspaceTaskCreate", { workspaceId })
     }
+
+    useHotkeys(
+        NEW_TASK_SHORTCUT,
+        () => {
+            handleAddTask()
+        },
+        {
+            preventDefault: true,
+            enableOnContentEditable: true,
+            enableOnFormTags: true,
+            ignoreEventWhen: isEventFromTerminal,
+        },
+        [handleAddTask]
+    )
+
+    useEffect(() => {
+        const handleTaskNavigationShortcut = (event: KeyboardEvent) => {
+            if (isMetaShortcut(event, "ArrowLeft")) {
+                event.preventDefault()
+                navigateTaskByOffset(-1)
+                return
+            }
+
+            if (isMetaShortcut(event, "ArrowRight")) {
+                event.preventDefault()
+                navigateTaskByOffset(1)
+            }
+        }
+
+        window.addEventListener("keydown", handleTaskNavigationShortcut, true)
+        return () => window.removeEventListener("keydown", handleTaskNavigationShortcut, true)
+    }, [navigateTaskByOffset])
 
     const handleSelectTask = (selectedTaskId: string) => {
         navigate.go("CodeWorkspaceTask", { workspaceId, taskId: selectedTaskId })
@@ -485,16 +537,23 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     const isEmpty = sortedPreviews.length === 0 && creations.length === 0
 
     return (
-        <div className="flex flex-col h-full mt-4">
+        <div className="relative flex flex-col h-full mt-4">
+            {showKeyboardHints && (
+                <div className="pointer-events-none absolute right-2 top-8 z-10 flex gap-1" aria-hidden>
+                    <ShortcutBadge label={PREVIOUS_TASK_SHORTCUT_LABEL} visible variant="floating" />
+                    <ShortcutBadge label={NEXT_TASK_SHORTCUT_LABEL} visible variant="floating" />
+                </div>
+            )}
             <div className="flex items-center justify-between pl-2 pr-1.5 mb-2">
                 <h2 className="text-muted text-sm font-medium select-none">Tasks</h2>
                 <button
                     type="button"
-                    className="btn flex items-center gap-1 px-2 py-1 text-xs font-medium bg-base-200 hover:bg-base-300 text-base-content transition-colors cursor-pointer"
+                    className="btn relative flex items-center gap-1 px-2 py-1 text-xs font-medium bg-base-200 hover:bg-base-300 text-base-content transition-colors cursor-pointer"
                     onClick={handleAddTask}
                 >
                     <Plus className="w-3 h-3" />
                     <span>New task</span>
+                    <ShortcutBadge label="N" visible={showKeyboardHints} variant="corner" />
                 </button>
             </div>
 

@@ -5,7 +5,7 @@
  * Shows theme previews as square cards using actual theme CSS classes.
  */
 
-import { Check } from "lucide-react"
+import { Check, Eye, EyeOff, Keyboard } from "lucide-react"
 import { observer } from "mobx-react"
 import { type ThemeClass, type ThemeSetting, allThemeOptions } from "../../persistence/personalSettingsStore"
 import type { CodeStore } from "../../store/store"
@@ -73,9 +73,14 @@ interface AppearanceTabProps {
 export const AppearanceTab = observer(({ store }: AppearanceTabProps) => {
     const personalSettings = store.personalSettingsStore
     const currentTheme = personalSettings?.settings.current.theme ?? "system"
+    const shortcutHintsHidden = personalSettings?.settings.current.shortcutHintsHidden ?? false
 
     const handleThemeChange = (theme: ThemeSetting) => {
         personalSettings?.settings.set({ theme })
+    }
+
+    const handleToggleShortcutHints = () => {
+        personalSettings?.settings.set({ shortcutHintsHidden: !shortcutHintsHidden })
     }
 
     return (
@@ -112,6 +117,29 @@ export const AppearanceTab = observer(({ store }: AppearanceTabProps) => {
                             </button>
                         )
                     })}
+                </div>
+            </section>
+
+            <section>
+                <h3 className="text-base font-semibold text-base-content mb-1">Shortcuts</h3>
+                <div className="flex items-center justify-between p-3 bg-base-200/50 border border-border">
+                    <div className="flex items-center gap-3">
+                        <Keyboard size={16} className="text-muted" />
+                        <div>
+                            <p className="text-sm font-medium text-base-content">Shortcut hints</p>
+                            <p className="text-xs text-muted">Show key hints while holding Command</p>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={handleToggleShortcutHints}
+                        className={`btn flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${
+                            shortcutHintsHidden ? "bg-base-200 text-base-content hover:bg-base-300" : "bg-primary text-primary-content hover:bg-primary/80"
+                        }`}
+                    >
+                        {shortcutHintsHidden ? <EyeOff size={14} /> : <Eye size={14} />}
+                        {shortcutHintsHidden ? "Hidden" : "Visible"}
+                    </button>
                 </div>
             </section>
         </div>

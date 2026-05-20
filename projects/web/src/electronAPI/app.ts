@@ -15,6 +15,11 @@ export function onUpdateError(callback: () => void): () => void {
     return window.openadeAPI.app.onUpdateError(callback)
 }
 
+export function onFocusInputShortcut(callback: () => void): () => void {
+    if (!window.openadeAPI) return () => {}
+    return window.openadeAPI.app.onFocusInputShortcut(callback)
+}
+
 export async function applyUpdate(): Promise<void> {
     if (!window.openadeAPI) return
     await window.openadeAPI.app.applyUpdate()

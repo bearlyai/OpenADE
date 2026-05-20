@@ -32,6 +32,8 @@ const openadeAPI = {
             createListener("app:update-available", cb as (...args: unknown[]) => void),
         onUpdateError: (cb: () => void) =>
             createListener("app:update-error", cb as (...args: unknown[]) => void),
+        onFocusInputShortcut: (cb: () => void) =>
+            createListener("app:focus-input-shortcut", cb as (...args: unknown[]) => void),
         retryUpdateCheck: () => ipcRenderer.invoke("retry-update-check"),
     },
 

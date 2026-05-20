@@ -85,6 +85,8 @@ export interface PersonalSettings {
     devHideTray?: boolean
     /** Dev: Force all input commands visible at once for layout testing */
     devForceAllCommands?: boolean
+    /** Hide shortcut hint overlays when holding Command */
+    shortcutHintsHidden?: boolean
     /** Version string of the latest release notes the user has seen */
     lastSeenReleaseVersion?: string
 

@@ -28,10 +28,12 @@ import { ThinkingPicker } from "../components/ThinkingPicker"
 import { SmartEditor, type SmartEditorRef } from "../components/SmartEditor"
 import { StrategyPicker } from "../components/hyperplan/StrategyPicker"
 import { TaskMcpSelector } from "../components/mcp/TaskMcpSelector"
-import { Select, Switch } from "../components/ui"
+import { Select, ShortcutBadge, Switch } from "../components/ui"
+import { onFocusInputShortcut } from "../electronAPI/app"
 import type { BranchInfo, GitSummaryResponse } from "../electronAPI/git"
 import { useImageDropZone } from "../hooks/useImageDropZone"
 import { usePortalContainer } from "../hooks/usePortalContainer"
+import { useShortcutHintsVisible } from "../hooks/useShortcutHintsVisible"
 import { useCodeNavigate } from "../routing"
 import { useCodeStore } from "../store/context"
 import type { StashedDraft } from "../store/managers/SmartEditorManager"
@@ -39,11 +41,24 @@ import type { CreationPhase, TaskCreation } from "../store/managers/TaskCreation
 import { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager"
 import type { Repo } from "../types"
 import { processImageBlob } from "../utils/imageAttachment"
+import { getMetaDigitShortcutIndex, isMetaOnlyShortcut, isMetaShortcut } from "../utils/keyboardShortcuts"
 
 interface TaskCreatePageProps {
     workspaceId: string
     repo: Repo
 }
+
+type CreateMode = "plan" | "do" | "ask" | "hyperplan"
+
+const CREATE_MODE_SHORTCUTS: Record<CreateMode, number> = {
+    do: 1,
+    plan: 2,
+    ask: 3,
+    hyperplan: 4,
+}
+
+const CREATE_MORE_SHORTCUT_LABEL = "⌥M"
+const WORKTREE_SHORTCUT_LABEL = "⌥W"
 
 const getLastBranchKey = (workspaceId: string) => `code:lastBranch:${workspaceId}`
 const getCreateMoreKey = (workspaceId: string) => `code:createMore:${workspaceId}`
@@ -302,6 +317,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
     const editorRef = useRef<SmartEditorRef>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const [showHyperPlan, setShowHyperPlan] = useState(false)
+    const showKeyboardHints = useShortcutHintsVisible()
 
     // Get SmartEditorManager for task creation
     const editorManager = codeStore.smartEditors.getManager("task-create", workspaceId)
@@ -400,6 +416,24 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
         editorRef.current?.focus()
     }, [repo?.path, editorManager])
 
+    useEffect(() => {
+        const handleFocusShortcut = (event: KeyboardEvent) => {
+            if (!isMetaOnlyShortcut(event, "KeyL")) return
+
+            event.preventDefault()
+            editorRef.current?.focusEnd()
+        }
+
+        window.addEventListener("keydown", handleFocusShortcut, true)
+        return () => window.removeEventListener("keydown", handleFocusShortcut, true)
+    }, [])
+
+    useEffect(() => {
+        return onFocusInputShortcut(() => {
+            editorRef.current?.focusEnd()
+        })
+    }, [])
+
     // Prune favorites that reference deleted files
     useEffect(() => {
         if (repo?.path) {
@@ -407,7 +441,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
         }
     }, [repo?.path, editorManager])
 
-    const handleCreate = (mode: "plan" | "do" | "ask" | "hyperplan") => {
+    const handleCreate = (mode: CreateMode) => {
         if (!editorManager.value.trim() || !workspaceId) return
 
         const description = editorManager.value.trim()
@@ -444,6 +478,48 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
     const isDisabled = !editorManager.value.trim()
     const showBranchSelector = gitInfoLoaded && branches.length > 0
 
+    useEffect(() => {
+        const handleCreateShortcut = (event: KeyboardEvent) => {
+            const shortcutIndex = getMetaDigitShortcutIndex(event)
+            if (shortcutIndex === null || isDisabled || showHyperPlan) return
+
+            const shortcutNumber = shortcutIndex + 1
+            const mode = (Object.entries(CREATE_MODE_SHORTCUTS) as Array<[CreateMode, number]>).find(([, number]) => number === shortcutNumber)?.[0]
+            if (!mode) return
+
+            event.preventDefault()
+            if (mode === "hyperplan") {
+                setShowHyperPlan(true)
+                return
+            }
+
+            handleCreate(mode)
+        }
+
+        window.addEventListener("keydown", handleCreateShortcut, true)
+        return () => window.removeEventListener("keydown", handleCreateShortcut, true)
+    }, [handleCreate, isDisabled, showHyperPlan])
+
+    useEffect(() => {
+        const handleOptionShortcut = (event: KeyboardEvent) => {
+            if (showHyperPlan) return
+
+            if (isMetaShortcut(event, "KeyM", { alt: true })) {
+                event.preventDefault()
+                setCreateMore((value) => !value)
+                return
+            }
+
+            if (showBranchSelector && isMetaShortcut(event, "KeyW", { alt: true })) {
+                event.preventDefault()
+                setUseWorktree((value) => !value)
+            }
+        }
+
+        window.addEventListener("keydown", handleOptionShortcut, true)
+        return () => window.removeEventListener("keydown", handleOptionShortcut, true)
+    }, [showBranchSelector, showHyperPlan])
+
     const creations = codeStore.creation.getCreationsForRepo(workspaceId)
     const pendingCreations = creations.filter((c) => c.completedTaskId === null)
 
@@ -475,7 +551,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
             {isDragOver && <ImageDropOverlay />}
             {/* Editor area - takes remaining space with scroll */}
             {/* biome-ignore lint/a11y/useKeyWithClickEvents: clicking anywhere focuses editor */}
-            <div className="flex-1 min-h-0 overflow-y-auto p-6 cursor-text" onClick={handleEditorAreaClick}>
+            <div className="relative flex-1 min-h-0 overflow-y-auto p-6 cursor-text" onClick={handleEditorAreaClick}>
                 <SmartEditor
                     key={`${editorManager.workspaceId}:${editorManager.id}`}
                     ref={editorRef}
@@ -487,6 +563,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                     className="h-full text-base border-0 bg-transparent [&>div]:h-full [&>div]:border-0 [&>div]:border-l-2 [&>div]:border-l-transparent [&>div:focus-within]:border-l-primary [&>div]:transition-colors"
                     editorClassName="h-full"
                 />
+                <ShortcutBadge label="L" visible={showKeyboardHints} variant="floating" className="absolute right-4 top-4" />
             </div>
 
             {/* Favorites bar - outside bottom bar, same bg as editor */}
@@ -595,7 +672,10 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                         <div className="flex items-center gap-3 border-l border-border pl-4">
                             <div className="flex items-center gap-2">
                                 <span className="text-xs text-muted">Worktree</span>
-                                <Switch checked={useWorktree} onCheckedChange={setUseWorktree} aria-label="Use worktree" />
+                                <span className="relative inline-flex">
+                                    <Switch checked={useWorktree} onCheckedChange={setUseWorktree} aria-label="Use worktree" />
+                                    <ShortcutBadge label={WORKTREE_SHORTCUT_LABEL} visible={showKeyboardHints} variant="corner" />
+                                </span>
                             </div>
 
                             {useWorktree && (
@@ -664,8 +744,12 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
 
                         {/* Settings popover */}
                         <Popover.Root>
-                            <Popover.Trigger className="btn p-2 text-muted hover:text-base-content hover:bg-base-200 transition-colors">
+                            <Popover.Trigger
+                                className="btn relative p-2 text-muted hover:text-base-content hover:bg-base-200 transition-colors"
+                                title="Toggle Create More (⌘⌥M)"
+                            >
                                 <Settings size={16} />
+                                <ShortcutBadge label={CREATE_MORE_SHORTCUT_LABEL} visible={showKeyboardHints} variant="corner" />
                             </Popover.Trigger>
                             <Popover.Portal container={portalContainer}>
                                 <Popover.Positioner sideOffset={8} side="top" align="end">
@@ -687,8 +771,9 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                             type="button"
                             onClick={() => handleCreate("do")}
                             disabled={isDisabled}
+                            title="Do (⌘1)"
                             className={cx(
-                                "btn flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
+                                "btn relative flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
                                 isDisabled
                                     ? "bg-success/40 text-success-content/50 cursor-not-allowed"
                                     : "bg-success text-success-content hover:bg-success/90 cursor-pointer"
@@ -696,13 +781,20 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                         >
                             <Code size={14} />
                             Do
+                            <ShortcutBadge
+                                label={String(CREATE_MODE_SHORTCUTS.do)}
+                                visible={showKeyboardHints}
+                                variant="corner"
+                                className="bg-base-100/20 text-current shadow-none"
+                            />
                         </button>
                         <button
                             type="button"
                             onClick={() => handleCreate("plan")}
                             disabled={isDisabled}
+                            title="Plan (⌘2)"
                             className={cx(
-                                "btn flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
+                                "btn relative flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
                                 isDisabled
                                     ? "bg-primary/40 text-primary-content/50 cursor-not-allowed"
                                     : "bg-primary text-primary-content hover:bg-primary/90 cursor-pointer"
@@ -710,13 +802,20 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                         >
                             <FileText size={14} />
                             Plan
+                            <ShortcutBadge
+                                label={String(CREATE_MODE_SHORTCUTS.plan)}
+                                visible={showKeyboardHints}
+                                variant="corner"
+                                className="bg-base-100/20 text-current shadow-none"
+                            />
                         </button>
                         <button
                             type="button"
                             onClick={() => setShowHyperPlan(true)}
                             disabled={isDisabled}
+                            title="HyperPlan (⌘4)"
                             className={cx(
-                                "btn flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
+                                "btn relative flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
                                 isDisabled
                                     ? "text-muted/50 cursor-not-allowed"
                                     : "text-base-content hover:bg-base-200 active:bg-base-300 active:scale-95 cursor-pointer"
@@ -724,13 +823,15 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                         >
                             <Zap size={14} />
                             HyperPlan
+                            <ShortcutBadge label={String(CREATE_MODE_SHORTCUTS.hyperplan)} visible={showKeyboardHints} variant="corner" />
                         </button>
                         <button
                             type="button"
                             onClick={() => handleCreate("ask")}
                             disabled={isDisabled}
+                            title="Ask (⌘3)"
                             className={cx(
-                                "btn flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
+                                "btn relative flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
                                 isDisabled
                                     ? "bg-base-200/40 text-base-content/50 cursor-not-allowed"
                                     : "bg-base-200 text-base-content hover:bg-base-300 active:bg-base-300 active:scale-95 cursor-pointer"
@@ -738,6 +839,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                         >
                             <MessageCircle size={14} />
                             Ask
+                            <ShortcutBadge label={String(CREATE_MODE_SHORTCUTS.ask)} visible={showKeyboardHints} variant="corner" />
                         </button>
                     </div>
                 </div>

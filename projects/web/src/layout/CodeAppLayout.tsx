@@ -1,4 +1,5 @@
 import NiceModal from "@ebay/nice-modal-react"
+import { EyeOff } from "lucide-react"
 import { observer } from "mobx-react"
 import { type ReactNode, useCallback, useEffect, useState } from "react"
 import { twMerge } from "tailwind-merge"
@@ -12,6 +13,7 @@ import { onUpdateAvailable, onUpdateError } from "../electronAPI/app"
 import { hasElectronIpc } from "../electronAPI/capabilities"
 import { type PlatformInfo, fetchPlatformInfo } from "../electronAPI/platform"
 import { type FrameColors, windowFrameEnabled, windowFrameSetColors } from "../electronAPI/windowFrame"
+import { useMetaKeyPressed } from "../hooks/useMetaKeyPressed"
 import { PortalContainerProvider } from "../hooks/usePortalContainer"
 import { useResolvedTheme } from "../hooks/useResolvedTheme"
 import { useCodeStore } from "../store/context"
@@ -193,6 +195,25 @@ const FramedApp = observer((props: { children: ReactNode; resolvedTheme: "light"
     )
 })
 
+const ShortcutHintsHideButton = observer(() => {
+    const codeStore = useCodeStore()
+    const metaPressed = useMetaKeyPressed()
+    const hidden = codeStore.personalSettingsStore?.settings.current.shortcutHintsHidden ?? false
+
+    if (!metaPressed || hidden) return null
+
+    return (
+        <button
+            type="button"
+            className={`${ELECTRON_NO_DRAG_REGION_CLASS} btn absolute right-4 top-14 z-[90] flex items-center gap-1.5 border border-border bg-base-100 px-3 py-1.5 text-xs font-medium text-base-content shadow-lg hover:bg-base-200 transition-colors`}
+            onClick={() => codeStore.personalSettingsStore?.settings.set({ shortcutHintsHidden: true })}
+        >
+            <EyeOff size={13} />
+            Hide shortcuts
+        </button>
+    )
+})
+
 export const CodeAppLayout = observer((props: CodeAppLayoutProps) => {
     const { children, navbar, frameCenter } = props
     const codeStore = useCodeStore()
@@ -209,6 +230,7 @@ export const CodeAppLayout = observer((props: CodeAppLayoutProps) => {
                         <PortalContainerProvider>
                             <div className="w-full h-full relative overflow-hidden bg-base-200">
                                 <CodeSidebar />
+                                <ShortcutHintsHideButton />
                                 <div
                                     className={twMerge(
                                         "flex flex-col relative z-10 h-full min-w-0 overflow-hidden bg-base-100 transition-[margin-left,border-radius] duration-300 ease-in-out",

@@ -15,6 +15,7 @@ describe("getWindowKeyboardShortcutAction", () => {
     it("uses Cmd for reload and close prevention on macOS", () => {
         expect(getWindowKeyboardShortcutAction(makeInput({ key: "r", meta: true }), "darwin")).toBe("reload")
         expect(getWindowKeyboardShortcutAction(makeInput({ key: "w", meta: true }), "darwin")).toBe("block-window-close")
+        expect(getWindowKeyboardShortcutAction(makeInput({ key: "l", meta: true }), "darwin")).toBe("focus-input")
     })
 
     it("does not treat macOS Ctrl terminal shortcuts as app shortcuts", () => {
@@ -35,6 +36,7 @@ describe("getWindowKeyboardShortcutAction", () => {
     it("uses Ctrl for reload and close prevention on non-macOS platforms", () => {
         expect(getWindowKeyboardShortcutAction(makeInput({ key: "r", control: true }), "linux")).toBe("reload")
         expect(getWindowKeyboardShortcutAction(makeInput({ key: "w", control: true }), "win32")).toBe("block-window-close")
+        expect(getWindowKeyboardShortcutAction(makeInput({ key: "l", control: true }), "linux")).toBe("focus-input")
     })
 
     it("ignores shifted or alt-modified variants", () => {
@@ -44,5 +46,9 @@ describe("getWindowKeyboardShortcutAction", () => {
 
     it("only reloads on keyDown", () => {
         expect(getWindowKeyboardShortcutAction(makeInput({ key: "r", meta: true, type: "keyUp" }), "darwin")).toBeNull()
+    })
+
+    it("only focuses input on keyDown", () => {
+        expect(getWindowKeyboardShortcutAction(makeInput({ key: "l", meta: true, type: "keyUp" }), "darwin")).toBeNull()
     })
 })

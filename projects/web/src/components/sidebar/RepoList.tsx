@@ -1,14 +1,19 @@
 import cx from "classnames"
 import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Copy, FolderOpen, FolderPlus, Loader2, MoreHorizontal, Settings, Trash2 } from "lucide-react"
 import { observer } from "mobx-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { getWorkspaceLastViewed } from "../../constants"
 import { getFileManagerName } from "../../electronAPI/platform"
 import { openPathInFileManager } from "../../electronAPI/shell"
+import { useShortcutHintsVisible } from "../../hooks/useShortcutHintsVisible"
 import { useCodeNavigate } from "../../routing"
 import { useCodeStore } from "../../store/context"
 import type { Repo } from "../../types"
-import { Menu, type MenuItem } from "../ui"
+import { isMetaShortcut } from "../../utils/keyboardShortcuts"
+import { Menu, ShortcutBadge, type MenuItem } from "../ui"
+
+const PREVIOUS_PROJECT_SHORTCUT_LABEL = "↑"
+const NEXT_PROJECT_SHORTCUT_LABEL = "↓"
 
 const RepoMenuButton = ({
     repo,
@@ -133,6 +138,8 @@ const RepoItemRow = ({
     onSettings,
     onDelete,
     onToggleArchive,
+    shortcutLabel,
+    showShortcut,
 }: {
     repo: Repo
     isActive: boolean
@@ -143,13 +150,15 @@ const RepoItemRow = ({
     onSettings: () => void
     onDelete: () => void
     onToggleArchive: () => void
+    shortcutLabel?: string
+    showShortcut: boolean
 }) => {
     return (
         <div
             role="button"
             tabIndex={0}
             className={cx(
-                "group btn flex items-center font-normal gap-2 p-1 px-3 hover:bg-base-200 w-full cursor-pointer text-muted",
+                "group btn relative flex items-center font-normal gap-2 p-1 px-3 hover:bg-base-200 w-full cursor-pointer text-muted",
                 isActive && "font-medium bg-base-300 text-base-content",
                 unreadCount > 0 && "border-l-2 border-l-primary",
                 isArchived && "opacity-60"
@@ -165,6 +174,7 @@ const RepoItemRow = ({
         >
             {isRunning ? <Loader2 className="w-4 h-4 animate-spin flex-shrink-0 text-muted" /> : <FolderOpen className="w-4 h-4 flex-shrink-0" />}
             <span className="truncate min-w-0 flex-1 select-none">{repo.name}</span>
+            <ShortcutBadge label={shortcutLabel} visible={showShortcut} variant="row" />
             <RepoMenuButton repo={repo} onSettings={onSettings} onDelete={onDelete} onToggleArchive={onToggleArchive} />
         </div>
     )
@@ -178,10 +188,12 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
     const codeStore = useCodeStore()
     const navigate = useCodeNavigate()
     const [showArchived, setShowArchived] = useState(false)
+    const showKeyboardHints = useShortcutHintsVisible()
 
     const allRepos = codeStore.repos.repos
     const activeRepos = allRepos.filter((r) => !r.archived)
     const archivedRepos = allRepos.filter((r) => r.archived)
+    const visibleRepos = showArchived ? [...activeRepos, ...archivedRepos] : activeRepos
 
     const getUnreadCount = (repoId: string): number => {
         const repo = codeStore.repoStore?.repos.get(repoId)
@@ -217,6 +229,23 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
         navigate.go("CodeWorkspaceTaskCreate", { workspaceId: repoId })
     }
 
+    useEffect(() => {
+        const handleProjectShortcut = (event: KeyboardEvent) => {
+            const direction = isMetaShortcut(event, "ArrowUp") ? -1 : isMetaShortcut(event, "ArrowDown") ? 1 : null
+            if (direction === null || visibleRepos.length === 0) return
+
+            const currentIndex = workspaceId ? visibleRepos.findIndex((repo) => repo.id === workspaceId) : -1
+            const baseIndex = currentIndex >= 0 ? currentIndex : direction === 1 ? -1 : 0
+            const nextIndex = (baseIndex + direction + visibleRepos.length) % visibleRepos.length
+
+            event.preventDefault()
+            handleSelectRepo(visibleRepos[nextIndex].id)
+        }
+
+        window.addEventListener("keydown", handleProjectShortcut, true)
+        return () => window.removeEventListener("keydown", handleProjectShortcut, true)
+    }, [visibleRepos, workspaceId, handleSelectRepo])
+
     const handleSettingsRepo = (repoId: string) => {
         navigate.go("CodeWorkspaceSettings", { workspaceId: repoId })
     }
@@ -250,11 +279,19 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
             onSettings={() => handleSettingsRepo(repo.id)}
             onDelete={() => handleDeleteRepo(repo.id)}
             onToggleArchive={() => handleToggleArchive(repo.id)}
+            shortcutLabel={undefined}
+            showShortcut={showKeyboardHints}
         />
     )
 
     return (
-        <div className="flex flex-col gap-1 mt-2">
+        <div className="relative flex flex-col gap-1 mt-2">
+            {showKeyboardHints && (
+                <div className="pointer-events-none absolute right-2 top-0 z-10 flex gap-1" aria-hidden>
+                    <ShortcutBadge label={PREVIOUS_PROJECT_SHORTCUT_LABEL} visible variant="floating" />
+                    <ShortcutBadge label={NEXT_PROJECT_SHORTCUT_LABEL} visible variant="floating" />
+                </div>
+            )}
             {allRepos.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-8 text-muted">
                     <FolderOpen size="1.5rem" className="mb-2 opacity-50" />
@@ -262,7 +299,7 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
                 </div>
             ) : (
                 <div className="flex flex-col gap-1 px-1.5">
-                    {activeRepos.map(renderRepoItem)}
+                    {activeRepos.map((repo) => renderRepoItem(repo))}
 
                     {archivedRepos.length > 0 && (
                         <>
@@ -274,7 +311,7 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
                                 {showArchived ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                                 <span>Archived ({archivedRepos.length})</span>
                             </button>
-                            {showArchived && archivedRepos.map(renderRepoItem)}
+                            {showArchived && archivedRepos.map((repo) => renderRepoItem(repo))}
                         </>
                     )}
                 </div>

@@ -3,12 +3,14 @@ import { Tooltip } from "@base-ui-components/react/tooltip"
 import cx from "classnames"
 import { ExternalLink, GitBranch, ImagePlus, Plug, X } from "lucide-react"
 import { observer } from "mobx-react"
-import { useRef } from "react"
+import { useEffect, useRef } from "react"
 import { Z_INDEX } from "../constants"
+import { onFocusInputShortcut } from "../electronAPI/app"
 import type { GitSummaryResponse } from "../electronAPI/git"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { openUrlInNativeBrowser } from "../electronAPI/shell"
 import { usePortalContainer } from "../hooks/usePortalContainer"
+import { useShortcutHintsVisible } from "../hooks/useShortcutHintsVisible"
 import type { ThinkingLevel } from "../store/TaskModel"
 import type { Command, InputManager } from "../store/managers/InputManager"
 import type { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager"
@@ -16,6 +18,7 @@ import type { SmartEditorManager } from "../store/managers/SmartEditorManager"
 import type { TrayManager } from "../store/managers/TrayManager"
 import type { Comment } from "../types"
 import { processImageBlob } from "../utils/imageAttachment"
+import { getMetaDigitShortcutIndex, isMetaOnlyShortcut } from "../utils/keyboardShortcuts"
 import { HarnessPicker } from "./HarnessPicker"
 import { ModelPicker } from "./ModelPicker"
 import { SmartEditor, type SmartEditorRef } from "./SmartEditor"
@@ -23,12 +26,30 @@ import { ThinkingPicker } from "./ThinkingPicker"
 import { CommentsSection } from "./events/CommentsSection"
 import { FastModeToggle } from "./FastModeToggle"
 import { TaskMcpSelector } from "./mcp/TaskMcpSelector"
+import { ShortcutBadge } from "./ui"
 import { TrayButtons, TraySlideOut, getTrayConfig } from "./tray"
 
 // Button variant styles
 const BUTTON_BASE = "btn flex items-center justify-center h-9 text-sm font-medium transition-all duration-100 whitespace-nowrap shrink-0"
 const BUTTON_LABELED = `${BUTTON_BASE} gap-2 px-4`
 const BUTTON_ICON_ONLY = `${BUTTON_BASE} w-9`
+const COMMAND_SHORTCUT_BY_ID: Partial<Record<string, number>> = {
+    do: 1,
+    runPlan: 1,
+    plan: 2,
+    revise: 2,
+    ask: 3,
+    review: 4,
+    reviewPlan: 4,
+    retry: 5,
+    repeat: 6,
+    commitAndPush: 7,
+    stop: 8,
+    repeatStop: 8,
+    cancelPlan: 8,
+    close: 9,
+    reopen: 9,
+}
 
 // Semantic button styles - each variant has enabled and disabled states
 // Disabled states preserve the button's color identity with reduced opacity
@@ -57,23 +78,44 @@ const BUTTON_STYLES = {
 
 type ButtonVariant = keyof typeof BUTTON_STYLES
 
+function getCommandShortcut(command: Command): number | undefined {
+    return COMMAND_SHORTCUT_BY_ID[command.id]
+}
+
 /** Reusable action button that renders a Command. Secondary commands render icon-only with a tooltip. */
-function CommandButton({ command, onExecute, portalContainer }: { command: Command; onExecute: (id: string) => void; portalContainer: HTMLElement | null }) {
+function CommandButton({
+    command,
+    onExecute,
+    portalContainer,
+    shortcutNumber,
+    showShortcut,
+}: {
+    command: Command
+    onExecute: (id: string) => void
+    portalContainer: HTMLElement | null
+    shortcutNumber?: number
+    showShortcut: boolean
+}) {
     const Icon = command.icon
     const variant = (command.style?.variant ?? "ghost") as ButtonVariant
     const styles = BUTTON_STYLES[variant]
     const iconOnly = command.group === "secondary"
     const base = iconOnly ? BUTTON_ICON_ONLY : BUTTON_LABELED
+    const shortcutLabel = shortcutNumber?.toString()
+    const shortcutTitle = shortcutLabel ? `${command.label} (⌘${shortcutLabel})` : command.label
 
     const btn = (
         <button
             type="button"
             onClick={() => onExecute(command.id)}
             disabled={!command.enabled}
-            className={cx(base, command.enabled ? styles.enabled : styles.disabled)}
+            className={cx(base, "relative", command.enabled ? styles.enabled : styles.disabled)}
+            title={shortcutTitle}
+            aria-keyshortcuts={shortcutLabel ? `Meta+${shortcutLabel}` : undefined}
         >
             <Icon size={14} />
             {!iconOnly && command.label}
+            <ShortcutBadge label={shortcutLabel} visible={showShortcut} variant="corner" className="bg-base-100/20 text-current shadow-none" />
         </button>
     )
 
@@ -84,7 +126,7 @@ function CommandButton({ command, onExecute, portalContainer }: { command: Comma
             <Tooltip.Trigger render={btn} />
             <Tooltip.Portal container={portalContainer}>
                 <Tooltip.Positioner sideOffset={6} side="top">
-                    <Tooltip.Popup className="bg-base-300 text-base-content text-xs px-2 py-1 shadow-lg border border-border">{command.label}</Tooltip.Popup>
+                    <Tooltip.Popup className="bg-base-300 text-base-content text-xs px-2 py-1 shadow-lg border border-border">{shortcutTitle}</Tooltip.Popup>
                 </Tooltip.Positioner>
             </Tooltip.Portal>
         </Tooltip.Root>
@@ -144,11 +186,52 @@ export const InputBar = observer(function InputBar({
     const portalContainer = usePortalContainer()
     const editorRef = useRef<SmartEditorRef>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
+    const showCommandShortcuts = useShortcutHintsVisible()
 
     // Get commands from InputManager
     const { commands } = input
     const hasComments = unsubmittedComments.length > 0
     const hasPendingImages = editorManager.pendingImages.length > 0
+
+    useEffect(() => {
+        const handleCommandShortcut = (event: KeyboardEvent) => {
+            const shortcutIndex = getMetaDigitShortcutIndex(event)
+            if (shortcutIndex === null) return
+
+            const shortcutNumber = shortcutIndex + 1
+            const cmd = commands.find((command) => getCommandShortcut(command) === shortcutNumber)
+            if (!cmd) return
+
+            event.preventDefault()
+            tray.close()
+            void input.runCommand(cmd.id)
+        }
+
+        window.addEventListener("keydown", handleCommandShortcut, true)
+        return () => window.removeEventListener("keydown", handleCommandShortcut, true)
+    }, [commands, input, tray])
+
+    useEffect(() => {
+        const handleFocusShortcut = (event: KeyboardEvent) => {
+            if (!isMetaOnlyShortcut(event, "KeyL")) return
+
+            event.preventDefault()
+            if (!input.isDisabled) {
+                editorRef.current?.focusEnd()
+            }
+        }
+
+        window.addEventListener("keydown", handleFocusShortcut, true)
+        return () => window.removeEventListener("keydown", handleFocusShortcut, true)
+    }, [input])
+
+    useEffect(() => {
+        return onFocusInputShortcut(() => {
+            if (!input.isDisabled) {
+                editorRef.current?.focusEnd()
+            }
+        })
+    }, [input])
 
     // Strip "openade/" worktree prefix from branch display
     const displayBranch = gitStatus?.branch?.replace(/^openade\//, "")
@@ -278,6 +361,7 @@ export const InputBar = observer(function InputBar({
                     >
                         <ImagePlus size={14} />
                     </button>
+                    <ShortcutBadge label="L" visible={showCommandShortcuts} variant="corner" />
                 </div>
 
                 {/* Image preview strip */}
@@ -333,6 +417,8 @@ export const InputBar = observer(function InputBar({
                             <div key={cmd.id} className={cx(cmd.spacer && "ml-auto", !cmd.spacer && input.isDisabled && "opacity-50 pointer-events-none")}>
                                 <CommandButton
                                     command={cmd}
+                                    shortcutNumber={getCommandShortcut(cmd)}
+                                    showShortcut={showCommandShortcuts}
                                     portalContainer={portalContainer}
                                     onExecute={(id) => {
                                         tray.close()

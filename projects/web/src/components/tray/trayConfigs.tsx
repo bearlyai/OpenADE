@@ -122,6 +122,7 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         id: "scratchpad",
         label: "Scratch Pad",
         icon: NotebookPen,
+        shortcut: { key: "mod+shift+s", display: "⌘⇧S" },
         renderContent: (tray) => {
             const repo = tray.store.repos.getRepo(tray.workspaceId)
             return <ScratchpadTrayContent workspaceId={tray.workspaceId} repoPath={repo?.path ?? null} />
@@ -131,6 +132,7 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         id: "processes",
         label: "Processes",
         icon: Play,
+        shortcut: { key: "mod+shift+p", display: "⌘⇧P" },
         renderBadge: (tray) => {
             const context = getProcessContext(tray)
             if (!context) return null
