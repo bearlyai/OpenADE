@@ -25,8 +25,8 @@ import { TaskDeleteConfirm } from "./TaskDeleteConfirm"
 import { resolveTaskCopyPath } from "./sidebarPathUtils"
 
 const NEW_TASK_SHORTCUT = "mod+n"
-const PREVIOUS_TASK_SHORTCUT_LABEL = "←"
-const NEXT_TASK_SHORTCUT_LABEL = "→"
+const PREVIOUS_TASK_SHORTCUT_LABEL = "↑"
+const NEXT_TASK_SHORTCUT_LABEL = "↓"
 
 function isPlanType(lastEvent: TaskPreviewLastEvent): boolean {
     return lastEvent.sourceType === "plan" || lastEvent.sourceType === "revise"
@@ -442,14 +442,14 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
 
     useEffect(() => {
         const navigateFromShortcut = (shortcut: KeyboardShortcutLike, preventDefault?: () => void) => {
-            if (isMetaShortcutLike(shortcut, "ArrowLeft")) {
+            if (isMetaShortcutLike(shortcut, "ArrowUp")) {
                 preventDefault?.()
                 suppressEditorAutoFocusForKeyboardNavigation()
                 navigateTaskByOffset(-1)
                 return
             }
 
-            if (isMetaShortcutLike(shortcut, "ArrowRight")) {
+            if (isMetaShortcutLike(shortcut, "ArrowDown")) {
                 preventDefault?.()
                 suppressEditorAutoFocusForKeyboardNavigation()
                 navigateTaskByOffset(1)

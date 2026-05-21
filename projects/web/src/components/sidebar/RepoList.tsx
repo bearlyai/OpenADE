@@ -18,8 +18,8 @@ import {
 } from "../../utils/keyboardShortcuts"
 import { Menu, ShortcutBadge, type MenuItem } from "../ui"
 
-const PREVIOUS_PROJECT_SHORTCUT_LABEL = "↑"
-const NEXT_PROJECT_SHORTCUT_LABEL = "↓"
+const PREVIOUS_PROJECT_SHORTCUT_LABEL = "←"
+const NEXT_PROJECT_SHORTCUT_LABEL = "→"
 
 const RepoMenuButton = ({
     repo,
@@ -237,7 +237,7 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
 
     useEffect(() => {
         const navigateFromShortcut = (shortcut: KeyboardShortcutLike, preventDefault?: () => void) => {
-            const direction = isMetaShortcutLike(shortcut, "ArrowUp") ? -1 : isMetaShortcutLike(shortcut, "ArrowDown") ? 1 : null
+            const direction = isMetaShortcutLike(shortcut, "ArrowLeft") ? -1 : isMetaShortcutLike(shortcut, "ArrowRight") ? 1 : null
             if (direction === null || visibleRepos.length === 0) return
 
             const currentIndex = workspaceId ? visibleRepos.findIndex((repo) => repo.id === workspaceId) : -1
