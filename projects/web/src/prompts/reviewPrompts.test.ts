@@ -16,6 +16,8 @@ function expectSharedReviewGuidance(userMessage: string): void {
     expect(userMessage.includes(REVIEW_DIMENSIONS)).toBe(true)
     expect(userMessage.includes(REVIEW_ENGINEERING_GUIDANCE)).toBe(true)
     expect(userMessage.includes(REVIEW_FINDING_FORMAT)).toBe(true)
+    expect(userMessage).toContain("Criticality: N/10")
+    expect(userMessage).toContain("Always write the score with the /10 denominator")
     expect(userMessage).toContain("ignore unrelated changes from other agents or concurrent threads")
     expect(userMessage).toContain("objectively much better ways to achieve the same goal")
 }

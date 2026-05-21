@@ -17,11 +17,12 @@ const REVIEW_MODE_INSTRUCTIONS = `<current_operating_mode mode="review">
 </constraints>
 </current_operating_mode>`
 
-export const REVIEW_FINDING_FORMAT = "For each finding: Location, Issue, Criticality (1-10), Suggestion. Bullets only, no prose."
+export const REVIEW_FINDING_FORMAT =
+    "For each finding: Location, Issue, Criticality: N/10, Suggestion. Always write the score with the /10 denominator. Bullets only, no prose."
 
 export const REVIEW_DIMENSIONS = `Only raise findings you would be comfortable blocking a PR on. Do not make trivial, nitpicky, or speculative comments. Every finding should be a real bug, a real risk, or a meaningfully better approach.
 
-Every finding must include a Criticality score from 1-10 so the user can decide whether the fix is worth the engineering effort. Score by severity, likelihood, user impact, and engineering risk: 10 is a release blocker, 7-9 is high risk, 4-6 is meaningful but not necessarily blocking, and 1-3 is low importance.
+Every finding must include a Criticality score written as N/10 so the user can decide whether the fix is worth the engineering effort. Score by severity, likelihood, user impact, and engineering risk: 10/10 is a release blocker, 7-9/10 is high risk, 4-6/10 is meaningful but not necessarily blocking, and 1-3/10 is low importance.
 
 Evaluate through these lenses:
 
