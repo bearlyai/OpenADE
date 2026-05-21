@@ -9,7 +9,13 @@ import { useShortcutHintsVisible } from "../../hooks/useShortcutHintsVisible"
 import { useCodeNavigate } from "../../routing"
 import { useCodeStore } from "../../store/context"
 import type { Repo } from "../../types"
-import { isEventFromEditable, isMetaShortcut, suppressEditorAutoFocusForKeyboardNavigation } from "../../utils/keyboardShortcuts"
+import {
+    type KeyboardShortcutLike,
+    isEventFromEditable,
+    isMetaShortcutLike,
+    onEmptyEditorGlobalShortcut,
+    suppressEditorAutoFocusForKeyboardNavigation,
+} from "../../utils/keyboardShortcuts"
 import { Menu, ShortcutBadge, type MenuItem } from "../ui"
 
 const PREVIOUS_PROJECT_SHORTCUT_LABEL = "↑"
@@ -230,23 +236,31 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
     }
 
     useEffect(() => {
-        const handleProjectShortcut = (event: KeyboardEvent) => {
-            if (isEventFromEditable(event)) return
-
-            const direction = isMetaShortcut(event, "ArrowUp") ? -1 : isMetaShortcut(event, "ArrowDown") ? 1 : null
+        const navigateFromShortcut = (shortcut: KeyboardShortcutLike, preventDefault?: () => void) => {
+            const direction = isMetaShortcutLike(shortcut, "ArrowUp") ? -1 : isMetaShortcutLike(shortcut, "ArrowDown") ? 1 : null
             if (direction === null || visibleRepos.length === 0) return
 
             const currentIndex = workspaceId ? visibleRepos.findIndex((repo) => repo.id === workspaceId) : -1
             const baseIndex = currentIndex >= 0 ? currentIndex : direction === 1 ? -1 : 0
             const nextIndex = (baseIndex + direction + visibleRepos.length) % visibleRepos.length
 
-            event.preventDefault()
+            preventDefault?.()
             suppressEditorAutoFocusForKeyboardNavigation()
             handleSelectRepo(visibleRepos[nextIndex].id)
         }
 
+        const handleProjectShortcut = (event: KeyboardEvent) => {
+            if (isEventFromEditable(event)) return
+
+            navigateFromShortcut(event, () => event.preventDefault())
+        }
+
         window.addEventListener("keydown", handleProjectShortcut, true)
-        return () => window.removeEventListener("keydown", handleProjectShortcut, true)
+        const removeEmptyEditorShortcut = onEmptyEditorGlobalShortcut(navigateFromShortcut)
+        return () => {
+            window.removeEventListener("keydown", handleProjectShortcut, true)
+            removeEmptyEditorShortcut()
+        }
     }, [visibleRepos, workspaceId, handleSelectRepo])
 
     const handleSettingsRepo = (repoId: string) => {

@@ -3,11 +3,20 @@ export function isEventFromTerminal(event: KeyboardEvent): boolean {
     return target instanceof HTMLElement && !!target.closest(".xterm")
 }
 
+export interface KeyboardShortcutLike {
+    code: string
+    metaKey: boolean
+    ctrlKey: boolean
+    altKey: boolean
+    shiftKey: boolean
+}
+
+const EMPTY_EDITOR_GLOBAL_SHORTCUT_EVENT = "openade:empty-editor-global-shortcut"
+const NAVIGATION_SHORTCUT_CODES = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"])
+
 export function isEventFromEditable(event: KeyboardEvent): boolean {
     const target = event.target
     if (!(target instanceof HTMLElement)) return false
-
-    if (target.closest("[data-allow-global-shortcuts='true']")) return false
 
     const editable = target.closest("input, textarea, select, [contenteditable]")
     return !!editable || target.isContentEditable
@@ -106,8 +115,16 @@ export function getDigitShortcutIndex(event: KeyboardEvent): number | null {
     return digit - 1
 }
 
-export function isMetaShortcut(event: KeyboardEvent, code: string, { alt = false, shift = false }: { alt?: boolean; shift?: boolean } = {}): boolean {
-    return event.metaKey && !event.ctrlKey && event.altKey === alt && event.shiftKey === shift && event.code === code && !isEventFromTerminal(event)
+export function isMetaShortcutLike(
+    shortcut: KeyboardShortcutLike,
+    code: string,
+    { alt = false, shift = false }: { alt?: boolean; shift?: boolean } = {}
+): boolean {
+    return shortcut.metaKey && !shortcut.ctrlKey && shortcut.altKey === alt && shortcut.shiftKey === shift && shortcut.code === code
+}
+
+export function isMetaShortcut(event: KeyboardEvent, code: string, options: { alt?: boolean; shift?: boolean } = {}): boolean {
+    return isMetaShortcutLike(event, code, options) && !isEventFromTerminal(event)
 }
 
 export function isMetaOnlyShortcut(event: KeyboardEvent, code: string): boolean {
@@ -117,4 +134,34 @@ export function isMetaOnlyShortcut(event: KeyboardEvent, code: string): boolean 
 export function getMetaDigitShortcutIndex(event: KeyboardEvent, { alt = false, shift = false }: { alt?: boolean; shift?: boolean } = {}): number | null {
     if (!event.metaKey || event.ctrlKey || event.altKey !== alt || event.shiftKey !== shift || isEventFromTerminal(event)) return null
     return getDigitShortcutIndex(event)
+}
+
+export function isEmptyEditorGlobalShortcut(event: KeyboardEvent): boolean {
+    return event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && NAVIGATION_SHORTCUT_CODES.has(event.code)
+}
+
+export function emitEmptyEditorGlobalShortcut(event: KeyboardEvent) {
+    if (typeof window === "undefined") return
+
+    window.dispatchEvent(
+        new CustomEvent<KeyboardShortcutLike>(EMPTY_EDITOR_GLOBAL_SHORTCUT_EVENT, {
+            detail: {
+                code: event.code,
+                metaKey: event.metaKey,
+                ctrlKey: event.ctrlKey,
+                altKey: event.altKey,
+                shiftKey: event.shiftKey,
+            },
+        })
+    )
+}
+
+export function onEmptyEditorGlobalShortcut(callback: (shortcut: KeyboardShortcutLike) => void): () => void {
+    if (typeof window === "undefined") return () => {}
+
+    const listener = (event: Event) => {
+        callback((event as CustomEvent<KeyboardShortcutLike>).detail)
+    }
+    window.addEventListener(EMPTY_EDITOR_GLOBAL_SHORTCUT_EVENT, listener)
+    return () => window.removeEventListener(EMPTY_EDITOR_GLOBAL_SHORTCUT_EVENT, listener)
 }

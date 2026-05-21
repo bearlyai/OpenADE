@@ -22,6 +22,7 @@ import { usePortalContainer } from "../hooks/usePortalContainer"
 import type { SdkCapabilitiesManager, SlashCommandEntry } from "../store/managers/SdkCapabilitiesManager"
 import type { SmartEditorManager } from "../store/managers/SmartEditorManager"
 import { processImageBlob } from "../utils/imageAttachment"
+import { emitEmptyEditorGlobalShortcut, isEmptyEditorGlobalShortcut } from "../utils/keyboardShortcuts"
 import { getFileName } from "./utils/paths"
 
 interface SmartEditorProps {
@@ -687,6 +688,18 @@ export const SmartEditor = observer(
                             return false
                         },
                         handleKeyDown: (_view, event) => {
+                            if (
+                                !event.defaultPrevented &&
+                                allowGlobalShortcutsWhenEmpty &&
+                                manager.pendingImages.length === 0 &&
+                                getPlainTextWithMentions(editor).length === 0 &&
+                                isEmptyEditorGlobalShortcut(event)
+                            ) {
+                                event.preventDefault()
+                                emitEmptyEditorGlobalShortcut(event)
+                                return true
+                            }
+
                             if (onKeyDown) {
                                 const syntheticEvent = {
                                     key: event.key,
@@ -821,12 +834,10 @@ export const SmartEditor = observer(
                 setIsDragOver(false)
                 // Actual drop handling is done by TipTap's handleDrop in editorProps
             }, [])
-            const allowGlobalShortcuts = !!allowGlobalShortcutsWhenEmpty && manager.value.trim().length === 0 && manager.pendingImages.length === 0
 
             return (
                 <div className="relative w-full">
                     <div
-                        data-allow-global-shortcuts={allowGlobalShortcuts ? "true" : undefined}
                         className={twMerge(
                             "w-full bg-input text-base-content border border-border cursor-text",
                             "focus-within:border-primary transition-colors",

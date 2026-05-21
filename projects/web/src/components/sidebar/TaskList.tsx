@@ -12,7 +12,14 @@ import { useCodeNavigate } from "../../routing"
 import { useCodeStore } from "../../store/context"
 import type { TaskCreation } from "../../store/managers/TaskCreationManager"
 import type { CodeEvent } from "../../types"
-import { isEventFromEditable, isEventFromTerminal, isMetaShortcut, suppressEditorAutoFocusForKeyboardNavigation } from "../../utils/keyboardShortcuts"
+import {
+    type KeyboardShortcutLike,
+    isEventFromEditable,
+    isEventFromTerminal,
+    isMetaShortcutLike,
+    onEmptyEditorGlobalShortcut,
+    suppressEditorAutoFocusForKeyboardNavigation,
+} from "../../utils/keyboardShortcuts"
 import { ScrollArea, ShortcutBadge } from "../ui"
 import { TaskDeleteConfirm } from "./TaskDeleteConfirm"
 import { resolveTaskCopyPath } from "./sidebarPathUtils"
@@ -434,25 +441,33 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     )
 
     useEffect(() => {
-        const handleTaskNavigationShortcut = (event: KeyboardEvent) => {
-            if (isEventFromEditable(event)) return
-
-            if (isMetaShortcut(event, "ArrowLeft")) {
-                event.preventDefault()
+        const navigateFromShortcut = (shortcut: KeyboardShortcutLike, preventDefault?: () => void) => {
+            if (isMetaShortcutLike(shortcut, "ArrowLeft")) {
+                preventDefault?.()
                 suppressEditorAutoFocusForKeyboardNavigation()
                 navigateTaskByOffset(-1)
                 return
             }
 
-            if (isMetaShortcut(event, "ArrowRight")) {
-                event.preventDefault()
+            if (isMetaShortcutLike(shortcut, "ArrowRight")) {
+                preventDefault?.()
                 suppressEditorAutoFocusForKeyboardNavigation()
                 navigateTaskByOffset(1)
             }
         }
 
+        const handleTaskNavigationShortcut = (event: KeyboardEvent) => {
+            if (isEventFromEditable(event)) return
+
+            navigateFromShortcut(event, () => event.preventDefault())
+        }
+
         window.addEventListener("keydown", handleTaskNavigationShortcut, true)
-        return () => window.removeEventListener("keydown", handleTaskNavigationShortcut, true)
+        const removeEmptyEditorShortcut = onEmptyEditorGlobalShortcut(navigateFromShortcut)
+        return () => {
+            window.removeEventListener("keydown", handleTaskNavigationShortcut, true)
+            removeEmptyEditorShortcut()
+        }
     }, [navigateTaskByOffset])
 
     const handleSelectTask = (selectedTaskId: string) => {
