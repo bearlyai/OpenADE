@@ -20,7 +20,7 @@ import { REVIEW_DIMENSIONS, REVIEW_ENGINEERING_GUIDANCE } from "../prompts/revie
 const HYPERPLAN_PLAN_SYSTEM_PROMPT = `${PLAN_MODE_INSTRUCTIONS}
 
 <additional_output_section>
-Before the final ## TL;DR section, include:
+Include this section before the final ## TL;DR section:
 
 ## Risks & Alternatives
 - Key risks with this approach and how they're mitigated
@@ -154,7 +154,7 @@ Evaluate each point on its merits:
 - Adopt suggestions that genuinely improve the plan
 - Reject suggestions you disagree with (briefly note why in Revision Notes)
 - Produce a complete revised plan, not just a diff
-- End the revised plan with ## TL;DR containing exactly four short bullet lines. Do not add anything after it.
+- End the revised plan with ## TL;DR containing 3-6 concise bullets chosen to fit the response; do not use predefined content slots. Do not add anything after this section.
 </revision_mode>`
 
 export function buildReviseStepPrompt(
@@ -238,7 +238,7 @@ Implementation steps with code blocks for key interfaces and signatures.
 - What was rejected and why
 
 ## TL;DR
-End with exactly four short bullet lines: outcome, main files or area, key decision or risk, and next verification or action. Do not add anything after this section.
+Always end with this section. Include 3-6 concise bullets chosen to fit the response; do not use predefined content slots. Do not add anything after this section.
 </output_format>
 </current_operating_mode>`
 

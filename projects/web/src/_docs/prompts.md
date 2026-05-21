@@ -36,7 +36,7 @@ Review-specific helpers live in `reviewPrompts.ts`:
 
 Execution-context helpers:
 - `buildWorktreeExecutionInstruction(...)` - Appends a worktree safety instruction when isolation type is `worktree`
-- `buildActionResponseStyleInstruction(...)` - Appends compact final-response and four-line TL;DR guidance for `do` and `run_plan`
+- `buildActionResponseStyleInstruction(...)` - Appends compact final-response guidance for `do` and `run_plan`
 - `mergeAppendSystemPrompt(...)` - Combines mode prompts with execution-context prompts
 - HyperPlan plan prompts may include `<main_thread_context ...>` containing serialized task thread XML from `taskThreadSerializer.ts`
 - Main-thread context is budgeted by UTF-8 bytes (default `240_000`) and keeps the most recent events that fit
@@ -69,15 +69,15 @@ All modes share `COMPACT_STYLE_RULES` (bullets > paragraphs, no filler, tradeoff
 ## ✅ Outcomes (bulleted expected results)
 ## 🔀 Decisions (Pick / Rejected / Depends on)
 ## 📝 Plan (steps with files, additions/deletions, tests)
-## TL;DR (exactly four short bullet lines)
+## TL;DR (3-6 concise bullets chosen for the response)
 ```
 Trivial changes use only `## 🎯 User-Specified Requirements`, `## 📝 Plan`, and `## TL;DR`.
 
 ### Ask
-No required sections. Lead with the answer, use whatever format fits, and keep supporting detail to what is needed to trust the answer. Non-trivial answers end with `## TL;DR` containing exactly four short bullet lines. Tiny factual answers can stay as a single direct answer with no TL;DR.
+No required sections. Lead with the answer, use whatever format fits, and keep supporting detail to what is needed to trust the answer. Always end with `## TL;DR` containing 3-6 concise bullets chosen to fit the response, without predefined content slots.
 
 ### Execute
-No required sections. Cover what was done, what was verified, and any risks or blockers. `do` and `run_plan` also receive compact final-response guidance from execution context, with `## TL;DR` for non-trivial completion reports.
+No required sections. Cover what was done, what was verified, and any risks or blockers. `do` and `run_plan` also receive compact final-response guidance from execution context, and final completion reports always end with `## TL;DR` containing 3-6 concise bullets chosen to fit the response.
 
 ## Action Prompts
 

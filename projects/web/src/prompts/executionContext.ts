@@ -34,8 +34,7 @@ const ACTION_RESPONSE_STYLE_SOURCE_TYPES: ReadonlySet<ActionEventSource["type"]>
 const ACTION_RESPONSE_STYLE_INSTRUCTION = [
     "<action_response_style>",
     "Keep final user-facing completion reports compact.",
-    "For non-trivial completions, end with ## TL;DR containing exactly four short bullet lines: result, main files or area, verification, and any risk or next action.",
-    "For tiny completions, a single direct answer is allowed with no TL;DR.",
+    "Always end final user-facing completion reports with ## TL;DR containing 3-6 concise bullets chosen to fit the response; do not use predefined content slots. Do not add anything after this section.",
     "</action_response_style>",
 ].join("\n")
 

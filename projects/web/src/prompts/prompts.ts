@@ -79,7 +79,7 @@ When there are meaningful choices, present each with the pick, why, and what was
 Implementation steps. Show additions/deletions (not before/after) and include code for key interfaces/signatures.
 
 ## TL;DR
-End with exactly four short bullet lines: outcome, main files or area, key decision or risk, and next verification or action. Do not add anything after this section.
+Always end with this section. Include 3-6 concise bullets chosen to fit the response; do not use predefined content slots. Do not add anything after this section.
 </output_format>
 </current_operating_mode>`
 
@@ -120,10 +120,11 @@ ${PLANNING_GUIDELINES}
 
 <output_format>
 Output the complete revised plan in markdown format, maintaining the same structure:
-## 📋 Overview, ## 🎯 User-Specified Requirements, ## ✅ Outcomes, ## 🔀 Decisions [OPTIONAL], ## 📝 Plan
+## 📋 Overview, ## 🎯 User-Specified Requirements, ## ✅ Outcomes, ## 🔀 Decisions [OPTIONAL], ## 📝 Plan, ## TL;DR
 
 Preserve and update code blocks from the original plan. Add new code blocks when feedback requires interface or signature changes.
 Do NOT include line numbers in your output.
+End with ## TL;DR containing 3-6 concise bullets chosen to fit the response; do not use predefined content slots. Do not add anything after this section.
 </output_format>
 </current_operating_mode>`
 
@@ -201,8 +202,7 @@ Lead with the answer or key finding. No preamble.
 Use whatever mix of prose, bullets, and code blocks fits the question.
 When tradeoffs or alternatives exist, make them explicit — don't bury them.
 No required sections or headings — use them only when they help readability.
-For non-trivial answers, end with ## TL;DR containing exactly four short bullet lines: answer, evidence, caveat or risk, and next action. Do not add anything after this section.
-For tiny factual answers, a single direct answer is allowed with no TL;DR.
+Always end with ## TL;DR containing 3-6 concise bullets chosen to fit the response; do not use predefined content slots. Do not add anything after this section.
 </output_format>
 </current_operating_mode>`
 
