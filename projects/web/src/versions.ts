@@ -8,6 +8,18 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.76.0",
+        title: "Keyboard Navigation & Work Recaps",
+        date: "2026-05-20",
+        highlights: [
+            "Keyboard-first navigation now covers task creation, task switching, project switching, tray movement, command actions, and HyperPlan strategy selection",
+            "Shortcut badges appear while holding the command key so available actions are easier to discover, with an option to hide the hints",
+            "Stats now include copyable work recaps for selected periods, grouped by project with task status, runtime, cost, and activity details",
+            "Agent transcripts now render more Claude operational events, Codex web searches, and compact file changes as readable timeline pills",
+            "Release builds now smoke test packaged desktop artifacts before publishing, and Electron shell/titlebar behavior is more reliable across platforms",
+        ],
+    },
+    {
         version: "0.75.0",
         title: "Fast Mode & Agent Event Visibility",
         date: "2026-05-17",
