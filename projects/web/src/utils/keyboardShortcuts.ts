@@ -3,6 +3,13 @@ export function isEventFromTerminal(event: KeyboardEvent): boolean {
     return target instanceof HTMLElement && !!target.closest(".xterm")
 }
 
+function isEditableElement(element: Element | null): boolean {
+    if (!(element instanceof HTMLElement)) return false
+
+    const editable = element.closest("input, textarea, select, [contenteditable]")
+    return !!editable || element.isContentEditable
+}
+
 export interface KeyboardShortcutLike {
     code: string
     metaKey: boolean
@@ -16,10 +23,9 @@ const NAVIGATION_SHORTCUT_CODES = new Set(["ArrowLeft", "ArrowRight", "ArrowUp",
 
 export function isEventFromEditable(event: KeyboardEvent): boolean {
     const target = event.target
-    if (!(target instanceof HTMLElement)) return false
+    if (isEditableElement(target instanceof Element ? target : null)) return true
 
-    const editable = target.closest("input, textarea, select, [contenteditable]")
-    return !!editable || target.isContentEditable
+    return typeof document !== "undefined" && isEditableElement(document.activeElement)
 }
 
 let suppressEditorAutoFocusUntil = 0
