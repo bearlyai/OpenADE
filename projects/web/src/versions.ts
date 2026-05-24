@@ -8,6 +8,17 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.77.0",
+        title: "Editor-Safe Shortcuts & Clearer Reviews",
+        date: "2026-05-24",
+        highlights: [
+            "Focused editors now keep arrow-key control instead of being interrupted by global project or task navigation shortcuts",
+            "Project and task shortcut arrows now match the sidebar hierarchy, with left/right for projects and up/down for tasks",
+            "Agent TL;DR guidance is more flexible, using concise bullets that fit the response instead of fixed content slots",
+            "Review findings now use Criticality: N/10 formatting so severity scores are easier to scan and compare",
+        ],
+    },
+    {
         version: "0.76.0",
         title: "Keyboard Navigation & Work Recaps",
         date: "2026-05-20",
