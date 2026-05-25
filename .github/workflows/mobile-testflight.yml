@@ -157,11 +157,6 @@ jobs:
             -configuration Release \
             -destination "generic/platform=iOS" \
             -archivePath "$RUNNER_TEMP/OpenADE.xcarchive" \
-            DEVELOPMENT_TEAM=NK6K4BACCF \
-            PRODUCT_BUNDLE_IDENTIFIER=ai.openade.app \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="$IOS_PROFILE_NAME" \
             MARKETING_VERSION="$IOS_MARKETING_VERSION" \
             CURRENT_PROJECT_VERSION="$IOS_BUILD_NUMBER"
 
