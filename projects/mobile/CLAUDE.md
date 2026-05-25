@@ -25,8 +25,19 @@ Thin Capacitor shell for the OpenADE remote-control surface.
 
 - src/App.tsx is the native shell boundary.
 - It owns QR scanning, Keychain mirroring, startup error reset, and storage hydration.
+- src/App.tsx calls CapacitorUpdater.notifyAppReady() on launch so downloaded OTA bundles do not roll back after a successful boot.
 - The main app UI comes from projects/web/src/remote/RemoteApp.tsx.
 - Do not duplicate companion state or remote API logic in projects/mobile if it can stay in projects/web/src/remote.
+
+## OTA Updates
+
+- OTA uses the open-source @capgo/capacitor-updater plugin in self-hosted mode.
+- OTA is for the web UI bundle only: React UI, remote client behavior, styles, copy, and demo/review-mode polish.
+- Do not use OTA for native capabilities, new plugins, permission changes, entitlements, or app-purpose changes; those require a reviewed App Store binary.
+- Build-time OTA variables are OPENADE_OTA_UPDATE_URL and OPENADE_OTA_CHANNEL.
+- If OPENADE_OTA_UPDATE_URL is absent, capacitor.config.ts sets autoUpdate to false and the app must load the bundled UI only.
+- statsUrl stays empty by default. Do not add third-party telemetry without an explicit product decision and privacy-label update.
+- OTA hosts must use HTTPS in production. Self-hosted responses should provide a bundle version, zip URL, and checksum.
 
 ## Pairing
 

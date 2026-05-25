@@ -1,4 +1,5 @@
 import { BarcodeFormat, BarcodeScanner } from "@capacitor-mlkit/barcode-scanning"
+import { CapacitorUpdater } from "@capgo/capacitor-updater"
 import { SecureStoragePlugin } from "capacitor-secure-storage-plugin"
 import { Component, type ErrorInfo, type ReactNode, useEffect, useState } from "react"
 import { RemoteApp } from "../../web/src/remote/RemoteApp"
@@ -70,6 +71,10 @@ async function scanPairingCode(): Promise<string | null> {
 export function App() {
     const [isStorageReady, setIsStorageReady] = useState(false)
     const [storageVersion, setStorageVersion] = useState(0)
+
+    useEffect(() => {
+        void CapacitorUpdater.notifyAppReady().catch(() => {})
+    }, [])
 
     useEffect(() => {
         let cancelled = false

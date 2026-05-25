@@ -134,10 +134,12 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const [newTaskTitle, setNewTaskTitle] = useState("")
     const [newTaskPrompt, setNewTaskPrompt] = useState("")
     const [isLoading, setIsLoading] = useState(false)
+    const [isSubmitting, setIsSubmitting] = useState(false)
     const [connectionStatus, setConnectionStatus] = useState<RemoteEventConnectionStatus>("disconnected")
     const [error, setError] = useState<string | null>(null)
     const selectedRepoIdRef = useRef<string | null>(null)
     const selectedTaskIdRef = useRef<string | null>(null)
+    const submitLockRef = useRef(false)
 
     const visibleRepos = snapshot?.repos.filter((repo) => showArchivedProjects || !repo.archived) ?? []
     const selectedRepo = selectedRepoId ? (snapshot?.repos.find((repo) => repo.id === selectedRepoId) ?? null) : null
@@ -364,16 +366,33 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         }
     }
 
+    const beginSubmission = () => {
+        if (submitLockRef.current) return false
+        submitLockRef.current = true
+        setIsSubmitting(true)
+        setIsLoading(true)
+        return true
+    }
+
+    const finishSubmission = () => {
+        submitLockRef.current = false
+        setIsSubmitting(false)
+        setIsLoading(false)
+    }
+
     const handleRunInTask = async () => {
         if (!config || !selectedRepo || !input.trim()) return
-        setIsLoading(true)
+        if (!beginSubmission()) return
         setError(null)
+        const submittedInput = input
+        const submittedType = commandType
+        const submittedTaskId = task?.unavailableReason ? undefined : selectedTaskId
         try {
             const result = await runRemote(config, {
                 repoId: selectedRepo.id,
-                type: commandType,
-                input,
-                inTaskId: task?.unavailableReason ? undefined : selectedTaskId,
+                type: submittedType,
+                input: submittedInput,
+                inTaskId: submittedTaskId,
             })
             setInput("")
             selectedTaskIdRef.current = result.taskId
@@ -384,21 +403,24 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         } catch (err) {
             setError(err instanceof Error ? err.message : "Run failed")
         } finally {
-            setIsLoading(false)
+            finishSubmission()
         }
     }
 
     const handleCreateTask = async () => {
         const repoId = newTaskRepoId ?? selectedRepo?.id
         if (!config || !repoId || !newTaskPrompt.trim()) return
-        setIsLoading(true)
+        if (!beginSubmission()) return
         setError(null)
+        const submittedTitle = newTaskTitle
+        const submittedPrompt = newTaskPrompt
+        const submittedMode = newTaskMode
         try {
             const result = await runRemote(config, {
                 repoId,
-                type: newTaskMode,
-                input: newTaskPrompt,
-                title: newTaskTitle.trim() || undefined,
+                type: submittedMode,
+                input: submittedPrompt,
+                title: submittedTitle.trim() || undefined,
             })
             setNewTaskPrompt("")
             setNewTaskTitle("")
@@ -412,7 +434,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         } catch (err) {
             setError(err instanceof Error ? err.message : "Task creation failed")
         } finally {
-            setIsLoading(false)
+            finishSubmission()
         }
     }
 
@@ -579,6 +601,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
                         input={input}
                         commandType={commandType}
                         isLoading={isLoading}
+                        isSubmitting={isSubmitting}
                         isOnline={connectionStatus === "connected"}
                         onInputChange={setInput}
                         onCommandTypeChange={setCommandType}
@@ -594,6 +617,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
                         title={newTaskTitle}
                         prompt={newTaskPrompt}
                         isLoading={isLoading}
+                        isSubmitting={isSubmitting}
                         isOnline={connectionStatus === "connected"}
                         onRepoChange={setNewTaskRepoId}
                         onModeChange={setNewTaskMode}
@@ -1060,6 +1084,7 @@ function TaskScreen({
     input,
     commandType,
     isLoading,
+    isSubmitting,
     isOnline,
     onInputChange,
     onCommandTypeChange,
@@ -1072,6 +1097,7 @@ function TaskScreen({
     input: string
     commandType: CommandType
     isLoading: boolean
+    isSubmitting: boolean
     isOnline: boolean
     onInputChange: (value: string) => void
     onCommandTypeChange: (value: CommandType) => void
@@ -1086,6 +1112,7 @@ function TaskScreen({
                 input={input}
                 commandType={commandType}
                 isLoading={isLoading}
+                isSubmitting={isSubmitting}
                 isOnline={isOnline}
                 isRunning={isRunning}
                 onInputChange={onInputChange}
@@ -1259,6 +1286,7 @@ function Composer({
     input,
     commandType,
     isLoading,
+    isSubmitting,
     isOnline,
     isRunning,
     onInputChange,
@@ -1269,6 +1297,7 @@ function Composer({
     input: string
     commandType: CommandType
     isLoading: boolean
+    isSubmitting: boolean
     isOnline: boolean
     isRunning: boolean
     onInputChange: (value: string) => void
@@ -1284,6 +1313,7 @@ function Composer({
                         key={type}
                         type="button"
                         onClick={() => onCommandTypeChange(type)}
+                        disabled={isSubmitting}
                         className={`btn shrink-0 border border-border px-2 py-1 text-xs ${commandType === type ? "bg-primary text-primary-content" : "bg-base-200 text-base-content"}`}
                     >
                         {type}
@@ -1299,16 +1329,26 @@ function Composer({
                 <textarea
                     value={input}
                     onChange={(event) => onInputChange(event.target.value)}
-                    placeholder={isOnline ? "Send to OpenADE" : "Offline"}
+                    disabled={isSubmitting}
+                    placeholder={isSubmitting ? "Sending..." : isOnline ? "Send to OpenADE" : "Offline"}
                     className="input min-h-12 max-h-28 min-w-0 flex-1 resize-none border border-border bg-base-200 p-2 text-sm"
                 />
                 <button
                     type="button"
                     onClick={onSend}
-                    disabled={!input.trim() || isLoading || !isOnline}
-                    className="btn flex w-12 items-center justify-center bg-primary text-primary-content disabled:opacity-50"
+                    disabled={!input.trim() || isLoading || isSubmitting || !isOnline}
+                    className={`btn flex shrink-0 items-center justify-center gap-1 bg-primary px-2 text-primary-content disabled:opacity-50 ${
+                        isSubmitting ? "w-24 text-xs" : "w-12"
+                    }`}
                 >
-                    <Send size={16} />
+                    {isSubmitting ? (
+                        <>
+                            <Loader2 size={15} className="animate-spin" />
+                            Sending
+                        </>
+                    ) : (
+                        <Send size={16} />
+                    )}
                 </button>
             </div>
         </footer>
@@ -1322,6 +1362,7 @@ function NewTaskScreen({
     title,
     prompt,
     isLoading,
+    isSubmitting,
     isOnline,
     onRepoChange,
     onModeChange,
@@ -1335,6 +1376,7 @@ function NewTaskScreen({
     title: string
     prompt: string
     isLoading: boolean
+    isSubmitting: boolean
     isOnline: boolean
     onRepoChange: (repoId: string) => void
     onModeChange: (mode: CommandType) => void
@@ -1364,6 +1406,7 @@ function NewTaskScreen({
                             <select
                                 value={repoId ?? ""}
                                 onChange={(event) => onRepoChange(event.target.value)}
+                                disabled={isSubmitting}
                                 className="input h-11 w-full max-w-full border border-border bg-base-100 px-3 text-sm"
                             >
                                 {repos.map((repo) => (
@@ -1384,6 +1427,7 @@ function NewTaskScreen({
                                 key={type}
                                 type="button"
                                 onClick={() => onModeChange(type)}
+                                disabled={isSubmitting}
                                 className={`btn min-w-0 overflow-hidden border px-1.5 py-2 text-xs ${
                                     mode === type ? "border-primary bg-primary text-primary-content" : "border-border bg-base-100 text-base-content"
                                 }`}
@@ -1399,24 +1443,26 @@ function NewTaskScreen({
                     <input
                         value={title}
                         onChange={(event) => onTitleChange(event.target.value)}
+                        disabled={isSubmitting}
                         placeholder="Optional title"
                         className="input mb-2 h-11 w-full max-w-full border border-border bg-base-100 px-3 text-base"
                     />
                     <textarea
                         value={prompt}
                         onChange={(event) => onPromptChange(event.target.value)}
-                        placeholder="What should OpenADE do?"
+                        disabled={isSubmitting}
+                        placeholder={isSubmitting ? "Sending..." : "What should OpenADE do?"}
                         className="input min-h-[220px] w-full max-w-full resize-none border border-border bg-base-100 p-3 text-base"
                     />
                 </section>
                 <button
                     type="button"
                     onClick={onCreate}
-                    disabled={!prompt.trim() || !repoId || isLoading || !isOnline}
+                    disabled={!prompt.trim() || !repoId || isLoading || isSubmitting || !isOnline}
                     className="btn flex h-12 items-center justify-center gap-2 bg-primary px-4 font-medium text-primary-content disabled:opacity-50"
                 >
-                    {isLoading ? <Loader2 size={16} className="animate-spin" /> : <MessageSquarePlus size={16} />}
-                    Create Task
+                    {isSubmitting || isLoading ? <Loader2 size={16} className="animate-spin" /> : <MessageSquarePlus size={16} />}
+                    {isSubmitting ? "Sending..." : "Create Task"}
                 </button>
             </div>
         </div>

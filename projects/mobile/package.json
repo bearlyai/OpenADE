@@ -9,6 +9,7 @@
     "ios": "npm run build && npx cap sync ios && npx cap open ios"
   },
   "dependencies": {
+    "@capgo/capacitor-updater": "7.45.10",
     "@capacitor-mlkit/barcode-scanning": "7.5.0",
     "@capacitor/core": "^7.4.4",
     "@capacitor/ios": "^7.4.4",
