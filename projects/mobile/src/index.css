@@ -1,0 +1,13 @@
+@source "../../web/src";
+@source "./";
+
+@import "../../web/src/index.css";
+
+html,
+body,
+#root {
+    min-height: 100%;
+    background: #000;
+    touch-action: manipulation;
+    -webkit-text-size-adjust: 100%;
+}

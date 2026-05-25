@@ -23,6 +23,7 @@ import {
 import { ScrollArea, ShortcutBadge } from "../ui"
 import { TaskDeleteConfirm } from "./TaskDeleteConfirm"
 import { resolveTaskCopyPath } from "./sidebarPathUtils"
+import { sortTaskPreviewsLikeSidebar } from "./taskSorting"
 
 const NEW_TASK_SHORTCUT = "mod+n"
 const PREVIOUS_TASK_SHORTCUT_LABEL = "↑"
@@ -361,26 +362,11 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     // ── Task previews + sorting ──
     const repo = codeStore.repoStore?.repos.get(workspaceId)
     const previews = repo?.tasks ?? []
-    const zeroTime = new Date(0).toISOString()
-    const sortByRecent = (a: TaskPreview, b: TaskPreview) => {
-        const aTime = a.lastEvent?.at ?? a?.createdAt ?? zeroTime
-        const bTime = b.lastEvent?.at ?? b?.createdAt ?? zeroTime
-        return bTime.localeCompare(aTime)
-    }
     const pinnedSet = new Set(codeStore.personalSettingsStore?.settings.current.pinnedTaskIds ?? [])
-    const withRunningFirst = (arr: TaskPreview[]) => {
-        const running = arr.filter((t) => codeStore.workingTaskIds.has(t.id))
-        const idle = arr.filter((t) => !codeStore.workingTaskIds.has(t.id))
-        return [...running, ...idle]
-    }
-
-    const openPreviews = previews.filter((t) => !t.closed).sort(sortByRecent)
-    const pinnedOpen = withRunningFirst(openPreviews.filter((t) => pinnedSet.has(t.id)))
-    const unpinnedOpen = withRunningFirst(openPreviews.filter((t) => !pinnedSet.has(t.id)))
-    const closedPreviews = previews.filter((t) => t.closed).sort(sortByRecent)
-    const pinnedClosed = closedPreviews.filter((t) => pinnedSet.has(t.id))
-    const unpinnedClosed = closedPreviews.filter((t) => !pinnedSet.has(t.id))
-    const sortedPreviews = [...pinnedOpen, ...unpinnedOpen, ...pinnedClosed, ...unpinnedClosed]
+    const sortedPreviews = sortTaskPreviewsLikeSidebar(previews, {
+        pinnedTaskIds: pinnedSet,
+        workingTaskIds: codeStore.workingTaskIds,
+    })
     const selectedOpenIds = sortedPreviews.filter((preview) => selectedIds.has(preview.id) && !preview.closed).map((preview) => preview.id)
     const creations = codeStore.creation.getCreationsForRepo(workspaceId)
 

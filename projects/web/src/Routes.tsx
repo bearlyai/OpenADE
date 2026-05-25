@@ -11,6 +11,7 @@ import { OnboardingPage } from "./pages/OnboardingPage"
 import { TaskCreateDraftsMenu, TaskCreatePage } from "./pages/TaskCreatePage"
 import { TaskCreationPage } from "./pages/TaskCreationPage"
 import { TaskPage } from "./pages/TaskPage"
+import { RemoteApp } from "./remote/RemoteApp"
 import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage"
 import { WorkspaceSettingsPage } from "./pages/WorkspaceSettingsPage"
 import { useCodeNavigate } from "./routing"
@@ -99,6 +100,8 @@ export const CodeBaseRoute = observer(() => {
     // First workspace, no tasks - go to task create
     return <Navigate to={navigate.path("CodeWorkspaceTaskCreate", { workspaceId: firstWorkspace.id })} replace />
 })
+
+export const RemoteRoute = () => <RemoteApp />
 
 // ==================== Route: /dashboard/code/workspace/create ====================
 

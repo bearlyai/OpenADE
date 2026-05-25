@@ -1,0 +1,20 @@
+{
+    "compilerOptions": {
+        "target": "ESNext",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "jsx": "react-jsx",
+        "strict": true,
+        "skipLibCheck": true,
+        "esModuleInterop": true,
+        "types": ["vite/client"]
+    },
+    "include": [
+        "src/**/*",
+        "capacitor.config.ts",
+        "vite.config.ts",
+        "../web/src/remote/RemoteApp.tsx",
+        "../web/src/remote/client.ts",
+        "../shared/companion/src/**/*"
+    ]
+}

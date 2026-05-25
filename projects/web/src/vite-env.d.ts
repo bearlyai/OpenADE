@@ -167,6 +167,17 @@ interface OpenADEAPI {
         getState: () => Promise<unknown>
         shouldShow: () => Promise<boolean>
     }
+    companion: {
+        getState: () => Promise<unknown>
+        setEnabled: (enabled: boolean) => Promise<unknown>
+        setKeepAwakeMode: (mode: string) => Promise<unknown>
+        startPairing: () => Promise<unknown>
+        revokeDevice: (deviceId: string) => Promise<unknown>
+        dropAllDevices: () => Promise<unknown>
+        onRequest: (cb: (request: unknown) => void) => () => void
+        respond: (response: unknown) => Promise<unknown>
+        notifyEvent: (event: unknown) => Promise<unknown>
+    }
     procs: {
         read: (params: { path: string }) => Promise<unknown>
         readFile: (params: { filePath: string }) => Promise<string>

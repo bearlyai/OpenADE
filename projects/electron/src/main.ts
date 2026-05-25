@@ -31,6 +31,7 @@ import { load as loadSnapshots, cleanup as cleanupSnapshots } from "./modules/co
 import { load as loadCapabilities, cleanup as cleanupCapabilities } from "./modules/code/capabilities"
 import { load as loadBinaries, cleanup as cleanupBinaries } from "./modules/code/binaries"
 import { load as loadCodeWindowFrame, cleanup as cleanupCodeWindowFrame } from "./modules/code/windowFrame"
+import { load as loadCompanion, cleanup as cleanupCompanion } from "./modules/companion"
 
 const main = () => {
     // OPENADE_SMOKE_TEST runs packaged smoke tests alongside any local production instance.
@@ -68,6 +69,7 @@ const main = () => {
     loadDataFolder()
     loadSnapshots()
     loadCodeWindowFrame()
+    loadCompanion()
 
     ipcMain.handle("quit-app", () => {
         app.quit()
@@ -113,6 +115,7 @@ const main = () => {
         cleanupCapabilities()
         cleanupBinaries()
         cleanupCodeWindowFrame()
+        void cleanupCompanion()
         cleanupSubprocess()
     })
 
@@ -134,6 +137,7 @@ const main = () => {
         cleanupCapabilities()
         cleanupBinaries()
         cleanupCodeWindowFrame()
+        void cleanupCompanion()
         cleanupSubprocess()
         app.quit()
     })
@@ -156,6 +160,7 @@ const main = () => {
         cleanupCapabilities()
         cleanupBinaries()
         cleanupCodeWindowFrame()
+        void cleanupCompanion()
         cleanupSubprocess()
         app.quit()
     })

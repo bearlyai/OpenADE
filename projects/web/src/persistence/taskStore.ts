@@ -11,7 +11,6 @@
 
 import type * as Y from "yjs"
 import type { CodeEvent, Comment, IsolationStrategy, Task, TaskDeviceEnvironment, User } from "../types"
-import { ulid } from "../utils/ulid"
 import type { RepoStore } from "./repoStore"
 import { updateTaskPreview } from "./repoStore"
 import { type YArrayHandle, type YObjectHandle, arrayOfType, objectOfType } from "./storage"
@@ -86,7 +85,7 @@ export function createTaskStore(doc: Y.Doc, initialTask?: Task): TaskStore {
     // Note: YJS cannot serialize undefined values, so we omit optional fields if not present
     const meta = objectOfType<TaskMetadata>(doc, "task:meta", () => {
         const base: TaskMetadata = {
-            id: initialTask?.id ?? ulid(),
+            id: initialTask?.id ?? "",
             repoId: initialTask?.repoId ?? "",
             slug: initialTask?.slug ?? "",
             title: initialTask?.title ?? "",

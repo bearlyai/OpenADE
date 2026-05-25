@@ -6,13 +6,14 @@
  */
 
 import NiceModal, { useModal } from "@ebay/nice-modal-react"
-import { BarChart3, Bug, Palette, Plug, Settings, Terminal, X } from "lucide-react"
+import { BarChart3, Bug, Palette, Plug, Settings, Smartphone, Terminal, X } from "lucide-react"
 import { observer } from "mobx-react"
 import { useMemo, useState } from "react"
 import { useHotkeys } from "react-hotkeys-hook"
 import type { CodeStore } from "../../store/store"
 import { ScrollArea } from "../ui/ScrollArea"
 import { AppearanceTab } from "./AppearanceTab"
+import { CompanionTab } from "./CompanionTab"
 import { ConnectorsTab } from "./ConnectorsTab"
 import { DevTab, isLocalDev } from "./DevTab"
 import { StatsTab } from "./StatsTab"
@@ -20,7 +21,7 @@ import { SystemConfigTab } from "./SystemConfigTab"
 
 const Z_INDEX_MODAL = "z-50"
 
-export type SettingsTab = "appearance" | "connectors" | "system" | "stats" | "dev"
+export type SettingsTab = "appearance" | "connectors" | "companion" | "system" | "stats" | "dev"
 
 interface TabConfig {
     id: SettingsTab
@@ -32,6 +33,7 @@ interface TabConfig {
 const ALL_TABS: TabConfig[] = [
     { id: "appearance", label: "Vibes", icon: Palette },
     { id: "connectors", label: "Connectors", icon: Plug },
+    { id: "companion", label: "Companion", icon: Smartphone },
     { id: "system", label: "System", icon: Terminal },
     { id: "stats", label: "Stats", icon: BarChart3 },
     { id: "dev", label: "Dev", icon: Bug, devOnly: true },
@@ -88,6 +90,8 @@ export const SettingsModal = NiceModal.create(
                     return <AppearanceTab store={store} />
                 case "connectors":
                     return <ConnectorsTab store={store} />
+                case "companion":
+                    return <CompanionTab store={store} />
                 case "system":
                     return <SystemConfigTab store={store} />
                 case "stats":

@@ -17,6 +17,8 @@ const createListener = (channel: string, callback: (...args: unknown[]) => void)
     return () => ipcRenderer.removeListener(channel, handler)
 }
 
+const toJsonIpcPayload = (value: unknown) => JSON.stringify(value)
+
 const openadeAPI = {
     // ========================================================================
     // App Controls
@@ -325,6 +327,22 @@ const openadeAPI = {
     notifications: {
         getState: () => ipcRenderer.invoke("notifications:getState"),
         shouldShow: () => ipcRenderer.invoke("notifications:shouldShow"),
+    },
+
+    // ========================================================================
+    // Companion remote control
+    // ========================================================================
+    companion: {
+        getState: () => ipcRenderer.invoke("companion:getState"),
+        setEnabled: (enabled: boolean) => ipcRenderer.invoke("companion:setEnabled", enabled),
+        setKeepAwakeMode: (mode: string) => ipcRenderer.invoke("companion:setKeepAwakeMode", mode),
+        startPairing: () => ipcRenderer.invoke("companion:startPairing"),
+        revokeDevice: (deviceId: string) => ipcRenderer.invoke("companion:revokeDevice", deviceId),
+        dropAllDevices: () => ipcRenderer.invoke("companion:dropAllDevices"),
+        onRequest: (cb: (request: unknown) => void) =>
+            createListener("companion:request", cb as (...args: unknown[]) => void),
+        respond: (response: unknown) => ipcRenderer.invoke("companion:response", toJsonIpcPayload(response)),
+        notifyEvent: (event: unknown) => ipcRenderer.invoke("companion:event", toJsonIpcPayload(event)),
     },
 
     // ========================================================================

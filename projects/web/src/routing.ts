@@ -23,6 +23,10 @@ export const codeRoutes = {
         path: "/dashboard/code",
         makePath: () => "/dashboard/code",
     },
+    Remote: {
+        path: "/remote",
+        makePath: () => "/remote",
+    },
     CodeWorkspaceCreate: {
         path: "/dashboard/code/workspace/create",
         makePath: () => "/dashboard/code/workspace/create",

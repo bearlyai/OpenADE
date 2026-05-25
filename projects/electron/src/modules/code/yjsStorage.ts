@@ -25,6 +25,10 @@ function getYjsStorageDir(): string {
     return path.join(os.homedir(), OPENADE_DIR, DATA_DIR, YJS_DIR)
 }
 
+function getLegacyNestedYjsStorageDir(): string {
+    return path.join(os.homedir(), OPENADE_DIR, OPENADE_DIR, DATA_DIR, YJS_DIR)
+}
+
 // Per-document save queue to prevent race conditions
 const saveQueues = new Map<string, Promise<void>>()
 
@@ -63,11 +67,47 @@ function getDocPath(id: string): string {
     return path.join(getYjsStorageDir(), sanitizeId(id))
 }
 
+function getLegacyNestedDocPath(id: string): string {
+    return path.join(getLegacyNestedYjsStorageDir(), sanitizeId(id))
+}
+
 /**
  * Ensure the storage directory exists.
  */
 async function ensureStorageDir(): Promise<void> {
     await fs.mkdir(getYjsStorageDir(), { recursive: true })
+}
+
+function expectedTaskMetaId(id: string): string | null {
+    return id.startsWith("code:task:") ? id.slice("code:task:".length) : null
+}
+
+function readTaskMetaId(data: Uint8Array): string | null {
+    const doc = new Y.Doc()
+    try {
+        Y.applyUpdate(doc, data)
+        const metaId = doc.getMap("task:meta").get("id")
+        return typeof metaId === "string" ? metaId : null
+    } finally {
+        doc.destroy()
+    }
+}
+
+function isExpectedTaskDoc(id: string, data: Uint8Array): boolean {
+    const expected = expectedTaskMetaId(id)
+    if (!expected) return true
+    try {
+        return readTaskMetaId(data) === expected
+    } catch {
+        return false
+    }
+}
+
+async function writeMigratedDoc(filePath: string, data: Uint8Array): Promise<void> {
+    await ensureStorageDir()
+    const tempPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`
+    await fs.writeFile(tempPath, data)
+    await fs.rename(tempPath, filePath)
 }
 
 /**
@@ -187,13 +227,44 @@ async function handleSave(id: string, data: Uint8Array): Promise<void> {
  */
 async function handleLoad(id: string): Promise<Uint8Array | null> {
     const filePath = getDocPath(id)
+    const legacyNestedPath = getLegacyNestedDocPath(id)
 
     try {
-        const data = await fs.readFile(filePath)
-        logger.debug(`[YjsStorage] Loaded document: ${id} (${data.length} bytes)`)
-        return new Uint8Array(data)
+        const data = new Uint8Array(await fs.readFile(filePath))
+        if (isExpectedTaskDoc(id, data)) {
+            logger.debug(`[YjsStorage] Loaded document: ${id} (${data.length} bytes)`)
+            return data
+        }
+
+        try {
+            const legacyData = new Uint8Array(await fs.readFile(legacyNestedPath))
+            if (isExpectedTaskDoc(id, legacyData)) {
+                await writeMigratedDoc(filePath, legacyData)
+                logger.warn(`[YjsStorage] Recovered task document from legacy nested path: ${id}`)
+                return legacyData
+            }
+        } catch (legacyError) {
+            if ((legacyError as NodeJS.ErrnoException).code !== "ENOENT") {
+                logger.warn(`[YjsStorage] Failed to inspect legacy nested document for ${id}:`, legacyError)
+            }
+        }
+
+        logger.warn(`[YjsStorage] Loaded task document with mismatched metadata: ${id}`)
+        return data
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            try {
+                const legacyData = new Uint8Array(await fs.readFile(legacyNestedPath))
+                if (isExpectedTaskDoc(id, legacyData)) {
+                    await writeMigratedDoc(filePath, legacyData)
+                    logger.warn(`[YjsStorage] Migrated task document from legacy nested path: ${id}`)
+                    return legacyData
+                }
+            } catch (legacyError) {
+                if ((legacyError as NodeJS.ErrnoException).code !== "ENOENT") {
+                    logger.warn(`[YjsStorage] Failed to load legacy nested document for ${id}:`, legacyError)
+                }
+            }
             return null
         }
         throw error
