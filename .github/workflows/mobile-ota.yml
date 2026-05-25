@@ -56,7 +56,7 @@ jobs:
           OTA_PUBLIC_BASE_URL: ${{ vars.OTA_PUBLIC_BASE_URL }}
           OPENADE_OTA_CHANNEL: ${{ vars.OPENADE_OTA_CHANNEL }}
           OTA_RELEASE_NOTES: ${{ inputs.release_notes }}
-        run: yarn prepare:ota >> "$GITHUB_OUTPUT"
+        run: node scripts/prepare-ota-release.mjs >> "$GITHUB_OUTPUT"
 
       - name: Install AWS CLI
         run: |
