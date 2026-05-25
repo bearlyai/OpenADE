@@ -7,9 +7,6 @@ const config: CapacitorConfig = {
     server: {
         androidScheme: "https",
     },
-    ios: {
-        webContentsDebuggingEnabled: true,
-    },
 }
 
 export default config
