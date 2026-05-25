@@ -71,6 +71,23 @@ jobs:
           MANIFEST_PATH: ${{ steps.ota.outputs.manifest_path }}
           MANIFEST_KEY: ${{ steps.ota.outputs.manifest_key }}
         run: |
+          cat > "$RUNNER_TEMP/r2-cors.json" <<'JSON'
+          {
+            "CORSRules": [
+              {
+                "AllowedHeaders": ["*"],
+                "AllowedMethods": ["GET", "HEAD"],
+                "AllowedOrigins": ["*"],
+                "ExposeHeaders": ["ETag"],
+                "MaxAgeSeconds": 3600
+              }
+            ]
+          }
+          JSON
+          aws s3api put-bucket-cors \
+            --bucket "$R2_BUCKET" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --cors-configuration "file://$RUNNER_TEMP/r2-cors.json"
           aws s3 cp "$ZIP_PATH" "s3://$R2_BUCKET/$ZIP_KEY" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type "application/zip" \
