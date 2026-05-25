@@ -38,6 +38,10 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
+      - name: Install web dependencies
+        working-directory: projects/web
+        run: yarn install --frozen-lockfile
+
       - name: Build web bundle
         env:
           OPENADE_OTA_CHANNEL: ${{ vars.OPENADE_OTA_CHANNEL }}
