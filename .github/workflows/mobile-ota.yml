@@ -91,7 +91,8 @@ jobs:
           aws s3api put-bucket-cors \
             --bucket "$R2_BUCKET" \
             --endpoint-url "$R2_ENDPOINT_URL" \
-            --cors-configuration "file://$RUNNER_TEMP/r2-cors.json"
+            --cors-configuration "file://$RUNNER_TEMP/r2-cors.json" || \
+            echo "Skipping R2 CORS update; configure bucket CORS once in Cloudflare if OTA fetches are blocked."
           aws s3 cp "$ZIP_PATH" "s3://$R2_BUCKET/$ZIP_KEY" \
             --endpoint-url "$R2_ENDPOINT_URL" \
             --content-type "application/zip" \
