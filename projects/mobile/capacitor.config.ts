@@ -4,20 +4,18 @@ declare const process: {
     env: Record<string, string | undefined>
 }
 
-const otaUpdateUrl = process.env.OPENADE_OTA_UPDATE_URL?.trim() ?? ""
 const otaChannel = process.env.OPENADE_OTA_CHANNEL?.trim() || "production"
 
 const config: CapacitorConfig = {
-    appId: "org.openade.companion",
-    appName: "OpenADE Companion",
+    appId: "ai.openade.app",
+    appName: "OpenADE",
     webDir: "dist",
     server: {
         androidScheme: "https",
     },
     plugins: {
         CapacitorUpdater: {
-            autoUpdate: Boolean(otaUpdateUrl),
-            updateUrl: otaUpdateUrl,
+            autoUpdate: false,
             statsUrl: "",
             defaultChannel: otaChannel,
             appReadyTimeout: 10000,

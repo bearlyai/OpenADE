@@ -6,6 +6,7 @@
   "scripts": {
     "start": "vite --host 0.0.0.0",
     "build": "vite build",
+    "prepare:ota": "node scripts/prepare-ota-release.mjs",
     "ios": "npm run build && npx cap sync ios && npx cap open ios"
   },
   "dependencies": {

@@ -1,0 +1,86 @@
+name: Mobile OTA
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional OTA bundle version. Defaults to package version + run number + commit.
+        required: false
+        type: string
+      release_notes:
+        description: Optional note stored in updates.json.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-ota
+  cancel-in-progress: false
+
+jobs:
+  publish-ota:
+    runs-on: ubuntu-latest
+    environment: mobile-release
+    defaults:
+      run:
+        working-directory: projects/mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: yarn
+          cache-dependency-path: projects/mobile/yarn.lock
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build web bundle
+        env:
+          OPENADE_OTA_CHANNEL: ${{ vars.OPENADE_OTA_CHANNEL }}
+          VITE_OPENADE_OTA_CHANNEL: ${{ vars.OPENADE_OTA_CHANNEL }}
+          VITE_OPENADE_OTA_UPDATE_URL: ${{ vars.OPENADE_OTA_UPDATE_URL }}
+        run: yarn build
+
+      - name: Prepare OTA bundle
+        id: ota
+        env:
+          OTA_BUNDLE_VERSION: ${{ inputs.version }}
+          OTA_PUBLIC_BASE_URL: ${{ vars.OTA_PUBLIC_BASE_URL }}
+          OPENADE_OTA_CHANNEL: ${{ vars.OPENADE_OTA_CHANNEL }}
+          OTA_RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: yarn prepare:ota >> "$GITHUB_OUTPUT"
+
+      - name: Install AWS CLI
+        run: |
+          python3 -m pip install --user awscli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Upload OTA bundle to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ENDPOINT_URL: ${{ vars.R2_ENDPOINT_URL }}
+          ZIP_PATH: ${{ steps.ota.outputs.zip_path }}
+          ZIP_KEY: ${{ steps.ota.outputs.zip_key }}
+          MANIFEST_PATH: ${{ steps.ota.outputs.manifest_path }}
+          MANIFEST_KEY: ${{ steps.ota.outputs.manifest_key }}
+        run: |
+          aws s3 cp "$ZIP_PATH" "s3://$R2_BUCKET/$ZIP_KEY" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type "application/zip" \
+            --cache-control "public, max-age=31536000, immutable"
+          aws s3 cp "$MANIFEST_PATH" "s3://$R2_BUCKET/$MANIFEST_KEY" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type "application/json" \
+            --cache-control "no-cache"
+
+      - name: Summary
+        run: |
+          echo "OTA version: ${{ steps.ota.outputs.version }}"
+          echo "Manifest: ${{ vars.OPENADE_OTA_UPDATE_URL }}"

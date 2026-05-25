@@ -1,4 +1,4 @@
-# OpenADE Companion
+# OpenADE Mobile
 
 Thin Capacitor shell for the OpenADE remote-control surface.
 
@@ -17,24 +17,34 @@ The mobile shell mirrors paired device tokens into `capacitor-secure-storage-plu
 
 The iOS deployment target is 15.5 because the in-app QR scanner uses ML Kit Barcode Scanning.
 
+## Release
+
+Mobile releases are split into two GitHub Actions workflows:
+
+- `.github/workflows/mobile-testflight.yml` builds, signs, and uploads the iOS wrapper to App Store Connect/TestFlight.
+- `.github/workflows/mobile-ota.yml` builds the web UI, zips `dist`, uploads it to Cloudflare R2, and updates the static OTA manifest.
+
+Both workflows use the `mobile-release` GitHub environment.
+
 ## OTA UI Updates
 
-The companion uses the open-source `@capgo/capacitor-updater` plugin for web-layer OTA updates. This keeps native capabilities in reviewed binaries while allowing incremental companion UI fixes without waiting for a new App Store build.
+The app uses the open-source `@capgo/capacitor-updater` plugin in manual static-manifest mode. Native auto-update is disabled because static R2 objects cannot serve Capgo's native POST update endpoint. The app instead fetches `updates.json` over HTTPS, downloads the zip natively, and stages it for the next app background/restart.
 
 Build-time config for an OTA-enabled binary:
 
 ```sh
-OPENADE_OTA_UPDATE_URL=https://updates.example.com/openade-companion/ios/updates.json
+VITE_OPENADE_OTA_UPDATE_URL=https://static.openade.ai/openade-companion/ios/updates.json
+VITE_OPENADE_OTA_CHANNEL=production
 OPENADE_OTA_CHANNEL=production
 ```
 
-If `OPENADE_OTA_UPDATE_URL` is empty, auto-update is disabled and the app uses the bundled UI only. `statsUrl` is intentionally set to an empty string so the plugin does not send update telemetry to a third party by default.
+If `VITE_OPENADE_OTA_UPDATE_URL` is empty, the app uses the bundled UI only. `statsUrl` is intentionally set to an empty string so the plugin does not send update telemetry to a third party by default.
 
-After changing OTA config:
+To prepare an OTA bundle locally:
 
 ```sh
 npm run build
-npx cap sync ios
+OTA_PUBLIC_BASE_URL=https://static.openade.ai/openade-companion/ios npm run prepare:ota
 ```
 
-The self-hosted update endpoint must return the Capgo updater response shape with a bundle `version`, HTTPS zip `url`, and `checksum`. Use OTA only for web UI changes. Native plugin, permission, entitlement, and app-purpose changes still require a reviewed App Store build.
+Use OTA only for web UI changes. Native plugin, permission, entitlement, bundle id, display name, and app-purpose changes still require a reviewed TestFlight/App Store binary.

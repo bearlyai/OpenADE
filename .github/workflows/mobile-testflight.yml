@@ -1,0 +1,180 @@
+name: Mobile TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Marketing version. Defaults to projects/mobile package version.
+        required: false
+        type: string
+      build_number:
+        description: App Store build number. Defaults to GitHub run number.
+        required: false
+        type: string
+      internal_only:
+        description: Restrict uploaded build to internal TestFlight testing only.
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-testflight
+  cancel-in-progress: false
+
+jobs:
+  upload-testflight:
+    runs-on: macos-latest
+    environment: mobile-release
+    defaults:
+      run:
+        working-directory: projects/mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: yarn
+          cache-dependency-path: projects/mobile/yarn.lock
+
+      - name: Resolve version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="$(node -p "require('./package.json').version")"
+          fi
+          BUILD_NUMBER="${{ inputs.build_number }}"
+          if [ -z "$BUILD_NUMBER" ]; then
+            BUILD_NUMBER="${GITHUB_RUN_NUMBER}"
+          fi
+          echo "IOS_MARKETING_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "IOS_BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build web bundle
+        env:
+          OPENADE_OTA_CHANNEL: ${{ vars.OPENADE_OTA_CHANNEL }}
+          VITE_OPENADE_OTA_CHANNEL: ${{ vars.OPENADE_OTA_CHANNEL }}
+          VITE_OPENADE_OTA_UPDATE_URL: ${{ vars.OPENADE_OTA_UPDATE_URL }}
+        run: yarn build
+
+      - name: Sync iOS project
+        env:
+          OPENADE_OTA_CHANNEL: ${{ vars.OPENADE_OTA_CHANNEL }}
+        run: npx cap sync ios
+
+      - name: Install signing material
+        env:
+          IOS_SIGNING_CERTIFICATE_P12: ${{ secrets.IOS_SIGNING_CERTIFICATE_P12 }}
+          IOS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.IOS_SIGNING_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/openade-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          P12_PATH="$RUNNER_TEMP/openade-ios-distribution.p12"
+          PROFILE_PATH="$RUNNER_TEMP/openade-appstore.mobileprovision"
+          PROFILE_PLIST="$RUNNER_TEMP/openade-appstore.plist"
+          ASC_KEY_PATH="$RUNNER_TEMP/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+
+          echo "$IOS_SIGNING_CERTIFICATE_P12" | base64 --decode > "$P12_PATH"
+          printf "%s" "$IOS_PROVISIONING_PROFILE" | base64 --decode > "$PROFILE_PATH"
+          printf "%s" "$APP_STORE_CONNECT_API_PRIVATE_KEY" > "$ASC_KEY_PATH"
+          chmod 600 "$P12_PATH" "$ASC_KEY_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$P12_PATH" -k "$KEYCHAIN_PATH" -P "$IOS_SIGNING_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security cms -D -i "$PROFILE_PATH" -o "$PROFILE_PLIST"
+          PROFILE_UUID="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PROFILE_PLIST")"
+          PROFILE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+
+          echo "IOS_PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+          echo "ASC_KEY_PATH=$ASC_KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Write export options
+        run: |
+          if [ "${{ inputs.internal_only }}" = "true" ]; then
+            INTERNAL_ONLY=true
+          else
+            INTERNAL_ONLY=false
+          fi
+          cat > "$RUNNER_TEMP/OpenADEExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>destination</key>
+            <string>upload</string>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>teamID</key>
+            <string>NK6K4BACCF</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>ai.openade.app</key>
+              <string>$IOS_PROFILE_NAME</string>
+            </dict>
+            <key>manageAppVersionAndBuildNumber</key>
+            <false/>
+            <key>stripSwiftSymbols</key>
+            <true/>
+            <key>uploadSymbols</key>
+            <true/>
+            <key>testFlightInternalTestingOnly</key>
+            <$INTERNAL_ONLY/>
+          </dict>
+          </plist>
+          PLIST
+          echo "EXPORT_OPTIONS_PLIST=$RUNNER_TEMP/OpenADEExportOptions.plist" >> "$GITHUB_ENV"
+
+      - name: Archive
+        run: |
+          xcodebuild clean archive \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "$RUNNER_TEMP/OpenADE.xcarchive" \
+            DEVELOPMENT_TEAM=NK6K4BACCF \
+            PRODUCT_BUNDLE_IDENTIFIER=ai.openade.app \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$IOS_PROFILE_NAME" \
+            MARKETING_VERSION="$IOS_MARKETING_VERSION" \
+            CURRENT_PROJECT_VERSION="$IOS_BUILD_NUMBER"
+
+      - name: Upload to App Store Connect
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/OpenADE.xcarchive" \
+            -exportPath "$RUNNER_TEMP/OpenADEExport" \
+            -exportOptionsPlist "$EXPORT_OPTIONS_PLIST" \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
+
+      - name: Summary
+        run: |
+          echo "Uploaded OpenADE $IOS_MARKETING_VERSION ($IOS_BUILD_NUMBER) to App Store Connect."
+          echo "App Store app id: ${{ vars.APP_STORE_APP_ID }}"
