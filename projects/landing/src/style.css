@@ -92,6 +92,10 @@ nav {
     letter-spacing: -0.01em;
 }
 
+.nav-wordmark-link {
+    text-decoration: none;
+}
+
 .nav-right {
     display: flex;
     align-items: center;
@@ -790,6 +794,72 @@ footer {
 
 .footer-link:hover {
     color: var(--gray-300);
+}
+
+/* ─── Legal Pages ─── */
+.legal-page {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 9rem 2rem 2rem;
+}
+
+.legal-hero {
+    padding-bottom: 2rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.legal-hero h1 {
+    color: var(--white);
+    font-size: clamp(2.5rem, 6vw, 5rem);
+    line-height: 0.95;
+    letter-spacing: -0.04em;
+    margin-top: 0.75rem;
+}
+
+.legal-hero p {
+    color: var(--gray-400);
+    margin-top: 1rem;
+    font-size: 1rem;
+}
+
+.legal-content {
+    padding-top: 2rem;
+    color: var(--gray-300);
+}
+
+.legal-content h2 {
+    color: var(--white);
+    font-size: 1.25rem;
+    line-height: 1.2;
+    margin: 2.25rem 0 0.75rem;
+    letter-spacing: -0.01em;
+}
+
+.legal-content p,
+.legal-content li {
+    font-size: 1rem;
+    line-height: 1.75;
+}
+
+.legal-content p + p {
+    margin-top: 1rem;
+}
+
+.legal-content ul {
+    display: grid;
+    gap: 0.6rem;
+    margin-left: 1.2rem;
+}
+
+.legal-content a {
+    color: var(--orange-dim);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    transition: color 0.15s;
+}
+
+.legal-content a:hover {
+    color: var(--orange);
 }
 
 /* ─── Animations ─── */

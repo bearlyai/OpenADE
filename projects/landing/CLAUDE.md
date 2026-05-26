@@ -34,6 +34,8 @@ Follows the main app's design language documented in `projects/web/src/_docs/des
 ```
 projects/landing/
 ├── index.html          # entry point (Vite processes this directly)
+├── privacy/
+│   └── index.html      # privacy policy served at /privacy/
 ├── src/
 │   ├── main.ts         # OS detection, scroll reveal, download CTA logic
 │   └── style.css       # all styles
@@ -107,6 +109,8 @@ The hero CTA and download section automatically detect the visitor's OS and:
 Meta tags are in `index.html` `<head>`. The OG image is referenced as `https://openade.ai/og.png`. When updating the OG image, make sure to keep the same filename so social media caches refresh naturally.
 
 Key meta tags: `title`, `description`, `canonical`, `og:*`, `twitter:*`, `theme-color`.
+
+The privacy policy lives at `privacy/index.html` and is intended to be reachable as `https://openade.ai/privacy/`. Keep the footer Privacy link and App Store Connect privacy URL in sync with that path.
 
 ## Messaging Guardrails
 

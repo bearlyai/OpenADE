@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenADE Privacy Policy</title>
+    <meta name="description" content="Privacy policy for OpenADE desktop and mobile companion apps.">
+    <link rel="canonical" href="https://openade.ai/privacy/">
+    <meta name="theme-color" content="#000000">
+
+    <meta property="og:title" content="OpenADE Privacy Policy">
+    <meta property="og:description" content="Privacy policy for OpenADE desktop and mobile companion apps.">
+    <meta property="og:url" content="https://openade.ai/privacy/">
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="https://openade.ai/og.png">
+
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="OpenADE Privacy Policy">
+    <meta name="twitter:description" content="Privacy policy for OpenADE desktop and mobile companion apps.">
+    <meta name="twitter:image" content="https://openade.ai/og.png">
+
+    <link rel="icon" href="/favicon.ico" sizes="48x48">
+    <link rel="icon" type="image/png" href="/favicon-192.png" sizes="192x192">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+
+    <link rel="preconnect" href="https://api.fontshare.com" crossorigin>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://api.fontshare.com/v2/css?f[]=clash-grotesk@200,300,400,500,600,700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+    <nav>
+        <div class="nav-left">
+            <a href="/" class="nav-wordmark nav-wordmark-link">OpenADE</a>
+        </div>
+        <button class="nav-hamburger" id="nav-hamburger" aria-label="Toggle menu" aria-expanded="false">
+            <span></span>
+            <span></span>
+            <span></span>
+        </button>
+        <div class="nav-right" id="nav-right">
+            <a href="/#features" class="nav-link">Features</a>
+            <a href="/#download" class="nav-link">Download</a>
+            <a href="https://discord.gg/EE8PHSpryH" class="nav-link" target="_blank" rel="noopener">Discord</a>
+            <a href="https://github.com/bearlyai/OpenADE" class="nav-link nav-gh" target="_blank" rel="noopener">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+                GitHub
+            </a>
+        </div>
+    </nav>
+
+    <main class="legal-page">
+        <section class="legal-hero">
+            <div class="section-label">Privacy</div>
+            <h1>OpenADE Privacy Policy</h1>
+            <p>Last updated: May 26, 2026</p>
+        </section>
+
+        <section class="legal-content">
+            <p>
+                OpenADE is open-source software built to keep your development work on machines you control. This policy explains what the OpenADE desktop app, iOS companion app, and website do with data.
+            </p>
+
+            <h2>Summary</h2>
+            <ul>
+                <li>OpenADE does not require an OpenADE account.</li>
+                <li>Your repositories, files, prompts, task output, credentials, and local tool access stay on your desktop host unless you choose to send them to a third-party AI provider through your configured harness.</li>
+                <li>The iOS companion app is a remote control for your desktop OpenADE instance. It stores pairing information locally on your device and sends commands directly to your paired desktop host.</li>
+                <li>OpenADE desktop includes optional anonymous telemetry and crash diagnostics that can be disabled in settings.</li>
+            </ul>
+
+            <h2>Desktop App</h2>
+            <p>
+                The OpenADE desktop app runs locally. It reads project files and executes tools on your machine only as part of the workflows you start. OpenADE does not operate a cloud service that stores your source code, prompts, task output, repository contents, credentials, or local filesystem data.
+            </p>
+            <p>
+                If you configure OpenADE to use Claude Code, Codex, or another harness, those tools may send prompts, file context, or task data to their own providers according to your configuration and those providers' policies.
+            </p>
+
+            <h2>iOS Companion App</h2>
+            <p>
+                The OpenADE iOS companion app pairs with the desktop app over a local/private network or a network you configure, such as Tailscale. The companion app may send prompts, task commands, and follow-up messages to your paired desktop host. It may receive project names, task metadata, task activity, and task output from that host so it can display and control the running desktop session.
+            </p>
+            <p>
+                Pairing tokens and device tokens are stored locally on the mobile device using iOS secure storage. Camera access is used to scan desktop pairing QR codes. Camera frames are processed for pairing and are not uploaded to OpenADE.
+            </p>
+
+            <h2>Telemetry And Diagnostics</h2>
+            <p>
+                OpenADE desktop may collect optional anonymous telemetry and crash diagnostics to help prioritize features and fix bugs. This telemetry is intended to avoid collecting code, prompts, file contents, credentials, or personal information. You can disable telemetry in the desktop app settings.
+            </p>
+            <p>
+                The iOS companion app does not use third-party advertising or tracking SDKs.
+            </p>
+
+            <h2>Website And Update Hosting</h2>
+            <p>
+                The OpenADE website and static update files may be served through hosting providers and CDNs. Those providers may process standard request information such as IP address, user agent, URL, timestamps, and related network metadata to deliver the site, serve downloads, prevent abuse, and maintain reliability.
+            </p>
+
+            <h2>Data Sharing</h2>
+            <p>
+                We do not sell personal information. We may use infrastructure providers for website hosting, downloads, crash diagnostics, and repository hosting. AI providers are used only when you configure and run a harness that sends data to them.
+            </p>
+
+            <h2>Your Choices</h2>
+            <ul>
+                <li>Disable desktop telemetry in OpenADE settings.</li>
+                <li>Revoke paired mobile devices from desktop Companion settings.</li>
+                <li>Remove a paired desktop session from the iOS companion app.</li>
+                <li>Disconnect OpenADE from third-party harnesses or integrations by removing their local credentials/configuration.</li>
+            </ul>
+
+            <h2>Contact</h2>
+            <p>
+                For privacy questions, open an issue at <a href="https://github.com/bearlyai/OpenADE/issues" target="_blank" rel="noopener">github.com/bearlyai/OpenADE/issues</a> or contact Bearly AI through <a href="https://bearly.ai" target="_blank" rel="noopener">bearly.ai</a>.
+            </p>
+        </section>
+    </main>
+
+    <footer>
+        <div class="footer-left">
+            MIT License &middot; Designed by <a href="https://bearly.ai" target="_blank" rel="noopener">Bearly AI</a>
+        </div>
+        <div class="footer-right">
+            <a href="https://github.com/bearlyai/OpenADE" class="footer-link" target="_blank" rel="noopener">GitHub</a>
+            <a href="https://discord.gg/EE8PHSpryH" class="footer-link" target="_blank" rel="noopener">Discord</a>
+            <a href="/privacy/" class="footer-link">Privacy</a>
+            <a href="https://github.com/bearlyai/OpenADE/blob/main/LICENSE" class="footer-link" target="_blank" rel="noopener">License</a>
+        </div>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
