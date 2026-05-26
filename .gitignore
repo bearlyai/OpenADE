@@ -146,3 +146,6 @@ dist
 __screenshots__/
 
 external_repos
+
+# Local generated image explorations
+output/

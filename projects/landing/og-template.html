@@ -65,6 +65,15 @@
     gap: 12px;
   }
 
+  .dict-logo {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    object-fit: cover;
+    margin-right: 2px;
+    box-shadow: 0 10px 26px rgba(255, 104, 96, 0.22);
+  }
+
   .dict-word {
     font-size: 20px;
     font-weight: 700;
@@ -144,12 +153,26 @@
     padding: 6px 14px;
     font-weight: 500;
   }
+
+  .brand-icon {
+    position: absolute;
+    right: 96px;
+    top: 86px;
+    width: 210px;
+    height: 210px;
+    border-radius: 48px;
+    object-fit: cover;
+    z-index: 1;
+    box-shadow: 0 34px 92px rgba(255, 104, 96, 0.18);
+  }
 </style>
 </head>
 <body>
+  <img src="/logo.png" alt="" class="brand-icon">
   <div class="content">
     <div class="dict">
       <div class="dict-top">
+        <img src="/logo.png" alt="" class="dict-logo">
         <span class="dict-word">OpenADE</span>
         <span class="dict-phonetic">/oh-pən-ayd/</span>
         <span class="dict-pos">noun</span>

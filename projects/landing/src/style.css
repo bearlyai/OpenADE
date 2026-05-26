@@ -83,6 +83,15 @@ nav {
 .nav-logo {
     width: 28px;
     height: 28px;
+    border-radius: 7px;
+    object-fit: cover;
+    box-shadow: 0 0 18px rgba(255, 109, 92, 0.18);
+}
+
+.nav-logo-link {
+    display: flex;
+    align-items: center;
+    text-decoration: none;
 }
 
 .nav-wordmark {
