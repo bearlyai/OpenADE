@@ -42,6 +42,18 @@ Thin Capacitor shell for the OpenADE remote-control surface.
 - The mobile-ota workflow publishes dist.zip and updates.json to Cloudflare R2 through the mobile-release environment.
 - The mobile-testflight workflow signs with the Apple Distribution p12 and App Store provisioning profile stored in the mobile-release environment.
 
+## Release Operations
+
+- Use projects/mobile/README.md as the human release runbook.
+- Keep all Apple, GitHub, and Cloudflare credentials in the mobile-release GitHub environment or local ignored files.
+- Never commit .env.local, p12 files, .mobileprovision files, .p8 keys, exported archives, or generated keychains.
+- Use Mobile TestFlight for native changes and Mobile OTA for web-only updates.
+- Use internal_only=true for early internal TestFlight uploads unless there is an explicit external beta release decision.
+- The TestFlight workflow must use a runner with the currently required App Store SDK. It is pinned to macos-26 for the iOS 26 SDK requirement.
+- The App target Release signing settings are manual, but workflow-level signing overrides should not be passed globally because they also affect Pods targets.
+- The R2 CORS update in Mobile OTA is best-effort. Lack of bucket-level CORS permission must not block object upload.
+- After OTA publish, verify https://static.openade.ai/openade-companion/ios/updates.json and the referenced zip URL both return 200.
+
 ## Pairing
 
 - Scan or paste the full HTTP pairing link from desktop.
