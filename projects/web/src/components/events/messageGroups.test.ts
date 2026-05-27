@@ -720,6 +720,58 @@ describe("groupStreamEvents unknown harness events", () => {
         ])
     })
 
+    it("renders Claude hook_started events as system groups", () => {
+        const raw = {
+            type: "system",
+            subtype: "hook_started",
+            hook_name: "pre-bash",
+            hook_event: "PreToolUse",
+            session_id: "0848323a-5269-439c-9411-1decd4b8dc5f",
+            uuid: "e1d4c18f-ba8a-4fd4-a393-b269470a074d",
+        }
+        const groups = groupStreamEvents([claudeMessageEvent(raw, "msg-1")], "claude-code")
+
+        expect(groups).toEqual([
+            {
+                type: "system",
+                subtype: "hook_started",
+                metadata: {
+                    hook_name: "pre-bash",
+                    hook_event: "PreToolUse",
+                    session_id: "0848323a-5269-439c-9411-1decd4b8dc5f",
+                    uuid: "e1d4c18f-ba8a-4fd4-a393-b269470a074d",
+                },
+                messageIndex: 0,
+            },
+        ])
+    })
+
+    it("renders Claude hook_progress events as system groups", () => {
+        const raw = {
+            type: "system",
+            subtype: "hook_progress",
+            hook_name: "pre-bash",
+            content: "Checking command...",
+            session_id: "0848323a-5269-439c-9411-1decd4b8dc5f",
+            uuid: "e1d4c18f-ba8a-4fd4-a393-b269470a074d",
+        }
+        const groups = groupStreamEvents([claudeMessageEvent(raw, "msg-1")], "claude-code")
+
+        expect(groups).toEqual([
+            {
+                type: "system",
+                subtype: "hook_progress",
+                metadata: {
+                    hook_name: "pre-bash",
+                    content: "Checking command...",
+                    session_id: "0848323a-5269-439c-9411-1decd4b8dc5f",
+                    uuid: "e1d4c18f-ba8a-4fd4-a393-b269470a074d",
+                },
+                messageIndex: 0,
+            },
+        ])
+    })
+
     it("renders Claude web_search events as tool groups", () => {
         const raw = {
             id: "ws_06a733061430c941016a0bc0dafe9481909d2a5c65720110ba",
