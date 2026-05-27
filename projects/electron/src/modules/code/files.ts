@@ -5,12 +5,10 @@
  * Uses git ls-files for git repos, ripgrep for non-git directories.
  */
 
-import { ipcMain, type IpcMainInvokeEvent } from "electron"
 import * as path from "path"
 import * as fs from "fs"
 import logger from "electron-log"
 import fuzzysort from "fuzzysort"
-import { isDev } from "../../config"
 import { getHotFiles } from "./git"
 import { execCommand } from "./subprocess"
 import { resolve as resolveBinary } from "./binaries"
@@ -39,25 +37,25 @@ const fileListCache = new Map<string, FileListCacheEntry>()
 // IMPORTANT: Keep in sync with projects/dashboard/src/pages/code/electronAPI/files.ts
 // ============================================================================
 
-interface FuzzySearchParams {
+export interface FuzzySearchParams {
     dir: string
     query: string
     matchDirs: boolean
     limit?: number
 }
 
-interface TreeChild {
+export interface TreeChild {
     name: string
     isDir: boolean
     fullPath: string
 }
 
-interface TreeMatch {
+export interface TreeMatch {
     path: string
     children: TreeChild[]
 }
 
-interface FuzzySearchResponse {
+export interface FuzzySearchResponse {
     results: string[]
     truncated: boolean
     source: "git" | "ripgrep" | "fs"
@@ -68,7 +66,7 @@ interface FuzzySearchResponse {
 // Content Search Types
 // ============================================================================
 
-interface ContentSearchParams {
+export interface ContentSearchParams {
     dir: string
     query: string
     limit?: number // default 100
@@ -77,7 +75,7 @@ interface ContentSearchParams {
     rankByHotFiles?: boolean // if true, rank results by git commit frequency
 }
 
-interface ContentSearchMatch {
+export interface ContentSearchMatch {
     file: string // relative path from dir
     line: number // 1-indexed
     content: string // full line content
@@ -85,7 +83,7 @@ interface ContentSearchMatch {
     matchEnd: number // character offset in content where match ends
 }
 
-interface ContentSearchResponse {
+export interface ContentSearchResponse {
     matches: ContentSearchMatch[]
     truncated: boolean
 }
@@ -94,14 +92,14 @@ interface ContentSearchResponse {
 // describePath Types
 // ============================================================================
 
-interface DescribePathParams {
+export interface DescribePathParams {
     path: string
     readContents?: boolean   // If true and path is a file, include content
     maxReadSize?: number     // Max file size to read (caller decides limit)
     showHidden?: boolean     // If true and path is a dir, include dotfiles
 }
 
-interface PathEntry {
+export interface PathEntry {
     name: string
     path: string  // Absolute path
     isDir: boolean
@@ -110,7 +108,7 @@ interface PathEntry {
     mode: number
 }
 
-type DescribePathResponse =
+export type DescribePathResponse =
     | { type: "dir"; path: string; mode: number; entries: PathEntry[] }
     | { type: "file"; path: string; size: number; mode: number; content: string | null; tooLarge: boolean; isReadable: boolean }
     | { type: "not_found"; path: string }
@@ -119,24 +117,6 @@ type DescribePathResponse =
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-/**
- * Check if caller is allowed
- */
-function checkAllowed(e: IpcMainInvokeEvent): boolean {
-    const origin = e.sender.getURL()
-    try {
-        const url = new URL(origin)
-        if (isDev) {
-            return url.hostname.endsWith("localhost")
-        } else {
-            return url.hostname.endsWith("localhost") || url.protocol === "file:"
-        }
-    } catch (error) {
-        logger.error("[Files:checkAllowed] Failed to parse origin:", error)
-        return false
-    }
-}
 
 /**
  * Execute a command using centralized subprocess runner
@@ -871,29 +851,16 @@ async function handleContentSearch(params: ContentSearchParams): Promise<Content
     return { matches, truncated }
 }
 
-// ============================================================================
-// Module Export
-// ============================================================================
+export async function fuzzySearchRuntimeFiles(params: FuzzySearchParams): Promise<FuzzySearchResponse> {
+    return handleFuzzySearch(params)
+}
 
-export const load = () => {
-    logger.info("[Files] Registering IPC handlers")
+export async function describeRuntimePath(params: DescribePathParams): Promise<DescribePathResponse> {
+    return handleDescribePath(params)
+}
 
-    ipcMain.handle("files:fuzzySearch", async (event, params: FuzzySearchParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleFuzzySearch(params)
-    })
-
-    ipcMain.handle("files:describePath", async (event, params: DescribePathParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleDescribePath(params)
-    })
-
-    ipcMain.handle("files:contentSearch", async (event, params: ContentSearchParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleContentSearch(params)
-    })
-
-    logger.info("[Files] IPC handlers registered successfully")
+export async function searchRuntimeFileContent(params: ContentSearchParams): Promise<ContentSearchResponse> {
+    return handleContentSearch(params)
 }
 
 export const cleanup = () => {
@@ -903,4 +870,3 @@ export const cleanup = () => {
     }
     fileListCache.clear()
 }
-

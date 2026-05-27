@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
 import { getHarnessStatuses, normalizeHarnessStatuses } from "./harnessStatus"
 
 type TestWindow = {
@@ -14,7 +15,8 @@ if (!testGlobal.window) {
 const testWindow = testGlobal.window
 const originalOpenadeApi = testWindow.openadeAPI
 
-afterEach(() => {
+afterEach(async () => {
+    await localRuntimeClient.close()
     testWindow.openadeAPI = originalOpenadeApi
     vi.restoreAllMocks()
 })
@@ -70,25 +72,32 @@ describe("getHarnessStatuses", () => {
     })
 
     it("loads and normalizes harness status payloads", async () => {
-        const checkStatus = vi.fn().mockResolvedValue({
-            "claude-code": {
-                installed: true,
-                version: "1.0.0",
-                authType: "account",
-                authenticated: true,
+        const request = vi.fn().mockResolvedValue({
+            id: 1,
+            result: {
+                "claude-code": {
+                    installed: true,
+                    version: "1.0.0",
+                    authType: "account",
+                    authenticated: true,
+                },
+                invalid: 123,
             },
-            invalid: 123,
         })
 
         testWindow.openadeAPI = {
-            harness: {
-                checkStatus,
+            runtime: {
+                connect: vi.fn().mockResolvedValue({ ok: true }),
+                disconnect: vi.fn().mockResolvedValue({ ok: true }),
+                request,
+                onMessage: vi.fn(() => () => {}),
             },
         } as unknown as NonNullable<Window["openadeAPI"]>
 
         const result = await getHarnessStatuses()
 
-        expect(checkStatus).toHaveBeenCalledTimes(1)
+        expect(request).toHaveBeenCalledTimes(1)
+        expect(request.mock.calls[0]?.[0]).toMatchObject({ method: "agent/provider/status" })
         expect(result.error).toBeNull()
         expect(result.statuses).toEqual({
             "claude-code": {
@@ -101,11 +110,14 @@ describe("getHarnessStatuses", () => {
     })
 
     it("surfaces invalid response payload errors", async () => {
-        const checkStatus = vi.fn().mockResolvedValue("invalid-response")
+        const request = vi.fn().mockResolvedValue({ id: 1, result: "invalid-response" })
 
         testWindow.openadeAPI = {
-            harness: {
-                checkStatus,
+            runtime: {
+                connect: vi.fn().mockResolvedValue({ ok: true }),
+                disconnect: vi.fn().mockResolvedValue({ ok: true }),
+                request,
+                onMessage: vi.fn(() => () => {}),
             },
         } as unknown as NonNullable<Window["openadeAPI"]>
 

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { ImageAttachment } from "../../types"
+import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import { TaskCreationManager, buildTaskCreationInput } from "./TaskCreationManager"
 import type { CodeStore } from "../store"
 
@@ -22,6 +23,13 @@ vi.mock("../../persistence", () => ({
     updateTaskPreview: vi.fn(),
 }))
 
+vi.mock("../../runtime/localOpenADEClient", () => ({
+    localOpenADEClient: {
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+    },
+}))
+
 const TEST_IMAGE: ImageAttachment = {
     id: "img-1",
     mediaType: "image/png",
@@ -35,6 +43,8 @@ const TEST_IMAGE: ImageAttachment = {
 describe("TaskCreationManager creation plumbing", () => {
     beforeEach(() => {
         vi.useRealTimers()
+        vi.mocked(localOpenADEClient.startTurn).mockResolvedValue({ taskId: "task-1" })
+        vi.mocked(localOpenADEClient.interruptTurn).mockResolvedValue(undefined)
     })
 
     afterEach(() => {
@@ -94,51 +104,18 @@ describe("TaskCreationManager creation plumbing", () => {
         expect(manager.getCreation(creationId)?.modelId).toBe("gpt-5.5")
     })
 
-    it("applies the selected model to the task before first execution", async () => {
-        vi.useFakeTimers()
-
+    it("passes the selected model to server-owned turn start", async () => {
         const generateTitleSpy = vi
             .spyOn(TaskCreationManager.prototype as unknown as { generateTitleAsync: (...args: unknown[]) => Promise<void> }, "generateTitleAsync")
             .mockResolvedValue(undefined)
 
-        const taskModel = {
-            setHarnessId: vi.fn(),
-            setModel: vi.fn(),
-            setThinking: vi.fn(),
-            setFastMode: vi.fn(),
-        }
-        const executeAction = vi.fn()
-        const taskStore = {
-            meta: {
-                current: { id: "" },
-                set: vi.fn(),
-            },
-            events: {
-                push: vi.fn(),
-            },
-            deviceEnvironments: {
-                push: vi.fn(),
-            },
-        }
-
         const store = {
             repos: {
                 getRepo: vi.fn(() => ({ id: "repo-1", path: "/tmp/repo" })),
-                getGitInfo: vi.fn(async () => ({ isGitRepo: false, relativePath: "" })),
             },
-            repoStore: {},
-            getTaskStore: vi.fn(async () => taskStore),
-            getCachedTaskStore: vi.fn(),
-            tasks: {
-                getTaskModel: vi.fn(() => taskModel),
-            },
-            execution: {
-                executeAction,
-                executePlan: vi.fn(),
-                executeAsk: vi.fn(),
-                executeHyperPlan: vi.fn(),
-            },
-            currentUser: { id: "user-1", email: "test@example.com" },
+            refreshRepoStoreFromStorage: vi.fn(async () => undefined),
+            getTaskStore: vi.fn(async () => ({})),
+            getActiveHyperPlanStrategy: vi.fn(),
         } as unknown as CodeStore
 
         const manager = new TaskCreationManager(store)
@@ -165,13 +142,17 @@ describe("TaskCreationManager creation plumbing", () => {
         await (manager as unknown as { runCreation: (id: string) => Promise<void> }).runCreation("creation-1")
 
         expect(generateTitleSpy).toHaveBeenCalled()
-        expect(taskModel.setHarnessId).toHaveBeenCalledWith("codex")
-        expect(taskModel.setModel).toHaveBeenCalledWith("gpt-5.5")
-        expect(taskModel.setFastMode).toHaveBeenCalledWith(true)
-
-        await vi.runAllTimersAsync()
-
-        expect(executeAction).toHaveBeenCalledTimes(1)
-        expect(taskModel.setModel.mock.invocationCallOrder[0]).toBeLessThan(executeAction.mock.invocationCallOrder[0])
+        expect(localOpenADEClient.startTurn).toHaveBeenCalledWith(
+            expect.objectContaining({
+                repoId: "repo-1",
+                type: "do",
+                input: "describe task",
+                harnessId: "codex",
+                modelId: "gpt-5.5",
+                thinking: "max",
+                fastMode: true,
+            })
+        )
+        expect(manager.getCreation("creation-1")?.completedTaskId).toBe("task-1")
     })
 })

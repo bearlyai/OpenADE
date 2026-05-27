@@ -215,7 +215,7 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
     const getIsRunning = (repoId: string): boolean => {
         const repo = codeStore.repoStore?.repos.get(repoId)
         if (!repo) return false
-        return repo.tasks.some((t) => codeStore.workingTaskIds.has(t.id))
+        return repo.tasks.some((t) => codeStore.isTaskRunning(t.id))
     }
 
     const handleAddRepo = () => {

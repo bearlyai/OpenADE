@@ -2,8 +2,10 @@
  * Procs API Bridge
  *
  * Client-side API for reading openade.toml configuration files.
- * Communicates with Electron main process via openadeAPI.
+ * Communicates with the local runtime protocol bridge.
  */
+
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
 
 // ============================================================================
 // Type Definitions
@@ -140,7 +142,7 @@ export type RunContext =
  * @returns Parsed configs and any errors
  */
 export async function readProcs(path: string): Promise<ReadProcsResult> {
-    if (!window.openadeAPI) {
+    if (!window.openadeAPI?.runtime) {
         // Return empty result in non-Electron environment
         return {
             repoRoot: path,
@@ -151,27 +153,27 @@ export async function readProcs(path: string): Promise<ReadProcsResult> {
         }
     }
 
-    return window.openadeAPI.procs.read({ path }) as Promise<ReadProcsResult>
+    return localRuntimeClient.request<ReadProcsResult>("host/procs/read", { path })
 }
 
 /**
  * Read raw content of a config file (for the editor)
  */
 export async function readConfigFile(filePath: string): Promise<string> {
-    if (!window.openadeAPI) return ""
-    return window.openadeAPI.procs.readFile({ filePath })
+    if (!window.openadeAPI?.runtime) return ""
+    return localRuntimeClient.request<string>("host/procs/file/read", { filePath })
 }
 
 /**
  * Write raw content to a config file (from the editor)
  */
 export async function writeConfigFile(filePath: string, content: string): Promise<void> {
-    if (!window.openadeAPI) return
-    await window.openadeAPI.procs.writeFile({ filePath, content })
+    if (!window.openadeAPI?.runtime) return
+    await localRuntimeClient.request("host/procs/file/write", { filePath, content })
 }
 
 export async function loadEditableProcsFile(filePath: string, searchPath?: string): Promise<EditableProcsFile> {
-    if (!window.openadeAPI) {
+    if (!window.openadeAPI?.runtime) {
         return {
             filePath,
             relativePath: filePath,
@@ -180,22 +182,22 @@ export async function loadEditableProcsFile(filePath: string, searchPath?: strin
             rawContent: "",
         }
     }
-    return window.openadeAPI.procs.loadEditable({ filePath, searchPath }) as Promise<EditableProcsFile>
+    return localRuntimeClient.request<EditableProcsFile>("host/procs/editable/load", { filePath, searchPath })
 }
 
 export async function parseEditableRaw(content: string, relativePath: string): Promise<{ processes: ProcessInput[]; crons: CronInput[] }> {
-    if (!window.openadeAPI) {
+    if (!window.openadeAPI?.runtime) {
         return { processes: [], crons: [] }
     }
-    return window.openadeAPI.procs.parseRaw({ content, relativePath }) as Promise<{ processes: ProcessInput[]; crons: CronInput[] }>
+    return localRuntimeClient.request<{ processes: ProcessInput[]; crons: CronInput[] }>("host/procs/raw/parse", { content, relativePath })
 }
 
 export async function serializeEditableProcs(input: {
     processes: ProcessInput[]
     crons: CronInput[]
 }): Promise<string> {
-    if (!window.openadeAPI) return ""
-    const result = (await window.openadeAPI.procs.serializeEditable(input)) as { rawContent: string }
+    if (!window.openadeAPI?.runtime) return ""
+    const result = await localRuntimeClient.request<{ rawContent: string }>("host/procs/editable/serialize", input)
     return result.rawContent
 }
 
@@ -206,7 +208,7 @@ export async function saveEditableProcsFile(input: {
     crons: CronInput[]
     searchPath?: string
 }): Promise<SaveEditableProcsResult> {
-    if (!window.openadeAPI) {
+    if (!window.openadeAPI?.runtime) {
         return {
             filePath: input.filePath,
             relativePath: input.relativePath,
@@ -214,7 +216,7 @@ export async function saveEditableProcsFile(input: {
         }
     }
 
-    return window.openadeAPI.procs.saveEditable(input) as Promise<SaveEditableProcsResult>
+    return localRuntimeClient.request<SaveEditableProcsResult>("host/procs/editable/save", input)
 }
 
 // ============================================================================

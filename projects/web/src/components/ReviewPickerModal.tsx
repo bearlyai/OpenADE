@@ -6,6 +6,7 @@ import { HARNESS_META, MODEL_REGISTRY } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { getVisibleModelEntries, getVisibleModelId } from "../modelVisibility"
 import type { ReviewType } from "../prompts/reviewPrompts"
+import { localOpenADEClient } from "../runtime/localOpenADEClient"
 import { useCodeStore } from "../store/context"
 import { Modal } from "./ui"
 
@@ -79,15 +80,22 @@ export const ReviewPickerModal = NiceModal.create(
         }, [])
 
         const startReview = (harnessId: HarnessId, modelId: string) => {
+            if (!taskModel?.repoId) return
             onStart?.()
             modal.remove()
-            void codeStore.execution.executeReview({
-                taskId,
-                reviewType,
-                harnessId,
-                modelId,
-                customInstructions: notes.trim() || undefined,
-            })
+            void localOpenADEClient
+                .startReview({
+                    repoId: taskModel.repoId,
+                    taskId,
+                    reviewType,
+                    harnessId,
+                    modelId,
+                    customInstructions: notes.trim() || undefined,
+                })
+                .then(() => codeStore.refreshTaskStoreFromStorage(taskId))
+                .catch((error) => {
+                    console.error("[ReviewPickerModal] Failed to start server-owned review:", error)
+                })
         }
 
         const title = reviewType === "plan" ? "Review Plan" : "Review Work"

@@ -2,8 +2,10 @@
  * Shell Utilities API Bridge
  *
  * Client-side API for shell/OS operations.
- * Communicates with Electron main process via openadeAPI.
+ * Uses direct Electron IPC for OS UI operations and local runtime for plain host operations.
  */
+
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
 
 // ============================================================================
 // Type Definitions
@@ -41,12 +43,12 @@ export async function selectDirectory(defaultPath?: string): Promise<string | nu
  * Create a directory at the specified path (recursive)
  */
 export async function createDirectory(path: string): Promise<CreateDirectoryResponse> {
-    if (!window.openadeAPI) {
+    if (!window.openadeAPI?.runtime) {
         console.warn("[ShellAPI] Not running in Electron")
         return { success: false, error: "Not running in Electron" }
     }
 
-    return (await window.openadeAPI.shell.createDirectory({ path })) as CreateDirectoryResponse
+    return localRuntimeClient.request<CreateDirectoryResponse>("host/shell/createDirectory", { path })
 }
 
 /**

@@ -11,6 +11,7 @@ function remoteTask(events: unknown[]): RemoteTask {
         description: "",
         events,
         comments: [],
+        deviceEnvironments: [],
     }
 }
 

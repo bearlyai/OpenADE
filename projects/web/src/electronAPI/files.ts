@@ -1,8 +1,8 @@
 /**
  * Files API Bridge
  *
- * Client-side API for file search operations.
- * Communicates with Electron main process via openadeAPI.
+ * Client-side API for file search operations over the trusted local runtime
+ * transport.
  */
 
 // ============================================================================
@@ -93,6 +93,7 @@ interface ContentSearchResponse {
 // ============================================================================
 
 import { isCodeModuleAvailable } from "./capabilities"
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
 
 // ============================================================================
 // Files API Functions
@@ -111,7 +112,7 @@ export async function fuzzySearch(params: FuzzySearchParams): Promise<FuzzySearc
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.files.fuzzySearch(params)) as FuzzySearchResponse
+    return localRuntimeClient.request<FuzzySearchResponse>("fs/search/fuzzy", params)
 }
 
 async function describePath(params: DescribePathParams): Promise<DescribePathResponse> {
@@ -119,7 +120,7 @@ async function describePath(params: DescribePathParams): Promise<DescribePathRes
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.files.describePath(params)) as DescribePathResponse
+    return localRuntimeClient.request<DescribePathResponse>("fs/path/describe", params)
 }
 
 async function contentSearch(params: ContentSearchParams): Promise<ContentSearchResponse> {
@@ -127,7 +128,7 @@ async function contentSearch(params: ContentSearchParams): Promise<ContentSearch
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.files.contentSearch(params)) as ContentSearchResponse
+    return localRuntimeClient.request<ContentSearchResponse>("fs/search/content", params)
 }
 
 export function isFilesApiAvailable(): boolean {

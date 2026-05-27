@@ -24,6 +24,7 @@ import { ScrollArea, ShortcutBadge } from "../ui"
 import { TaskDeleteConfirm } from "./TaskDeleteConfirm"
 import { resolveTaskCopyPath } from "./sidebarPathUtils"
 import { sortTaskPreviewsLikeSidebar } from "./taskSorting"
+import { runtimeFirstTaskDisplayEvent } from "./taskRuntimeDisplay"
 
 const NEW_TASK_SHORTCUT = "mod+n"
 const PREVIOUS_TASK_SHORTCUT_LABEL = "↑"
@@ -49,15 +50,17 @@ function codeEventToPreviewEvent(event: CodeEvent): TaskPreviewLastEvent {
     }
 }
 
-function getInProgressEventForTask(codeStore: ReturnType<typeof useCodeStore>, taskId: string): TaskPreviewLastEvent | null {
+function getInProgressEventForTask(codeStore: ReturnType<typeof useCodeStore>, preview: TaskPreview): TaskPreviewLastEvent | null {
+    const taskId = preview.id
     const task = codeStore.tasks.getTask(taskId)
-    if (!task || task.events.length === 0) return null
-
-    const lastEvent = task.events[task.events.length - 1]
-    if (lastEvent.status === "in_progress") {
-        return codeEventToPreviewEvent(lastEvent)
+    if (task && task.events.length > 0) {
+        const lastEvent = task.events[task.events.length - 1]
+        if (lastEvent.status === "in_progress") {
+            return codeEventToPreviewEvent(lastEvent)
+        }
     }
-    return null
+
+    return runtimeFirstTaskDisplayEvent(preview.lastEvent, codeStore.isTaskRunning(taskId))
 }
 
 // ============================================================================
@@ -365,7 +368,7 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     const pinnedSet = new Set(codeStore.personalSettingsStore?.settings.current.pinnedTaskIds ?? [])
     const sortedPreviews = sortTaskPreviewsLikeSidebar(previews, {
         pinnedTaskIds: pinnedSet,
-        workingTaskIds: codeStore.workingTaskIds,
+        runningTaskIds: codeStore.runtimes.runningTaskIds,
     })
     const selectedOpenIds = sortedPreviews.filter((preview) => selectedIds.has(preview.id) && !preview.closed).map((preview) => preview.id)
     const creations = codeStore.creation.getCreationsForRepo(workspaceId)
@@ -620,7 +623,7 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
                                     isActive={taskId === preview.id}
                                     isUnread={!preview.closed && !!preview.lastEventAt && (!preview.lastViewedAt || preview.lastEventAt > preview.lastViewedAt)}
                                     isPinned={pinnedSet.has(preview.id)}
-                                    inProgressEvent={getInProgressEventForTask(codeStore, preview.id)}
+                                    inProgressEvent={getInProgressEventForTask(codeStore, preview)}
                                     selectionMode={selectionMode}
                                     isSelected={selectedIds.has(preview.id)}
                                     onSelect={() => handleSelectTask(preview.id)}

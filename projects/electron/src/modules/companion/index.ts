@@ -11,10 +11,10 @@ import {
     startPairing,
     updateSettings,
 } from "./auth"
-import { cleanupRendererBridge, loadRendererBridge } from "./rendererBridge"
 import { getPublicBaseUrl } from "./network"
 import { cleanupPowerKeeper, configurePowerKeeper } from "./powerKeeper"
 import { closeCompanionStreams, getBoundUrls, startCompanionServer, stopCompanionServer } from "./server"
+import { cleanupRuntimeIpc, loadRuntimeIpc } from "./runtimeIpc"
 
 async function ensureServer(): Promise<string[]> {
     const settings = loadSettings()
@@ -48,7 +48,7 @@ async function setEnabled(enabled: boolean) {
 }
 
 export function load(): void {
-    loadRendererBridge()
+    loadRuntimeIpc()
 
     ipcMain.handle("companion:getState", () => currentState())
     ipcMain.handle("companion:setEnabled", async (_event, enabled: boolean) => setEnabled(enabled === true))
@@ -97,7 +97,7 @@ export async function cleanup(): Promise<void> {
     ipcMain.removeHandler("companion:revokeDevice")
     ipcMain.removeHandler("companion:dropAllDevices")
     flushLastSeen()
-    cleanupRendererBridge()
+    cleanupRuntimeIpc()
     cleanupPowerKeeper()
     await stopCompanionServer()
 }

@@ -1,4 +1,5 @@
 import { isCodeModuleAvailable } from "./capabilities"
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
 
 export interface HarnessInstallStatus {
     installed: boolean
@@ -40,7 +41,7 @@ function normalizeHarnessStatus(value: unknown): HarnessInstallStatus | null {
 }
 
 export function isHarnessStatusApiAvailable(): boolean {
-    return isCodeModuleAvailable() && !!window.openadeAPI?.harness?.checkStatus
+    return isCodeModuleAvailable() && !!window.openadeAPI?.runtime
 }
 
 export function normalizeHarnessStatuses(raw: unknown): HarnessStatusMap {
@@ -57,7 +58,7 @@ export function normalizeHarnessStatuses(raw: unknown): HarnessStatusMap {
 }
 
 export async function getHarnessStatuses(): Promise<HarnessStatusResult> {
-    if (!window.openadeAPI?.harness?.checkStatus) {
+    if (!isHarnessStatusApiAvailable()) {
         return {
             statuses: {},
             error: "Harness status is only available in Electron.",
@@ -65,10 +66,12 @@ export async function getHarnessStatuses(): Promise<HarnessStatusResult> {
     }
 
     try {
-        const raw = await window.openadeAPI.harness.checkStatus()
-        const statuses = normalizeHarnessStatuses(raw)
+        const raw = await localRuntimeClient.request("agent/provider/status")
+        const rawRecord = isRecord(raw) ? raw : null
+        const statusPayload = rawRecord && "status" in rawRecord ? rawRecord.status : raw
+        const statuses = normalizeHarnessStatuses(statusPayload)
 
-        if (!isRecord(raw)) {
+        if (!isRecord(raw) && !isRecord(statusPayload)) {
             return {
                 statuses,
                 error: "Received an invalid harness status response.",

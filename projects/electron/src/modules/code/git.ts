@@ -5,14 +5,12 @@
  * Implements worktree management, diff generation, file listing with fuzzy search, and basic git commands.
  */
 
-import { ipcMain, type IpcMainInvokeEvent } from "electron"
 import * as path from "path"
 import * as os from "os"
 import * as fs from "fs"
 import * as fsExtra from "fs-extra"
 import logger from "electron-log"
 import fuzzysort from "fuzzysort"
-import { isDev } from "../../config"
 import { execCommand } from "./subprocess"
 
 // ============================================================================
@@ -20,72 +18,62 @@ import { execCommand } from "./subprocess"
 // IMPORTANT: Keep in sync with projects/dashboard/src/pages/code/electronAPI/git.ts
 // ============================================================================
 
-interface IsGitInstalledResponse {
+export interface IsGitInstalledResponse {
     installed: boolean
     version?: string
 }
 
-interface IsGitDirParams {
-    repoDir: string
-}
-
-interface IsGitDirResponse {
-    isGitRepo: boolean
-    mainBranch?: string
-    error?: string
-}
-
-interface GetOrCreateWorkTreeParams {
+export interface GetOrCreateWorkTreeParams {
     repoDir: string
     id: string
     sourceTreeish?: string
 }
 
-interface GetOrCreateWorkTreeResponse {
+export interface GetOrCreateWorkTreeResponse {
     worktreeDir: string
     matchingDir: string
     created: boolean
 }
 
-interface WorkTreeDiffPatchParams {
+export interface WorkTreeDiffPatchParams {
     repoDir: string
     workTreeId: string
     compareToCommit: string // Commit SHA to diff against (e.g., merge-base)
 }
 
-interface WorkTreeDiffPatchResponse {
+export interface WorkTreeDiffPatchResponse {
     patch: string
 }
 
-interface GetMergeBaseParams {
+export interface GetMergeBaseParams {
     repoDir: string
     workTreeId: string
     targetBranch: string // Branch to find merge-base with (e.g., "main")
 }
 
-interface GetMergeBaseResponse {
+export interface GetMergeBaseResponse {
     mergeBaseCommit: string
 }
 
-interface GitStatusParams {
+export interface GitStatusParams {
     repoDir: string
     workTreeId?: string // Optional - if not provided, checks the main repo directly
 }
 
-interface UncommittedChangesStats {
+export interface UncommittedChangesStats {
     filesChanged: number
     insertions: number
     deletions: number
 }
 
 /** File info returned from git status with binary detection */
-interface GitFileInfo {
+export interface GitFileInfo {
     path: string
     binary: boolean
     status?: "added" | "deleted" | "modified" | "renamed"
 }
 
-interface GitSummaryResponse {
+export interface GitSummaryResponse {
     // Git ref info
     branch: string | null // Current branch name (null if detached HEAD)
     headCommit: string // Short SHA of HEAD commit
@@ -106,7 +94,7 @@ interface GitSummaryResponse {
     untracked: GitFileInfo[]
 }
 
-interface GitStatusResponse extends GitSummaryResponse {
+export interface GitStatusResponse extends GitSummaryResponse {
     staged: {
         files: GitFileInfo[]
         patch: string
@@ -119,91 +107,91 @@ interface GitStatusResponse extends GitSummaryResponse {
     }
 }
 
-interface ListFilesParams {
+export interface ListFilesParams {
     repoDir: string
     workTreeId?: string
     query?: string
     limit?: number
 }
 
-interface ListFilesResponse {
+export interface ListFilesResponse {
     files: string[]
     truncated: boolean
 }
 
-interface DeleteWorkTreeParams {
+export interface DeleteWorkTreeParams {
     repoDir: string
     id: string
 }
 
-interface DeleteWorkTreeResponse {
+export interface DeleteWorkTreeResponse {
     deleted: boolean
     error?: string
 }
 
-interface IsBranchMergedParams {
+export interface IsBranchMergedParams {
     repoDir: string
     branchName: string
     targetBranch: string
 }
 
-interface DeleteBranchParams {
+export interface DeleteBranchParams {
     repoDir: string
     branchName: string
 }
 
-interface ListWorkTreesParams {
+export interface ListWorkTreesParams {
     repoDir: string
 }
 
-interface WorkTreeInfo {
+export interface WorkTreeInfo {
     id: string
     path: string
     branch: string
     head: string
 }
 
-interface ListWorkTreesResponse {
+export interface ListWorkTreesResponse {
     worktrees: WorkTreeInfo[]
 }
 
-interface CommitWorkTreeParams {
+export interface CommitWorkTreeParams {
     repoDir: string
     workTreeId: string
     message: string
 }
 
-interface CommitWorkTreeResponse {
+export interface CommitWorkTreeResponse {
     committed: boolean
     sha?: string
     error?: string
 }
 
-interface ListBranchesParams {
+export interface ListBranchesParams {
     repoDir: string
     includeRemote?: boolean
 }
 
-interface BranchInfo {
+export interface BranchInfo {
     name: string
     isDefault: boolean
     isRemote: boolean
 }
 
-interface ListBranchesResponse {
+export interface ListBranchesResponse {
     branches: BranchInfo[]
     defaultBranch: string
 }
 
-interface CheckGhCliResponse {
+export interface CheckGhCliResponse {
     hasGhCli: boolean
 }
 
-interface IsGitDirectoryParams {
+export interface IsGitDirectoryParams {
     directory: string
 }
 
-type IsGitDirectoryResponse =
+export type IsGitDirectoryResponse =
     | {
           isGitDirectory: true
           repoRoot: string
@@ -216,56 +204,56 @@ type IsGitDirectoryResponse =
           error?: string
       }
 
-interface ResolvePathParams {
+export interface ResolvePathParams {
     path: string
 }
 
-interface ResolvePathResponse {
+export interface ResolvePathResponse {
     resolvedPath: string
     exists: boolean
     isDirectory: boolean
 }
 
-interface InitGitParams {
+export interface InitGitParams {
     directory: string
 }
 
-interface InitGitResponse {
+export interface InitGitResponse {
     success: boolean
     error?: string
 }
 
-interface GetChangedFilesParams {
+export interface GetChangedFilesParams {
     workDir: string
     fromTreeish: string
     toTreeish: string
 }
 
-interface ChangedFileInfo {
+export interface ChangedFileInfo {
     path: string
     status: "added" | "deleted" | "modified" | "renamed"
     oldPath?: string // For renamed files
 }
 
-interface GetChangedFilesResponse {
+export interface GetChangedFilesResponse {
     files: ChangedFileInfo[]
     fromTreeish: string
     toTreeish: string
 }
 
-interface GetFileAtTreeishParams {
+export interface GetFileAtTreeishParams {
     workDir: string
     treeish: string
     filePath: string
 }
 
-interface GetFileAtTreeishResponse {
+export interface GetFileAtTreeishResponse {
     content: string
     exists: boolean
     tooLarge?: boolean
 }
 
-interface GetFilePairParams {
+export interface GetFilePairParams {
     workDir: string
     fromTreeish: string
     toTreeish: string
@@ -273,13 +261,13 @@ interface GetFilePairParams {
     oldPath?: string // For renamed files
 }
 
-interface GetFilePairResponse {
+export interface GetFilePairResponse {
     before: string
     after: string
     tooLarge?: boolean
 }
 
-interface GetWorktreeFilePatchParams {
+export interface GetWorktreeFilePatchParams {
     workDir: string
     fromTreeish: string
     filePath: string
@@ -288,7 +276,7 @@ interface GetWorktreeFilePatchParams {
     allowTruncation?: boolean
 }
 
-interface GetCommitFilePatchParams {
+export interface GetCommitFilePatchParams {
     workDir: string
     commit: string
     filePath: string
@@ -297,7 +285,7 @@ interface GetCommitFilePatchParams {
     allowTruncation?: boolean
 }
 
-interface GetFilePatchResponse {
+export interface GetFilePatchResponse {
     patch: string
     truncated: boolean
     heavy: boolean
@@ -309,14 +297,14 @@ interface GetFilePatchResponse {
     }
 }
 
-interface GetGitLogParams {
+export interface GetGitLogParams {
     workDir: string
     ref?: string
     limit?: number
     skip?: number
 }
 
-interface GitLogEntry {
+export interface GitLogEntry {
     sha: string
     shortSha: string
     message: string
@@ -326,17 +314,17 @@ interface GitLogEntry {
     parentCount: number
 }
 
-interface GetGitLogResponse {
+export interface GetGitLogResponse {
     commits: GitLogEntry[]
     hasMore: boolean
 }
 
-interface GetCommitFilesParams {
+export interface GetCommitFilesParams {
     workDir: string
     commit: string
 }
 
-interface GetCommitFilesResponse {
+export interface GetCommitFilesResponse {
     files: ChangedFileInfo[]
 }
 
@@ -513,24 +501,6 @@ function parseWorktreeList(output: string): WorkTreeInfo[] {
     return worktrees
 }
 
-/**
- * Check if caller is allowed
- */
-function checkAllowed(e: IpcMainInvokeEvent): boolean {
-    const origin = e.sender.getURL()
-    try {
-        const url = new URL(origin)
-        if (isDev) {
-            return url.hostname.endsWith("localhost")
-        } else {
-            return url.hostname.endsWith("localhost") || url.protocol === "file:"
-        }
-    } catch (error) {
-        logger.error("[Git:checkAllowed] Failed to parse origin:", error)
-        return false
-    }
-}
-
 // ============================================================================
 // IPC Handlers
 // ============================================================================
@@ -649,55 +619,6 @@ async function handleIsGitDirectory(params: IsGitDirectoryParams): Promise<IsGit
             isGitDirectory: false,
             error: error.message,
         }
-    }
-}
-
-/**
- * Check if directory is a git repository and detect main branch
- * (Legacy handler - supports subdirectories via resolveGitInfo)
- */
-async function handleIsGitDir(params: IsGitDirParams): Promise<IsGitDirResponse> {
-    const startTime = Date.now()
-    logger.info("[Git:isGitDir] Checking if directory is a git repo", JSON.stringify({ repoDir: params.repoDir }))
-
-    try {
-        validateRepoDir(params.repoDir)
-
-        // Use resolveGitInfo to handle subdirectories
-        const { repoRoot } = await resolveGitInfo(params.repoDir)
-
-        // Detect main branch using repo root
-        let mainBranch = "main"
-
-        // Try to get from remote HEAD
-        const remoteHeadResult = await execGit(["symbolic-ref", "refs/remotes/origin/HEAD"], repoRoot)
-        if (remoteHeadResult.success) {
-            const refName = remoteHeadResult.stdout.trim()
-            mainBranch = refName.replace("refs/remotes/origin/", "")
-            logger.info("[Git:isGitDir] Detected main branch from remote HEAD", JSON.stringify({ mainBranch, repoDir: params.repoDir, duration: Date.now() - startTime }))
-            return { isGitRepo: true, mainBranch }
-        }
-
-        // Check if main exists
-        const mainExistsResult = await execGit(["show-ref", "--verify", "refs/heads/main"], repoRoot)
-        if (mainExistsResult.success) {
-            logger.info("[Git:isGitDir] Found main branch", JSON.stringify({ repoDir: params.repoDir, duration: Date.now() - startTime }))
-            return { isGitRepo: true, mainBranch: "main" }
-        }
-
-        // Check if master exists
-        const masterExistsResult = await execGit(["show-ref", "--verify", "refs/heads/master"], repoRoot)
-        if (masterExistsResult.success) {
-            logger.info("[Git:isGitDir] Found master branch", JSON.stringify({ repoDir: params.repoDir, duration: Date.now() - startTime }))
-            return { isGitRepo: true, mainBranch: "master" }
-        }
-
-        // Default to main
-        logger.info("[Git:isGitDir] No main/master found, defaulting to main", JSON.stringify({ repoDir: params.repoDir, duration: Date.now() - startTime }))
-        return { isGitRepo: true, mainBranch: "main" }
-    } catch (error: any) {
-        logger.info("[Git:isGitDir] Not a git repository", JSON.stringify({ repoDir: params.repoDir, error: error.message, duration: Date.now() - startTime }))
-        return { isGitRepo: false, error: error.message }
     }
 }
 
@@ -2354,6 +2275,102 @@ export async function getHotFiles(repoDir: string): Promise<Record<string, numbe
     return files
 }
 
+export async function isRuntimeGitDirectory(params: IsGitDirectoryParams): Promise<IsGitDirectoryResponse> {
+    return handleIsGitDirectory(params)
+}
+
+export async function isRuntimeGitInstalled(): Promise<IsGitInstalledResponse> {
+    return handleIsGitInstalled()
+}
+
+export async function checkRuntimeGhCli(): Promise<CheckGhCliResponse> {
+    return handleCheckGhCli()
+}
+
+export async function getOrCreateRuntimeWorkTree(params: GetOrCreateWorkTreeParams): Promise<GetOrCreateWorkTreeResponse> {
+    return handleGetOrCreateWorkTree(params)
+}
+
+export async function getRuntimeWorkTreeDiffPatch(params: WorkTreeDiffPatchParams): Promise<WorkTreeDiffPatchResponse> {
+    return handleWorkTreeDiffPatch(params)
+}
+
+export async function getRuntimeMergeBase(params: GetMergeBaseParams): Promise<GetMergeBaseResponse> {
+    return handleGetMergeBase(params)
+}
+
+export async function getRuntimeGitSummary(params: GitStatusParams): Promise<GitSummaryResponse> {
+    return handleGetGitSummary(params)
+}
+
+export async function getRuntimeGitStatus(params: GitStatusParams): Promise<GitStatusResponse> {
+    return handleGetGitStatus(params)
+}
+
+export async function listRuntimeGitFiles(params: ListFilesParams): Promise<ListFilesResponse> {
+    return handleListFiles(params)
+}
+
+export async function resolveRuntimeGitPath(params: ResolvePathParams): Promise<ResolvePathResponse> {
+    return handleResolvePath(params)
+}
+
+export async function getRuntimeGitLog(params: GetGitLogParams): Promise<GetGitLogResponse> {
+    return handleGetGitLog(params)
+}
+
+export async function getRuntimeChangedFiles(params: GetChangedFilesParams): Promise<GetChangedFilesResponse> {
+    return handleGetChangedFiles(params)
+}
+
+export async function deleteRuntimeWorkTree(params: DeleteWorkTreeParams): Promise<DeleteWorkTreeResponse> {
+    return handleDeleteWorkTree(params)
+}
+
+export async function isRuntimeBranchMerged(params: IsBranchMergedParams): Promise<boolean> {
+    return handleIsBranchMerged(params)
+}
+
+export async function deleteRuntimeBranch(params: DeleteBranchParams): Promise<void> {
+    await handleDeleteBranch(params)
+}
+
+export async function listRuntimeWorkTrees(params: ListWorkTreesParams): Promise<ListWorkTreesResponse> {
+    return handleListWorkTrees(params)
+}
+
+export async function commitRuntimeWorkTree(params: CommitWorkTreeParams): Promise<CommitWorkTreeResponse> {
+    return handleCommitWorkTree(params)
+}
+
+export async function listRuntimeBranches(params: ListBranchesParams): Promise<ListBranchesResponse> {
+    return handleListBranches(params)
+}
+
+export async function initRuntimeGit(params: InitGitParams): Promise<InitGitResponse> {
+    return handleInitGit(params)
+}
+
+export async function getRuntimeFileAtTreeish(params: GetFileAtTreeishParams): Promise<GetFileAtTreeishResponse> {
+    return handleGetFileAtTreeish(params)
+}
+
+export async function getRuntimeFilePair(params: GetFilePairParams): Promise<GetFilePairResponse> {
+    return handleGetFilePair(params)
+}
+
+export async function getRuntimeWorktreeFilePatch(params: GetWorktreeFilePatchParams): Promise<GetFilePatchResponse> {
+    return handleGetWorktreeFilePatch(params)
+}
+
+export async function getRuntimeCommitFilePatch(params: GetCommitFilePatchParams): Promise<GetFilePatchResponse> {
+    return handleGetCommitFilePatch(params)
+}
+
+export async function getRuntimeCommitFiles(params: GetCommitFilesParams): Promise<GetCommitFilesResponse> {
+    return handleGetCommitFiles(params)
+}
+
 /**
  * Build hot files cache by analyzing recent commits.
  * Tries to use local git user's commits first, falls back to all authors.
@@ -2395,141 +2412,6 @@ export const __test__ = {
     getUntrackedFilePatch,
     handleGetWorktreeFilePatch,
     handleGetCommitFilePatch,
-}
-
-// ============================================================================
-// Module Export
-// ============================================================================
-
-export const load = () => {
-    logger.info("[Git] Registering IPC handlers")
-
-    ipcMain.handle("git:isGitInstalled", async (event) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleIsGitInstalled()
-    })
-
-    ipcMain.handle("git:isGitDir", async (event, params: IsGitDirParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleIsGitDir(params)
-    })
-
-    ipcMain.handle("git:isGitDirectory", async (event, params: IsGitDirectoryParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleIsGitDirectory(params)
-    })
-
-    ipcMain.handle("git:checkGhCli", async (event) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleCheckGhCli()
-    })
-
-    ipcMain.handle("git:getOrCreateWorkTree", async (event, params: GetOrCreateWorkTreeParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleGetOrCreateWorkTree(params)
-    })
-
-    ipcMain.handle("git:workTreeDiffPatch", async (event, params: WorkTreeDiffPatchParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleWorkTreeDiffPatch(params)
-    })
-
-    ipcMain.handle("git:getMergeBase", async (event, params: GetMergeBaseParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleGetMergeBase(params)
-    })
-
-    ipcMain.handle("git:getGitSummary", async (event, params: GitStatusParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleGetGitSummary(params)
-    })
-
-    ipcMain.handle("git:getGitStatus", async (event, params: GitStatusParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleGetGitStatus(params)
-    })
-
-    ipcMain.handle("git:listFiles", async (event, params: ListFilesParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleListFiles(params)
-    })
-
-    ipcMain.handle("git:deleteWorkTree", async (event, params: DeleteWorkTreeParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleDeleteWorkTree(params)
-    })
-
-    ipcMain.handle("git:isBranchMerged", async (event, params: IsBranchMergedParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleIsBranchMerged(params)
-    })
-
-    ipcMain.handle("git:deleteBranch", async (event, params: DeleteBranchParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleDeleteBranch(params)
-    })
-
-    ipcMain.handle("git:listWorkTrees", async (event, params: ListWorkTreesParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleListWorkTrees(params)
-    })
-
-    ipcMain.handle("git:commitWorkTree", async (event, params: CommitWorkTreeParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleCommitWorkTree(params)
-    })
-
-    ipcMain.handle("git:listBranches", async (event, params: ListBranchesParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleListBranches(params)
-    })
-
-    ipcMain.handle("git:resolvePath", async (event, params: ResolvePathParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleResolvePath(params)
-    })
-
-    ipcMain.handle("git:initGit", async (event, params: InitGitParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleInitGit(params)
-    })
-
-    ipcMain.handle("git:getLog", async (event, params: GetGitLogParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleGetGitLog(params)
-    })
-
-    ipcMain.handle("git:getCommitFiles", async (event, params: GetCommitFilesParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleGetCommitFiles(params)
-    })
-
-    ipcMain.handle("git:getChangedFiles", async (event, params: GetChangedFilesParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleGetChangedFiles(params)
-    })
-
-    ipcMain.handle("git:getFileAtTreeish", async (event, params: GetFileAtTreeishParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleGetFileAtTreeish(params)
-    })
-
-    ipcMain.handle("git:getFilePair", async (event, params: GetFilePairParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleGetFilePair(params)
-    })
-
-    ipcMain.handle("git:getWorktreeFilePatch", async (event, params: GetWorktreeFilePatchParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleGetWorktreeFilePatch(params)
-    })
-
-    ipcMain.handle("git:getCommitFilePatch", async (event, params: GetCommitFilePatchParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleGetCommitFilePatch(params)
-    })
-
-    logger.info("[Git] IPC handlers registered successfully")
 }
 
 export const cleanup = () => {

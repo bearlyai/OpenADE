@@ -1,13 +1,8 @@
 import { makeAutoObservable, runInAction } from "mobx"
-import { dataFolderApi } from "../../electronAPI/dataFolder"
 import { gitApi } from "../../electronAPI/git"
-import { deleteHarnessSession } from "../../electronAPI/harnessQuery"
-import { getTaskPtyId, ptyApi } from "../../electronAPI/pty"
-import { snapshotsApi } from "../../electronAPI/snapshots"
-import { deleteTaskPreview, syncTaskPreviewFromStore, taskFromStore, updateTaskPreview } from "../../persistence"
-import { getStorageDriver } from "../../persistence/storage"
-import type { TaskStore } from "../../persistence/taskStore"
+import { taskFromStore } from "../../persistence"
 import { fallbackTitle, generateTitle } from "../../prompts/titleExtractor"
+import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { Task, TaskDeviceEnvironment } from "../../types"
 import { TaskModel } from "../TaskModel"
 import type { CodeStore } from "../store"
@@ -40,36 +35,19 @@ export interface DeleteOptions {
 }
 
 export class TaskManager {
-    tasksById: Map<string, Task> = new Map()
     tasksLoading = false
     loadedRepoIds: Set<string> = new Set()
     regeneratingTitleTaskIds: Set<string> = new Set()
     private taskModels: Map<string, TaskModel> = new Map()
     private taskUIStates: Map<string, TaskUIStateManager> = new Map()
-    private disposers: Array<() => void> = []
 
     constructor(private store: CodeStore) {
         makeAutoObservable(this, {
-            tasksById: true,
             loadedRepoIds: true,
         })
-        this.init()
-    }
-
-    private init(): void {
-        this.disposers.push(
-            this.store.execution.onAfterEvent((taskId) => {
-                this.markTaskHasNewEvent(taskId)
-            })
-        )
     }
 
     getTask(taskId: string): Task | null {
-        // First check cache (for backward compat with working tasks)
-        const cached = this.tasksById.get(taskId)
-        if (cached) return cached
-
-        // Otherwise, get from TaskStore if loaded
         const taskStore = this.store.getCachedTaskStore(taskId)
         if (taskStore) {
             return taskFromStore(taskStore)
@@ -113,7 +91,7 @@ export class TaskManager {
     }
 
     getTaskModel(taskId: string): TaskModel | null {
-        if (!this.store.getCachedTaskStore(taskId) && !this.tasksById.has(taskId)) return null
+        if (!this.store.getCachedTaskStore(taskId)) return null
 
         const cached = this.taskModels.get(taskId)
         if (cached) {
@@ -145,80 +123,17 @@ export class TaskManager {
         this.taskModels.delete(taskId)
     }
 
-    /** @deprecated - Kept for backward compat during migration. Use TaskStore directly. */
-    updateTask(task: Task): void {
-        runInAction(() => this.tasksById.set(task.id, task))
-    }
-
     ensureTasksLoaded(repoId: string): void {
         // Tasks are now loaded from RepoStore previews - no separate loading needed
         this.loadedRepoIds.add(repoId)
     }
 
     async removeTask(id: string): Promise<void> {
-        const task = this.getTask(id)
-
-        // Find repoId - from task if loaded, otherwise search RepoStore previews
-        let repoId = task?.repoId
-        if (!repoId && this.store.repoStore) {
-            // Task not loaded - find it in RepoStore previews
-            for (const repo of this.store.repoStore.repos.all()) {
-                const preview = repo.tasks.find((t) => t.id === id)
-                if (preview) {
-                    repoId = repo.id
-                    console.debug("[TaskManager] Found orphaned task preview, repoId:", repoId)
-                    break
-                }
-            }
-        }
-
-        if (!repoId) {
-            console.warn("[TaskManager] Cannot remove task - not found in task store or repo previews:", id)
-            return
-        }
-
-        // Delete snapshot patch files if TaskStore is available
-        const taskStore = this.store.getCachedTaskStore(id)
-        if (taskStore && snapshotsApi.isAvailable()) {
-            const events = taskStore.events.all()
-            for (const event of events) {
-                if (event.type === "snapshot" && event.patchFileId) {
-                    try {
-                        await snapshotsApi.delete(event.patchFileId)
-                        console.debug("[TaskManager] Deleted snapshot patch file:", event.patchFileId)
-                    } catch (err) {
-                        console.warn("[TaskManager] Failed to delete snapshot patch file:", err)
-                    }
-                }
-            }
-        }
-
-        // Delete from RepoStore
-        if (this.store.repoStore) {
-            deleteTaskPreview(this.store.repoStore, repoId, id)
-        }
-
-        // Disconnect TaskStore
-        this.store.disconnectTaskStore(id)
-
-        // Clean up pinned state
-        const pinned = this.store.personalSettingsStore?.settings.current.pinnedTaskIds
-        if (pinned?.includes(id)) {
-            this.store.personalSettingsStore?.settings.set({
-                pinnedTaskIds: pinned.filter((pid) => pid !== id),
-            })
-        }
-
-        // Cleanup local state
-        const model = this.taskModels.get(id)
-        if (model) {
-            model.dispose()
-        }
-        runInAction(() => {
-            this.tasksById.delete(id)
-            this.taskModels.delete(id)
-            this.taskUIStates.delete(id)
-            this.store.workingTaskIds.delete(id)
+        await this.deepRemoveTask(id, {
+            deleteSnapshots: false,
+            deleteImages: false,
+            deleteSessions: false,
+            deleteWorktrees: false,
         })
     }
 
@@ -307,7 +222,7 @@ export class TaskManager {
             results.push({
                 taskId: id,
                 taskTitle: meta.title || meta.description || "Untitled",
-                isRunning: this.store.workingTaskIds.has(id),
+                isRunning: this.store.isTaskRunning(id),
                 snapshotIds,
                 images,
                 sessions: [...sessions.entries()].map(([sessionId, harnessId]) => ({ sessionId, harnessId })),
@@ -325,73 +240,16 @@ export class TaskManager {
     }
 
     async deepRemoveTask(id: string, options: DeleteOptions): Promise<void> {
-        // 1. Abort active query + kill terminal
-        await this.store.queries.abortTask(id)
-        ptyApi.kill(getTaskPtyId(id)).catch(() => {})
-
-        // 2. Resolve repoId
         const repoId = this.resolveRepoId(id)
         if (!repoId) {
             console.warn("[TaskManager] deepRemoveTask: Cannot find repoId for task", id)
             return
         }
 
-        // 3. Load TaskStore if needed
-        const taskStore = await this.ensureTaskStore(id, repoId)
-        const meta = taskStore.meta.current
-        const events = taskStore.events.all()
-
-        // 4. Conditionally delete snapshots
-        if (options.deleteSnapshots && snapshotsApi.isAvailable()) {
-            for (const event of events) {
-                if (event.type === "snapshot" && event.patchFileId) {
-                    await snapshotsApi.delete(event.patchFileId).catch(() => {})
-                }
-            }
-        }
-
-        // 5. Conditionally delete images
-        if (options.deleteImages && dataFolderApi.isAvailable()) {
-            for (const event of events) {
-                if (event.type === "action" && event.images?.length) {
-                    for (const img of event.images) {
-                        await dataFolderApi.delete("images", img.id, img.ext).catch(() => {})
-                    }
-                }
-            }
-        }
-
-        // 6. Conditionally delete harness sessions
-        if (options.deleteSessions) {
-            const sessionEntries = new Map<string, string>()
-            for (const sid of Object.values(meta.sessionIds)) {
-                sessionEntries.set(sid, "claude-code")
-            }
-            for (const event of events) {
-                if (event.type === "action" && event.execution?.sessionId) {
-                    sessionEntries.set(event.execution.sessionId, event.execution.harnessId ?? "claude-code")
-                }
-            }
-            for (const [sessionId, harnessId] of sessionEntries) {
-                await deleteHarnessSession({ harnessId, sessionId }).catch(() => {})
-            }
-        }
-
-        // 7. Conditionally delete worktree + branch
-        if (options.deleteWorktrees && meta.isolationStrategy.type === "worktree") {
-            const gitInfo = await this.store.repos.getGitInfo(repoId)
-            if (gitInfo) {
-                await gitApi.deleteWorkTree({ repoDir: gitInfo.repoRoot, id: meta.slug }).catch(() => {})
-                await gitApi.deleteBranch({ repoDir: gitInfo.repoRoot, branchName: `openade/${meta.slug}` }).catch(() => {})
-            }
-        }
-
-        // 8. Always: delete TaskPreview, disconnect + delete YJS doc, clean runtime state
-        if (this.store.repoStore) {
-            deleteTaskPreview(this.store.repoStore, repoId, id)
-        }
+        await this.store.queries.abortTask(id)
+        await localOpenADEClient.deleteTask({ repoId, taskId: id, options })
+        await this.store.refreshRepoStoreFromStorage()
         this.store.disconnectTaskStore(id)
-        await getStorageDriver().deleteDoc(`code:task:${id}`)
 
         // Clean up pinned state
         const pinned = this.store.personalSettingsStore?.settings.current.pinnedTaskIds
@@ -406,41 +264,24 @@ export class TaskManager {
             model.dispose()
         }
         runInAction(() => {
-            this.tasksById.delete(id)
             this.taskModels.delete(id)
             this.taskUIStates.delete(id)
-            this.store.workingTaskIds.delete(id)
         })
+        this.store.runtimes.removeTask(id)
     }
 
     // ==================== Session Management ====================
 
     async setSessionId({ taskId, key, sessionId }: { taskId: string; key: string; sessionId: string }): Promise<void> {
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) return
-
-        taskStore.meta.update((draft) => {
-            draft.sessionIds[key] = sessionId
-            draft.updatedAt = new Date().toISOString()
-        })
+        await localOpenADEClient.updateTaskMetadata({ taskId, sessionIds: { [key]: sessionId } })
+        await this.store.refreshTaskStoreFromStorage(taskId)
+        await this.store.refreshRepoStoreFromStorage()
     }
 
     async addDeviceEnvironment(taskId: string, deviceEnv: TaskDeviceEnvironment): Promise<void> {
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) return
-
-        // Check if exists
-        const existing = taskStore.deviceEnvironments.all().find((de) => de.deviceId === deviceEnv.deviceId)
-        if (existing) {
-            taskStore.deviceEnvironments.update(existing.id, () => deviceEnv)
-        } else {
-            taskStore.deviceEnvironments.push(deviceEnv)
-        }
-
-        taskStore.meta.update((draft) => {
-            draft.updatedAt = new Date().toISOString()
-        })
-
+        await localOpenADEClient.setupTaskEnvironment({ taskId, deviceEnvironment: deviceEnv })
+        await this.store.refreshTaskStoreFromStorage(taskId)
+        await this.store.refreshRepoStoreFromStorage()
         this.invalidateTaskModel(taskId)
     }
 
@@ -467,74 +308,29 @@ export class TaskManager {
         const taskStore = this.store.getCachedTaskStore(taskId)
         if (!taskStore) return
 
-        taskStore.meta.update((draft) => {
-            draft.lastViewedAt = new Date().toISOString()
-            draft.updatedAt = new Date().toISOString()
-        })
-
-        // Sync to RepoStore so sidebar unread badge updates
-        if (this.store.repoStore) {
-            syncTaskPreviewFromStore(this.store.repoStore, taskStore.meta.current.repoId, taskStore)
-        }
-    }
-
-    private markTaskHasNewEvent(taskId: string): void {
-        // Skip if user is currently viewing this task (it's already "read")
-        if (window.location.hash.includes(taskId)) return
-
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) return
-
-        const now = new Date().toISOString()
-        taskStore.meta.update((draft) => {
-            draft.lastEventAt = now
-            draft.updatedAt = now
-        })
-
-        // Sync to RepoStore for sidebar badge
-        if (this.store.repoStore) {
-            syncTaskPreviewFromStore(this.store.repoStore, taskStore.meta.current.repoId, taskStore)
-        }
+        await localOpenADEClient.updateTaskMetadata({ taskId, lastViewedAt: new Date().toISOString() })
+        await this.store.refreshTaskStoreFromStorage(taskId)
+        await this.store.refreshRepoStoreFromStorage()
     }
 
     async setTaskClosed(taskId: string, closed: boolean): Promise<void> {
-        const repoId = this.resolveRepoId(taskId)
-        if (!repoId) {
+        if (!this.resolveRepoId(taskId)) {
             console.warn("[TaskManager] Cannot update task closed state - not found in task store or repo previews:", taskId)
             return
         }
 
-        let taskStore: TaskStore
-        try {
-            taskStore = await this.ensureTaskStore(taskId, repoId)
-        } catch (error) {
-            console.error("[TaskManager] Failed to load task store before updating closed state:", error)
-            return
-        }
-
-        // Kill terminal when closing task
-        if (closed) {
-            ptyApi.kill(getTaskPtyId(taskId)).catch(() => {})
-        }
-
-        taskStore.meta.update((draft) => {
-            draft.closed = closed
-            draft.updatedAt = new Date().toISOString()
-        })
-
-        // Sync to RepoStore
-        if (this.store.repoStore) {
-            syncTaskPreviewFromStore(this.store.repoStore, repoId, taskStore)
-        }
+        await localOpenADEClient.updateTaskMetadata({ taskId, closed })
+        await this.store.refreshTaskStoreFromStorage(taskId)
+        await this.store.refreshRepoStoreFromStorage()
     }
 
     setEnabledMcpServerIds(taskId: string, serverIds: string[]): void {
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) return
-
-        taskStore.meta.update((draft) => {
-            draft.enabledMcpServerIds = serverIds.length > 0 ? serverIds : undefined
-            draft.updatedAt = new Date().toISOString()
+        void (async () => {
+            await localOpenADEClient.updateTaskMetadata({ taskId, enabledMcpServerIds: serverIds })
+            await this.store.refreshTaskStoreFromStorage(taskId)
+            await this.store.refreshRepoStoreFromStorage()
+        })().catch((error) => {
+            console.error("[TaskManager] Failed to update MCP server selection:", error)
         })
     }
 
@@ -542,18 +338,12 @@ export class TaskManager {
         const trimmed = title.trim()
         if (!trimmed) return
 
-        const task = this.getTask(taskId)
-        if (!task) return
-
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) return
-
-        if (this.store.repoStore) {
-            updateTaskPreview(this.store.repoStore, task.repoId, taskId, { title: trimmed })
-        }
-        taskStore.meta.update((draft) => {
-            draft.title = trimmed
-            draft.updatedAt = new Date().toISOString()
+        void (async () => {
+            await localOpenADEClient.updateTaskMetadata({ taskId, title: trimmed })
+            await this.store.refreshTaskStoreFromStorage(taskId)
+            await this.store.refreshRepoStoreFromStorage()
+        })().catch((error) => {
+            console.error("[TaskManager] Failed to update task title:", error)
         })
     }
 

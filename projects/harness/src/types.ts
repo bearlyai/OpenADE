@@ -115,6 +115,8 @@ export interface HarnessQuery {
     // ── Process visibility ──
     /** Optional process label used for ps/pgrep visibility (best effort, platform-dependent). */
     processLabel?: string
+    /** Called after the harness subprocess starts, when a child PID is available. */
+    onSpawn?: (pid: number) => void
 
     // ── Control ──
     signal: AbortSignal

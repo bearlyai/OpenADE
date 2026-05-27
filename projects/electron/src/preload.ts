@@ -17,8 +17,6 @@ const createListener = (channel: string, callback: (...args: unknown[]) => void)
     return () => ipcRenderer.removeListener(channel, handler)
 }
 
-const toJsonIpcPayload = (value: unknown) => JSON.stringify(value)
-
 const openadeAPI = {
     // ========================================================================
     // App Controls
@@ -61,256 +59,12 @@ const openadeAPI = {
     },
 
     // ========================================================================
-    // Directory Access (legacy)
-    // ========================================================================
-    dir: {
-        enabled: () => ipcRenderer.invoke("dir-access-enabled"),
-        list: (args: unknown) => ipcRenderer.invoke("list-dir", args),
-        getDirFromPath: (args: unknown) => ipcRenderer.invoke("get-dir-from-path", args),
-        fileContents: (args: unknown) => ipcRenderer.invoke("file-contents", args),
-        selectDirectory: (args?: unknown) => ipcRenderer.invoke("select-directory", args),
-    },
-
-    // ========================================================================
-    // CORS-Free Fetch
-    // ========================================================================
-    fetch: {
-        available: () => ipcRenderer.invoke("cors-free-fetch-available"),
-        fetch: (args: unknown) => ipcRenderer.invoke("cors-free-fetch", args),
-    },
-
-    // ========================================================================
-    // Capabilities
-    // ========================================================================
-    capabilities: {
-        get: () => ipcRenderer.invoke("code:capabilities"),
-        getSdk: (args: { cwd: string }) => ipcRenderer.invoke("code:sdk-capabilities", args),
-        invalidateSdk: (args: { cwd: string }) => ipcRenderer.invoke("code:invalidate-sdk-capabilities", args),
-    },
-
-    // ========================================================================
-    // Files
-    // ========================================================================
-    files: {
-        fuzzySearch: (params: unknown) => ipcRenderer.invoke("files:fuzzySearch", params),
-        describePath: (params: unknown) => ipcRenderer.invoke("files:describePath", params),
-        contentSearch: (params: unknown) => ipcRenderer.invoke("files:contentSearch", params),
-    },
-
-    // ========================================================================
-    // Git
-    // ========================================================================
-    git: {
-        isGitInstalled: () => ipcRenderer.invoke("git:isGitInstalled"),
-        isGitDir: (params: unknown) => ipcRenderer.invoke("git:isGitDir", params),
-        isGitDirectory: (params: unknown) => ipcRenderer.invoke("git:isGitDirectory", params),
-        checkGhCli: () => ipcRenderer.invoke("git:checkGhCli"),
-        getOrCreateWorkTree: (params: unknown) => ipcRenderer.invoke("git:getOrCreateWorkTree", params),
-        workTreeDiffPatch: (params: unknown) => ipcRenderer.invoke("git:workTreeDiffPatch", params),
-        getMergeBase: (params: unknown) => ipcRenderer.invoke("git:getMergeBase", params),
-        getGitSummary: (params: unknown) => ipcRenderer.invoke("git:getGitSummary", params),
-        getGitStatus: (params: unknown) => ipcRenderer.invoke("git:getGitStatus", params),
-        listFiles: (params: unknown) => ipcRenderer.invoke("git:listFiles", params),
-        deleteWorkTree: (params: unknown) => ipcRenderer.invoke("git:deleteWorkTree", params),
-        isBranchMerged: (params: unknown) => ipcRenderer.invoke("git:isBranchMerged", params),
-        deleteBranch: (params: unknown) => ipcRenderer.invoke("git:deleteBranch", params),
-        listWorkTrees: (params: unknown) => ipcRenderer.invoke("git:listWorkTrees", params),
-        commitWorkTree: (params: unknown) => ipcRenderer.invoke("git:commitWorkTree", params),
-        listBranches: (params: unknown) => ipcRenderer.invoke("git:listBranches", params),
-        resolvePath: (params: unknown) => ipcRenderer.invoke("git:resolvePath", params),
-        initGit: (params: unknown) => ipcRenderer.invoke("git:initGit", params),
-        getLog: (params: unknown) => ipcRenderer.invoke("git:getLog", params),
-        getCommitFiles: (params: unknown) => ipcRenderer.invoke("git:getCommitFiles", params),
-        getChangedFiles: (params: unknown) => ipcRenderer.invoke("git:getChangedFiles", params),
-        getFileAtTreeish: (params: unknown) => ipcRenderer.invoke("git:getFileAtTreeish", params),
-        getFilePair: (params: unknown) => ipcRenderer.invoke("git:getFilePair", params),
-        getWorktreeFilePatch: (params: unknown) => ipcRenderer.invoke("git:getWorktreeFilePatch", params),
-        getCommitFilePatch: (params: unknown) => ipcRenderer.invoke("git:getCommitFilePatch", params),
-    },
-
-    // ========================================================================
-    // Process (with streaming)
-    // ========================================================================
-    process: {
-        runCmd: (params: unknown) => ipcRenderer.invoke("process:runCmd", params),
-        runScript: (params: unknown) => ipcRenderer.invoke("process:runScript", params),
-        reconnect: (args: unknown) => ipcRenderer.invoke("process:reconnect", args),
-        kill: (args: unknown) => ipcRenderer.invoke("process:kill", args),
-        list: () => ipcRenderer.invoke("process:list"),
-        killAll: () => ipcRenderer.invoke("process:killAll"),
-        // Streaming events
-        onOutput: (processId: string, cb: (chunk: string) => void) =>
-            createListener(`process:output:${processId}`, cb as (...args: unknown[]) => void),
-        onExit: (processId: string, cb: (data: { exitCode: number | null; signal: string | null }) => void) =>
-            createListener(`process:exit:${processId}`, cb as (...args: unknown[]) => void),
-        onError: (processId: string, cb: (error: unknown) => void) =>
-            createListener(`process:error:${processId}`, cb as (...args: unknown[]) => void),
-    },
-
-    // ========================================================================
-    // PTY (with streaming)
-    // ========================================================================
-    pty: {
-        spawn: (params: unknown) => ipcRenderer.invoke("pty:spawn", params),
-        write: (params: unknown) => ipcRenderer.invoke("pty:write", params),
-        resize: (params: unknown) => ipcRenderer.invoke("pty:resize", params),
-        kill: (params: unknown) => ipcRenderer.invoke("pty:kill", params),
-        reconnect: (params: unknown) => ipcRenderer.invoke("pty:reconnect", params),
-        killAll: () => ipcRenderer.invoke("pty:killAll"),
-        // Streaming events
-        onOutput: (ptyId: string, cb: (chunk: string) => void) =>
-            createListener(`pty:output:${ptyId}`, cb as (...args: unknown[]) => void),
-        onExit: (ptyId: string, cb: (data: { exitCode: number }) => void) =>
-            createListener(`pty:exit:${ptyId}`, cb as (...args: unknown[]) => void),
-    },
-
-    // ========================================================================
-    // Harness (unified AI coding CLI interface, with streaming)
-    // ========================================================================
-    harness: {
-        // Unified command interface
-        command: (command: unknown) => ipcRenderer.invoke("harness:command", command),
-        // Convenience methods (wrap harness:command with the correct type)
-        query: (args: { executionId: string; prompt: unknown; options: unknown }) =>
-            ipcRenderer.invoke("harness:command", { id: crypto.randomUUID(), type: "start_query", ...args }),
-        toolResponse: (args: { executionId: string; callId: string; result?: unknown; error?: string }) =>
-            ipcRenderer.invoke("harness:command", { id: crypto.randomUUID(), type: "tool_response", ...args }),
-        abort: (args: { executionId: string }) =>
-            ipcRenderer.invoke("harness:command", { id: crypto.randomUUID(), type: "abort", ...args }),
-        reconnect: (args: { executionId: string }) =>
-            ipcRenderer.invoke("harness:command", { id: crypto.randomUUID(), type: "reconnect", ...args }),
-        structuredQuery: (args: { prompt: unknown; options: unknown; outputSchema: unknown }) =>
-            ipcRenderer.invoke("harness:command", { id: crypto.randomUUID(), executionId: crypto.randomUUID(), type: "structured_query", ...args }),
-        // Check install status of all registered harnesses
-        checkStatus: () => ipcRenderer.invoke("harness:check-status"),
-        deleteSession: (args: { harnessId: string; sessionId: string; cwd?: string }) =>
-            ipcRenderer.invoke("harness:deleteSession", args),
-        // Streaming events (new channel)
-        onEvent: (cb: (event: unknown) => void) =>
-            createListener("harness:event", cb as (...args: unknown[]) => void),
-        // Tool call events (per execution)
-        onToolCall: (executionId: string, cb: (callId: string, name: string, args: unknown) => void) => {
-            const handler = (_event: IpcRendererEvent, callId: string, name: string, args: unknown) =>
-                cb(callId, name, args)
-            ipcRenderer.on(`claude:tool-call:${executionId}`, handler)
-            return () => ipcRenderer.removeListener(`claude:tool-call:${executionId}`, handler)
-        },
-    },
-
-    // ========================================================================
-    // Claude (legacy backward compat — delegates to harness)
-    // ========================================================================
-    claude: {
-        // Unified command interface (legacy channel)
-        command: (command: unknown) => ipcRenderer.invoke("claude:command", command),
-        // Legacy handlers
-        query: (args: unknown) => ipcRenderer.invoke("claude:query", args),
-        toolResponse: (args: unknown) => ipcRenderer.invoke("claude:tool-response", args),
-        reconnect: (args: unknown) => ipcRenderer.invoke("claude:reconnect", args),
-        abort: (args: unknown) => ipcRenderer.invoke("claude:abort", args),
-        // Streaming events (legacy channel)
-        onEvent: (cb: (event: unknown) => void) =>
-            createListener("claude:event", cb as (...args: unknown[]) => void),
-        onToolCall: (executionId: string, cb: (callId: string, name: string, args: unknown) => void) => {
-            const handler = (_event: IpcRendererEvent, callId: string, name: string, args: unknown) =>
-                cb(callId, name, args)
-            ipcRenderer.on(`claude:tool-call:${executionId}`, handler)
-            return () => ipcRenderer.removeListener(`claude:tool-call:${executionId}`, handler)
-        },
-        onMessage: (executionId: string, cb: (message: unknown) => void) =>
-            createListener(`claude:message:${executionId}`, cb as (...args: unknown[]) => void),
-        onComplete: (executionId: string, cb: () => void) =>
-            createListener(`claude:complete:${executionId}`, cb as (...args: unknown[]) => void),
-        onError: (executionId: string, cb: (error: unknown) => void) =>
-            createListener(`claude:error:${executionId}`, cb as (...args: unknown[]) => void),
-    },
-
-    // ========================================================================
-    // MCP (Model Context Protocol)
-    // ========================================================================
-    mcp: {
-        testConnection: (params: unknown) => ipcRenderer.invoke("code:mcp:testConnection", params),
-        initiateOAuth: (params: unknown) => ipcRenderer.invoke("code:mcp:initiateOAuth", params),
-        cancelOAuth: (params: unknown) => ipcRenderer.invoke("code:mcp:cancelOAuth", params),
-        refreshOAuth: (params: unknown) => ipcRenderer.invoke("code:mcp:refreshOAuth", params),
-        // OAuth completion events (global - not per-server)
-        onOAuthComplete: (cb: (result: unknown) => void) =>
-            createListener("code:mcp:oauthComplete", cb as (...args: unknown[]) => void),
-    },
-
-    // ========================================================================
-    // Binaries
-    // ========================================================================
-    binaries: {
-        statuses: () => ipcRenderer.invoke("code:binaries:statuses"),
-        ensure: (args: { name: string }) => ipcRenderer.invoke("code:binaries:ensure", args),
-        remove: (args: { name: string }) => ipcRenderer.invoke("code:binaries:remove", args),
-        resolve: (args: { name: string }) => ipcRenderer.invoke("code:binaries:resolve", args),
-    },
-
-    // ========================================================================
-    // Platform
-    // ========================================================================
-    platform: {
-        getInfo: () => ipcRenderer.invoke("code:platform:getInfo"),
-        checkBinary: (args: { binary: string }) => ipcRenderer.invoke("code:system:checkBinary", args),
-        checkVendoredRipgrep: () => ipcRenderer.invoke("code:system:checkVendoredRipgrep"),
-    },
-
-    // ========================================================================
     // Shell
     // ========================================================================
     shell: {
         selectDirectory: (params: unknown) => ipcRenderer.invoke("code:shell:selectDirectory", params),
         openUrl: (params: unknown) => ipcRenderer.invoke("code:shell:openUrl", params),
         openPath: (params: unknown) => ipcRenderer.invoke("code:shell:openPath", params),
-        createDirectory: (params: unknown) => ipcRenderer.invoke("code:shell:createDirectory", params),
-    },
-
-    // ========================================================================
-    // Subprocess
-    // ========================================================================
-    subprocess: {
-        setGlobalEnv: (args: { env: Record<string, string> }) =>
-            ipcRenderer.invoke("code:system:setGlobalEnv", args),
-    },
-
-    // ========================================================================
-    // YJS Storage
-    // ========================================================================
-    yjs: {
-        save: (args: { id: string; data: Uint8Array }) => ipcRenderer.invoke("code:yjs:save", args),
-        load: (args: { id: string }) => ipcRenderer.invoke("code:yjs:load", args),
-        delete: (args: { id: string }) => ipcRenderer.invoke("code:yjs:delete", args),
-        list: () => ipcRenderer.invoke("code:yjs:list"),
-    },
-
-    // ========================================================================
-    // Data Folder (unified storage for images, snapshots, etc.)
-    // ========================================================================
-    data: {
-        save: (args: { folder: string; id: string; data: string | Buffer; ext: string }) =>
-            ipcRenderer.invoke("code:data:save", args),
-        load: (args: { folder: string; id: string; ext: string }) =>
-            ipcRenderer.invoke("code:data:load", args),
-        delete: (args: { folder: string; id: string; ext: string }) =>
-            ipcRenderer.invoke("code:data:delete", args),
-    },
-
-    // ========================================================================
-    // Snapshots
-    // ========================================================================
-    snapshots: {
-        saveBundle: (args: { id: string; patch: string; index: unknown }) =>
-            ipcRenderer.invoke("snapshots:saveBundle", args),
-        loadPatch: (args: { id: string }) =>
-            ipcRenderer.invoke("snapshots:loadPatch", args),
-        loadIndex: (args: { id: string }) =>
-            ipcRenderer.invoke("snapshots:loadIndex", args),
-        loadPatchSlice: (args: { id: string; start: number; end: number }) =>
-            ipcRenderer.invoke("snapshots:loadPatchSlice", args),
-        deleteBundle: (args: { id: string }) =>
-            ipcRenderer.invoke("snapshots:deleteBundle", args),
     },
 
     // ========================================================================
@@ -339,25 +93,19 @@ const openadeAPI = {
         startPairing: () => ipcRenderer.invoke("companion:startPairing"),
         revokeDevice: (deviceId: string) => ipcRenderer.invoke("companion:revokeDevice", deviceId),
         dropAllDevices: () => ipcRenderer.invoke("companion:dropAllDevices"),
-        onRequest: (cb: (request: unknown) => void) =>
-            createListener("companion:request", cb as (...args: unknown[]) => void),
-        respond: (response: unknown) => ipcRenderer.invoke("companion:response", toJsonIpcPayload(response)),
-        notifyEvent: (event: unknown) => ipcRenderer.invoke("companion:event", toJsonIpcPayload(event)),
     },
 
     // ========================================================================
-    // Procs (config file reading/writing)
+    // Runtime protocol
     // ========================================================================
-    procs: {
-        read: (params: { path: string }) => ipcRenderer.invoke("procs:read", params),
-        readFile: (params: { filePath: string }) => ipcRenderer.invoke("procs:readFile", params),
-        writeFile: (params: { filePath: string; content: string }) => ipcRenderer.invoke("procs:writeFile", params),
-        loadEditable: (params: { filePath: string; searchPath?: string }) => ipcRenderer.invoke("procs:loadEditable", params),
-        parseRaw: (params: { content: string; relativePath: string }) => ipcRenderer.invoke("procs:parseRaw", params),
-        serializeEditable: (params: { processes: unknown[]; crons: unknown[] }) => ipcRenderer.invoke("procs:serializeEditable", params),
-        saveEditable: (params: { filePath: string; relativePath: string; processes: unknown[]; crons: unknown[]; searchPath?: string }) =>
-            ipcRenderer.invoke("procs:saveEditable", params),
+    runtime: {
+        connect: () => ipcRenderer.invoke("runtime:connect"),
+        disconnect: () => ipcRenderer.invoke("runtime:disconnect"),
+        request: (request: unknown) => ipcRenderer.invoke("runtime:request", request),
+        onMessage: (cb: (message: unknown) => void) =>
+            createListener("runtime:message", cb as (...args: unknown[]) => void),
     },
+
 }
 
 // Expose the API to the renderer

@@ -12,10 +12,8 @@
  */
 
 import { execFile, spawn } from "child_process"
-import { ipcMain, type IpcMainInvokeEvent } from "electron"
 import logger from "electron-log"
 import { userInfo } from "os"
-import { isDev } from "../../config"
 
 // ============================================================================
 // Shell Environment Detection
@@ -130,7 +128,7 @@ let previousOverrideKeys: Set<string> = new Set()
  * Set global environment variables by mutating process.env directly.
  * Tracks previous values so they can be restored when new vars are pushed or on cleanup.
  */
-function setGlobalEnvVars(env: Record<string, string>): void {
+export function setRuntimeGlobalEnvVars(env: Record<string, string>): void {
     // Restore previous overrides
     for (const key of previousOverrideKeys) {
         if (previousOverrides[key] === undefined) {
@@ -247,44 +245,15 @@ export async function execCommand(cmd: string, args: string[], options: ExecOpti
 }
 
 // ============================================================================
-// IPC Handlers
-// ============================================================================
-
-/**
- * Check if caller is allowed
- */
-function checkAllowed(e: IpcMainInvokeEvent): boolean {
-    const origin = e.sender.getURL()
-    try {
-        const url = new URL(origin)
-        if (isDev) {
-            return url.hostname.endsWith("localhost")
-        } else {
-            return url.hostname.endsWith("localhost") || url.protocol === "file:"
-        }
-    } catch {
-        return false
-    }
-}
-
-// ============================================================================
 // Module Export
 // ============================================================================
 
 export const load = () => {
-    logger.info("[Subprocess] Registering IPC handlers")
+    logger.info("[Subprocess] Initializing runtime subprocess environment")
 
     // Detect the user's shell environment (fire-and-forget).
     // Resolves in ~200-500ms, well before any user interaction triggers a subprocess.
     initShellEnv().catch((err) => logger.error("[Subprocess] initShellEnv unexpected error", err))
-
-    ipcMain.handle("code:system:setGlobalEnv", async (event, { env }: { env: Record<string, string> }) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        setGlobalEnvVars(env)
-        return { success: true }
-    })
-
-    logger.info("[Subprocess] IPC handlers registered")
 }
 
 export const cleanup = () => {

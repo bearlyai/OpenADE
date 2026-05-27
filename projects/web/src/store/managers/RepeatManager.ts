@@ -1,5 +1,6 @@
 import { makeAutoObservable } from "mobx"
 import { extractRawMessageEvents } from "../../electronAPI/harnessEventTypes"
+import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { ActionEvent } from "../../types"
 import type { CodeStore } from "../store"
 
@@ -128,12 +129,30 @@ export class RepeatManager {
             return
         }
 
-        this.store.execution.executeAction({
-            taskId: this.activeTaskId,
-            input: { userInput: prompt, images: [] },
-            label: REPEAT_LABEL,
-            includeComments: false,
-        })
+        const taskId = this.activeTaskId
+        void (async () => {
+            try {
+                await this.store.getTaskStore(taskModel.repoId, taskId)
+                await localOpenADEClient.startTurn({
+                    repoId: taskModel.repoId,
+                    type: "do",
+                    input: prompt,
+                    images: [],
+                    inTaskId: taskId,
+                    enabledMcpServerIds: taskModel.enabledMcpServerIds,
+                    harnessId: taskModel.harnessId,
+                    modelId: taskModel.model,
+                    thinking: taskModel.thinking,
+                    fastMode: taskModel.fastMode,
+                    label: REPEAT_LABEL,
+                    includeComments: false,
+                })
+                await this.store.refreshTaskStoreFromStorage(taskId)
+            } catch (err) {
+                console.error("[RepeatManager] Failed to start repeat turn:", err)
+                if (this.activeTaskId === taskId) this.cleanup()
+            }
+        })()
     }
 
     private cleanup(): void {

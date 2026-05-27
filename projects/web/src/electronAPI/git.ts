@@ -15,16 +15,6 @@ interface IsGitInstalledResponse {
     version?: string
 }
 
-interface IsGitDirParams {
-    repoDir: string
-}
-
-interface IsGitDirResponse {
-    isGitRepo: boolean
-    mainBranch?: string
-    error?: string
-}
-
 export interface IsGitDirectoryParams {
     directory: string
 }
@@ -336,6 +326,7 @@ interface GetCommitFilesResponse {
 // ============================================================================
 
 import { isCodeModuleAvailable } from "./capabilities"
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
 
 // ============================================================================
 // Git API Functions
@@ -350,24 +341,11 @@ async function isGitInstalled(): Promise<IsGitInstalledResponse> {
         return { installed: false }
     }
 
-    return (await window.openadeAPI.git.isGitInstalled()) as IsGitInstalledResponse
-}
-
-/**
- * Check if a directory is a git repository (legacy - use isGitDirectory instead)
- */
-async function isGitDir(params: IsGitDirParams): Promise<IsGitDirResponse> {
-    if (!window.openadeAPI) {
-        console.warn("[GitAPI] Not running in Electron")
-        return { isGitRepo: false, error: "Not running in Electron" }
-    }
-
-    return (await window.openadeAPI.git.isGitDir(params)) as IsGitDirResponse
+    return localRuntimeClient.request<IsGitInstalledResponse>("git/installed/read")
 }
 
 /**
  * Check if a directory is within a git repository and get repo info
- * Preferred over isGitDir as it handles subdirectories and returns more info
  */
 export async function isGitDirectory(params: IsGitDirectoryParams): Promise<IsGitDirectoryResponse> {
     if (!window.openadeAPI) {
@@ -375,7 +353,7 @@ export async function isGitDirectory(params: IsGitDirectoryParams): Promise<IsGi
         return { isGitDirectory: false, error: "Not running in Electron" }
     }
 
-    return (await window.openadeAPI.git.isGitDirectory(params)) as IsGitDirectoryResponse
+    return localRuntimeClient.request<IsGitDirectoryResponse>("git/directory/read", params)
 }
 
 /**
@@ -387,7 +365,7 @@ export async function checkGhCli(): Promise<CheckGhCliResponse> {
         return { hasGhCli: false }
     }
 
-    return (await window.openadeAPI.git.checkGhCli()) as CheckGhCliResponse
+    return localRuntimeClient.request<CheckGhCliResponse>("git/gh/read")
 }
 
 /**
@@ -398,7 +376,7 @@ async function getOrCreateWorkTree(params: GetOrCreateWorkTreeParams): Promise<G
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.getOrCreateWorkTree(params)) as GetOrCreateWorkTreeResponse
+    return localRuntimeClient.request<GetOrCreateWorkTreeResponse>("git/worktree/getOrCreate", params)
 }
 
 /**
@@ -410,7 +388,7 @@ async function workTreeDiffPatch(params: WorkTreeDiffPatchParams): Promise<WorkT
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.workTreeDiffPatch(params)) as WorkTreeDiffPatchResponse
+    return localRuntimeClient.request<WorkTreeDiffPatchResponse>("git/worktree/diffPatch", params)
 }
 
 /**
@@ -421,7 +399,7 @@ async function getMergeBase(params: GetMergeBaseParams): Promise<GetMergeBaseRes
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.getMergeBase(params)) as GetMergeBaseResponse
+    return localRuntimeClient.request<GetMergeBaseResponse>("git/mergeBase/read", params)
 }
 
 /**
@@ -432,7 +410,7 @@ export async function getGitStatus(params: GitStatusParams): Promise<GitStatusRe
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.getGitStatus(params)) as GitStatusResponse
+    return localRuntimeClient.request<GitStatusResponse>("git/status/read", params)
 }
 
 /**
@@ -443,7 +421,7 @@ export async function getGitSummary(params: GitStatusParams): Promise<GitSummary
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.getGitSummary(params)) as GitSummaryResponse
+    return localRuntimeClient.request<GitSummaryResponse>("git/summary/read", params)
 }
 
 /**
@@ -454,7 +432,7 @@ async function listFiles(params: ListFilesParams): Promise<ListFilesResponse> {
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.listFiles(params)) as ListFilesResponse
+    return localRuntimeClient.request<ListFilesResponse>("git/file/list", params)
 }
 
 /**
@@ -465,7 +443,7 @@ async function deleteWorkTree(params: DeleteWorkTreeParams): Promise<DeleteWorkT
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.deleteWorkTree(params)) as DeleteWorkTreeResponse
+    return localRuntimeClient.request<DeleteWorkTreeResponse>("git/worktree/delete", params)
 }
 
 async function isBranchMerged(params: IsBranchMergedParams): Promise<boolean> {
@@ -473,7 +451,7 @@ async function isBranchMerged(params: IsBranchMergedParams): Promise<boolean> {
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.isBranchMerged(params)) as boolean
+    return localRuntimeClient.request<boolean>("git/branch/merged/read", params)
 }
 
 async function deleteBranch(params: DeleteBranchParams): Promise<void> {
@@ -481,7 +459,7 @@ async function deleteBranch(params: DeleteBranchParams): Promise<void> {
         throw new Error("Not running in Electron")
     }
 
-    await window.openadeAPI.git.deleteBranch(params)
+    await localRuntimeClient.request<void>("git/branch/delete", params)
 }
 
 /**
@@ -492,7 +470,7 @@ async function listWorkTrees(params: ListWorkTreesParams): Promise<ListWorkTrees
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.listWorkTrees(params)) as ListWorkTreesResponse
+    return localRuntimeClient.request<ListWorkTreesResponse>("git/worktree/list", params)
 }
 
 /**
@@ -503,7 +481,7 @@ async function commitWorkTree(params: CommitWorkTreeParams): Promise<CommitWorkT
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.commitWorkTree(params)) as CommitWorkTreeResponse
+    return localRuntimeClient.request<CommitWorkTreeResponse>("git/worktree/commit", params)
 }
 
 /**
@@ -514,7 +492,7 @@ async function listBranches(params: ListBranchesParams): Promise<ListBranchesRes
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.listBranches(params)) as ListBranchesResponse
+    return localRuntimeClient.request<ListBranchesResponse>("git/branch/list", params)
 }
 
 /**
@@ -525,7 +503,7 @@ export async function resolvePath(params: ResolvePathParams): Promise<ResolvePat
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.resolvePath(params)) as ResolvePathResponse
+    return localRuntimeClient.request<ResolvePathResponse>("git/path/resolve", params)
 }
 
 /**
@@ -536,7 +514,7 @@ export async function initGit(params: InitGitParams): Promise<InitGitResponse> {
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.initGit(params)) as InitGitResponse
+    return localRuntimeClient.request<InitGitResponse>("git/repo/init", params)
 }
 
 /**
@@ -554,7 +532,7 @@ async function getChangedFiles(params: GetChangedFilesParams): Promise<GetChange
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.getChangedFiles(params)) as GetChangedFilesResponse
+    return localRuntimeClient.request<GetChangedFilesResponse>("git/changedFiles/read", params)
 }
 
 /**
@@ -565,7 +543,7 @@ async function getFileAtTreeish(params: GetFileAtTreeishParams): Promise<GetFile
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.getFileAtTreeish(params)) as GetFileAtTreeishResponse
+    return localRuntimeClient.request<GetFileAtTreeishResponse>("git/fileAtTreeish/read", params)
 }
 
 /**
@@ -576,7 +554,7 @@ async function getFilePair(params: GetFilePairParams): Promise<GetFilePairRespon
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.getFilePair(params)) as GetFilePairResponse
+    return localRuntimeClient.request<GetFilePairResponse>("git/filePair/read", params)
 }
 
 async function getWorktreeFilePatch(params: GetWorktreeFilePatchParams): Promise<GetFilePatchResponse> {
@@ -584,7 +562,7 @@ async function getWorktreeFilePatch(params: GetWorktreeFilePatchParams): Promise
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.getWorktreeFilePatch(params)) as GetFilePatchResponse
+    return localRuntimeClient.request<GetFilePatchResponse>("git/worktree/filePatch/read", params)
 }
 
 async function getCommitFilePatch(params: GetCommitFilePatchParams): Promise<GetFilePatchResponse> {
@@ -592,7 +570,7 @@ async function getCommitFilePatch(params: GetCommitFilePatchParams): Promise<Get
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.getCommitFilePatch(params)) as GetFilePatchResponse
+    return localRuntimeClient.request<GetFilePatchResponse>("git/commit/filePatch/read", params)
 }
 
 async function getLog(params: GetGitLogParams): Promise<GetGitLogResponse> {
@@ -600,7 +578,7 @@ async function getLog(params: GetGitLogParams): Promise<GetGitLogResponse> {
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.getLog(params)) as GetGitLogResponse
+    return localRuntimeClient.request<GetGitLogResponse>("git/log/read", params)
 }
 
 async function getCommitFiles(params: GetCommitFilesParams): Promise<GetCommitFilesResponse> {
@@ -608,7 +586,7 @@ async function getCommitFiles(params: GetCommitFilesParams): Promise<GetCommitFi
         throw new Error("Not running in Electron")
     }
 
-    return (await window.openadeAPI.git.getCommitFiles(params)) as GetCommitFilesResponse
+    return localRuntimeClient.request<GetCommitFilesResponse>("git/commit/files/read", params)
 }
 
 /**
@@ -616,7 +594,6 @@ async function getCommitFiles(params: GetCommitFilesParams): Promise<GetCommitFi
  */
 export const gitApi = {
     isGitInstalled,
-    isGitDir,
     isGitDirectory,
     checkGhCli,
     getOrCreateWorkTree,

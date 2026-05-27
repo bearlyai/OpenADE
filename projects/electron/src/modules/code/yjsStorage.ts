@@ -2,16 +2,14 @@
  * YJS Document Storage Module for Electron
  *
  * Persists YJS documents to the filesystem at ~/.openade/data/yjs/
- * Provides load, save, delete, and list operations via IPC.
+ * Provides load, save, delete, and list operations to runtime host adapters.
  */
 
-import { ipcMain, type IpcMainInvokeEvent } from "electron"
 import logger from "electron-log"
 import * as fs from "fs/promises"
 import * as path from "path"
 import * as os from "os"
 import * as Y from "yjs"
-import { isDev } from "../../config"
 
 // ============================================================================
 // Constants
@@ -22,6 +20,7 @@ const DATA_DIR = "data"
 const YJS_DIR = "yjs"
 
 function getYjsStorageDir(): string {
+    if (process.env.OPENADE_YJS_STORAGE_DIR) return process.env.OPENADE_YJS_STORAGE_DIR
     return path.join(os.homedir(), OPENADE_DIR, DATA_DIR, YJS_DIR)
 }
 
@@ -57,6 +56,12 @@ function sanitizeId(id: string): string {
  * Replaces underscores with colons.
  */
 function unsanitizeId(filename: string): string {
+    if (filename === "code_repos") return "code:repos"
+    if (filename === "code_personal_settings") return "code:personal_settings"
+    if (filename === "code_mcp_servers") return "code:mcp_servers"
+    if (filename.startsWith("code_task_")) return `code:task:${filename.slice("code_task_".length)}`
+    if (filename.startsWith("code_scratchpad-index_")) return `code:scratchpad-index:${filename.slice("code_scratchpad-index_".length)}`
+    if (filename.startsWith("code_scratchpad_")) return `code:scratchpad:${filename.slice("code_scratchpad_".length)}`
     return filename.replace(/_/g, ":")
 }
 
@@ -108,25 +113,6 @@ async function writeMigratedDoc(filePath: string, data: Uint8Array): Promise<voi
     const tempPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`
     await fs.writeFile(tempPath, data)
     await fs.rename(tempPath, filePath)
-}
-
-/**
- * Check if caller is allowed.
- */
-function checkAllowed(e: IpcMainInvokeEvent): boolean {
-    const origin = e.sender.getURL()
-    try {
-        const url = new URL(origin)
-        if (isDev) {
-            return url.hostname.endsWith("localhost")
-        } else {
-            // In production, allow localhost for Electron file:// loading
-        return url.hostname.endsWith("localhost") || url.protocol === "file:"
-        }
-    } catch (error) {
-        logger.error("[YjsStorage:checkAllowed] Failed to parse origin:", error)
-        return false
-    }
 }
 
 // ============================================================================
@@ -221,6 +207,10 @@ async function handleSave(id: string, data: Uint8Array): Promise<void> {
     return currentSave
 }
 
+export async function saveYjsDocument(id: string, data: Uint8Array): Promise<void> {
+    await handleSave(id, data)
+}
+
 /**
  * Load a YJS document from disk.
  * Returns null if the document doesn't exist.
@@ -271,6 +261,10 @@ async function handleLoad(id: string): Promise<Uint8Array | null> {
     }
 }
 
+export async function loadYjsDocument(id: string): Promise<Uint8Array | null> {
+    return handleLoad(id)
+}
+
 /**
  * Delete a YJS document from disk.
  */
@@ -287,6 +281,10 @@ async function handleDelete(id: string): Promise<void> {
         }
         throw error
     }
+}
+
+export async function deleteYjsDocument(id: string): Promise<void> {
+    await handleDelete(id)
 }
 
 /**
@@ -308,36 +306,8 @@ async function handleList(): Promise<string[]> {
     }
 }
 
-// ============================================================================
-// Module Export
-// ============================================================================
-
-export const load = () => {
-    logger.info("[YjsStorage] Registering IPC handlers")
-
-    ipcMain.handle("code:yjs:save", async (event, { id, data }: { id: string; data: Uint8Array }) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        await handleSave(id, data)
-        return { success: true }
-    })
-
-    ipcMain.handle("code:yjs:load", async (event, { id }: { id: string }) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleLoad(id)
-    })
-
-    ipcMain.handle("code:yjs:delete", async (event, { id }: { id: string }) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        await handleDelete(id)
-        return { success: true }
-    })
-
-    ipcMain.handle("code:yjs:list", async (event) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleList()
-    })
-
-    logger.info("[YjsStorage] IPC handlers registered successfully")
+export async function listYjsDocuments(): Promise<string[]> {
+    return handleList()
 }
 
 export const cleanup = () => {

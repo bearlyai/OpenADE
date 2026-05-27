@@ -6,12 +6,11 @@
  * Downloads start automatically on app launch.
  */
 
-import { app, ipcMain, type IpcMainInvokeEvent } from "electron"
+import { app } from "electron"
 import logger from "electron-log"
 import path from "path"
 import fs from "fs"
 import { execCommand } from "./subprocess"
-import { isDev } from "../../config"
 import { createWriteStream } from "fs"
 
 // Note: getCliJsPath() has been removed. The @openade/harness library handles
@@ -23,7 +22,7 @@ import { createWriteStream } from "fs"
 // IMPORTANT: Keep ManagedBinaryStatus in sync with projects/dashboard/src/pages/code/electronAPI/binaries.ts
 // ============================================================================
 
-interface ManagedBinaryStatus {
+export interface ManagedBinaryStatus {
     name: string
     displayName: string
     version: string
@@ -231,7 +230,7 @@ export function resolve(name: string): string | null {
  * Ensure a managed binary is available. Downloads if not present.
  * Deduplicates concurrent calls for the same binary.
  */
-async function ensure(name: string): Promise<string> {
+export async function ensureRuntimeBinary(name: string): Promise<string> {
     const def = REGISTRY[name]
     if (!def) throw new Error(`Unknown binary: ${name}`)
 
@@ -279,7 +278,7 @@ async function ensure(name: string): Promise<string> {
 /**
  * Get status of all managed binaries.
  */
-function getStatuses(): ManagedBinaryStatus[] {
+export function getRuntimeBinaryStatuses(): ManagedBinaryStatus[] {
     const platformKey = getPlatformKey()
     return Object.entries(REGISTRY).map(([name, def]) => {
         const binaryPath = resolve(name)
@@ -300,7 +299,7 @@ function getStatuses(): ManagedBinaryStatus[] {
 /**
  * Remove a managed binary.
  */
-function remove(name: string): void {
+export function removeRuntimeBinary(name: string): void {
     const def = REGISTRY[name]
     if (!def) return
 
@@ -314,27 +313,8 @@ function remove(name: string): void {
     }
 }
 
-// ============================================================================
-// IPC Handlers
-// ============================================================================
-
-function checkAllowed(e: IpcMainInvokeEvent): boolean {
-    const origin = e.sender.getURL()
-    try {
-        const url = new URL(origin)
-        if (isDev) {
-            return url.hostname.endsWith("localhost")
-        } else {
-            return url.hostname.endsWith("localhost") || url.protocol === "file:"
-        }
-    } catch (err) {
-        logger.error('[Binaries] Error parsing origin URL:', err)
-        return false
-    }
-}
-
 export const load = () => {
-    logger.info("[Binaries] Registering IPC handlers")
+    logger.info("[Binaries] Initializing managed binary registry")
 
     // Enhance PATH with any previously downloaded binaries
     enhancePath()
@@ -344,42 +324,12 @@ export const load = () => {
     app.whenReady().then(() => {
         for (const name of Object.keys(REGISTRY)) {
             if (!resolve(name)) {
-                ensure(name).catch((err) => {
+                ensureRuntimeBinary(name).catch((err) => {
                     logger.warn(`[Binaries] Background download of ${name} failed:`, err instanceof Error ? err.message : err)
                 })
             }
         }
     })
-
-    ipcMain.handle("code:binaries:statuses", async (event) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return getStatuses()
-    })
-
-    ipcMain.handle("code:binaries:ensure", async (event, { name }: { name: string }) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        try {
-            const binaryPath = await ensure(name)
-            return { ok: true, path: binaryPath }
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "Unknown error"
-            logger.error(`[Binaries] ensure(${name}) failed:`, message)
-            return { ok: false, error: message }
-        }
-    })
-
-    ipcMain.handle("code:binaries:remove", async (event, { name }: { name: string }) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        remove(name)
-        return { ok: true }
-    })
-
-    ipcMain.handle("code:binaries:resolve", async (event, { name }: { name: string }) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return { path: resolve(name) }
-    })
-
-    logger.info("[Binaries] IPC handlers registered")
 }
 
 export const cleanup = () => {

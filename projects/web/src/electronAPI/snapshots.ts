@@ -1,4 +1,5 @@
 import { isCodeModuleAvailable } from "./capabilities"
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
 
 export interface SnapshotPatchFile {
     id: string
@@ -21,47 +22,27 @@ export interface SnapshotPatchIndex {
 }
 
 async function saveBundle(id: string, patch: string, index: SnapshotPatchIndex): Promise<void> {
-    if (!window.openadeAPI?.snapshots) {
-        throw new Error("Snapshots API not available")
-    }
-
-    await window.openadeAPI.snapshots.saveBundle({ id, patch, index })
+    await localRuntimeClient.request("snapshot/bundle/save", { id, patch, index })
 }
 
 async function loadPatch(id: string): Promise<string | null> {
-    if (!window.openadeAPI?.snapshots) {
-        throw new Error("Snapshots API not available")
-    }
-
-    return (await window.openadeAPI.snapshots.loadPatch({ id })) as string | null
+    return localRuntimeClient.request<string | null>("snapshot/patch/read", { id })
 }
 
 async function loadIndex(id: string): Promise<SnapshotPatchIndex | null> {
-    if (!window.openadeAPI?.snapshots) {
-        throw new Error("Snapshots API not available")
-    }
-
-    return (await window.openadeAPI.snapshots.loadIndex({ id })) as SnapshotPatchIndex | null
+    return localRuntimeClient.request<SnapshotPatchIndex | null>("snapshot/index/read", { id })
 }
 
 async function loadPatchSlice(id: string, start: number, end: number): Promise<string | null> {
-    if (!window.openadeAPI?.snapshots) {
-        throw new Error("Snapshots API not available")
-    }
-
-    return (await window.openadeAPI.snapshots.loadPatchSlice({ id, start, end })) as string | null
+    return localRuntimeClient.request<string | null>("snapshot/patch/readSlice", { id, start, end })
 }
 
 async function deleteBundle(id: string): Promise<void> {
-    if (!window.openadeAPI?.snapshots) {
-        throw new Error("Snapshots API not available")
-    }
-
-    await window.openadeAPI.snapshots.deleteBundle({ id })
+    await localRuntimeClient.request("snapshot/bundle/delete", { id })
 }
 
 function isAvailable(): boolean {
-    return isCodeModuleAvailable() && !!window.openadeAPI?.snapshots
+    return isCodeModuleAvailable() && !!window.openadeAPI?.runtime
 }
 
 export const snapshotsApi = {

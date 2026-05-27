@@ -364,15 +364,6 @@ export class FileBrowserManager {
         }))
     }
 
-    // Legacy getters for compatibility
-    get viewingFile(): string | null {
-        return this.activeFile
-    }
-
-    get viewingFileData(): Extract<DescribePathResponse, { type: "file" }> | null {
-        return this.activeFileData
-    }
-
     closeFile(): void {
         if (this.activeFile) {
             this.closeTab(this.activeFile)

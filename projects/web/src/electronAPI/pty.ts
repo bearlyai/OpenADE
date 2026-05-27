@@ -30,6 +30,7 @@ interface ReconnectResponse {
 }
 
 import { isCodeModuleAvailable } from "./capabilities"
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
 
 type EventHandler = (...args: unknown[]) => void
 
@@ -64,7 +65,7 @@ export class PtyHandle {
 
         console.debug("[PtyHandle] Spawning PTY:", params.ptyId, params.cwd)
 
-        const response = (await window.openadeAPI.pty.spawn(params)) as SpawnResponse
+        const response = await localRuntimeClient.request<SpawnResponse>("pty/spawn", params)
         if (!response.ok) {
             console.error("[PtyHandle] Spawn failed:", response.error)
             return null
@@ -88,7 +89,7 @@ export class PtyHandle {
         const handle = new PtyHandle(ptyId)
         handle.setupListeners()
 
-        const result = (await window.openadeAPI.pty.reconnect({ ptyId })) as ReconnectResponse
+        const result = await localRuntimeClient.request<ReconnectResponse & { output?: PtyOutputEvent[] }>("pty/reconnect", { ptyId })
 
         if (!result.found) {
             console.debug("[PtyHandle] PTY not found")
@@ -97,10 +98,14 @@ export class PtyHandle {
         }
 
         console.debug("[PtyHandle] Reconnected to PTY")
+        for (const chunk of result.output ?? []) {
+            handle.emit("output", chunk)
+        }
 
         if (result.exited) {
             handle._exited = true
             handle._exitCode = result.exitCode ?? null
+            handle.emit("exit", { exitCode: handle._exitCode })
         }
 
         return { handle, found: true }
@@ -109,21 +114,24 @@ export class PtyHandle {
     private setupListeners() {
         if (!window.openadeAPI) return
 
-        // Subscribe to output events
-        const unsubOutput = window.openadeAPI.pty.onOutput(this._ptyId, (chunk) => {
-            this.emit("output", chunk as PtyOutputEvent)
-        })
-        this.unsubscribers.push(unsubOutput)
+        const unsubscribe = localRuntimeClient.subscribe((notification) => {
+            const params = notification.params as Record<string, unknown> | undefined
+            if (!params || params.ptyId !== this._ptyId) return
 
-        // Subscribe to exit events
-        const unsubExit = window.openadeAPI.pty.onExit(this._ptyId, (data) => {
-            const exit = data as PtyExitEvent
-            console.debug("[PtyHandle] PTY exited:", exit)
-            this._exited = true
-            this._exitCode = exit.exitCode
-            this.emit("exit", exit)
+            if (notification.method === "pty/output") {
+                this.emit("output", params.chunk as PtyOutputEvent)
+                return
+            }
+
+            if (notification.method === "pty/exit" || notification.method === "pty/killed") {
+                const exit = { exitCode: typeof params.exitCode === "number" ? params.exitCode : 0 }
+                console.debug("[PtyHandle] PTY exited:", exit)
+                this._exited = true
+                this._exitCode = exit.exitCode
+                this.emit("exit", exit)
+            }
         })
-        this.unsubscribers.push(unsubExit)
+        this.unsubscribers.push(unsubscribe)
     }
 
     private emit(event: string, ...args: unknown[]) {
@@ -150,19 +158,19 @@ export class PtyHandle {
         if (!window.openadeAPI || this._exited) return
 
         const base64Data = btoa(data)
-        await window.openadeAPI.pty.write({ ptyId: this._ptyId, data: base64Data })
+        await localRuntimeClient.request("pty/write", { ptyId: this._ptyId, data: base64Data })
     }
 
     async resize(cols: number, rows: number): Promise<void> {
         if (!window.openadeAPI || this._exited) return
 
-        await window.openadeAPI.pty.resize({ ptyId: this._ptyId, cols, rows })
+        await localRuntimeClient.request("pty/resize", { ptyId: this._ptyId, cols, rows })
     }
 
     async kill(): Promise<void> {
         if (!window.openadeAPI) return
 
-        await window.openadeAPI.pty.kill({ ptyId: this._ptyId })
+        await localRuntimeClient.request("pty/kill", { ptyId: this._ptyId })
         this._exited = true
         this.cleanup()
     }
@@ -187,12 +195,12 @@ export function getTaskPtyId(taskId: string): string {
 
 async function killPty(ptyId: string): Promise<void> {
     if (!window.openadeAPI) return
-    await window.openadeAPI.pty.kill({ ptyId })
+    await localRuntimeClient.request("pty/kill", { ptyId })
 }
 
 async function killAllPtys(): Promise<boolean> {
     if (!window.openadeAPI) return false
-    const resp = (await window.openadeAPI.pty.killAll()) as { ok: boolean }
+    const resp = await localRuntimeClient.request<{ ok: boolean }>("pty/killAll")
     return resp.ok
 }
 

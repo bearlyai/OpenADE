@@ -1,4 +1,6 @@
-import type { PairRequest, RemoteRunRequest, RemoteSnapshot, RemoteTask } from "../../../shared/companion/src"
+import type { PairRequest, RemoteSnapshot, RemoteTask, RemoteTurnStartRequest } from "../../../shared/companion/src"
+import { OpenADEClient } from "../../../openade-client/src"
+import { RuntimeClient, RuntimeClientError, type RuntimeClientStatus } from "../../../runtime-client/src"
 
 export interface RemoteConfig {
     id: string
@@ -11,7 +13,7 @@ export interface RemoteConfig {
 }
 
 export const REMOTE_CONFIG_STORAGE_KEY = "openade-companion-config"
-export type RemoteEventConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected"
+export type RemoteRealtimeConnectionStatus = RuntimeClientStatus | "lagged"
 
 export interface PairingTarget {
     baseUrl: string
@@ -27,6 +29,23 @@ interface RemoteConfigStore {
 }
 
 type RemoteConfigInput = Pick<RemoteConfig, "baseUrl" | "token"> & Partial<Omit<RemoteConfig, "baseUrl" | "token">>
+
+interface RuntimeClientEntry {
+    client: RuntimeClient
+    openade: OpenADEClient
+    statusListeners: Set<(status: RuntimeClientStatus) => void>
+    url: string
+    token: string
+}
+
+const runtimeClients = new Map<string, RuntimeClientEntry>()
+
+export function remoteErrorMessage(error: unknown, fallback: string): string {
+    if (error instanceof RuntimeClientError && error.code === "unsupported_protocol_version") {
+        return "Desktop update required. Update OpenADE on your desktop, then reconnect this app."
+    }
+    return error instanceof Error ? error.message : fallback
+}
 
 function notifyConfigSaved(value: string | null): void {
     window.dispatchEvent(new CustomEvent("openade-companion-config", { detail: value }))
@@ -191,17 +210,59 @@ export function parsePairingCode(value: string): PairingTarget {
     return buildPairingTarget(url.searchParams.get("baseUrl") ?? url.origin, token, url.searchParams.get("hostId") ?? undefined)
 }
 
-async function requestJson<T>(config: RemoteConfig, path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`${config.baseUrl}${path}`, {
-        ...init,
-        headers: {
-            Authorization: `Bearer ${config.token}`,
-            "Content-Type": "application/json",
-            ...init?.headers,
+function runtimeSocketUrl(config: RemoteConfig): string {
+    const url = new URL(config.baseUrl)
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
+    url.pathname = "/v1/runtime"
+    url.search = ""
+    return url.toString()
+}
+
+function runtimeEntry(config: RemoteConfig, onStatus?: (status: RuntimeClientStatus) => void): { entry: RuntimeClientEntry; removeStatus: () => void } {
+    const key = config.id
+    const url = runtimeSocketUrl(config)
+    let entry = runtimeClients.get(key)
+    if (entry && (entry.url !== url || entry.token !== config.token)) {
+        entry.client.close()
+        runtimeClients.delete(key)
+        entry = undefined
+    }
+    if (!entry) {
+        const statusListeners = new Set<(status: RuntimeClientStatus) => void>()
+        const runtime = new RuntimeClient({
+            url,
+            token: config.token,
+            clientName: "OpenADE Companion",
+            clientPlatform: "mobile",
+            protocolVersion: 1,
+            reconnect: true,
+            onStatus(status) {
+                for (const listener of statusListeners) listener(status)
+            },
+        })
+        entry = {
+            url,
+            token: config.token,
+            statusListeners,
+            client: runtime,
+            openade: new OpenADEClient({
+                runtime,
+                clientName: "OpenADE Companion",
+                clientPlatform: "mobile",
+                protocolVersion: 1,
+            }),
+        }
+        runtimeClients.set(key, entry)
+    }
+
+    if (!onStatus) return { entry, removeStatus: () => {} }
+    entry.statusListeners.add(onStatus)
+    return {
+        entry,
+        removeStatus: () => {
+            entry?.statusListeners.delete(onStatus)
         },
-    })
-    if (!response.ok) throw new Error(await response.text())
-    return (await response.json()) as T
+    }
 }
 
 export async function pairRemote(baseUrl: string, token: string): Promise<RemoteConfig> {
@@ -222,90 +283,30 @@ export async function pairRemote(baseUrl: string, token: string): Promise<Remote
 }
 
 export function getSnapshot(config: RemoteConfig): Promise<RemoteSnapshot> {
-    return requestJson<RemoteSnapshot>(config, "/v1/snapshot")
+    return runtimeEntry(config).entry.openade.getSnapshot()
 }
 
 export function getTask(config: RemoteConfig, repoId: string, taskId: string): Promise<RemoteTask> {
-    return requestJson<RemoteTask>(config, `/v1/tasks/${taskId}?repoId=${encodeURIComponent(repoId)}`)
+    return runtimeEntry(config).entry.openade.getTask(repoId, taskId)
 }
 
-export function runRemote(config: RemoteConfig, args: RemoteRunRequest): Promise<{ taskId: string }> {
-    return requestJson<{ taskId: string }>(config, "/v1/run", {
-        method: "POST",
-        body: JSON.stringify(args),
-    })
+export function startRemoteTurn(config: RemoteConfig, args: RemoteTurnStartRequest): Promise<{ taskId: string }> {
+    return runtimeEntry(config).entry.openade.startTurn(args)
 }
 
 export function abortRemote(config: RemoteConfig, taskId: string): Promise<void> {
-    return requestJson<void>(config, `/v1/tasks/${taskId}/abort`, { method: "POST" })
+    return runtimeEntry(config).entry.openade.interruptTurn(taskId)
 }
 
-function parseSseId(message: string): string | undefined {
-    for (const line of message.split("\n")) {
-        if (line.startsWith("id:")) return line.slice(3).trim()
-    }
-    return undefined
-}
-
-function delay(ms: number): Promise<void> {
-    return new Promise((resolve) => window.setTimeout(resolve, ms))
-}
-
-export function subscribeRemoteEvents(config: RemoteConfig, onEvent: () => void, onStatus?: (status: RemoteEventConnectionStatus) => void): () => void {
-    let active = true
-    let controller: AbortController | null = null
-    let lastEventId: string | undefined
-    let retryMs = 1000
-
-    const connect = async () => {
-        while (active) {
-            controller = new AbortController()
-            onStatus?.(lastEventId ? "reconnecting" : "connecting")
-
-            try {
-                const response = await fetch(`${config.baseUrl}/v1/events`, {
-                    headers: {
-                        Authorization: `Bearer ${config.token}`,
-                        ...(lastEventId ? { "Last-Event-ID": lastEventId } : {}),
-                    },
-                    signal: controller.signal,
-                })
-                if (!response.ok || !response.body) throw new Error("Unable to open event stream")
-
-                onStatus?.("connected")
-                retryMs = 1000
-
-                const reader = response.body.getReader()
-                const decoder = new TextDecoder()
-                let buffer = ""
-
-                while (active) {
-                    const { done, value } = await reader.read()
-                    if (done) break
-                    buffer += decoder.decode(value, { stream: true })
-                    const messages = buffer.split("\n\n")
-                    buffer = messages.pop() ?? ""
-                    for (const message of messages) {
-                        lastEventId = parseSseId(message) ?? lastEventId
-                        onEvent()
-                    }
-                }
-            } catch {
-                if (!active) return
-                onStatus?.("disconnected")
-            }
-
-            if (!active) return
-            onStatus?.("reconnecting")
-            await delay(retryMs)
-            retryMs = Math.min(retryMs * 2, 15_000)
-        }
-    }
-
-    void connect()
+export function subscribeRemoteChanges(config: RemoteConfig, onEvent: () => void, onStatus?: (status: RemoteRealtimeConnectionStatus) => void): () => void {
+    const { entry, removeStatus } = runtimeEntry(config, onStatus)
+    const unsubscribe = entry.openade.subscribeToChanges((notification) => {
+        if (notification.method === "connection/lagged") onStatus?.("lagged")
+        onEvent()
+    })
 
     return () => {
-        active = false
-        controller?.abort()
+        unsubscribe()
+        removeStatus()
     }
 }

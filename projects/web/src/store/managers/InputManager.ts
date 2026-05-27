@@ -29,7 +29,9 @@ import { makeAutoObservable } from "mobx"
 import { track } from "../../analytics"
 import { ReviewPickerModal } from "../../components/ReviewPickerModal"
 import { ACTION_PROMPTS } from "../../prompts/prompts"
+import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { ActionEvent, UserInputContext } from "../../types"
+import type { OpenADETurnStartRequest } from "../../../../openade-module/src"
 import type { CodeStore } from "../store"
 import type { SmartEditorManager } from "./SmartEditorManager"
 
@@ -78,7 +80,7 @@ export class InputManager {
     }
 
     private get isWorking(): boolean {
-        return this.store.isTaskWorking(this.taskId)
+        return this.store.isTaskRunning(this.taskId)
     }
 
     private get hasInput(): boolean {
@@ -178,6 +180,31 @@ export class InputManager {
         return { userInput, images }
     }
 
+    private async executeRuntimeTurn(
+        type: OpenADETurnStartRequest["type"],
+        input: UserInputContext,
+        options: Pick<OpenADETurnStartRequest, "label" | "includeComments" | "appendSystemPrompt"> = {}
+    ): Promise<void> {
+        const taskModel = this.taskModel
+        if (!taskModel?.repoId) return
+
+        await this.store.getTaskStore(taskModel.repoId, this.taskId)
+        await localOpenADEClient.startTurn({
+            repoId: taskModel.repoId,
+            type,
+            input: input.userInput,
+            images: input.images,
+            inTaskId: this.taskId,
+            enabledMcpServerIds: taskModel.enabledMcpServerIds,
+            harnessId: taskModel.harnessId,
+            modelId: taskModel.model,
+            thinking: taskModel.thinking,
+            fastMode: taskModel.fastMode,
+            ...options,
+        })
+        await this.store.refreshTaskStoreFromStorage(this.taskId)
+    }
+
     // === Repeat mode ===
 
     get repeatState() {
@@ -258,12 +285,14 @@ export class InputManager {
                 show: this.canRetry,
                 enabled: true,
                 action: async () => {
-                    await this.store.execution.executeAction({
-                        taskId: this.taskId,
-                        input: { userInput: ACTION_PROMPTS.retry, images: [] },
-                        label: this.retryLabel,
-                        includeComments: false,
-                    })
+                    await this.executeRuntimeTurn(
+                        "do",
+                        { userInput: ACTION_PROMPTS.retry, images: [] },
+                        {
+                            label: this.retryLabel,
+                            includeComments: false,
+                        }
+                    )
                 },
             },
 
@@ -279,7 +308,7 @@ export class InputManager {
                 enabled: true,
                 action: async () => {
                     const input = this.captureAndClear()
-                    await this.store.execution.executeRunPlan(this.taskId, input)
+                    await this.executeRuntimeTurn("run_plan", input)
                 },
             },
 
@@ -315,7 +344,7 @@ export class InputManager {
                 enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()
-                    await this.store.execution.executeRevise(this.taskId, input)
+                    await this.executeRuntimeTurn("revise", input)
                 },
             },
 
@@ -348,7 +377,7 @@ export class InputManager {
                 enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()
-                    await this.store.execution.executeAction({ taskId: this.taskId, input })
+                    await this.executeRuntimeTurn("do", input)
                 },
             },
 
@@ -364,7 +393,7 @@ export class InputManager {
                 enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()
-                    await this.store.execution.executePlan(this.taskId, input)
+                    await this.executeRuntimeTurn("plan", input)
                 },
             },
 
@@ -380,7 +409,7 @@ export class InputManager {
                 enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()
-                    await this.store.execution.executeAsk({ taskId: this.taskId, input })
+                    await this.executeRuntimeTurn("ask", input)
                 },
             },
 
@@ -443,12 +472,14 @@ export class InputManager {
                     }
 
                     const branch = this.taskModel?.gitStatus?.branch ?? "HEAD"
-                    await this.store.execution.executeAction({
-                        taskId: this.taskId,
-                        input: { userInput: ACTION_PROMPTS.commitAndPush(input.userInput, hasGhCli, branch), images: input.images },
-                        label: COMMIT_AND_PUSH_LABEL,
-                        includeComments: false,
-                    })
+                    await this.executeRuntimeTurn(
+                        "do",
+                        { userInput: ACTION_PROMPTS.commitAndPush(input.userInput, hasGhCli, branch), images: input.images },
+                        {
+                            label: COMMIT_AND_PUSH_LABEL,
+                            includeComments: false,
+                        }
+                    )
                 },
             },
 

@@ -12,10 +12,9 @@
  * - Reconnection support after renderer refresh
  * - Client-defined tools that execute in the renderer process (proxied via IPC)
  * - stderr capture and streaming
- * - Backward-compatible "claude:*" IPC channels
+ * - Runtime-owned execution methods for local and remote clients
  */
 
-import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron"
 import {
     HarnessRegistry,
     ClaudeCodeHarness,
@@ -27,7 +26,6 @@ import {
     type ClientToolDefinition,
     type ClientToolResult,
 } from "@openade/harness"
-import { isDev } from "../../config.js"
 import { setSdkCache } from "./capabilities.js"
 
 // ============================================================================
@@ -123,6 +121,21 @@ type HarnessStreamEvent =
     | (HarnessExecutionEvent & { direction: "execution" })
     | (HarnessCommandEvent & { direction: "command" })
 
+type HarnessEventSink = (event: HarnessStreamEvent) => void
+type HarnessSettledSink = (result: {
+    executionId: string
+    status: ExecutionState["status"]
+    sessionId?: string
+    events: HarnessStreamEvent[]
+}) => void
+type HarnessSpawnSink = (result: {
+    executionId: string
+    pid: number
+    pgid?: number
+    processLabel?: string
+    processStartedAt: string
+}) => void
+
 // ============================================================================
 // Execution State
 // ============================================================================
@@ -135,10 +148,14 @@ interface ExecutionState {
     cwd?: string
     events: HarnessStreamEvent[]
     abortController: AbortController
-    webContents: WebContents | null
+    eventSink?: HarnessEventSink
     cleanupTimer: ReturnType<typeof setTimeout> | null
     createdAt: string
     completedAt?: string
+    pid?: number
+    pgid?: number
+    processLabel?: string
+    processStartedAt?: string
 }
 
 /** Pending tool call waiting for renderer response */
@@ -164,30 +181,6 @@ const BUFFER_RETENTION_MS = 30 * 60 * 1000
 // Helper Functions
 // ============================================================================
 
-function checkAllowed(e: IpcMainInvokeEvent): boolean {
-    const origin = e.sender.getURL()
-    console.debug("[Harness] checkAllowed called", { origin, isDev })
-    try {
-        const url = new URL(origin)
-        const allowed = isDev
-            ? url.hostname.endsWith("localhost")
-            : url.hostname.endsWith("localhost") || url.protocol === "file:"
-        if (!allowed) {
-            console.debug("[Harness] checkAllowed REJECTED - hostname not allowed", {
-                hostname: url.hostname,
-                isDev,
-            })
-        }
-        return allowed
-    } catch (err) {
-        console.debug("[Harness] checkAllowed REJECTED - URL parse error", {
-            origin,
-            error: String(err),
-        })
-        return false
-    }
-}
-
 /** Reset the cleanup timer for an execution */
 function resetCleanupTimer(executionId: string): void {
     const execution = activeExecutions.get(executionId)
@@ -198,9 +191,34 @@ function resetCleanupTimer(executionId: string): void {
     }
 
     execution.cleanupTimer = setTimeout(() => {
+        if (execution.status === "in_progress") {
+            console.warn("[Harness] Refusing to clean up in-progress execution:", executionId)
+            resetCleanupTimer(executionId)
+            return
+        }
         console.log("[Harness] Cleaning up stale execution:", executionId)
         activeExecutions.delete(executionId)
     }, BUFFER_RETENTION_MS)
+}
+
+function deleteExecutionRecord(executionId: string, reason: "clear_buffer" | "cleanup" | "shutdown"): boolean {
+    const execution = activeExecutions.get(executionId)
+    if (!execution) return false
+
+    if (execution.status === "in_progress") {
+        console.warn("[Harness] Refusing to delete in-progress execution:", {
+            executionId,
+            reason,
+        })
+        resetCleanupTimer(executionId)
+        return false
+    }
+
+    if (execution.cleanupTimer) {
+        clearTimeout(execution.cleanupTimer)
+    }
+    activeExecutions.delete(executionId)
+    return true
 }
 
 /** Emit an execution event to the buffer and renderer */
@@ -226,20 +244,7 @@ function emitExecutionEvent(executionId: string, event: HarnessExecutionEventBas
     // Reset cleanup timer on activity
     resetCleanupTimer(executionId)
 
-    // Send to renderer if connected
-    if (execution.webContents && !execution.webContents.isDestroyed()) {
-        // New channel
-        execution.webContents.send("harness:event", fullEvent)
-        // Legacy channel for backward compat
-        execution.webContents.send("claude:event", fullEvent)
-    } else {
-        console.debug("[Harness] emitExecutionEvent: no webContents to send to", {
-            executionId,
-            eventType: event.type,
-            hasWebContents: !!execution.webContents,
-            isDestroyed: execution.webContents?.isDestroyed(),
-        })
-    }
+    execution.eventSink?.(fullEvent)
 }
 
 /** Record a command event in the buffer */
@@ -428,8 +433,10 @@ async function streamToRenderer(
 // ============================================================================
 
 async function handleStartQuery(
-    event: IpcMainInvokeEvent,
-    command: HarnessCommandEvent & { type: "start_query" }
+    command: HarnessCommandEvent & { type: "start_query" },
+    eventSink?: HarnessEventSink,
+    settledSink?: HarnessSettledSink,
+    spawnSink?: HarnessSpawnSink
 ): Promise<{ ok: boolean; error?: string }> {
     const { executionId, prompt, options } = command
     const harnessId = options.harnessId || "claude-code"
@@ -461,9 +468,10 @@ async function handleStartQuery(
         cwd: options.cwd,
         events: [],
         abortController,
-        webContents: event.sender,
+        eventSink,
         cleanupTimer: null,
         createdAt: new Date().toISOString(),
+        processLabel: options.processLabel,
     }
 
     activeExecutions.set(executionId, execution)
@@ -488,11 +496,8 @@ async function handleStartQuery(
                     const callId = crypto.randomUUID()
 
                     const currentExecution = activeExecutions.get(executionId)
-                    if (
-                        !currentExecution?.webContents ||
-                        currentExecution.webContents.isDestroyed()
-                    ) {
-                        return { error: "No renderer connected for tool call" }
+                    if (!currentExecution?.eventSink) {
+                        return { error: "No client connected for tool call" }
                     }
 
                     // Emit tool_call event via unified stream
@@ -504,14 +509,6 @@ async function handleStartQuery(
                         toolName: toolDef.name,
                         args: inputArgs,
                     })
-
-                    // Also send via legacy channel for backward compatibility
-                    currentExecution.webContents.send(
-                        `claude:tool-call:${executionId}`,
-                        callId,
-                        toolDef.name,
-                        inputArgs
-                    )
 
                     // Wait for response from renderer
                     return new Promise<ClientToolResult>((resolve, reject) => {
@@ -555,6 +552,20 @@ async function handleStartQuery(
         disablePlanningTools: options.disablePlanningTools,
         mcpServers: options.mcpServerConfigs,
         clientTools,
+        onSpawn: (pid) => {
+            const processStartedAt = new Date().toISOString()
+            const pgid = process.platform === "win32" ? undefined : pid
+            execution.pid = pid
+            execution.pgid = pgid
+            execution.processStartedAt = processStartedAt
+            spawnSink?.({
+                executionId,
+                pid,
+                pgid,
+                processLabel: options.processLabel,
+                processStartedAt,
+            })
+        },
         signal: abortController.signal,
     }
 
@@ -597,13 +608,21 @@ async function handleStartQuery(
     console.debug("[Harness] handleStartQuery: starting streamToRenderer (fire-and-forget)", {
         executionId,
     })
-    streamToRenderer(executionId, harnessId, generator)
+    void streamToRenderer(executionId, harnessId, generator).finally(() => {
+        const settled = activeExecutions.get(executionId)
+        if (!settled) return
+        settledSink?.({
+            executionId,
+            status: settled.status,
+            sessionId: settled.sessionId,
+            events: [...settled.events],
+        })
+    })
 
     return { ok: true }
 }
 
 async function handleStructuredQuery(
-    _event: IpcMainInvokeEvent,
     command: HarnessCommandEvent & { type: "structured_query" }
 ): Promise<{
     ok: boolean
@@ -714,8 +733,8 @@ function handleAbort(command: HarnessCommandEvent & { type: "abort" }): { ok: bo
 }
 
 function handleReconnect(
-    event: IpcMainInvokeEvent,
-    command: HarnessCommandEvent & { type: "reconnect" }
+    command: HarnessCommandEvent & { type: "reconnect" },
+    eventSink?: HarnessEventSink
 ): { ok: boolean; found: boolean; events?: HarnessStreamEvent[] } {
     const { executionId } = command
     console.debug("[Harness] handleReconnect called", {
@@ -732,7 +751,7 @@ function handleReconnect(
     recordCommandEvent(executionId, command)
 
     // Update webContents reference
-    execution.webContents = event.sender
+    execution.eventSink = eventSink ?? execution.eventSink
 
     // Reset cleanup timer
     resetCleanupTimer(executionId)
@@ -743,248 +762,126 @@ function handleReconnect(
 
 function handleClearBuffer(
     command: HarnessCommandEvent & { type: "clear_buffer" }
-): { ok: boolean } {
+): { ok: boolean; retained?: boolean } {
     const { executionId } = command
 
-    const execution = activeExecutions.get(executionId)
-    if (execution) {
-        if (execution.cleanupTimer) {
-            clearTimeout(execution.cleanupTimer)
-        }
-        activeExecutions.delete(executionId)
-        console.log("[Harness] Buffer cleared for execution:", executionId)
-    }
+    const deleted = deleteExecutionRecord(executionId, "clear_buffer")
+    if (deleted) console.log("[Harness] Buffer cleared for execution:", executionId)
 
-    return { ok: true }
+    return { ok: true, retained: !deleted }
 }
 
-// ============================================================================
-// IPC Handlers
-// ============================================================================
-
-export const load = () => {
-    console.log("[Harness] Registering unified IPC handlers...")
-
-    // ── New unified command handler ──
-    ipcMain.handle(
-        "harness:command",
-        async (
-            event,
-            command: HarnessCommandEvent
-        ): Promise<{
-            ok: boolean
-            found?: boolean
-            events?: HarnessStreamEvent[]
-            output?: unknown
-            usage?: unknown
-            sessionId?: string
-            error?: string
-        }> => {
-            if (!checkAllowed(event)) throw new Error("not allowed")
-
-            switch (command.type) {
-                case "start_query":
-                    return handleStartQuery(event, command)
-                case "structured_query":
-                    return handleStructuredQuery(event, command)
-                case "tool_response":
-                    return handleToolResponse(command)
-                case "abort":
-                    return handleAbort(command)
-                case "reconnect":
-                    return handleReconnect(event, command)
-                case "clear_buffer":
-                    return handleClearBuffer(command)
-                default:
-                    return { ok: false, error: "Unknown command type" }
-            }
-        }
+export function startRuntimeHarnessQuery(args: {
+    executionId: string
+    prompt: string | ContentBlock[]
+    options: HarnessQueryOptions
+    onEvent?: HarnessEventSink
+    onSettled?: HarnessSettledSink
+    onSpawn?: HarnessSpawnSink
+}): Promise<{ ok: boolean; error?: string }> {
+    return handleStartQuery(
+        {
+            id: crypto.randomUUID(),
+            type: "start_query",
+            executionId: args.executionId,
+            prompt: args.prompt,
+            options: args.options,
+        },
+        args.onEvent,
+        args.onSettled,
+        args.onSpawn
     )
+}
 
-    // ── Legacy "claude:command" handler (backward compat, delegates to same handlers) ──
-    ipcMain.handle(
-        "claude:command",
-        async (
-            event,
-            command: HarnessCommandEvent
-        ): Promise<{
-            ok: boolean
-            found?: boolean
-            events?: HarnessStreamEvent[]
-            output?: unknown
-            usage?: unknown
-            sessionId?: string
-            error?: string
-        }> => {
-            if (!checkAllowed(event)) throw new Error("not allowed")
+export function structuredRuntimeHarnessQuery(args: {
+    prompt: string | ContentBlock[]
+    options: HarnessQueryOptions
+    outputSchema: Record<string, unknown>
+}): Promise<{
+    ok: boolean
+    output?: unknown
+    usage?: unknown
+    sessionId?: string
+    error?: string
+}> {
+    return handleStructuredQuery({
+        id: crypto.randomUUID(),
+        type: "structured_query",
+        executionId: crypto.randomUUID(),
+        prompt: args.prompt,
+        options: args.options,
+        outputSchema: args.outputSchema,
+    })
+}
 
-            // Ensure harnessId defaults to claude-code for legacy callers
-            if (command.type === "start_query" && !command.options.harnessId) {
-                command.options.harnessId = "claude-code"
-            }
+export function respondRuntimeHarnessTool(args: {
+    executionId: string
+    callId: string
+    result?: ToolResult
+    error?: string
+}): { ok: boolean; error?: string } {
+    return handleToolResponse({
+        id: crypto.randomUUID(),
+        type: "tool_response",
+        executionId: args.executionId,
+        callId: args.callId,
+        result: args.result,
+        error: args.error,
+    })
+}
 
-            switch (command.type) {
-                case "start_query":
-                    return handleStartQuery(event, command)
-                case "structured_query":
-                    return handleStructuredQuery(event, command)
-                case "tool_response":
-                    return handleToolResponse(command)
-                case "abort":
-                    return handleAbort(command)
-                case "reconnect":
-                    return handleReconnect(event, command)
-                case "clear_buffer":
-                    return handleClearBuffer(command)
-                default:
-                    return { ok: false, error: "Unknown command type" }
-            }
-        }
-    )
+export function abortRuntimeHarnessQuery(args: { executionId: string }): { ok: boolean } {
+    return handleAbort({
+        id: crypto.randomUUID(),
+        type: "abort",
+        executionId: args.executionId,
+    })
+}
 
-    // ── Legacy individual handlers for backward compatibility ──
-
-    ipcMain.handle(
-        "claude:tool-response",
-        async (
-            event,
-            args: {
-                executionId: string
-                callId: string
-                result?: ToolResult
-                error?: string
-            }
-        ) => {
-            if (!checkAllowed(event)) throw new Error("not allowed")
-            return handleToolResponse({
-                id: crypto.randomUUID(),
-                type: "tool_response",
-                executionId: args.executionId,
-                callId: args.callId,
-                result: args.result,
-                error: args.error,
-            })
-        }
-    )
-
-    ipcMain.handle(
-        "claude:query",
-        async (
-            event,
-            args: {
-                executionId: string
-                prompt: string | ContentBlock[]
-                options?: HarnessQueryOptions
-            }
-        ) => {
-            console.debug("[Harness] IPC claude:query received (legacy)", {
-                executionId: args.executionId,
-            })
-            if (!checkAllowed(event)) throw new Error("not allowed")
-            return handleStartQuery(event, {
-                id: crypto.randomUUID(),
-                type: "start_query",
-                executionId: args.executionId,
-                prompt: args.prompt,
-                options: {
-                    harnessId: "claude-code",
-                    cwd: args.options?.cwd ?? process.cwd(),
-                    ...args.options,
-                },
-            })
-        }
-    )
-
-    ipcMain.handle("claude:reconnect", async (event, args: { executionId: string }) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-
-        handleReconnect(event, {
+export function reconnectRuntimeHarnessQuery(args: {
+    executionId: string
+    onEvent?: HarnessEventSink
+}): { ok: boolean; found: boolean; events?: HarnessStreamEvent[] } {
+    return handleReconnect(
+        {
             id: crypto.randomUUID(),
             type: "reconnect",
             executionId: args.executionId,
-        })
-
-        const execution = activeExecutions.get(args.executionId)
-        if (!execution) {
-            return { ok: false, found: false }
-        }
-
-        // Send events via legacy channels for backward compatibility
-        for (const evt of execution.events) {
-            if (evt.direction === "execution" && evt.type === "raw_message") {
-                event.sender.send(
-                    `claude:message:${args.executionId}`,
-                    (evt as HarnessExecutionEvent & { type: "raw_message" }).message
-                )
-            }
-        }
-
-        if (execution.status === "completed") {
-            event.sender.send(`claude:complete:${args.executionId}`)
-            return {
-                ok: true,
-                found: true,
-                completed: true,
-                messageCount: execution.events.length,
-            }
-        }
-
-        if (execution.status === "error") {
-            const errorEvent = execution.events.find(
-                (e) => e.direction === "execution" && e.type === "error"
-            ) as (HarnessExecutionEvent & { type: "error" }) | undefined
-            event.sender.send(
-                `claude:error:${args.executionId}`,
-                errorEvent?.error ?? "Unknown error"
-            )
-            return {
-                ok: true,
-                found: true,
-                error: errorEvent?.error,
-                messageCount: execution.events.length,
-            }
-        }
-
-        return { ok: true, found: true, completed: false, messageCount: execution.events.length }
-    })
-
-    ipcMain.handle("claude:abort", async (event, args: { executionId: string }) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleAbort({
-            id: crypto.randomUUID(),
-            type: "abort",
-            executionId: args.executionId,
-        })
-    })
-
-    ipcMain.handle(
-        "harness:deleteSession",
-        async (event, args: { harnessId: string; sessionId: string; cwd?: string }): Promise<{ ok: boolean }> => {
-            if (!checkAllowed(event)) throw new Error("not allowed")
-            const harness = registry.get(args.harnessId as HarnessId)
-            if (!harness) return { ok: false }
-            try {
-                await harness.deleteSession(args.sessionId, { cwd: args.cwd })
-                return { ok: true }
-            } catch {
-                return { ok: false }
-            }
-        }
+        },
+        args.onEvent
     )
 }
 
-// ============================================================================
-// Query Status
-// ============================================================================
+export function clearRuntimeHarnessBuffer(args: { executionId: string }): { ok: boolean; retained?: boolean } {
+    return handleClearBuffer({
+        id: crypto.randomUUID(),
+        type: "clear_buffer",
+        executionId: args.executionId,
+    })
+}
 
-/** Check if there are any active queries in progress */
-export function hasActiveQueries(): boolean {
-    for (const execution of activeExecutions.values()) {
-        if (execution.status === "in_progress") {
-            return true
-        }
+export async function deleteRuntimeHarnessSession(args: {
+    harnessId: string
+    sessionId: string
+    cwd?: string
+}): Promise<{ ok: boolean }> {
+    const harness = registry.get(args.harnessId as HarnessId)
+    if (!harness) return { ok: false }
+    try {
+        await harness.deleteSession(args.sessionId, { cwd: args.cwd })
+        return { ok: true }
+    } catch {
+        return { ok: false }
     }
-    return false
+}
+
+export async function checkRuntimeHarnessStatus(): Promise<Record<string, unknown>> {
+    const statusMap = await registry.checkAllInstallStatus()
+    const result: Record<string, unknown> = {}
+    for (const [id, status] of statusMap) {
+        result[id] = status
+    }
+    return result
 }
 
 // ============================================================================

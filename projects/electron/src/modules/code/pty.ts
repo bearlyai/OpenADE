@@ -1,13 +1,11 @@
-import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron"
 import * as pty from "node-pty"
 import * as os from "os"
 import * as fs from "fs"
 import logger from "electron-log"
-import { isDev } from "../../config"
 
 // IMPORTANT: Keep in sync with projects/dashboard/src/pages/code/electronAPI/pty.ts
 
-interface SpawnParams {
+export interface SpawnParams {
     ptyId: string
     cwd: string
     env?: Record<string, string>
@@ -15,48 +13,57 @@ interface SpawnParams {
     rows: number
 }
 
-interface SpawnResponse {
+export interface SpawnResponse {
     ok: boolean
     error?: string
 }
 
-interface WriteParams {
+export interface WriteParams {
     ptyId: string
     data: string // base64 encoded
 }
 
-interface ResizeParams {
+export interface ResizeParams {
     ptyId: string
     cols: number
     rows: number
 }
 
-interface KillParams {
+export interface KillParams {
     ptyId: string
 }
 
-interface ReconnectParams {
+export interface ReconnectParams {
     ptyId: string
 }
 
-interface ReconnectResponse {
+export interface ReconnectResponse {
     ok: boolean
     found: boolean
     exited?: boolean
     exitCode?: number
 }
 
-interface PtyOutputEvent {
+export interface RuntimeReconnectResponse extends ReconnectResponse {
+    output: PtyOutputEvent[]
+}
+
+export interface PtyOutputEvent {
     data: string // base64 encoded
     timestamp: number
 }
+
+export type PtyLifecycleEvent =
+    | { type: "started"; ptyId: string; pid: number; cwd: string; shell: string }
+    | { type: "output"; ptyId: string; chunk: PtyOutputEvent }
+    | { type: "exit"; ptyId: string; exitCode: number }
+    | { type: "killed"; ptyId: string }
 
 
 interface ActivePty {
     pty: pty.IPty
     outputBuffer: PtyOutputEvent[]
     bufferSizeBytes: number
-    webContents: WebContents | null
     exited: boolean
     exitCode: number | null
     cleanupTimeoutId?: NodeJS.Timeout
@@ -67,21 +74,7 @@ const MAX_ACTIVE_PTYS = 50
 const CLEANUP_DELAY_MS = 30 * 60 * 1000 // 30 minutes
 
 const activePtys = new Map<string, ActivePty>()
-
-function checkAllowed(e: IpcMainInvokeEvent): boolean {
-    const origin = e.sender.getURL()
-    try {
-        const url = new URL(origin)
-        if (isDev) {
-            return url.hostname.endsWith("localhost")
-        } else {
-            return url.hostname.endsWith("localhost") || url.protocol === "file:"
-        }
-    } catch (error) {
-        logger.error("[Pty:checkAllowed] Failed to parse origin:", error)
-        return false
-    }
-}
+const lifecycleListeners = new Set<(event: PtyLifecycleEvent) => void>()
 
 function validateCwd(cwd: string): void {
     if (!cwd || typeof cwd !== "string") {
@@ -129,6 +122,21 @@ function getDefaultShell(): string {
     return "/bin/sh"
 }
 
+function emitLifecycle(event: PtyLifecycleEvent): void {
+    for (const listener of lifecycleListeners) {
+        try {
+            listener(event)
+        } catch (error) {
+            logger.warn("[Pty] Lifecycle listener failed", error)
+        }
+    }
+}
+
+export function addPtyLifecycleListener(listener: (event: PtyLifecycleEvent) => void): () => void {
+    lifecycleListeners.add(listener)
+    return () => lifecycleListeners.delete(listener)
+}
+
 function scheduleCleanup(ptyId: string): void {
     const p = activePtys.get(ptyId)
     if (!p) return
@@ -167,9 +175,7 @@ function sendOutput(ptyId: string, data: string): void {
         p.bufferSizeBytes += chunkSize
     }
 
-    if (p.webContents && !p.webContents.isDestroyed()) {
-        p.webContents.send(`pty:output:${ptyId}`, chunk)
-    }
+    emitLifecycle({ type: "output", ptyId, chunk })
 }
 
 function sendExit(ptyId: string, exitCode: number): void {
@@ -179,14 +185,12 @@ function sendExit(ptyId: string, exitCode: number): void {
     p.exited = true
     p.exitCode = exitCode
 
-    if (p.webContents && !p.webContents.isDestroyed()) {
-        p.webContents.send(`pty:exit:${ptyId}`, { exitCode })
-    }
+    emitLifecycle({ type: "exit", ptyId, exitCode })
 
     scheduleCleanup(ptyId)
 }
 
-async function handleSpawn(params: SpawnParams, webContents: WebContents): Promise<SpawnResponse> {
+async function handleSpawn(params: SpawnParams): Promise<SpawnResponse> {
     logger.info("[Pty:spawn] Starting", JSON.stringify({ ptyId: params.ptyId, cwd: params.cwd, cols: params.cols, rows: params.rows }))
 
     try {
@@ -198,8 +202,6 @@ async function handleSpawn(params: SpawnParams, webContents: WebContents): Promi
 
         // If PTY already exists, just reconnect
         if (activePtys.has(params.ptyId)) {
-            const existing = activePtys.get(params.ptyId)!
-            existing.webContents = webContents
             return { ok: true }
         }
 
@@ -216,7 +218,6 @@ async function handleSpawn(params: SpawnParams, webContents: WebContents): Promi
             pty: ptyProcess,
             outputBuffer: [],
             bufferSizeBytes: 0,
-            webContents,
             exited: false,
             exitCode: null,
         })
@@ -228,6 +229,14 @@ async function handleSpawn(params: SpawnParams, webContents: WebContents): Promi
         ptyProcess.onExit(({ exitCode }) => {
             logger.info("[Pty] Process exited", JSON.stringify({ ptyId: params.ptyId, exitCode }))
             sendExit(params.ptyId, exitCode)
+        })
+
+        emitLifecycle({
+            type: "started",
+            ptyId: params.ptyId,
+            pid: ptyProcess.pid,
+            cwd: params.cwd,
+            shell,
         })
 
         logger.info("[Pty:spawn] PTY created", JSON.stringify({ ptyId: params.ptyId, shell, pid: ptyProcess.pid }))
@@ -287,6 +296,7 @@ async function handleKill(params: KillParams): Promise<{ ok: boolean }> {
             clearTimeout(p.cleanupTimeoutId)
         }
         activePtys.delete(params.ptyId)
+        emitLifecycle({ type: "killed", ptyId: params.ptyId })
 
         return { ok: true }
     } catch (error) {
@@ -295,12 +305,26 @@ async function handleKill(params: KillParams): Promise<{ ok: boolean }> {
     }
 }
 
-async function handleReconnect(params: ReconnectParams, webContents: WebContents): Promise<ReconnectResponse> {
-    logger.info("[Pty:reconnect] Reconnecting", JSON.stringify({ ptyId: params.ptyId }))
+export async function spawnRuntimePty(params: SpawnParams): Promise<SpawnResponse> {
+    return handleSpawn(params)
+}
 
+export async function writeRuntimePty(params: WriteParams): Promise<{ ok: boolean }> {
+    return handleWrite(params)
+}
+
+export async function resizeRuntimePty(params: ResizeParams): Promise<{ ok: boolean }> {
+    return handleResize(params)
+}
+
+export async function killRuntimePty(params: KillParams): Promise<{ ok: boolean }> {
+    return handleKill(params)
+}
+
+export async function reconnectRuntimePty(params: ReconnectParams): Promise<RuntimeReconnectResponse> {
     const p = activePtys.get(params.ptyId)
     if (!p) {
-        return { ok: false, found: false }
+        return { ok: false, found: false, output: [] }
     }
 
     if (p.cleanupTimeoutId) {
@@ -308,58 +332,22 @@ async function handleReconnect(params: ReconnectParams, webContents: WebContents
         p.cleanupTimeoutId = undefined
     }
 
-    p.webContents = webContents
-
-    // Replay buffered output
-    for (const chunk of p.outputBuffer) {
-        webContents.send(`pty:output:${params.ptyId}`, chunk)
-    }
-
     if (p.exited) {
-        webContents.send(`pty:exit:${params.ptyId}`, { exitCode: p.exitCode })
         scheduleCleanup(params.ptyId)
-        return { ok: true, found: true, exited: true, exitCode: p.exitCode ?? undefined }
     }
 
-    return { ok: true, found: true, exited: false }
+    return {
+        ok: true,
+        found: true,
+        exited: p.exited,
+        exitCode: p.exitCode ?? undefined,
+        output: [...p.outputBuffer],
+    }
 }
 
-export const load = () => {
-    logger.info("[Pty] Registering IPC handlers")
-
-    ipcMain.handle("pty:spawn", async (event, params: SpawnParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleSpawn(params, event.sender)
-    })
-
-    ipcMain.handle("pty:write", async (event, params: WriteParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleWrite(params)
-    })
-
-    ipcMain.handle("pty:resize", async (event, params: ResizeParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleResize(params)
-    })
-
-    ipcMain.handle("pty:kill", async (event, params: KillParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleKill(params)
-    })
-
-    ipcMain.handle("pty:reconnect", async (event, params: ReconnectParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleReconnect(params, event.sender)
-    })
-
-    ipcMain.handle("pty:killAll", async (event) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        logger.info("[Pty] Killing all PTYs (triggered by frontend)")
-        cleanup()
-        return { ok: true }
-    })
-
-    logger.info("[Pty] IPC handlers registered successfully")
+export async function killAllRuntimePtys(): Promise<{ ok: true }> {
+    cleanup()
+    return { ok: true }
 }
 
 export const cleanup = () => {
@@ -376,6 +364,7 @@ export const cleanup = () => {
             } catch {
                 // Ignore errors during cleanup
             }
+            emitLifecycle({ type: "killed", ptyId })
         }
 
         activePtys.delete(ptyId)

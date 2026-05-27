@@ -14,6 +14,7 @@ import { getStorageDriver } from "./storage"
 export interface RepoStoreConnection {
     store: RepoStore
     sync: () => Promise<void>
+    refresh: () => Promise<boolean>
     disconnect: () => void
 }
 
@@ -22,7 +23,7 @@ export interface RepoStoreConnection {
  */
 export async function connectRepoStore(): Promise<RepoStoreConnection> {
     const storage = getStorageDriver()
-    const { doc, sync, disconnect } = await storage.getYDoc("code:repos")
+    const { doc, sync, refresh, disconnect } = await storage.getYDoc("code:repos")
 
     const store = createRepoStore(doc)
 
@@ -32,6 +33,7 @@ export async function connectRepoStore(): Promise<RepoStoreConnection> {
     return {
         store,
         sync,
+        refresh,
         disconnect,
     }
 }

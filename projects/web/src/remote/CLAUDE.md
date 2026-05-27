@@ -4,17 +4,19 @@ Renderer-side remote control surface shared by the desktop-hosted mobile view an
 
 ## Architecture
 
-- Keep OpenADE domain logic in the existing renderer store.
-- registerCompanionController.ts is the renderer bridge used by Electron main. It should call CodeStore managers, not duplicate business logic.
+- Keep only not-yet-migrated desktop dashboard domain logic in the existing renderer store; companion commands are server-owned through the OpenADE module.
+- The desktop renderer should listen to runtime OpenADE notifications and refresh cached Yjs documents from storage after server-owned writes.
+- Remote invalidations come from runtime OpenADE notifications; do not reintroduce renderer-origin companion event bridges.
 - RemoteApp.tsx is the mobile-sized UI and should stay thin over client.ts and shared types.
-- client.ts owns config persistence, pairing URL parsing, host validation, fetch calls, and SSE reconnect state.
+- client.ts owns config persistence, pairing URL parsing, host validation, runtime WebSocket clients, and online/reconnecting/offline state.
+- client.ts must cache one runtime WebSocket client per paired host id; navigation, refresh, and multiple subscriptions must not create extra sockets for the same saved credentials.
 - messagePresentation.ts turns task events into mobile-readable message and activity rows.
 
 ## Data Flow
 
-- The desktop renderer owns RepoStore, TaskStore, RunCmdManager, execution state, and theme selection.
-- Main process authenticates companion HTTP requests and forwards narrow requests to the renderer.
-- The mobile client reads snapshots and task detail over REST, then refreshes from SSE events.
+- Electron main owns companion auth, runtime transport, Yjs-backed read projections, and low-level host methods.
+- The desktop renderer is not a companion command adapter. Product commands from remote clients go through runtime WebSocket methods.
+- The mobile client reads snapshots, projects, task detail, and runtime updates over the `/v1/runtime` WebSocket.
 - Do not sync Yjs to the phone for the companion MVP.
 - Do not expose raw Electron APIs, filesystem APIs, or shell APIs to RemoteApp.
 
@@ -22,11 +24,11 @@ Renderer-side remote control surface shared by the desktop-hosted mobile view an
 
 - Pairing uses HTTP URLs and full-link paste. Deep-link pairing is intentionally rejected.
 - Multiple OpenADE sessions are stored in a versioned config store with an active id.
-- Snapshot and task payloads must be plain JSON. Use JSON serialization before responding across IPC when store objects may contain uncloneable values.
+- Snapshot and task payloads must be plain JSON. Use the OpenADE module's Yjs-backed projection for remote reads.
 - If a task document is missing or has mismatched metadata, return a readable unavailable state instead of crashing the mobile UI.
 - Task sorting must match the desktop sidebar. Use sortTaskPreviewsLikeSidebar from components/sidebar/taskSorting.
-- Harness ids from remote input must be validated against MODEL_REGISTRY before forwarding to RunCmdManager.
-- SSE must reconnect with Last-Event-ID and surface online/reconnecting/offline state in the UI.
+- Harness ids from remote input must be validated at the OpenADE runtime boundary before starting a host harness.
+- RuntimeClient should reconnect automatically and surface online/reconnecting/offline state in the UI.
 
 ## UI And Theme
 
@@ -43,5 +45,5 @@ Renderer-side remote control surface shared by the desktop-hosted mobile view an
 ## Testing
 
 - Run npm run typecheck from projects/web after changes.
-- Add Vitest coverage for parsing, persistence migration, SSE reconnect, message presentation, and task sorting changes.
+- Add Vitest coverage for parsing, persistence migration, runtime reconnect, message presentation, and task sorting changes.
 - For visual changes, also build projects/mobile, sync iOS, and inspect the simulator.

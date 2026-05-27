@@ -1,9 +1,11 @@
 /**
  * Subprocess API Client
  *
- * Provides access to the centralized subprocess execution module in Electron.
+ * Provides access to the centralized subprocess execution module through the local runtime.
  * Used to push global environment variables that apply to all subprocess calls.
  */
+
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
 
 // ============================================================================
 // Subprocess API Functions
@@ -17,14 +19,13 @@
  * @param env - Record of environment variable key-value pairs
  */
 export async function setGlobalEnv(env: Record<string, string>): Promise<{ success: boolean }> {
-    if (!window.openadeAPI) {
+    if (!window.openadeAPI?.runtime) {
         console.warn("[SubprocessAPI] Not running in Electron, cannot set global env")
         return { success: false }
     }
 
     try {
-        const response = (await window.openadeAPI.subprocess.setGlobalEnv({ env })) as { success: boolean }
-        return response
+        return await localRuntimeClient.request<{ success: boolean }>("host/subprocess/setGlobalEnv", { env })
     } catch (error) {
         console.error("[SubprocessAPI] Failed to set global env:", error)
         return { success: false }

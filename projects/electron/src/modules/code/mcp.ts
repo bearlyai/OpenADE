@@ -1,25 +1,24 @@
 /**
  * MCP Server Module for Electron
  *
- * Provides MCP server operations via IPC to the dashboard frontend:
+ * Provides MCP server operations through trusted runtime host methods:
  * - Connection testing (real MCP JSON-RPC protocol check)
  * - OAuth flow with automatic endpoint discovery and dynamic client registration
  * - Token exchange
  */
 
-import { ipcMain, shell, BrowserWindow, type IpcMainInvokeEvent } from "electron"
+import { shell, BrowserWindow } from "electron"
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http"
 import { URL } from "url"
 import { randomBytes, createHash } from "crypto"
 import logger from "electron-log"
-import { isDev } from "../../config"
 
 // ============================================================================
 // Type Definitions
 // IMPORTANT: Keep in sync with projects/dashboard/src/pages/code/electronAPI/mcp.ts
 // ============================================================================
 
-interface McpServerConfig {
+export interface McpServerConfig {
     type: "http" | "stdio"
     // HTTP config
     url?: string
@@ -30,11 +29,11 @@ interface McpServerConfig {
     env?: Record<string, string>
 }
 
-interface TestMcpConnectionParams {
+export interface TestMcpConnectionParams {
     config: McpServerConfig
 }
 
-interface TestMcpConnectionResponse {
+export interface TestMcpConnectionResponse {
     success: boolean
     error?: string
     requiresAuth?: boolean
@@ -44,31 +43,31 @@ interface TestMcpConnectionResponse {
     }
 }
 
-interface InitiateMcpOAuthParams {
+export interface InitiateMcpOAuthParams {
     serverId: string
     serverUrl: string // MCP server URL - we discover OAuth endpoints from this
 }
 
-interface InitiateMcpOAuthResponse {
+export interface InitiateMcpOAuthResponse {
     success: boolean
     error?: string
 }
 
-interface CancelMcpOAuthParams {
+export interface CancelMcpOAuthParams {
     serverId: string
 }
 
-interface CancelMcpOAuthResponse {
+export interface CancelMcpOAuthResponse {
     success: boolean
 }
 
-interface RefreshMcpOAuthParams {
+export interface RefreshMcpOAuthParams {
     serverId: string
     serverUrl: string
     refreshToken: string
 }
 
-interface RefreshMcpOAuthResponse {
+export interface RefreshMcpOAuthResponse {
     success: boolean
     tokens?: McpOAuthTokens
     error?: string
@@ -93,14 +92,14 @@ interface DynamicClientRegistrationResponse {
     client_secret_expires_at?: number
 }
 
-interface McpOAuthTokens {
+export interface McpOAuthTokens {
     accessToken: string
     refreshToken?: string
     expiresAt?: string
     tokenType: string
 }
 
-interface OAuthCompleteResult {
+export interface OAuthCompleteResult {
     serverId: string
     tokens?: McpOAuthTokens
     error?: string
@@ -116,7 +115,7 @@ interface PendingOAuthFlow {
     clientId: string
     redirectUri: string
     codeVerifier: string
-    sender: Electron.WebContents
+    onComplete: (result: OAuthCompleteResult) => void
     timeout: NodeJS.Timeout
 }
 
@@ -126,24 +125,6 @@ const pendingOAuthFlows = new Map<string, PendingOAuthFlow>()
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-/**
- * Check if caller is allowed
- */
-function checkAllowed(e: IpcMainInvokeEvent): boolean {
-    const origin = e.sender.getURL()
-    try {
-        const url = new URL(origin)
-        if (isDev) {
-            return url.hostname.endsWith("localhost")
-        } else {
-            return url.hostname.endsWith("localhost") || url.protocol === "file:"
-        }
-    } catch (error) {
-        logger.error("[MCP:checkAllowed] Failed to parse origin:", error)
-        return false
-    }
-}
 
 /**
  * Generate PKCE code verifier (43-128 characters, URL-safe)
@@ -191,21 +172,11 @@ function getAuthBaseUrl(serverUrl: string): string {
     return `${url.protocol}//${url.host}`
 }
 
-/**
- * Safely send a message to a WebContents, checking if it's still valid.
- * Returns true if the message was sent, false if the sender was destroyed.
- */
-function safeSend(sender: Electron.WebContents, channel: string, ...args: unknown[]): boolean {
+function emitOAuthComplete(flow: PendingOAuthFlow, result: OAuthCompleteResult): void {
     try {
-        if (sender.isDestroyed()) {
-            logger.warn("[MCP:OAuth] Cannot send message - WebContents destroyed", JSON.stringify({ channel }))
-            return false
-        }
-        sender.send(channel, ...args)
-        return true
+        flow.onComplete(result)
     } catch (error) {
-        logger.warn("[MCP:OAuth] Failed to send message", JSON.stringify({ channel, error }))
-        return false
+        logger.warn("[MCP:OAuth] Failed to emit completion", JSON.stringify({ error }))
     }
 }
 
@@ -305,7 +276,7 @@ async function registerClient(registrationEndpoint: string, redirectUri: string)
  * Test connection to an MCP server using the actual MCP protocol.
  * Makes a JSON-RPC initialize request and checks the response.
  */
-async function handleTestConnection(config: McpServerConfig): Promise<TestMcpConnectionResponse> {
+export async function testRuntimeMcpConnection(config: McpServerConfig): Promise<TestMcpConnectionResponse> {
     const startTime = Date.now()
 
     if (config.type !== "http" || !config.url) {
@@ -485,7 +456,7 @@ async function handleOAuthCallback(
             serverId,
             error: errorDescription || error,
         }
-        safeSend(flow.sender, "code:mcp:oauthComplete", result)
+        emitOAuthComplete(flow, result)
 
         // Show error page
         res.writeHead(200, { "Content-Type": "text/html" })
@@ -525,7 +496,7 @@ async function handleOAuthCallback(
             serverId,
             tokens,
         }
-        safeSend(flow.sender, "code:mcp:oauthComplete", result)
+        emitOAuthComplete(flow, result)
 
         // Focus the Electron app window
         focusMainWindow()
@@ -553,7 +524,7 @@ async function handleOAuthCallback(
             serverId,
             error: message,
         }
-        safeSend(flow.sender, "code:mcp:oauthComplete", result)
+        emitOAuthComplete(flow, result)
 
         // Show error page
         res.writeHead(200, { "Content-Type": "text/html" })
@@ -575,7 +546,10 @@ async function handleOAuthCallback(
  * Initiate OAuth flow for an MCP server.
  * Automatically discovers OAuth endpoints and performs dynamic client registration.
  */
-async function handleInitiateOAuth(event: IpcMainInvokeEvent, params: InitiateMcpOAuthParams): Promise<InitiateMcpOAuthResponse> {
+export async function initiateRuntimeMcpOAuth(
+    params: InitiateMcpOAuthParams,
+    onComplete: (result: OAuthCompleteResult) => void
+): Promise<InitiateMcpOAuthResponse> {
     const { serverId, serverUrl } = params
     const startTime = Date.now()
 
@@ -644,7 +618,7 @@ async function handleInitiateOAuth(event: IpcMainInvokeEvent, params: InitiateMc
                 serverId,
                 error: "OAuth flow timed out",
             }
-            safeSend(event.sender, "code:mcp:oauthComplete", result)
+            onComplete(result)
             cleanupOAuthFlow(serverId, "timeout")
         }, OAUTH_TIMEOUT_MS)
 
@@ -655,7 +629,7 @@ async function handleInitiateOAuth(event: IpcMainInvokeEvent, params: InitiateMc
             clientId,
             redirectUri,
             codeVerifier,
-            sender: event.sender,
+            onComplete,
             timeout,
         })
 
@@ -695,7 +669,7 @@ async function handleInitiateOAuth(event: IpcMainInvokeEvent, params: InitiateMc
 /**
  * Cancel a pending OAuth flow for an MCP server.
  */
-function handleCancelOAuth(params: CancelMcpOAuthParams): CancelMcpOAuthResponse {
+export function cancelRuntimeMcpOAuth(params: CancelMcpOAuthParams): CancelMcpOAuthResponse {
     const { serverId } = params
 
     if (pendingOAuthFlows.has(serverId)) {
@@ -710,7 +684,7 @@ function handleCancelOAuth(params: CancelMcpOAuthParams): CancelMcpOAuthResponse
  * Refresh OAuth tokens using the refresh token.
  * Discovers token endpoint from server URL and exchanges refresh token for new tokens.
  */
-async function handleRefreshOAuth(params: RefreshMcpOAuthParams): Promise<RefreshMcpOAuthResponse> {
+export async function refreshRuntimeMcpOAuth(params: RefreshMcpOAuthParams): Promise<RefreshMcpOAuthResponse> {
     const { serverUrl, refreshToken } = params
 
     logger.info("[MCP:OAuth] Refreshing OAuth tokens", JSON.stringify({ serverUrl }))
@@ -761,32 +735,6 @@ async function handleRefreshOAuth(params: RefreshMcpOAuthParams): Promise<Refres
         logger.error("[MCP:OAuth] Token refresh error", JSON.stringify({ error: message }))
         return { success: false, error: message }
     }
-}
-
-export const load = () => {
-    logger.info("[MCP] Registering IPC handlers")
-
-    ipcMain.handle("code:mcp:testConnection", async (event, params: TestMcpConnectionParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleTestConnection(params.config)
-    })
-
-    ipcMain.handle("code:mcp:initiateOAuth", async (event, params: InitiateMcpOAuthParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleInitiateOAuth(event, params)
-    })
-
-    ipcMain.handle("code:mcp:cancelOAuth", async (event, params: CancelMcpOAuthParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleCancelOAuth(params)
-    })
-
-    ipcMain.handle("code:mcp:refreshOAuth", async (event, params: RefreshMcpOAuthParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleRefreshOAuth(params)
-    })
-
-    logger.info("[MCP] IPC handlers registered successfully")
 }
 
 export const cleanup = () => {

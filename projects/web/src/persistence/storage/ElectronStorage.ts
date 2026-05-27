@@ -1,5 +1,5 @@
 /**
- * ElectronStorage - A storage driver that persists YJS documents to the filesystem via Electron IPC.
+ * ElectronStorage - A storage driver that persists YJS documents to the filesystem via the trusted runtime protocol.
  *
  * Uses ~/.openade/data/yjs/ for storage with debounced saves on document changes.
  * Includes migration from IndexedDB for existing users.
@@ -14,7 +14,6 @@ const SAVE_DEBOUNCE_MS = 1000
 interface CachedDoc {
     doc: Y.Doc
     unsubscribe: () => void
-    saveTimeout: ReturnType<typeof setTimeout> | null
 }
 
 export class ElectronStorage implements StorageDriver {
@@ -27,6 +26,7 @@ export class ElectronStorage implements StorageDriver {
             return {
                 doc: cached.doc,
                 sync: () => this.saveDoc(id, cached.doc),
+                refresh: () => this.refreshDoc(id, cached.doc),
                 disconnect: () => this.disconnectDoc(id),
             }
         }
@@ -59,9 +59,10 @@ export class ElectronStorage implements StorageDriver {
                 doc.off("update", onUpdate)
                 if (saveTimeout) {
                     clearTimeout(saveTimeout)
+                    saveTimeout = null
+                    this.saveDoc(id, doc).catch((e) => console.error(`[ElectronStorage] Failed to flush ${id}:`, e))
                 }
             },
-            saveTimeout: null,
         }
 
         this.docCache.set(id, cachedDoc)
@@ -69,6 +70,7 @@ export class ElectronStorage implements StorageDriver {
         return {
             doc,
             sync: () => this.saveDoc(id, doc),
+            refresh: () => this.refreshDoc(id, doc),
             disconnect: () => this.disconnectDoc(id),
         }
     }
@@ -87,6 +89,13 @@ export class ElectronStorage implements StorageDriver {
     private async saveDoc(id: string, doc: Y.Doc): Promise<void> {
         const update = Y.encodeStateAsUpdate(doc)
         await saveYjsDoc(id, update)
+    }
+
+    private async refreshDoc(id: string, doc: Y.Doc): Promise<boolean> {
+        const savedUpdate = await loadYjsDoc(id)
+        if (!savedUpdate) return false
+        Y.applyUpdate(doc, savedUpdate)
+        return true
     }
 
     private disconnectDoc(id: string): void {

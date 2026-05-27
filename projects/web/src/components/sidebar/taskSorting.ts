@@ -8,9 +8,9 @@ export function compareTaskPreviewsByRecent(a: TaskPreview, b: TaskPreview): num
     return bTime.localeCompare(aTime)
 }
 
-function withRunningFirst(previews: TaskPreview[], workingTaskIds: Set<string>): TaskPreview[] {
-    const running = previews.filter((task) => workingTaskIds.has(task.id))
-    const idle = previews.filter((task) => !workingTaskIds.has(task.id))
+function withRunningFirst(previews: TaskPreview[], runningTaskIds: Set<string>): TaskPreview[] {
+    const running = previews.filter((task) => runningTaskIds.has(task.id))
+    const idle = previews.filter((task) => !runningTaskIds.has(task.id))
     return [...running, ...idle]
 }
 
@@ -18,20 +18,20 @@ export function sortTaskPreviewsLikeSidebar(
     previews: TaskPreview[],
     options: {
         pinnedTaskIds?: Iterable<string>
-        workingTaskIds?: Iterable<string>
+        runningTaskIds?: Iterable<string>
     } = {}
 ): TaskPreview[] {
     const pinnedSet = new Set(options.pinnedTaskIds ?? [])
-    const workingSet = new Set(options.workingTaskIds ?? [])
+    const runningSet = new Set(options.runningTaskIds ?? [])
 
     const openPreviews = previews.filter((task) => !task.closed).sort(compareTaskPreviewsByRecent)
     const pinnedOpen = withRunningFirst(
         openPreviews.filter((task) => pinnedSet.has(task.id)),
-        workingSet
+        runningSet
     )
     const unpinnedOpen = withRunningFirst(
         openPreviews.filter((task) => !pinnedSet.has(task.id)),
-        workingSet
+        runningSet
     )
     const closedPreviews = previews.filter((task) => task.closed).sort(compareTaskPreviewsByRecent)
     const pinnedClosed = closedPreviews.filter((task) => pinnedSet.has(task.id))

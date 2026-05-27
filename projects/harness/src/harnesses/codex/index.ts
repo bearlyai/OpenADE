@@ -190,6 +190,7 @@ export class CodexHarness implements Harness<CodexEvent> {
                 env,
                 signal: q.signal,
                 argv0: q.processLabel,
+                onSpawn: q.onSpawn,
                 stdinData: buildResult.stdinData,
                 parseLine: (line) => {
                     let parsed: unknown

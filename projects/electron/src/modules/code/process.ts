@@ -1,24 +1,22 @@
 /**
  * Process Management Module for Electron
  *
- * Provides process spawning with real-time stdout/stderr streaming via IPC.
+ * Provides process spawning with real-time stdout/stderr streaming for runtime host adapters.
  * Supports reconnection after renderer refresh through output buffering.
  */
 
-import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron"
 import { spawn, type ChildProcess } from "child_process"
 import * as path from "path"
 import * as os from "os"
 import * as fs from "fs"
 import logger from "electron-log"
-import { isDev } from "../../config"
 
 // ============================================================================
 // Type Definitions
 // IMPORTANT: Keep in sync with projects/dashboard/src/pages/code/electronAPI/process.ts
 // ============================================================================
 
-interface RunCmdParams {
+export interface StartCommandParams {
     cmd: string
     args?: string[]
     cwd: string
@@ -26,18 +24,18 @@ interface RunCmdParams {
     timeoutMs?: number // Default: 10 minutes (600000ms)
 }
 
-interface RunScriptParams {
+export interface StartScriptParams {
     script: string
     cwd: string
     env?: Record<string, string>
     timeoutMs?: number // Default: 10 minutes (600000ms)
 }
 
-interface RunProcessResponse {
+export interface StartProcessResponse {
     processId: string
 }
 
-interface ProcessOutputChunk {
+export interface ProcessOutputChunk {
     type: "stdout" | "stderr"
     data: string
     timestamp: number
@@ -47,7 +45,6 @@ interface ActiveProcess {
     process: ChildProcess
     outputBuffer: ProcessOutputChunk[]
     bufferSizeBytes: number
-    webContents: WebContents | null
     exitCode: number | null
     signal: string | null
     completed: boolean
@@ -57,7 +54,7 @@ interface ActiveProcess {
     tempScriptPath?: string // For cleanup
 }
 
-interface ReconnectResponse {
+export interface ReconnectResponse {
     ok: boolean
     found: boolean
     completed?: boolean
@@ -67,20 +64,31 @@ interface ReconnectResponse {
     outputCount?: number
 }
 
-interface KillResponse {
+export interface RuntimeReconnectResponse extends ReconnectResponse {
+    output: ProcessOutputChunk[]
+}
+
+export interface KillResponse {
     ok: boolean
     error?: string
 }
 
-interface ListResponse {
+export interface ListResponse {
     processes: {
         processId: string
         completed: boolean
         exitCode: number | null
         signal: string | null
         error?: string
+        pid?: number
     }[]
 }
+
+export type ProcessLifecycleEvent =
+    | { type: "started"; processId: string; pid?: number; cwd: string; label: string }
+    | { type: "output"; processId: string; chunk: ProcessOutputChunk }
+    | { type: "exit"; processId: string; exitCode: number | null; signal: string | null }
+    | { type: "error"; processId: string; error: string }
 
 // ============================================================================
 // Constants
@@ -144,28 +152,11 @@ function getScriptShell(): { shell: string; args: (scriptPath: string) => string
 // ============================================================================
 
 const activeProcesses = new Map<string, ActiveProcess>()
+const lifecycleListeners = new Set<(event: ProcessLifecycleEvent) => void>()
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-/**
- * Check if caller is allowed
- */
-function checkAllowed(e: IpcMainInvokeEvent): boolean {
-    const origin = e.sender.getURL()
-    try {
-        const url = new URL(origin)
-        if (isDev) {
-            return url.hostname.endsWith("localhost")
-        } else {
-            return url.hostname.endsWith("localhost") || url.protocol === "file:"
-        }
-    } catch (error) {
-        logger.error("[Process:checkAllowed] Failed to parse origin:", error)
-        return false
-    }
-}
 
 /**
  * Validate working directory
@@ -187,6 +178,21 @@ function validateCwd(cwd: string): void {
  */
 function generateProcessId(): string {
     return `proc-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function emitLifecycle(event: ProcessLifecycleEvent): void {
+    for (const listener of lifecycleListeners) {
+        try {
+            listener(event)
+        } catch (error) {
+            logger.warn("[Process] Lifecycle listener failed", error)
+        }
+    }
+}
+
+export function addProcessLifecycleListener(listener: (event: ProcessLifecycleEvent) => void): () => void {
+    lifecycleListeners.add(listener)
+    return () => lifecycleListeners.delete(listener)
 }
 
 /**
@@ -255,10 +261,7 @@ function sendOutput(processId: string, type: "stdout" | "stderr", data: string):
         proc.bufferSizeBytes += chunkSize
     }
 
-    // Send to renderer if connected
-    if (proc.webContents && !proc.webContents.isDestroyed()) {
-        proc.webContents.send(`process:output:${processId}`, chunk)
-    }
+    emitLifecycle({ type: "output", processId, chunk })
 }
 
 /**
@@ -273,9 +276,7 @@ function sendExit(processId: string, exitCode: number | null, signal: string | n
     proc.exitCode = exitCode
     proc.signal = signal
 
-    if (proc.webContents && !proc.webContents.isDestroyed()) {
-        proc.webContents.send(`process:exit:${processId}`, { exitCode, signal })
-    }
+    emitLifecycle({ type: "exit", processId, exitCode, signal })
 
     // Schedule cleanup
     scheduleCleanup(processId)
@@ -292,9 +293,7 @@ function sendError(processId: string, error: string): void {
     proc.completedAt = Date.now()
     proc.error = error
 
-    if (proc.webContents && !proc.webContents.isDestroyed()) {
-        proc.webContents.send(`process:error:${processId}`, error)
-    }
+    emitLifecycle({ type: "error", processId, error })
 
     // Schedule cleanup
     scheduleCleanup(processId)
@@ -360,11 +359,11 @@ function setupProcessHandlers(processId: string, childProcess: ChildProcess, tim
 // ============================================================================
 
 /**
- * Run a command
+ * Start a command process
  */
-async function handleRunCmd(params: RunCmdParams, webContents: WebContents): Promise<RunProcessResponse> {
+async function handleStartCommand(params: StartCommandParams): Promise<StartProcessResponse> {
     const startTime = Date.now()
-    logger.info("[Process:runCmd] Starting command", JSON.stringify({
+    logger.info("[Process:startCommand] Starting command", JSON.stringify({
         cmd: params.cmd,
         args: params.args,
         cwd: params.cwd,
@@ -396,7 +395,6 @@ async function handleRunCmd(params: RunCmdParams, webContents: WebContents): Pro
             process: childProcess,
             outputBuffer: [],
             bufferSizeBytes: 0,
-            webContents,
             exitCode: null,
             signal: null,
             completed: false,
@@ -404,22 +402,29 @@ async function handleRunCmd(params: RunCmdParams, webContents: WebContents): Pro
 
         // Setup handlers
         setupProcessHandlers(processId, childProcess, timeoutMs)
+        emitLifecycle({
+            type: "started",
+            processId,
+            pid: childProcess.pid,
+            cwd: params.cwd,
+            label: [params.cmd, ...(params.args || [])].join(" "),
+        })
 
-        logger.info("[Process:runCmd] Command started", JSON.stringify({ processId, pid: childProcess.pid, duration: Date.now() - startTime }))
+        logger.info("[Process:startCommand] Command started", JSON.stringify({ processId, pid: childProcess.pid, duration: Date.now() - startTime }))
         return { processId }
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error"
-        logger.error("[Process:runCmd] Error:", JSON.stringify({ error: errorMessage, duration: Date.now() - startTime }))
+        logger.error("[Process:startCommand] Error:", JSON.stringify({ error: errorMessage, duration: Date.now() - startTime }))
         throw error
     }
 }
 
 /**
- * Run a script
+ * Start a script process
  */
-async function handleRunScript(params: RunScriptParams, webContents: WebContents): Promise<RunProcessResponse> {
+async function handleStartScript(params: StartScriptParams): Promise<StartProcessResponse> {
     const startTime = Date.now()
-    logger.info("[Process:runScript] Starting script", JSON.stringify({
+    logger.info("[Process:startScript] Starting script", JSON.stringify({
         scriptLength: params.script.length,
         cwd: params.cwd,
         hasEnv: !!params.env,
@@ -470,7 +475,6 @@ async function handleRunScript(params: RunScriptParams, webContents: WebContents
             process: childProcess,
             outputBuffer: [],
             bufferSizeBytes: 0,
-            webContents,
             exitCode: null,
             signal: null,
             completed: false,
@@ -479,8 +483,15 @@ async function handleRunScript(params: RunScriptParams, webContents: WebContents
 
         // Setup handlers
         setupProcessHandlers(processId, childProcess, timeoutMs)
+        emitLifecycle({
+            type: "started",
+            processId,
+            pid: childProcess.pid,
+            cwd: params.cwd,
+            label: "script",
+        })
 
-        logger.info("[Process:runScript] Script started", JSON.stringify({ processId, pid: childProcess.pid, duration: Date.now() - startTime }))
+        logger.info("[Process:startScript] Script started", JSON.stringify({ processId, pid: childProcess.pid, duration: Date.now() - startTime }))
         return { processId }
     } catch (error: unknown) {
         // Clean up temp script on error
@@ -493,66 +504,8 @@ async function handleRunScript(params: RunScriptParams, webContents: WebContents
         }
 
         const errorMessage = error instanceof Error ? error.message : "Unknown error"
-        logger.error("[Process:runScript] Error:", JSON.stringify({ error: errorMessage, duration: Date.now() - startTime }))
+        logger.error("[Process:startScript] Error:", JSON.stringify({ error: errorMessage, duration: Date.now() - startTime }))
         throw error
-    }
-}
-
-/**
- * Reconnect to a running or completed process
- */
-async function handleReconnect(processId: string, webContents: WebContents): Promise<ReconnectResponse> {
-    logger.info("[Process:reconnect] Reconnecting", JSON.stringify({ processId }))
-
-    const proc = activeProcesses.get(processId)
-    if (!proc) {
-        return { ok: false, found: false }
-    }
-
-    // Cancel cleanup timeout since client is reconnecting
-    if (proc.cleanupTimeoutId) {
-        clearTimeout(proc.cleanupTimeoutId)
-        proc.cleanupTimeoutId = undefined
-    }
-
-    // Update webContents reference
-    proc.webContents = webContents
-
-    // Replay buffered output
-    for (const chunk of proc.outputBuffer) {
-        webContents.send(`process:output:${processId}`, chunk)
-    }
-
-    // If completed, send exit or error
-    if (proc.completed) {
-        if (proc.error) {
-            webContents.send(`process:error:${processId}`, proc.error)
-        } else {
-            webContents.send(`process:exit:${processId}`, {
-                exitCode: proc.exitCode,
-                signal: proc.signal,
-            })
-        }
-
-        // Re-schedule cleanup
-        scheduleCleanup(processId)
-
-        return {
-            ok: true,
-            found: true,
-            completed: true,
-            exitCode: proc.exitCode,
-            signal: proc.signal,
-            error: proc.error,
-            outputCount: proc.outputBuffer.length,
-        }
-    }
-
-    return {
-        ok: true,
-        found: true,
-        completed: false,
-        outputCount: proc.outputBuffer.length,
     }
 }
 
@@ -620,51 +573,58 @@ async function handleList(): Promise<ListResponse> {
         exitCode: proc.exitCode,
         signal: proc.signal,
         error: proc.error,
+        pid: proc.process.pid,
     }))
 
     return { processes }
 }
 
-// ============================================================================
-// Module Export
-// ============================================================================
+export async function startRuntimeCommand(params: StartCommandParams): Promise<StartProcessResponse> {
+    return handleStartCommand(params)
+}
 
-export const load = () => {
-    logger.info("[Process] Registering IPC handlers")
+export async function startRuntimeScript(params: StartScriptParams): Promise<StartProcessResponse> {
+    return handleStartScript(params)
+}
 
-    ipcMain.handle("process:runCmd", async (event, params: RunCmdParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleRunCmd(params, event.sender)
-    })
+export async function killRuntimeProcess(processId: string): Promise<KillResponse> {
+    return handleKill(processId)
+}
 
-    ipcMain.handle("process:runScript", async (event, params: RunScriptParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleRunScript(params, event.sender)
-    })
+export async function listRuntimeProcesses(): Promise<ListResponse> {
+    return handleList()
+}
 
-    ipcMain.handle("process:reconnect", async (event, args: { processId: string }) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleReconnect(args.processId, event.sender)
-    })
+export async function reconnectRuntimeProcess(processId: string): Promise<RuntimeReconnectResponse> {
+    const proc = activeProcesses.get(processId)
+    if (!proc) {
+        return { ok: false, found: false, output: [] }
+    }
 
-    ipcMain.handle("process:kill", async (event, args: { processId: string }) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleKill(args.processId)
-    })
+    if (proc.cleanupTimeoutId) {
+        clearTimeout(proc.cleanupTimeoutId)
+        proc.cleanupTimeoutId = undefined
+    }
 
-    ipcMain.handle("process:list", async (event) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleList()
-    })
+    if (proc.completed) {
+        scheduleCleanup(processId)
+    }
 
-    ipcMain.handle("process:killAll", async (event) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        logger.info("[Process] Killing all processes (triggered by frontend)")
-        cleanup()
-        return { ok: true }
-    })
+    return {
+        ok: true,
+        found: true,
+        completed: proc.completed,
+        exitCode: proc.exitCode,
+        signal: proc.signal,
+        error: proc.error,
+        outputCount: proc.outputBuffer.length,
+        output: [...proc.outputBuffer],
+    }
+}
 
-    logger.info("[Process] IPC handlers registered successfully")
+export async function killAllRuntimeProcesses(): Promise<{ ok: true }> {
+    cleanup()
+    return { ok: true }
 }
 
 export const cleanup = () => {
@@ -689,6 +649,7 @@ export const cleanup = () => {
                     logger.debug('[Process] Error killing process during cleanup:', err2)
                 }
             }
+            emitLifecycle({ type: "exit", processId, exitCode: null, signal: "SIGKILL" })
         }
 
         // Clean up temp script

@@ -2,8 +2,8 @@
  * CronManager
  *
  * Manages cron job definitions, per-machine install state, scheduling,
- * and catch-up execution across ALL workspaces. Uses RunCmdManager.run()
- * to execute cron tasks.
+ * and catch-up execution across ALL workspaces. Uses openade-client to start
+ * server-owned cron turns.
  *
  * Scheduling: Each enabled cron gets its own setTimeout targeting a
  * specific timestamp computed via croner's nextRun(). When the timer
@@ -23,7 +23,9 @@ import { makeAutoObservable, observable, runInAction } from "mobx"
 import { dataFolderApi } from "../../electronAPI/dataFolder"
 import type { CronDef, ReadProcsResult } from "../../electronAPI/procs"
 import { readProcs } from "../../electronAPI/procs"
-import type { HarnessId, RunCmdArgs } from "../../types"
+import { localOpenADEClient } from "../../runtime/localOpenADEClient"
+import type { HarnessId } from "../../types"
+import type { OpenADETurnStartRequest } from "../../../../openade-module/src"
 import type { CodeStore } from "../store"
 
 // ============================================================================
@@ -514,18 +516,27 @@ export class CronManager {
         }
 
         try {
-            const args: RunCmdArgs = {
+            const isolationStrategy: OpenADETurnStartRequest["isolationStrategy"] =
+                def.isolation === "worktree" ? { type: "worktree", sourceBranch: "HEAD" } : { type: "head" }
+            const args: OpenADETurnStartRequest = {
                 repoId: repoState.repoId,
                 type: def.type,
                 input: def.prompt,
                 appendSystemPrompt: def.appendSystemPrompt,
                 inTaskId: def.inTaskId || (def.reuseTask && state?.lastTaskId) || undefined,
-                isolationStrategy: def.isolation === "worktree" ? { type: "worktree", sourceBranch: "HEAD" } : { type: "head" },
+                isolationStrategy,
                 harnessId: (def.harness as HarnessId) || undefined,
                 title: `[Cron] ${def.name}`,
+                hyperplanStrategy: def.type === "hyperplan" ? this.store.getActiveHyperPlanStrategy() : undefined,
             }
 
-            const result = await this.store.runCmd.run(args)
+            const result = await localOpenADEClient.startTurn(args)
+            if (args.inTaskId) {
+                await this.store.refreshTaskStoreFromStorage(result.taskId)
+            } else {
+                await this.store.refreshRepoStoreFromStorage()
+                await this.store.getTaskStore(repoState.repoId, result.taskId)
+            }
 
             if (state) {
                 state.lastTaskId = result.taskId

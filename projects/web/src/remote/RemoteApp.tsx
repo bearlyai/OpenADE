@@ -21,8 +21,7 @@ import {
     WifiOff,
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
-import type { RemoteRepo, RemoteRunRequest, RemoteSnapshot, RemoteTask, RemoteTaskPreview } from "../../../shared/companion/src"
-import { type ThemeClass, themeClasses } from "../persistence/personalSettingsStore"
+import type { RemoteRepo, RemoteSnapshot, RemoteTask, RemoteTaskPreview, RemoteTurnStartRequest } from "../../../shared/companion/src"
 import {
     abortRemote,
     activateRemoteConfig,
@@ -35,18 +34,31 @@ import {
     parsePairingCode,
     pairRemote,
     removeRemoteConfig,
-    runRemote,
+    remoteErrorMessage,
+    startRemoteTurn,
     saveRemoteConfig,
-    subscribeRemoteEvents,
+    subscribeRemoteChanges,
     type PairingTarget,
     type RemoteConfig,
-    type RemoteEventConnectionStatus,
+    type RemoteRealtimeConnectionStatus,
 } from "./client"
 import { taskMessages, type RemoteActivity, type RemoteMessage } from "./messagePresentation"
+import { isRemoteRealtimeOnline, statusCopy, type RemoteStatusTone } from "./status"
+import { beginRemoteSubmission, finishRemoteSubmission } from "./submission"
+import { shouldFollowRemoteThread } from "./threadScroll"
 
-type CommandType = RemoteRunRequest["type"]
+type CommandType = RemoteTurnStartRequest["type"]
 type PendingConnection = PairingTarget & { mode: "pair" | "manual" }
 type RemoteScreen = "projects" | "project" | "task" | "new_task" | "sessions" | "settings"
+const themeClasses = {
+    "code-theme-light": { label: "Light" },
+    "code-theme-bright": { label: "Bright" },
+    "code-theme-clean": { label: "Clean" },
+    "code-theme-black": { label: "Black" },
+    "code-theme-synthwave": { label: "Synthwave" },
+    "code-theme-dracula": { label: "Dracula" },
+} as const
+type ThemeClass = keyof typeof themeClasses
 type MobileThemeSetting = "desktop" | ThemeClass
 
 const mobileThemeStorageKey = "openade-companion-theme"
@@ -86,20 +98,7 @@ function looksLikePairingCode(value: string): boolean {
     }
 }
 
-function statusCopy(status: RemoteEventConnectionStatus): { label: string; tone: "ok" | "warn" | "bad" | "muted" } {
-    switch (status) {
-        case "connected":
-            return { label: "Online", tone: "ok" }
-        case "connecting":
-            return { label: "Connecting", tone: "muted" }
-        case "reconnecting":
-            return { label: "Reconnecting", tone: "warn" }
-        case "disconnected":
-            return { label: "Offline", tone: "bad" }
-    }
-}
-
-function toneClass(tone: "ok" | "warn" | "bad" | "muted"): string {
+function toneClass(tone: RemoteStatusTone): string {
     if (tone === "ok") return "text-success"
     if (tone === "warn") return "text-warning"
     if (tone === "bad") return "text-error"
@@ -135,7 +134,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const [newTaskPrompt, setNewTaskPrompt] = useState("")
     const [isLoading, setIsLoading] = useState(false)
     const [isSubmitting, setIsSubmitting] = useState(false)
-    const [connectionStatus, setConnectionStatus] = useState<RemoteEventConnectionStatus>("disconnected")
+    const [connectionStatus, setConnectionStatus] = useState<RemoteRealtimeConnectionStatus>("disconnected")
     const [error, setError] = useState<string | null>(null)
     const selectedRepoIdRef = useRef<string | null>(null)
     const selectedTaskIdRef = useRef<string | null>(null)
@@ -148,6 +147,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const themeClass = mobileTheme === "desktop" ? desktopThemeClass : mobileTheme
     const rootClass = `code-theme ${themeClass} flex bg-base-100 text-base-content flex-col overflow-hidden`
     const status = statusCopy(connectionStatus)
+    const isOnline = isRemoteRealtimeOnline(connectionStatus)
 
     useEffect(() => {
         selectedRepoIdRef.current = selectedRepoId
@@ -236,7 +236,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             const taskId = selectedTaskIdRef.current
             await refreshTask(config, repoId, taskId)
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Unable to refresh")
+            setError(remoteErrorMessage(err, "Unable to refresh"))
         } finally {
             setIsLoading(false)
         }
@@ -245,7 +245,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     useEffect(() => {
         if (!config) return
         void refreshAll()
-        return subscribeRemoteEvents(
+        return subscribeRemoteChanges(
             config,
             () => {
                 void refreshAll()
@@ -344,7 +344,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             setPendingConnection(null)
             await refreshSnapshot(next)
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Connection failed")
+            setError(remoteErrorMessage(err, "Connection failed"))
         } finally {
             setIsLoading(false)
         }
@@ -367,17 +367,17 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     }
 
     const beginSubmission = () => {
-        if (submitLockRef.current) return false
-        submitLockRef.current = true
-        setIsSubmitting(true)
-        setIsLoading(true)
-        return true
+        return beginRemoteSubmission(submitLockRef, {
+            setSubmitting: setIsSubmitting,
+            setLoading: setIsLoading,
+        })
     }
 
     const finishSubmission = () => {
-        submitLockRef.current = false
-        setIsSubmitting(false)
-        setIsLoading(false)
+        finishRemoteSubmission(submitLockRef, {
+            setSubmitting: setIsSubmitting,
+            setLoading: setIsLoading,
+        })
     }
 
     const handleRunInTask = async () => {
@@ -388,7 +388,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         const submittedType = commandType
         const submittedTaskId = task?.unavailableReason ? undefined : selectedTaskId
         try {
-            const result = await runRemote(config, {
+            const result = await startRemoteTurn(config, {
                 repoId: selectedRepo.id,
                 type: submittedType,
                 input: submittedInput,
@@ -401,7 +401,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             await refreshSnapshot(config)
             await refreshTask(config, selectedRepo.id, result.taskId)
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Run failed")
+            setError(remoteErrorMessage(err, "Run failed"))
         } finally {
             finishSubmission()
         }
@@ -416,7 +416,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         const submittedPrompt = newTaskPrompt
         const submittedMode = newTaskMode
         try {
-            const result = await runRemote(config, {
+            const result = await startRemoteTurn(config, {
                 repoId,
                 type: submittedMode,
                 input: submittedPrompt,
@@ -432,7 +432,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             await refreshSnapshot(config)
             await refreshTask(config, repoId, result.taskId)
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Task creation failed")
+            setError(remoteErrorMessage(err, "Task creation failed"))
         } finally {
             finishSubmission()
         }
@@ -602,7 +602,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
                         commandType={commandType}
                         isLoading={isLoading}
                         isSubmitting={isSubmitting}
-                        isOnline={connectionStatus === "connected"}
+                        isOnline={isOnline}
                         onInputChange={setInput}
                         onCommandTypeChange={setCommandType}
                         onSend={handleRunInTask}
@@ -618,7 +618,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
                         prompt={newTaskPrompt}
                         isLoading={isLoading}
                         isSubmitting={isSubmitting}
-                        isOnline={connectionStatus === "connected"}
+                        isOnline={isOnline}
                         onRepoChange={setNewTaskRepoId}
                         onModeChange={setNewTaskMode}
                         onTitleChange={setNewTaskTitle}
@@ -1160,8 +1160,7 @@ function TaskMessages({
     const handleScroll = () => {
         const el = scrollRef.current
         if (!el) return
-        const distance = el.scrollHeight - el.scrollTop - el.clientHeight
-        shouldFollowRef.current = distance < 80
+        shouldFollowRef.current = shouldFollowRemoteThread(el.scrollHeight, el.scrollTop, el.clientHeight)
         if (shouldFollowRef.current) setShowJump(false)
     }
 

@@ -8,7 +8,7 @@
 
 import { computed, makeAutoObservable } from "mobx"
 import { type BranchInfo, type GitSummaryResponse, gitApi } from "../../electronAPI/git"
-import { addRepo as addRepoToStore, deleteRepo as deleteRepoFromStore, updateRepo as updateRepoInStore } from "../../persistence"
+import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { Repo } from "../../types"
 import type { CodeStore } from "../store"
 
@@ -53,7 +53,6 @@ export class RepoManager {
         return this.repos.find((r) => r.id === id)
     }
 
-    /** Alias for createRepo - kept for backward compatibility */
     async addRepo(params: { name: string; path: string }): Promise<Repo | null> {
         return this.createRepo(params)
     }
@@ -61,13 +60,14 @@ export class RepoManager {
     async createRepo(params: { name: string; path: string }): Promise<Repo | null> {
         if (!this.store.repoStore) return null
 
-        const repoId = addRepoToStore(this.store.repoStore, {
+        const result = await localOpenADEClient.createRepo({
             name: params.name,
             path: params.path,
             createdBy: this.store.currentUser,
         })
+        await this.store.refreshRepoStoreFromStorage()
 
-        return this.getRepo(repoId) ?? null
+        return this.getRepo(result.repoId) ?? null
     }
 
     async updateRepo(id: string, updates: Partial<Pick<Repo, "name" | "path">>): Promise<Repo | null> {
@@ -78,17 +78,18 @@ export class RepoManager {
             this.gitInfoCache.delete(id)
         }
 
-        updateRepoInStore(this.store.repoStore, id, updates)
+        await localOpenADEClient.updateRepo({ repoId: id, ...updates })
+        await this.store.refreshRepoStoreFromStorage()
 
         return this.getRepo(id) ?? null
     }
 
     async setRepoArchived(id: string, archived: boolean): Promise<void> {
         if (!this.store.repoStore) return
-        updateRepoInStore(this.store.repoStore, id, { archived })
+        await localOpenADEClient.updateRepo({ repoId: id, archived })
+        await this.store.refreshRepoStoreFromStorage()
     }
 
-    /** Alias for deleteRepo - kept for backward compatibility */
     async removeRepo(id: string): Promise<boolean> {
         return this.deleteRepo(id)
     }
@@ -99,7 +100,8 @@ export class RepoManager {
         // Clean up cache
         this.gitInfoCache.delete(id)
 
-        deleteRepoFromStore(this.store.repoStore, id)
+        await localOpenADEClient.deleteRepo({ repoId: id })
+        await this.store.refreshRepoStoreFromStorage()
         return true
     }
 

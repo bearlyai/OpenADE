@@ -2,14 +2,15 @@
  * Code Module Capabilities API Bridge
  *
  * Provides detection of code module availability and version.
- * Replaces raw Electron detection (`"require" in window`) with a
- * semantic check that queries the Electron backend.
+ * Uses the trusted local runtime protocol.
  *
  * Usage:
  *   - Call `initCodeModuleCapabilities()` once during app startup
  *   - Use `isCodeModuleAvailable()` synchronously anywhere after init
- *   - Use `hasElectronIpc()` for low-level IPC availability (e.g., in getIpc helpers)
+ *   - Use `hasElectronIpc()` for local Electron availability checks.
  */
+
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
 
 // ============================================================================
 // Type Definitions
@@ -51,7 +52,7 @@ export async function initCodeModuleCapabilities(): Promise<CodeModuleCapabiliti
     }
 
     try {
-        const response = (await window.openadeAPI.capabilities.get()) as CodeModuleCapabilities
+        const response = await localRuntimeClient.request<CodeModuleCapabilities>("host/capabilities/read")
         cachedCapabilities = response
         return response
     } catch (error) {
@@ -89,10 +90,10 @@ export interface SdkCapabilities {
  * Returns cached data if available, otherwise runs a lightweight probe (~1.4s).
  */
 export async function getSdkCapabilities(cwd: string): Promise<SdkCapabilities | null> {
-    if (!window.openadeAPI) return null
+    if (!window.openadeAPI?.runtime) return null
 
     try {
-        const response = (await window.openadeAPI.capabilities.getSdk({ cwd })) as SdkCapabilities | null
+        const response = await localRuntimeClient.request<SdkCapabilities | null>("agent/sdkCapabilities/read", { cwd })
         return response
     } catch (error) {
         console.error("[CapabilitiesAPI] Failed to fetch SDK capabilities:", error)

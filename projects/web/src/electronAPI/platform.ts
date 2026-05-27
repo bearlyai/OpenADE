@@ -2,9 +2,11 @@
  * Platform API Bridge
  *
  * Client-side API for platform information.
- * Communicates with Electron main process via openadeAPI.
+ * Communicates with the local runtime protocol bridge.
  * Provides cross-platform path handling utilities.
  */
+
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
 
 // ============================================================================
 // Type Definitions
@@ -44,20 +46,20 @@ const defaultPlatformInfo: PlatformInfo = {
 // ============================================================================
 
 /**
- * Fetch platform info from Electron main process
+ * Fetch platform info from the local runtime
  * Caches the result for subsequent calls
  */
 export async function fetchPlatformInfo(): Promise<PlatformInfo> {
     if (cachedPlatformInfo) return cachedPlatformInfo
 
-    if (!window.openadeAPI) {
+    if (!window.openadeAPI?.runtime) {
         console.warn("[PlatformAPI] Not running in Electron, using default platform info")
         cachedPlatformInfo = defaultPlatformInfo
         return cachedPlatformInfo
     }
 
     try {
-        const response = (await window.openadeAPI.platform.getInfo()) as PlatformInfo
+        const response = await localRuntimeClient.request<PlatformInfo>("host/platform/info")
         cachedPlatformInfo = response
         return response
     } catch (error) {

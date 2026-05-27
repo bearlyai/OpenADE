@@ -15,6 +15,14 @@
         "vite.config.ts",
         "../web/src/remote/RemoteApp.tsx",
         "../web/src/remote/client.ts",
-        "../shared/companion/src/**/*"
+        "../shared/companion/src/**/*",
+        "../runtime-protocol/src/**/*",
+        "../runtime-client/src/**/*",
+        "../openade-client/src/**/*"
+    ],
+    "exclude": [
+        "../runtime-client/src/**/*.test.ts",
+        "../openade-client/src/**/*.test.ts",
+        "../runtime-protocol/src/**/*.test.ts"
     ]
 }

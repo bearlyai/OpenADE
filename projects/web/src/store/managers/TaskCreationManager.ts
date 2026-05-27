@@ -1,13 +1,10 @@
-import { exhaustive } from "exhaustive"
 import { makeAutoObservable, runInAction } from "mobx"
 import { track } from "../../analytics"
 import type { HarnessId } from "../../electronAPI/harnessEventTypes"
-import { addTaskPreview, syncTaskPreviewFromStore, taskFromStore, updateTaskPreview } from "../../persistence"
-import { fallbackTitle, generateSlug, generateTitle } from "../../prompts/titleExtractor"
-import type { ImageAttachment, IsolationStrategy, SetupEnvironmentEvent, TaskDeviceEnvironment, UserInputContext } from "../../types"
-import { getDeviceId } from "../../utils/deviceId"
+import { fallbackTitle, generateTitle } from "../../prompts/titleExtractor"
+import { localOpenADEClient } from "../../runtime/localOpenADEClient"
+import type { ImageAttachment, IsolationStrategy, UserInputContext } from "../../types"
 import { ulid } from "../../utils/ulid"
-import { TaskEnvironment } from "../TaskEnvironment"
 import type { ThinkingLevel } from "../TaskModel"
 import type { CodeStore } from "../store"
 
@@ -159,158 +156,35 @@ export class TaskCreationManager {
         try {
             if (signal.aborted) throw new Error("Task creation cancelled")
 
-            // Generate slug synchronously - no LLM call needed
-            const slug = generateSlug()
-            const title = "New task" // Placeholder, will be updated async after creation
-
-            runInAction(() => {
-                creation.slug = slug
-            })
-
-            // Fetch git info (async, from cache or Electron)
-            const gitInfo = await this.store.repos.getGitInfo(creation.repoId)
-
-            // Validate worktree mode requires git
-            if (creation.isolationStrategy.type === "worktree" && !gitInfo?.isGitRepo) {
-                throw new Error("Worktree mode requires a git repository")
-            }
-
-            // Set up environment based on isolation strategy
-            let deviceEnv: TaskDeviceEnvironment | undefined
-            let setupEvent: SetupEnvironmentEvent | undefined
-
-            const needsFullSetup = exhaustive.tag(creation.isolationStrategy, "type", {
-                worktree: () => true,
-                head: () => false, // Head mode never needs full setup
-            })
-
-            if (needsFullSetup && gitInfo?.isGitRepo) {
-                deviceEnv = await TaskEnvironment.setup({
-                    taskSlug: slug,
-                    gitInfo,
-                    isolationStrategy: creation.isolationStrategy,
-                    signal,
-                    onPhase: (phase) =>
-                        runInAction(() => {
-                            creation.phase = phase
-                        }),
-                })
-
-                // Create setup event for the event log
-                const now = new Date().toISOString()
-                const deviceId = getDeviceId()
-
-                // Compute working dir for display (worktreeDir + relativePath)
-                const relativePath = gitInfo?.relativePath ?? ""
-                const workingDir = relativePath ? `${deviceEnv!.worktreeDir}/${relativePath}` : deviceEnv!.worktreeDir!
-
-                const outputLines = exhaustive.tag(creation.isolationStrategy, "type", {
-                    worktree: (strategy) =>
-                        [
-                            `Worktree: ${deviceEnv!.worktreeDir}`,
-                            `Working directory: ${workingDir}`,
-                            `Branch: ${strategy.sourceBranch}`,
-                            deviceEnv!.mergeBaseCommit ? `Merge base: ${deviceEnv!.mergeBaseCommit.slice(0, 8)}` : "",
-                        ].filter(Boolean),
-                    head: () => [`Working directory: ${workingDir}`].filter(Boolean),
-                })
-
-                setupEvent = {
-                    id: ulid(),
-                    type: "setup_environment",
-                    status: "completed",
-                    createdAt: now,
-                    completedAt: now,
-                    userInput: "Environment setup",
-                    worktreeId: slug,
-                    deviceId,
-                    workingDir,
-                    setupOutput: outputLines.join("\n"),
-                }
-            } else if (creation.isolationStrategy.type === "head") {
-                // For head mode, create a minimal device environment
-                // No worktreeDir - working dir is derived from repo.path at runtime
-                const now = new Date().toISOString()
-                const deviceId = getDeviceId()
-
-                deviceEnv = {
-                    id: deviceId, // Required for YArrayHandle
-                    deviceId,
-                    // No worktreeDir for head mode
-                    setupComplete: true,
-                    // No mergeBaseCommit for head mode
-                    createdAt: now,
-                    lastUsedAt: now,
-                }
-            }
-
-            if (signal.aborted) {
-                // Clean up if we created a worktree
-                if (creation.isolationStrategy.type === "worktree" && gitInfo?.repoRoot && creation.slug) {
-                    await this.store.tasks.cleanupWorktree(creation.repoId, creation.slug)
-                }
-                throw new Error("Task creation cancelled")
-            }
-
             runInAction(() => {
                 creation.phase = "completing"
             })
 
-            // Create task using new YJS-backed stores
-            if (!this.store.repoStore) {
-                throw new Error("RepoStore not initialized")
-            }
-
-            const taskId = ulid()
-            const now = new Date().toISOString()
-
-            // 1. Create task preview in RepoStore
-            addTaskPreview(this.store.repoStore, creation.repoId, {
-                id: taskId,
-                slug,
-                title,
+            const result = await localOpenADEClient.startTurn({
+                repoId: creation.repoId,
+                type: creation.mode,
+                input: creation.description,
+                isolationStrategy: creation.isolationStrategy,
+                enabledMcpServerIds: creation.enabledMcpServerIds,
+                harnessId: creation.harnessId,
+                modelId: creation.modelId,
+                images: creation.images,
+                thinking: creation.thinking,
+                fastMode: creation.fastMode,
+                hyperplanStrategy: creation.mode === "hyperplan" ? this.store.getActiveHyperPlanStrategy() : undefined,
             })
+            await this.store.refreshRepoStoreFromStorage()
+            await this.store.getTaskStore(creation.repoId, result.taskId)
 
-            // 2. Load TaskStore and cache the connection
-            const taskStore = await this.store.getTaskStore(creation.repoId, taskId, { allowUninitialized: true })
-
-            // 3. Populate TaskStore if empty (for fresh creates)
-            if (taskStore.meta.current.id === "" || taskStore.meta.current.id !== taskId) {
-                const metaFields: Parameters<typeof taskStore.meta.set>[0] = {
-                    id: taskId,
-                    repoId: creation.repoId,
-                    slug,
-                    title,
-                    description: creation.description,
-                    isolationStrategy: creation.isolationStrategy,
-                    sessionIds: {},
-                    createdBy: this.store.currentUser,
-                    createdAt: now,
-                    updatedAt: now,
-                }
-                // Only add enabledMcpServerIds if provided (YJS can't serialize undefined)
-                if (creation.enabledMcpServerIds && creation.enabledMcpServerIds.length > 0) {
-                    metaFields.enabledMcpServerIds = creation.enabledMcpServerIds
-                }
-                taskStore.meta.set(metaFields)
-
-                if (setupEvent) {
-                    taskStore.events.push(setupEvent)
-                }
-
-                if (deviceEnv) {
-                    taskStore.deviceEnvironments.push(deviceEnv)
-                }
+            if (signal.aborted) {
+                await localOpenADEClient.interruptTurn(result.taskId).catch((err) => {
+                    console.warn("[TaskCreationManager] Failed to interrupt cancelled runtime task:", err)
+                })
+                throw new Error("Task creation cancelled")
             }
-
-            // 4. Sync preview to reflect initial state
-            syncTaskPreviewFromStore(this.store.repoStore, creation.repoId, taskStore)
-
-            // 5. Get task object for backward compatibility
-            const task = taskFromStore(taskStore)
 
             runInAction(() => {
-                creation.completedTaskId = task.id
+                creation.completedTaskId = result.taskId
             })
 
             // Track task creation
@@ -320,39 +194,8 @@ export class TaskCreationManager {
                 hasMcpServers: (creation.enabledMcpServerIds?.length ?? 0) > 0,
             })
 
-            // Set harness, model, thinking level, and fast mode before execution starts
-            {
-                const taskModel = this.store.tasks.getTaskModel(task.id)
-                if (taskModel) {
-                    if (creation.harnessId) {
-                        taskModel.setHarnessId(creation.harnessId)
-                    }
-                    if (creation.modelId) {
-                        taskModel.setModel(creation.modelId)
-                    }
-                    if (creation.thinking) {
-                        taskModel.setThinking(creation.thinking)
-                    }
-                    taskModel.setFastMode(creation.fastMode ?? false)
-                }
-            }
-
             // Generate title async - don't block task creation
-            this.generateTitleAsync(task.id, creation.repoId, creation.description, creation.harnessId)
-
-            setTimeout(() => {
-                const input = buildTaskCreationInput(creation.description, creation.images)
-                if (creation.mode === "plan") {
-                    this.store.execution.executePlan(task.id, input)
-                } else if (creation.mode === "hyperplan") {
-                    const strategy = this.store.getActiveHyperPlanStrategy()
-                    this.store.execution.executeHyperPlan(task.id, input, strategy)
-                } else if (creation.mode === "ask") {
-                    this.store.execution.executeAsk({ taskId: task.id, input })
-                } else {
-                    this.store.execution.executeAction({ taskId: task.id, input })
-                }
-            }, 0)
+            this.generateTitleAsync(result.taskId, creation.description, creation.harnessId)
         } catch (err) {
             if (err instanceof Error && err.message === "Task creation cancelled") {
                 runInAction(() => {
@@ -368,30 +211,14 @@ export class TaskCreationManager {
     }
 
     /** Generate title async and update task when done (fire-and-forget) */
-    private async generateTitleAsync(taskId: string, repoId: string, description: string, harnessId?: HarnessId): Promise<void> {
-        const updateTitle = (title: string) => {
-            // Update task preview in repo store (sidebar display)
-            if (this.store.repoStore) {
-                updateTaskPreview(this.store.repoStore, repoId, taskId, { title })
-            }
-
-            // Update task metadata in task store
-            const taskStore = this.store.getCachedTaskStore(taskId)
-            if (taskStore) {
-                taskStore.meta.update((draft) => {
-                    draft.title = title
-                    draft.updatedAt = new Date().toISOString()
-                })
-            }
-        }
-
+    private async generateTitleAsync(taskId: string, description: string, harnessId?: HarnessId): Promise<void> {
         try {
             const abortController = new AbortController()
             const generatedTitle = await generateTitle(description, abortController, harnessId)
-            updateTitle(generatedTitle ?? fallbackTitle(description))
+            this.store.tasks.setTaskTitle(taskId, generatedTitle ?? fallbackTitle(description))
         } catch (err) {
             console.error("[TaskCreationManager] Title generation failed:", err)
-            updateTitle(fallbackTitle(description))
+            this.store.tasks.setTaskTitle(taskId, fallbackTitle(description))
         }
     }
 }

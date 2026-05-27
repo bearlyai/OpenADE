@@ -30,9 +30,8 @@
         "isolatedModules": true,
         "types": ["vite/client"],
         "paths": {
-            "@/*": [
-                "./src/*"
-            ]
+            "@/*": ["./src/*"],
+            "yjs": ["./node_modules/yjs"]
         }
 
 

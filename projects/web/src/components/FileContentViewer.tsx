@@ -18,25 +18,25 @@ interface FileContentViewerProps {
 }
 
 export const FileContentViewer = observer(function FileContentViewer({ fileBrowser, taskId, className }: FileContentViewerProps) {
-    const { viewingFile, viewingFileData, fileLoading, fileError } = fileBrowser
+    const { activeFile, activeFileData, fileLoading, fileError } = fileBrowser
 
     // Create comment handlers for the current file
     const commentHandlers: CommentHandlers | null = useMemo(() => {
-        if (!viewingFile) return null
+        if (!activeFile) return null
 
-        const sourceMatch = (c: { source: { type: string; filePath?: string } }) => c.source.type === "file" && c.source.filePath === viewingFile
+        const sourceMatch = (c: { source: { type: string; filePath?: string } }) => c.source.type === "file" && c.source.filePath === activeFile
 
         const createSource = (lineStart: number, lineEnd: number, _side: AnnotationSide) => ({
             type: "file" as const,
-            filePath: viewingFile,
+            filePath: activeFile,
             lineStart,
             lineEnd,
         })
 
         return { taskId, sourceMatch, createSource }
-    }, [taskId, viewingFile])
+    }, [taskId, activeFile])
 
-    if (!viewingFile) {
+    if (!activeFile) {
         return <div className={twMerge("flex flex-col h-full items-center justify-center text-muted text-sm", className)}>Select a file to view</div>
     }
 
@@ -51,22 +51,22 @@ export const FileContentViewer = observer(function FileContentViewer({ fileBrows
                         <AlertTriangle size={24} className="text-error" />
                         <span className="text-error text-sm">{fileError}</span>
                     </div>
-                ) : viewingFileData?.tooLarge ? (
+                ) : activeFileData?.tooLarge ? (
                     <div className="flex flex-col items-center justify-center py-12 gap-2">
                         <AlertTriangle size={24} className="text-warning" />
-                        <span className="text-muted text-sm">File too large to display ({formatFileSize(viewingFileData.size)})</span>
+                        <span className="text-muted text-sm">File too large to display ({formatFileSize(activeFileData.size)})</span>
                     </div>
-                ) : viewingFileData && !viewingFileData.isReadable ? (
+                ) : activeFileData && !activeFileData.isReadable ? (
                     <div className="flex flex-col items-center justify-center py-12 gap-2">
                         <AlertTriangle size={24} className="text-warning" />
                         <span className="text-muted text-sm">File is not readable</span>
                     </div>
-                ) : viewingFileData && viewingFileData.content !== null ? (
+                ) : activeFileData && activeFileData.content !== null ? (
                     <div className="min-h-full bg-editor-background">
                         <FileViewer
                             file={{
-                                name: viewingFile,
-                                contents: viewingFileData.content,
+                                name: activeFile,
+                                contents: activeFileData.content,
                             }}
                             disableFileHeader
                             commentHandlers={commentHandlers}

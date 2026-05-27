@@ -2,7 +2,7 @@
  * TaskModel - Observable wrapper for Task
  *
  * Provides derived state and actions for tasks.
- * Models compute from store's tasksById - no caching needed.
+ * Models compute from loaded task stores - no task data is cached here.
  */
 
 import { makeAutoObservable, runInAction } from "mobx"
@@ -435,7 +435,7 @@ export class TaskModel {
     }
 
     get isWorking(): boolean {
-        return this.store.isTaskWorking(this.taskId)
+        return this.store.isTaskRunning(this.taskId)
     }
 
     get stats(): { totalCostUsd: number; durationMs: number; inputTokens: number; outputTokens: number } {

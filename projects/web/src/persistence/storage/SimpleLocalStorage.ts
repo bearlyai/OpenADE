@@ -14,7 +14,6 @@ const SAVE_DEBOUNCE_MS = 1000
 interface CachedDoc {
     doc: Y.Doc
     unsubscribe: () => void
-    saveTimeout: ReturnType<typeof setTimeout> | null
 }
 
 export class SimpleLocalStorage implements StorageDriver {
@@ -32,6 +31,7 @@ export class SimpleLocalStorage implements StorageDriver {
             return {
                 doc: cached.doc,
                 sync: () => this.saveDoc(id, cached.doc),
+                refresh: () => this.refreshDoc(id, cached.doc),
                 disconnect: () => this.disconnectDoc(id),
             }
         }
@@ -64,9 +64,10 @@ export class SimpleLocalStorage implements StorageDriver {
                 doc.off("update", onUpdate)
                 if (saveTimeout) {
                     clearTimeout(saveTimeout)
+                    saveTimeout = null
+                    this.saveDoc(id, doc).catch((e) => console.error(`[SimpleLocalStorage] Failed to flush ${id}:`, e))
                 }
             },
-            saveTimeout: null,
         }
 
         this.docCache.set(id, cachedDoc)
@@ -74,6 +75,7 @@ export class SimpleLocalStorage implements StorageDriver {
         return {
             doc,
             sync: () => this.saveDoc(id, doc),
+            refresh: () => this.refreshDoc(id, doc),
             disconnect: () => this.disconnectDoc(id),
         }
     }
@@ -92,6 +94,13 @@ export class SimpleLocalStorage implements StorageDriver {
     private async saveDoc(id: string, doc: Y.Doc): Promise<void> {
         const update = Y.encodeStateAsUpdate(doc)
         await this.db.set(id, update)
+    }
+
+    private async refreshDoc(id: string, doc: Y.Doc): Promise<boolean> {
+        const savedUpdate = await this.db.get(id)
+        if (!savedUpdate) return false
+        Y.applyUpdate(doc, savedUpdate)
+        return true
     }
 
     private disconnectDoc(id: string): void {

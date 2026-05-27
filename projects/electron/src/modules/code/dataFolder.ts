@@ -3,19 +3,12 @@
  *
  * Generic file storage at ~/.openade/data/{folder}/{id}.{ext}
  * Used by images, snapshots, and any future data types.
- *
- * IPC channels (folder is a parameter, not part of the channel name):
- * - code:data:save   { folder, id, data, ext }
- * - code:data:load   { folder, id, ext }
- * - code:data:delete { folder, id, ext }
  */
 
-import { ipcMain, type IpcMainInvokeEvent } from "electron"
 import * as path from "path"
 import * as fs from "fs"
 import * as os from "os"
 import logger from "electron-log"
-import { isDev } from "../../config"
 
 // ============================================================================
 // Constants
@@ -30,20 +23,20 @@ const ALLOWED_FOLDERS = ["images", "snapshots", "cron"]
 // Type Definitions
 // ============================================================================
 
-interface SaveParams {
+export interface SaveDataFileParams {
 	folder: string
 	id: string
 	data: string | Buffer | ArrayBuffer
 	ext: string
 }
 
-interface LoadParams {
+export interface LoadDataFileParams {
 	folder: string
 	id: string
 	ext: string
 }
 
-interface DeleteParams {
+export interface DeleteDataFileParams {
 	folder: string
 	id: string
 	ext: string
@@ -52,21 +45,6 @@ interface DeleteParams {
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-function checkAllowed(e: IpcMainInvokeEvent): boolean {
-	const origin = e.sender.getURL()
-	try {
-		const url = new URL(origin)
-		if (isDev) {
-			return url.hostname.endsWith("localhost")
-		} else {
-			return url.hostname.endsWith("localhost") || url.protocol === "file:"
-		}
-	} catch (error) {
-		logger.error("[DataFolder:checkAllowed] Failed to parse origin:", error)
-		return false
-	}
-}
 
 function validateFolder(folder: string): boolean {
 	return ALLOWED_FOLDERS.includes(folder)
@@ -112,7 +90,7 @@ function ensureFolderDir(folder: string): void {
 // IPC Handlers
 // ============================================================================
 
-async function handleSave(params: SaveParams): Promise<void> {
+async function handleSave(params: SaveDataFileParams): Promise<void> {
 	const { folder, id, data, ext } = params
 
 	const filePath = getFilePath(folder, id, ext)
@@ -146,7 +124,7 @@ async function handleSave(params: SaveParams): Promise<void> {
 	}
 }
 
-async function handleLoad(params: LoadParams): Promise<string | Buffer | null> {
+async function handleLoad(params: LoadDataFileParams): Promise<string | Buffer | null> {
 	const { folder, id, ext } = params
 
 	const filePath = getFilePath(folder, id, ext)
@@ -170,7 +148,7 @@ async function handleLoad(params: LoadParams): Promise<string | Buffer | null> {
 	}
 }
 
-async function handleDelete(params: DeleteParams): Promise<void> {
+async function handleDelete(params: DeleteDataFileParams): Promise<void> {
 	const { folder, id, ext } = params
 
 	const filePath = getFilePath(folder, id, ext)
@@ -190,6 +168,18 @@ async function handleDelete(params: DeleteParams): Promise<void> {
 	} catch (error) {
 		logger.error("[DataFolder] Failed to delete file:", error)
 	}
+}
+
+export async function saveRuntimeDataFile(params: SaveDataFileParams): Promise<void> {
+	return handleSave(params)
+}
+
+export async function loadRuntimeDataFile(params: LoadDataFileParams): Promise<string | Buffer | null> {
+	return handleLoad(params)
+}
+
+export async function deleteRuntimeDataFile(params: DeleteDataFileParams): Promise<void> {
+	return handleDelete(params)
 }
 
 // ============================================================================
@@ -255,27 +245,10 @@ function migrateSnapshots(): void {
 // ============================================================================
 
 export const load = () => {
-	logger.info("[DataFolder] Registering IPC handlers")
-
-	ipcMain.handle("code:data:save", async (event, params: SaveParams) => {
-		if (!checkAllowed(event)) throw new Error("not allowed")
-		return handleSave(params)
-	})
-
-	ipcMain.handle("code:data:load", async (event, params: LoadParams) => {
-		if (!checkAllowed(event)) throw new Error("not allowed")
-		return handleLoad(params)
-	})
-
-	ipcMain.handle("code:data:delete", async (event, params: DeleteParams) => {
-		if (!checkAllowed(event)) throw new Error("not allowed")
-		return handleDelete(params)
-	})
-
 	// Run snapshot migration
 	migrateSnapshots()
 
-	logger.info("[DataFolder] IPC handlers registered successfully")
+	logger.info("[DataFolder] Storage ready")
 }
 
 export const cleanup = () => {

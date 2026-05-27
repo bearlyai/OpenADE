@@ -196,29 +196,6 @@ export interface TaskDeviceEnvironment {
     lastUsedAt: string
 }
 
-// ============================================================================
-// RunCmd — canonical interface for programmatic task execution
-// ============================================================================
-
-export interface RunCmdArgs {
-    repoId: string
-    type: "plan" | "do" | "ask" | "hyperplan"
-    input: string
-    images?: ImageAttachment[]
-    appendSystemPrompt?: string
-    inTaskId?: string | null // if set, run in existing task; if null/undefined, create new
-    isolationStrategy?: IsolationStrategy // defaults to { type: "head" }
-    enabledMcpServerIds?: string[]
-    harnessId?: HarnessId
-    thinking?: "low" | "med" | "high" | "max"
-    fastMode?: boolean
-    title?: string // if set, skip LLM title generation
-}
-
-export interface RunCmdResult {
-    taskId: string
-}
-
 export interface Task {
     id: string
     repoId: string

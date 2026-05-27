@@ -1,15 +1,15 @@
 /**
- * Harness Query Bridge - Client Side
+ * Runtime Agent Query Bridge - Client Side
  *
- * Unified event stream API for communicating with Electron main process.
- * Replaces claude.ts with harness-agnostic types.
+ * Unified event stream API for low-level agent executions over the local runtime
+ * transport.
  *
  * Architecture:
  * - HarnessQueryManager: Singleton that manages all executions and routes events
  * - HarnessQuery: Individual query instance for a single execution
  *
  * Features:
- * - Single unified event stream (HarnessStreamEvent)
+ * - Single unified runtime event stream (HarnessStreamEvent)
  * - Global buffering and deduplication
  * - Reconnection support after renderer refresh
  * - Client-defined tools with renderer-side handlers
@@ -79,6 +79,7 @@ export type ClientHarnessQueryOptions = HarnessQueryOptions & {
 // ============================================================================
 
 import { isCodeModuleAvailable } from "./capabilities"
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
 
 // ============================================================================
 // HarnessQuery Class
@@ -251,8 +252,6 @@ export class HarnessQuery {
     }
 
     private async sendToolResponse(callId: string, result?: ToolResult, error?: string): Promise<void> {
-        if (!window.openadeAPI) return
-
         const command: HarnessCommandEvent = {
             id: crypto.randomUUID(),
             type: "tool_response",
@@ -262,8 +261,7 @@ export class HarnessQuery {
             error,
         }
 
-        // Send via openadeAPI
-        await window.openadeAPI.harness.toolResponse({
+        await localRuntimeClient.request("agent/tool/respond", {
             executionId: this._executionId,
             callId,
             result,
@@ -364,27 +362,24 @@ export class HarnessQuery {
      * Abort the query
      */
     async abort(): Promise<void> {
-        if (!window.openadeAPI) return
-
-        await window.openadeAPI.harness.abort({ executionId: this._executionId })
+        await localRuntimeClient.request("agent/execution/interrupt", { executionId: this._executionId })
         this._isAborted = true
         this._executionState.status = "aborted"
         this._executionState.completedAt = new Date().toISOString()
     }
 
     /**
-     * Clear the Electron-side buffer (call after persisting to storage)
+     * Clear the host-side buffer (call after persisting to storage)
      */
     async clearBuffer(): Promise<void> {
-        if (!window.openadeAPI) return
-
         const command: HarnessCommandEvent = {
             id: crypto.randomUUID(),
             type: "clear_buffer",
             executionId: this._executionId,
         }
 
-        await window.openadeAPI.harness.command(command)
+        await localRuntimeClient.request("agent/execution/buffer/clear", { executionId: this._executionId })
+        this._executionState.events.push({ ...command, direction: "command" })
     }
 
     /**
@@ -417,16 +412,11 @@ class HarnessQueryManagerImpl {
     }
 
     private setupEventListener(): void {
-        if (!window.openadeAPI) {
-            console.debug("[HarnessQueryManager] setupEventListener: no openadeAPI available, skipping")
-            return
-        }
+        console.debug("[HarnessQueryManager] setupEventListener: registering runtime agent event listener")
 
-        console.debug("[HarnessQueryManager] setupEventListener: registering harness event listener")
-
-        // Subscribe to unified events using the new pattern
-        this._unsubscribeEvent = window.openadeAPI.harness.onEvent((event) => {
-            const streamEvent = event as HarnessStreamEvent
+        this._unsubscribeEvent = localRuntimeClient.subscribe((notification) => {
+            if (notification.method !== "agent/event") return
+            const streamEvent = notification.params as HarnessStreamEvent
             const query = this.queries.get(streamEvent.executionId)
             if (query) {
                 query.handleEvent(streamEvent)
@@ -462,11 +452,6 @@ class HarnessQueryManagerImpl {
             hasImages: Array.isArray(prompt),
         })
 
-        if (!window.openadeAPI) {
-            console.debug("[HarnessQueryManager] startExecution: no openadeAPI - not running in Electron")
-            return null
-        }
-
         const mergedOptions: ClientHarnessQueryOptions = {
             // Defaults
             model: "sonnet",
@@ -489,33 +474,34 @@ class HarnessQueryManagerImpl {
             inputSchema: zodToJsonSchema(z.object(t.inputSchema)),
         }))
 
-        // Build IPC options - exclude client-side-only fields
+        // Build runtime options - exclude client-side-only fields
         const { clientToolDefinitions: _, ...restOptions } = mergedOptions
-        const ipcOptions: HarnessQueryOptions = serializedTools ? { ...restOptions, clientTools: serializedTools } : restOptions
+        const runtimeOptions: HarnessQueryOptions = serializedTools ? { ...restOptions, clientTools: serializedTools } : restOptions
 
         // Start the query
-        console.debug("[HarnessQueryManager] startExecution: invoking openadeAPI.harness.query", {
+        console.debug("[HarnessQueryManager] startExecution: starting runtime agent execution", {
             executionId: finalId,
             promptLength: prompt.length,
-            harnessId: ipcOptions.harnessId,
-            model: ipcOptions.model,
-            fastMode: ipcOptions.fastMode,
-            cwd: ipcOptions.cwd,
-            mode: ipcOptions.mode,
-            disablePlanningTools: ipcOptions.disablePlanningTools,
+            harnessId: runtimeOptions.harnessId,
+            model: runtimeOptions.model,
+            fastMode: runtimeOptions.fastMode,
+            cwd: runtimeOptions.cwd,
+            mode: runtimeOptions.mode,
+            disablePlanningTools: runtimeOptions.disablePlanningTools,
             hasSerializedTools: !!serializedTools,
             serializedToolCount: serializedTools?.length ?? 0,
         })
 
         try {
-            const ipcResult = await window.openadeAPI.harness.query({
+            const runtimeResult = await localRuntimeClient.request<{ ok: boolean; error?: string }>("agent/execution/start", {
                 executionId: finalId,
                 prompt,
-                options: ipcOptions,
+                options: runtimeOptions,
             })
+            if (!runtimeResult.ok) throw new Error(runtimeResult.error ?? "Runtime harness query failed")
             console.debug("[HarnessQueryManager] startExecution: query succeeded", {
                 executionId: finalId,
-                ipcResult,
+                runtimeResult,
             })
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err)
@@ -538,11 +524,6 @@ class HarnessQueryManagerImpl {
      */
     async attachExecution(executionId: string, toolHandlers?: Map<string, ToolHandler>): Promise<HarnessQuery | null> {
         console.debug("[HarnessQueryManager] attachExecution called", { executionId, hasToolHandlers: !!toolHandlers })
-        if (!window.openadeAPI) {
-            console.debug("[HarnessQueryManager] attachExecution: no openadeAPI available")
-            return null
-        }
-
         // Check if we already have this query
         let query = this.queries.get(executionId)
         if (!query) {
@@ -558,7 +539,7 @@ class HarnessQueryManagerImpl {
         }
 
         // Reconnect to get buffered events
-        const result = (await window.openadeAPI.harness.reconnect({ executionId })) as {
+        const result = (await localRuntimeClient.request("agent/execution/reconnect", { executionId })) as {
             ok: boolean
             found: boolean
             events?: HarnessStreamEvent[]
@@ -589,7 +570,7 @@ class HarnessQueryManagerImpl {
     }
 
     /**
-     * Clear the Electron-side buffer for an execution
+     * Clear the host-side buffer for an execution
      */
     async clearBuffer(executionId: string): Promise<void> {
         const query = this.queries.get(executionId)
@@ -622,11 +603,7 @@ export async function runStructuredHarnessQuery<T>(args: {
     schema: Record<string, unknown>
     parse?: (value: unknown) => T
 }): Promise<T> {
-    if (!window.openadeAPI?.harness?.structuredQuery) {
-        throw new Error("Harness structured query API not available")
-    }
-
-    const result = (await window.openadeAPI.harness.structuredQuery({
+    const result = (await localRuntimeClient.request("agent/query/structured", {
         prompt: args.prompt,
         options: args.options,
         outputSchema: args.schema,
@@ -656,8 +633,7 @@ export async function deleteHarnessSession(params: {
     sessionId: string
     cwd?: string
 }): Promise<boolean> {
-    if (!window.openadeAPI?.harness?.deleteSession) return false
-    const result = (await window.openadeAPI.harness.deleteSession(params)) as { ok: boolean }
+    const result = (await localRuntimeClient.request("agent/session/delete", params)) as { ok: boolean }
     return result.ok
 }
 
