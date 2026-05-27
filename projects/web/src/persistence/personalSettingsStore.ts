@@ -89,6 +89,8 @@ export interface PersonalSettings {
     shortcutHintsHidden?: boolean
     /** Version string of the latest release notes the user has seen */
     lastSeenReleaseVersion?: string
+    /** Default to rendering assistant text blocks as rendered markdown instead of source */
+    renderAssistantMarkdown?: boolean
 
     // === HyperPlan settings ===
 
