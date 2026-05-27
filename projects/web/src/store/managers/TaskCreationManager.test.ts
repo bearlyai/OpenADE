@@ -105,6 +105,10 @@ describe("TaskCreationManager creation plumbing", () => {
     })
 
     it("passes the selected model to server-owned turn start", async () => {
+        vi.mocked(localOpenADEClient.startTurn).mockImplementation(async (args) => {
+            expect(() => structuredClone(args)).not.toThrow()
+            return { taskId: "task-1" }
+        })
         const generateTitleSpy = vi
             .spyOn(TaskCreationManager.prototype as unknown as { generateTitleAsync: (...args: unknown[]) => Promise<void> }, "generateTitleAsync")
             .mockResolvedValue(undefined)
@@ -124,9 +128,9 @@ describe("TaskCreationManager creation plumbing", () => {
             repoId: "repo-1",
             description: "describe task",
             mode: "do",
-            isolationStrategy: { type: "head" },
-            images: [],
-            enabledMcpServerIds: undefined,
+            isolationStrategy: { type: "worktree", sourceBranch: "main" },
+            images: [TEST_IMAGE],
+            enabledMcpServerIds: ["mcp-1"],
             harnessId: "codex",
             modelId: "gpt-5.5",
             thinking: "max",
@@ -147,6 +151,9 @@ describe("TaskCreationManager creation plumbing", () => {
                 repoId: "repo-1",
                 type: "do",
                 input: "describe task",
+                isolationStrategy: { type: "worktree", sourceBranch: "main" },
+                enabledMcpServerIds: ["mcp-1"],
+                images: [TEST_IMAGE],
                 harnessId: "codex",
                 modelId: "gpt-5.5",
                 thinking: "max",

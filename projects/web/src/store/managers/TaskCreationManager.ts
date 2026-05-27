@@ -1,6 +1,7 @@
 import { makeAutoObservable, runInAction } from "mobx"
 import { track } from "../../analytics"
 import type { HarnessId } from "../../electronAPI/harnessEventTypes"
+import type { HyperPlanStrategy } from "../../hyperplan/types"
 import { fallbackTitle, generateTitle } from "../../prompts/titleExtractor"
 import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { ImageAttachment, IsolationStrategy, UserInputContext } from "../../types"
@@ -46,7 +47,42 @@ export interface TaskCreation {
 export function buildTaskCreationInput(description: string, images: ImageAttachment[]): UserInputContext {
     return {
         userInput: description,
-        images: [...images],
+        images: images.map(cloneImageAttachment),
+    }
+}
+
+function cloneImageAttachment(image: ImageAttachment): ImageAttachment {
+    return {
+        id: image.id,
+        mediaType: image.mediaType,
+        ext: image.ext,
+        originalWidth: image.originalWidth,
+        originalHeight: image.originalHeight,
+        resizedWidth: image.resizedWidth,
+        resizedHeight: image.resizedHeight,
+    }
+}
+
+function cloneIsolationStrategy(strategy: IsolationStrategy): IsolationStrategy {
+    return strategy.type === "worktree" ? { type: "worktree", sourceBranch: strategy.sourceBranch } : { type: "head" }
+}
+
+function cloneHyperPlanStrategy(strategy: HyperPlanStrategy): HyperPlanStrategy {
+    return {
+        id: strategy.id,
+        name: strategy.name,
+        description: strategy.description,
+        terminalStepId: strategy.terminalStepId,
+        steps: strategy.steps.map((step) => ({
+            id: step.id,
+            primitive: step.primitive,
+            agent: {
+                harnessId: step.agent.harnessId,
+                modelId: step.agent.modelId,
+            },
+            inputs: [...step.inputs],
+            resumeStepId: step.resumeStepId,
+        })),
     }
 }
 
@@ -164,14 +200,14 @@ export class TaskCreationManager {
                 repoId: creation.repoId,
                 type: creation.mode,
                 input: creation.description,
-                isolationStrategy: creation.isolationStrategy,
-                enabledMcpServerIds: creation.enabledMcpServerIds,
+                isolationStrategy: cloneIsolationStrategy(creation.isolationStrategy),
+                enabledMcpServerIds: creation.enabledMcpServerIds ? [...creation.enabledMcpServerIds] : undefined,
                 harnessId: creation.harnessId,
                 modelId: creation.modelId,
-                images: creation.images,
+                images: creation.images.map(cloneImageAttachment),
                 thinking: creation.thinking,
                 fastMode: creation.fastMode,
-                hyperplanStrategy: creation.mode === "hyperplan" ? this.store.getActiveHyperPlanStrategy() : undefined,
+                hyperplanStrategy: creation.mode === "hyperplan" ? cloneHyperPlanStrategy(this.store.getActiveHyperPlanStrategy()) : undefined,
             })
             await this.store.refreshRepoStoreFromStorage()
             await this.store.getTaskStore(creation.repoId, result.taskId)
