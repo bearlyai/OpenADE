@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { QueuedTurn } from "../types"
-import { getInputBarQueuedTurns, QUEUED_TURNS_PREVIEW_STORAGE_KEY } from "./InputBar"
+import { getInputBarQueuedTurns, QUEUED_TURNS_PREVIEW_STORAGE_KEY, setInputBarQueuedTurnsPreviewEnabled } from "./InputBar"
 
 const queuedTurn: QueuedTurn = {
     id: "real-queued",
@@ -32,5 +32,17 @@ describe("InputBar queued turn preview", () => {
         window.localStorage.setItem(QUEUED_TURNS_PREVIEW_STORAGE_KEY, "1")
 
         expect(getInputBarQueuedTurns([]).preview).toBe(true)
+    })
+
+    it("emits a browser event when the preview flag changes so mounted input bars can update", () => {
+        const listener = vi.fn()
+        window.addEventListener("openade:queued-turn-preview-changed", listener)
+
+        setInputBarQueuedTurnsPreviewEnabled(true)
+
+        expect(window.localStorage.getItem(QUEUED_TURNS_PREVIEW_STORAGE_KEY)).toBe("1")
+        expect(listener).toHaveBeenCalledTimes(1)
+
+        window.removeEventListener("openade:queued-turn-preview-changed", listener)
     })
 })

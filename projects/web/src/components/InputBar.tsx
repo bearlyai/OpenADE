@@ -3,7 +3,7 @@ import { Tooltip } from "@base-ui-components/react/tooltip"
 import cx from "classnames"
 import { ExternalLink, GitBranch, ImagePlus, Plug, X } from "lucide-react"
 import { observer } from "mobx-react"
-import { useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react"
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { Z_INDEX } from "../constants"
 import { onFocusInputShortcut } from "../electronAPI/app"
 import type { GitSummaryResponse } from "../electronAPI/git"
@@ -58,6 +58,13 @@ const COMMAND_SHORTCUT_BY_ID: Partial<Record<string, number>> = {
 }
 
 export const QUEUED_TURNS_PREVIEW_STORAGE_KEY = "openade.previewQueuedTurns"
+export const QUEUED_TURNS_PREVIEW_CHANGED_EVENT = "openade:queued-turn-preview-changed"
+
+declare global {
+    interface Window {
+        openadePreviewQueuedTurns?: (enabled?: boolean) => void
+    }
+}
 
 const SAMPLE_QUEUED_TURNS: QueuedTurn[] = [
     {
@@ -86,6 +93,20 @@ function isQueuedTurnsPreviewEnabled(): boolean {
     } catch {
         return false
     }
+}
+
+export function setInputBarQueuedTurnsPreviewEnabled(enabled: boolean): void {
+    try {
+        if (enabled) {
+            window.localStorage.setItem(QUEUED_TURNS_PREVIEW_STORAGE_KEY, "1")
+        } else {
+            window.localStorage.removeItem(QUEUED_TURNS_PREVIEW_STORAGE_KEY)
+        }
+    } catch {
+        return
+    }
+
+    window.dispatchEvent(new Event(QUEUED_TURNS_PREVIEW_CHANGED_EVENT))
 }
 
 export function getInputBarQueuedTurns(queuedTurns: QueuedTurn[], previewEnabled = isQueuedTurnsPreviewEnabled()): { turns: QueuedTurn[]; preview: boolean } {
@@ -236,7 +257,8 @@ export const InputBar = observer(function InputBar({
     const { commands } = input
     const hasComments = unsubmittedComments.length > 0
     const hasPendingImages = editorManager.pendingImages.length > 0
-    const queuedTurnsState = getInputBarQueuedTurns(input.queuedTurns)
+    const [queuedTurnsPreviewEnabled, setQueuedTurnsPreviewEnabled] = useState(() => isQueuedTurnsPreviewEnabled())
+    const queuedTurnsState = getInputBarQueuedTurns(input.queuedTurns, queuedTurnsPreviewEnabled)
     const queuedTurns = queuedTurnsState.turns
     const focusEditorAtEnd = useCallback(() => {
         if (input.isDisabled) return
@@ -272,6 +294,25 @@ export const InputBar = observer(function InputBar({
         window.addEventListener("keydown", handleCommandShortcut, true)
         return () => window.removeEventListener("keydown", handleCommandShortcut, true)
     }, [commands, input, tray])
+
+    useEffect(() => {
+        const refreshPreview = () => setQueuedTurnsPreviewEnabled(isQueuedTurnsPreviewEnabled())
+
+        window.addEventListener(QUEUED_TURNS_PREVIEW_CHANGED_EVENT, refreshPreview)
+        window.addEventListener("storage", refreshPreview)
+
+        if (import.meta.env.DEV) {
+            window.openadePreviewQueuedTurns = (enabled = true) => setInputBarQueuedTurnsPreviewEnabled(enabled)
+        }
+
+        return () => {
+            window.removeEventListener(QUEUED_TURNS_PREVIEW_CHANGED_EVENT, refreshPreview)
+            window.removeEventListener("storage", refreshPreview)
+            if (window.openadePreviewQueuedTurns) {
+                delete window.openadePreviewQueuedTurns
+            }
+        }
+    }, [])
 
     useEffect(() => {
         const handleFocusShortcut = (event: KeyboardEvent) => {
