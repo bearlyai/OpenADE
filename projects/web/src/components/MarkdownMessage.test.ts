@@ -3,33 +3,65 @@ import {
     annotationBelongsToMarkdownBlock,
     getMarkdownSelectionRange,
     parseMarkdownBlocks,
+    renderInlineMarkdownHtml,
+    renderMarkdownHtml,
 } from "./MarkdownMessage"
 
-describe("parseMarkdownBlocks", () => {
-    it("parses headings, list items, code fences, and paragraphs with source line ranges", () => {
-        expect(parseMarkdownBlocks("# Title\n\n- one\n- two\n\n```ts\nconst x = 1\n```\n\nDone")).toEqual([
-            { type: "heading", level: 1, text: "Title", startLine: 1, endLine: 1 },
-            { type: "list", items: ["one", "two"], startLine: 3, endLine: 4 },
-            { type: "code", language: "ts", text: "const x = 1", startLine: 7, endLine: 7 },
-            { type: "paragraph", text: "Done", startLine: 10, endLine: 10 },
+describe("MarkdownMessage", () => {
+    it("uses markdown-it blocks for common markdown instead of a custom marker parser", () => {
+        const blocks = parseMarkdownBlocks("# Title\n\n1. Step one\n2. Step two\n\n- [x] Completed task\n- [ ] Pending task\n\n> A blockquote.\n\n---")
+
+        expect(blocks).toHaveLength(5)
+        expect(blocks[0]).toMatchObject({ type: "rendered", startLine: 1, endLine: 1 })
+        expect(blocks[0]?.type === "rendered" ? blocks[0].html : "").toContain("<h1>")
+        expect(blocks[1]?.type === "rendered" ? blocks[1].html : "").toContain("<ol>")
+        expect(blocks[2]?.type === "rendered" ? blocks[2].html : "").toContain('type="checkbox"')
+        expect(blocks[3]?.type === "rendered" ? blocks[3].html : "").toContain("<blockquote>")
+        expect(blocks[4]?.type === "rendered" ? blocks[4].html : "").toContain("<hr")
+    })
+
+    it("keeps fenced code as commentable blocks for syntax highlighting and copy", () => {
+        expect(parseMarkdownBlocks("```ts\nconst x = 1\n```")).toEqual([
+            { type: "code", language: "ts", text: "const x = 1\n", startLine: 1, endLine: 3, diagram: false },
         ])
     })
 
-    it("parses markdown tables as aligned table blocks with source line ranges", () => {
-        const blocks = parseMarkdownBlocks("| Name | Role |\n| --- | --- |\n| Ada | Engineer |\n| Grace | Admiral |\n\nDone")
+    it("routes diagram fences through the diagram renderer", () => {
+        expect(parseMarkdownBlocks("```mermaid\nsequenceDiagram\nA->>B: hello\n```")).toEqual([
+            { type: "code", language: "mermaid", text: "sequenceDiagram\nA->>B: hello\n", startLine: 1, endLine: 4, diagram: true },
+        ])
+    })
 
-        expect(blocks[0]?.type).toBe("table")
-        if (blocks[0]?.type !== "table") throw new Error("Expected table block")
-        expect(blocks[0].startLine).toBe(1)
-        expect(blocks[0].endLine).toBe(4)
-        const tableLines = blocks[0].text.split("\n")
-        expect(new Set(tableLines.map((line) => line.length)).size).toBe(1)
-        expect(blocks[1]).toEqual({ type: "paragraph", text: "Done", startLine: 6, endLine: 6 })
+    it("renders links as external anchors and sanitizes raw html", () => {
+        const inline = renderInlineMarkdownHtml("[OpenADE](https://openade.ai) and ~~done~~")
+        const block = renderMarkdownHtml('<a href="javascript:alert(1)">bad</a><script>alert(1)</script>')
+
+        expect(inline).toContain('href="https://openade.ai"')
+        expect(inline).toContain('target="_blank"')
+        expect(inline).toContain('rel="noopener noreferrer"')
+        expect(inline).toContain("<s>done</s>")
+        expect(block).not.toContain("javascript:")
+        expect(block).not.toContain("<script")
+    })
+
+    it("renders math formulas through KaTeX", () => {
+        const html = renderMarkdownHtml("Inline $x^2$ and block:\n\n$$\ny = mx + b\n$$")
+
+        expect(html).toContain("katex")
+        expect(html).toContain("x")
+        expect(html).toContain("y")
+    })
+
+    it("renders markdown tables as fixed layout html tables", () => {
+        const blocks = parseMarkdownBlocks("| Name | Role |\n| --- | --- |\n| Ada | Engineer |")
+
+        expect(blocks[0]?.type).toBe("rendered")
+        expect(blocks[0]?.type === "rendered" ? blocks[0].html : "").toContain("<table>")
     })
 
     it("renders a multi-line markdown comment form only on the block containing the annotation line", () => {
-        const firstBlock = { type: "paragraph" as const, text: "first", startLine: 1, endLine: 2 }
-        const secondBlock = { type: "paragraph" as const, text: "second", startLine: 3, endLine: 4 }
+        const firstBlock = { type: "rendered" as const, html: "first", startLine: 1, endLine: 2 }
+        const secondBlock = { type: "rendered" as const, html: "second", startLine: 3, endLine: 4 }
         const selectionAnnotation = { lineNumber: 4, metadata: { startLine: 1, endLine: 4 } }
 
         expect(annotationBelongsToMarkdownBlock(selectionAnnotation, firstBlock)).toBe(false)
@@ -39,17 +71,16 @@ describe("parseMarkdownBlocks", () => {
     it("resolves a browser text selection to a multi-line markdown source range", () => {
         const container = document.createElement("div")
         container.innerHTML = `
-            <span data-markdown-line="2">first line</span>
-            <span data-markdown-line="3">second line</span>
-            <span data-markdown-line="4">third line</span>
+            <span data-markdown-start="2" data-markdown-end="3">first block</span>
+            <span data-markdown-start="4" data-markdown-end="6">second block</span>
         `
         document.body.appendChild(container)
         const range = document.createRange()
-        const first = container.querySelector('[data-markdown-line="2"]')?.firstChild
-        const third = container.querySelector('[data-markdown-line="4"]')?.firstChild
-        if (!first || !third) throw new Error("Missing test lines")
+        const first = container.querySelector('[data-markdown-start="2"]')?.firstChild
+        const second = container.querySelector('[data-markdown-start="4"]')?.firstChild
+        if (!first || !second) throw new Error("Missing test blocks")
         range.setStart(first, 2)
-        range.setEnd(third, 5)
+        range.setEnd(second, 5)
 
         const selection = window.getSelection()
         selection?.removeAllRanges()
@@ -57,7 +88,7 @@ describe("parseMarkdownBlocks", () => {
 
         expect(getMarkdownSelectionRange(container, selection)).toEqual({
             start: 2,
-            end: 4,
+            end: 6,
             side: "additions",
         })
 

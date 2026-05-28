@@ -1,22 +1,23 @@
 import type { AnnotationSide } from "@pierre/diffs"
 import cx from "classnames"
-import { MessageSquarePlus } from "lucide-react"
+import DOMPurify from "dompurify"
+import katex from "katex"
+import "katex/dist/katex.min.css"
+import { Check, Copy, MessageSquarePlus } from "lucide-react"
+import MarkdownIt from "markdown-it"
+import taskLists from "markdown-it-task-lists"
+import texmath from "markdown-it-texmath"
+import mermaid from "mermaid"
 import { observer } from "mobx-react"
-import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { type CSSProperties, type MouseEvent, type MouseEventHandler, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { codeToTokens } from "shiki/bundle/web"
 import type { BundledLanguage, SpecialLanguage } from "shiki/bundle/web"
+import { openUrlInNativeBrowser } from "../electronAPI/shell"
 import type { CommentSelectedText } from "../types"
 import { useCommentAnnotations } from "./comments/hooks/useCommentAnnotations"
 import { extractSelectedText } from "./comments/utils"
 import type { CommentHandlers } from "./FilesAndDiffs"
-import { formatMarkdownTables } from "./utils/markdownTableFormatter"
-
-export type MarkdownBlock =
-    | { type: "heading"; level: number; text: string; startLine: number; endLine: number }
-    | { type: "paragraph"; text: string; startLine: number; endLine: number }
-    | { type: "list"; items: string[]; startLine: number; endLine: number }
-    | { type: "table"; text: string; startLine: number; endLine: number }
-    | { type: "code"; language?: string; text: string; startLine: number; endLine: number }
+import { getExternalUrlToOpen } from "../utils/externalLinks"
 
 type HighlightedCodeLine = {
     content: string
@@ -24,37 +25,59 @@ type HighlightedCodeLine = {
     fontStyle?: number
 }[]
 
-const highlightedCodeCache = new Map<string, Promise<HighlightedCodeLine[]>>()
+export type MarkdownBlock =
+    | { type: "rendered"; html: string; startLine: number; endLine: number }
+    | { type: "code"; language?: string; text: string; startLine: number; endLine: number; diagram: boolean }
 
-function flushParagraph(blocks: MarkdownBlock[], lines: string[], startLine: number): void {
-    if (lines.length === 0) return
-    blocks.push({
-        type: "paragraph",
-        text: lines.join("\n"),
-        startLine,
-        endLine: startLine + lines.length - 1,
+type MarkdownToken = ReturnType<MarkdownIt["parse"]>[number]
+
+const highlightedCodeCache = new Map<string, Promise<HighlightedCodeLine[]>>()
+let mermaidDiagramId = 0
+
+const markdown = new MarkdownIt({
+    html: true,
+    linkify: true,
+    typographer: true,
+})
+    .use(taskLists, { enabled: false, label: true })
+    .use(texmath, {
+        engine: katex,
+        delimiters: "dollars",
+        katexOptions: {
+            throwOnError: false,
+        },
+    })
+
+const defaultLinkOpenRule = markdown.renderer.rules.link_open
+markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
+    const token = tokens[index]
+    token.attrSet("target", "_blank")
+    token.attrSet("rel", "noopener noreferrer")
+    token.attrSet("data-openade-external-link", "true")
+    token.attrJoin("class", "text-primary underline underline-offset-2 hover:opacity-80")
+    return defaultLinkOpenRule ? defaultLinkOpenRule(tokens, index, options, env, self) : self.renderToken(tokens, index, options)
+}
+
+function sanitizeHtml(html: string): string {
+    return DOMPurify.sanitize(html, {
+        ADD_ATTR: ["target", "data-openade-external-link", "class"],
     })
 }
 
-function isMarkdownTableRow(line: string): boolean {
-    return line.trim().includes("|")
+export function renderMarkdownHtml(text: string): string {
+    return sanitizeHtml(markdown.render(text))
 }
 
-function isMarkdownTableSeparator(line: string): boolean {
-    const trimmed = line.trim()
-    return trimmed.includes("|") && trimmed.includes("-") && /^[\s|:\-]+$/.test(trimmed)
+export function renderInlineMarkdownHtml(text: string): string {
+    return sanitizeHtml(markdown.renderInline(text))
 }
 
 function normalizeCodeLanguage(language?: string): string {
     switch (language?.toLowerCase()) {
         case "js":
             return "javascript"
-        case "jsx":
-            return "jsx"
         case "ts":
             return "typescript"
-        case "tsx":
-            return "tsx"
         case "py":
             return "python"
         case "sh":
@@ -120,7 +143,7 @@ function tokenStyle(token: HighlightedCodeLine[number]): CSSProperties {
     }
 }
 
-function useShikiTheme(ref: React.RefObject<HTMLElement | null>): string {
+function useEditorTheme(ref: React.RefObject<HTMLElement | null>): string {
     const [theme, setTheme] = useState("pierre-dark")
 
     useEffect(() => {
@@ -133,7 +156,6 @@ function useShikiTheme(ref: React.RefObject<HTMLElement | null>): string {
         }
 
         updateTheme()
-
         const themeAncestor = el.closest(".code-theme")
         if (!themeAncestor) return
 
@@ -149,132 +171,126 @@ function useShikiTheme(ref: React.RefObject<HTMLElement | null>): string {
     return theme
 }
 
-export function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
-    const sourceLines = markdown.split("\n")
-    const blocks: MarkdownBlock[] = []
-    let paragraphLines: string[] = []
-    let paragraphStartLine = 1
-    let index = 0
-
-    while (index < sourceLines.length) {
-        const line = sourceLines[index]
-        const lineNumber = index + 1
-        const fence = line.match(/^```(\S*)\s*$/)
-
-        if (fence) {
-            flushParagraph(blocks, paragraphLines, paragraphStartLine)
-            paragraphLines = []
-            const codeLines: string[] = []
-            const codeStartLine = lineNumber + 1
-            index++
-            while (index < sourceLines.length && !sourceLines[index].startsWith("```")) {
-                codeLines.push(sourceLines[index])
-                index++
-            }
-            blocks.push({
-                type: "code",
-                language: fence[1] || undefined,
-                text: codeLines.join("\n"),
-                startLine: codeStartLine,
-                endLine: Math.max(codeStartLine, codeStartLine + codeLines.length - 1),
-            })
-            index++
-            continue
-        }
-
-        if (!line.trim()) {
-            flushParagraph(blocks, paragraphLines, paragraphStartLine)
-            paragraphLines = []
-            index++
-            continue
-        }
-
-        if (isMarkdownTableRow(line) && isMarkdownTableSeparator(sourceLines[index + 1] ?? "")) {
-            flushParagraph(blocks, paragraphLines, paragraphStartLine)
-            paragraphLines = []
-            const tableLines = [line, sourceLines[index + 1]]
-            const startLine = lineNumber
-            index += 2
-            while (index < sourceLines.length && isMarkdownTableRow(sourceLines[index]) && !isMarkdownTableSeparator(sourceLines[index])) {
-                tableLines.push(sourceLines[index])
-                index++
-            }
-            blocks.push({
-                type: "table",
-                text: formatMarkdownTables(tableLines.join("\n")),
-                startLine,
-                endLine: startLine + tableLines.length - 1,
-            })
-            continue
-        }
-
-        const heading = line.match(/^(#{1,6})\s+(.+)$/)
-        if (heading) {
-            flushParagraph(blocks, paragraphLines, paragraphStartLine)
-            paragraphLines = []
-            blocks.push({ type: "heading", level: heading[1].length, text: heading[2], startLine: lineNumber, endLine: lineNumber })
-            index++
-            continue
-        }
-
-        if (/^\s*[-*]\s+/.test(line)) {
-            flushParagraph(blocks, paragraphLines, paragraphStartLine)
-            paragraphLines = []
-            const items: string[] = []
-            const startLine = lineNumber
-            while (index < sourceLines.length && /^\s*[-*]\s+/.test(sourceLines[index])) {
-                items.push(sourceLines[index].replace(/^\s*[-*]\s+/, ""))
-                index++
-            }
-            blocks.push({ type: "list", items, startLine, endLine: index })
-            continue
-        }
-
-        if (paragraphLines.length === 0) paragraphStartLine = lineNumber
-        paragraphLines.push(line)
-        index++
-    }
-
-    flushParagraph(blocks, paragraphLines, paragraphStartLine)
-    return blocks
+function markdownLineRange(block: MarkdownBlock): { start: number; end: number } {
+    return { start: block.startLine, end: block.endLine }
 }
 
-function renderInline(text: string): ReactNode[] {
-    const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g)
-    return parts.map((part, index) => {
-        if (part.startsWith("`") && part.endsWith("`")) {
-            return (
-                <code key={index} className="rounded-sm bg-base-200 px-1 py-0.5 font-mono text-[0.9em]">
-                    {part.slice(1, -1)}
-                </code>
-            )
-        }
-        if (part.startsWith("**") && part.endsWith("**")) {
-            return <strong key={index}>{part.slice(2, -2)}</strong>
-        }
-        return part
-    })
-}
-
-function lineClass(lineNumber: number, selectedRange: { start: number; end: number } | null): string {
+function rangeClass(startLine: number, endLine: number, selectedRange: { start: number; end: number } | null): string {
     const selectedStart = selectedRange ? Math.min(selectedRange.start, selectedRange.end) : null
     const selectedEnd = selectedRange ? Math.max(selectedRange.start, selectedRange.end) : null
     return cx(
         "rounded-sm px-0.5",
-        selectedStart !== null && selectedEnd !== null && lineNumber >= selectedStart && lineNumber <= selectedEnd && "bg-primary/10"
+        selectedStart !== null && selectedEnd !== null && endLine >= selectedStart && startLine <= selectedEnd && "bg-primary/10"
     )
 }
 
-function lineProps(lineNumber: number, selectedRange: { start: number; end: number } | null) {
+function rangeProps(startLine: number, endLine: number, selectedRange: { start: number; end: number } | null) {
     return {
-        "data-markdown-line": lineNumber,
-        className: lineClass(lineNumber, selectedRange),
+        "data-markdown-start": startLine,
+        "data-markdown-end": endLine,
+        "data-markdown-line": startLine,
+        className: rangeClass(startLine, endLine, selectedRange),
     }
+}
+
+function tokenLineRange(tokens: MarkdownToken[]): { startLine: number; endLine: number } {
+    const ranges = tokens.map((token) => token.map).filter((map): map is [number, number] => Array.isArray(map))
+    if (ranges.length === 0) return { startLine: 1, endLine: 1 }
+    return {
+        startLine: Math.min(...ranges.map((range) => range[0])) + 1,
+        endLine: Math.max(...ranges.map((range) => range[1])),
+    }
+}
+
+function renderTokens(tokens: MarkdownToken[]): string {
+    return sanitizeHtml(markdown.renderer.render(tokens, markdown.options, {}))
+}
+
+function isDiagramLanguage(language: string | undefined, text: string): boolean {
+    const normalized = language?.toLowerCase()
+    return (
+        normalized === "mermaid" ||
+        normalized === "sequence" ||
+        normalized === "sequencediagram" ||
+        /^\s*(sequenceDiagram|flowchart|graph|classDiagram|stateDiagram|stateDiagram-v2|erDiagram|journey|gantt|pie|mindmap|timeline|gitGraph)\b/.test(text)
+    )
+}
+
+function collectTopLevelBlock(tokens: MarkdownToken[], startIndex: number): { tokens: MarkdownToken[]; nextIndex: number } {
+    const first = tokens[startIndex]
+    if (!first || first.nesting !== 1) return { tokens: [first], nextIndex: startIndex + 1 }
+
+    let depth = 1
+    let endIndex = startIndex + 1
+    while (endIndex < tokens.length && depth > 0) {
+        depth += tokens[endIndex].nesting
+        endIndex++
+    }
+
+    return { tokens: tokens.slice(startIndex, endIndex), nextIndex: endIndex }
+}
+
+export function parseMarkdownBlocks(markdownText: string): MarkdownBlock[] {
+    const tokens = markdown.parse(markdownText, {})
+    const blocks: MarkdownBlock[] = []
+    let index = 0
+
+    while (index < tokens.length) {
+        const token = tokens[index]
+        if (!token) break
+
+        if (token.type === "fence" || token.type === "code_block") {
+            const language = token.info.trim().split(/\s+/)[0] || undefined
+            const range = token.map ? { startLine: token.map[0] + 1, endLine: token.map[1] } : { startLine: 1, endLine: 1 }
+            blocks.push({
+                type: "code",
+                language,
+                text: token.content,
+                ...range,
+                diagram: isDiagramLanguage(language, token.content),
+            })
+            index++
+            continue
+        }
+
+        const block = collectTopLevelBlock(tokens, index)
+        const range = tokenLineRange(block.tokens)
+        const html = renderTokens(block.tokens)
+        if (html.trim()) {
+            blocks.push({ type: "rendered", html, ...range })
+        }
+        index = block.nextIndex
+    }
+
+    return blocks
+}
+
+function CopyButton({ content, label = "Copy", className }: { content: string; label?: string; className?: string }) {
+    const [copied, setCopied] = useState(false)
+
+    const copy = async () => {
+        await navigator.clipboard.writeText(content)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1200)
+    }
+
+    return (
+        <button
+            type="button"
+            className={cx("btn flex items-center gap-1.5 border border-border bg-base-100/90 px-2 py-1 text-xs text-muted shadow-sm hover:bg-base-200 hover:text-base-content", className)}
+            onClick={copy}
+            aria-label={label}
+            title={label}
+        >
+            {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+            <span>{copied ? "Copied" : label}</span>
+        </button>
+    )
 }
 
 function HighlightedCodeBlock({ block, selectedRange }: { block: Extract<MarkdownBlock, { type: "code" }>; selectedRange: { start: number; end: number } | null }) {
     const ref = useRef<HTMLPreElement | null>(null)
-    const theme = useShikiTheme(ref)
+    const theme = useEditorTheme(ref)
     const codeLines = useMemo(() => block.text.split("\n"), [block.text])
     const [highlightedLines, setHighlightedLines] = useState<HighlightedCodeLine[] | null>(null)
 
@@ -292,90 +308,105 @@ function HighlightedCodeBlock({ block, selectedRange }: { block: Extract<Markdow
     const lines = highlightedLines ?? codeLines.map((line) => [{ content: line || " " }])
 
     return (
-        <pre ref={ref} className="my-2 overflow-x-auto border border-border bg-base-200 p-3 font-mono text-sm leading-6">
-            <code>
-                {lines.map((line, index) => {
-                    const props = lineProps(block.startLine + index, selectedRange)
-                    return (
-                        <span key={index} {...props} className={cx(props.className, "block min-h-4 whitespace-pre")}>
-                            {line.length === 0
-                                ? " "
-                                : line.map((token, tokenIndex) => (
-                                      <span key={tokenIndex} style={tokenStyle(token)}>
-                                          {token.content}
-                                      </span>
-                                  ))}
-                        </span>
-                    )
-                })}
-            </code>
-        </pre>
+        <div className="group/code relative">
+            <CopyButton content={block.text} label="Copy code" className="absolute top-2 right-2 z-10 opacity-0 transition-opacity group-hover/code:opacity-100 group-focus-within/code:opacity-100" />
+            <pre ref={ref} className="my-2 overflow-x-auto border border-border bg-base-200 p-3 pr-24 font-mono text-sm leading-6">
+                <code>
+                    {lines.map((line, index) => {
+                        const lineNumber = block.startLine + index
+                        const props = rangeProps(lineNumber, lineNumber, selectedRange)
+                        return (
+                            <span key={index} {...props} className={cx(props.className, "block min-h-4 whitespace-pre")}>
+                                {line.length === 0
+                                    ? " "
+                                    : line.map((token, tokenIndex) => (
+                                          <span key={tokenIndex} style={tokenStyle(token)}>
+                                              {token.content}
+                                          </span>
+                                      ))}
+                            </span>
+                        )
+                    })}
+                </code>
+            </pre>
+        </div>
     )
 }
 
-function MarkdownTableBlock({ block, selectedRange }: { block: Extract<MarkdownBlock, { type: "table" }>; selectedRange: { start: number; end: number } | null }) {
-    const tableLines = block.text.split("\n")
+function MermaidBlock({ block, selectedRange }: { block: Extract<MarkdownBlock, { type: "code" }>; selectedRange: { start: number; end: number } | null }) {
+    const ref = useRef<HTMLDivElement | null>(null)
+    const theme = useEditorTheme(ref)
+    const [svg, setSvg] = useState<string | null>(null)
+    const [error, setError] = useState<string | null>(null)
+
+    useEffect(() => {
+        let cancelled = false
+        const id = `openade-mermaid-${++mermaidDiagramId}`
+        setSvg(null)
+        setError(null)
+
+        mermaid.initialize({
+            startOnLoad: false,
+            securityLevel: "strict",
+            theme: normalizeShikiTheme(theme) === "github-light" || normalizeShikiTheme(theme) === "light-plus" ? "default" : "dark",
+        })
+
+        mermaid
+            .render(id, block.text)
+            .then((result) => {
+                if (!cancelled) setSvg(sanitizeHtml(result.svg))
+            })
+            .catch((err) => {
+                if (!cancelled) setError(err instanceof Error ? err.message : "Unable to render diagram")
+            })
+
+        return () => {
+            cancelled = true
+        }
+    }, [block.text, theme])
+
+    const props = rangeProps(block.startLine, block.endLine, selectedRange)
+
     return (
-        <pre className="my-2 overflow-x-auto border border-border bg-base-200 p-3 font-mono text-sm leading-6">
-            <code>
-                {tableLines.map((line, index) => {
-                    const props = lineProps(block.startLine + index, selectedRange)
-                    return (
-                        <span key={index} {...props} className={cx(props.className, "block min-h-4 whitespace-pre")}>
-                            {line || " "}
-                        </span>
-                    )
-                })}
-            </code>
-        </pre>
+        <div ref={ref} {...props} className={cx(props.className, "group/diagram relative my-2 border border-border bg-base-200 p-3")}>
+            <CopyButton content={block.text} label="Copy diagram" className="absolute top-2 right-2 z-10 opacity-0 transition-opacity group-hover/diagram:opacity-100 group-focus-within/diagram:opacity-100" />
+            {svg ? <div className="overflow-x-auto [&_svg]:mx-auto [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} /> : error ? <HighlightedCodeBlock block={block} selectedRange={selectedRange} /> : <div className="text-sm text-muted">Rendering diagram…</div>}
+        </div>
     )
+}
+
+const renderedMarkdownClass = cx(
+    "markdown-rendered min-w-0 text-sm leading-6",
+    "[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2",
+    "[&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-primary/50 [&_blockquote]:bg-base-200/40 [&_blockquote]:py-1 [&_blockquote]:pl-4 [&_blockquote]:text-muted",
+    "[&_code]:rounded-sm [&_code]:bg-base-200 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em]",
+    "[&_h1]:mb-2 [&_h1]:mt-3 [&_h1]:text-3xl [&_h1]:font-semibold [&_h1]:leading-tight",
+    "[&_h2]:mb-2 [&_h2]:mt-3 [&_h2]:text-2xl [&_h2]:font-semibold [&_h2]:leading-tight",
+    "[&_h3]:mb-1 [&_h3]:mt-2 [&_h3]:text-xl [&_h3]:font-semibold [&_h3]:leading-snug",
+    "[&_h4]:mb-1 [&_h4]:mt-2 [&_h4]:text-base [&_h4]:font-semibold",
+    "[&_hr]:my-4 [&_hr]:border-border",
+    "[&_li]:my-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6",
+    "[&_table]:my-3 [&_table]:w-full [&_table]:table-fixed [&_table]:border-collapse [&_table]:font-mono [&_table]:text-sm",
+    "[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:bg-base-200 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left"
+)
+
+function RenderedMarkdownBlock({ block, selectedRange }: { block: Extract<MarkdownBlock, { type: "rendered" }>; selectedRange: { start: number; end: number } | null }) {
+    const props = rangeProps(block.startLine, block.endLine, selectedRange)
+    return <div {...props} className={cx(props.className, renderedMarkdownClass)} dangerouslySetInnerHTML={{ __html: block.html }} />
 }
 
 function MarkdownBlockView({ block, selectedRange = null }: { block: MarkdownBlock; selectedRange?: { start: number; end: number } | null }) {
-    switch (block.type) {
-        case "heading": {
-            const Tag = `h${Math.min(block.level + 1, 6)}` as keyof JSX.IntrinsicElements
-            return (
-                <Tag className="mt-2 mb-1 font-semibold text-base-content">
-                    <span {...lineProps(block.startLine, selectedRange)}>{renderInline(block.text)}</span>
-                </Tag>
-            )
-        }
-        case "list":
-            return (
-                <ul className="my-2 list-disc pl-5">
-                    {block.items.map((item, index) => (
-                        <li key={index}>
-                            <span {...lineProps(block.startLine + index, selectedRange)}>{renderInline(item)}</span>
-                        </li>
-                    ))}
-                </ul>
-            )
-        case "code":
-            return <HighlightedCodeBlock block={block} selectedRange={selectedRange} />
-        case "table":
-            return <MarkdownTableBlock block={block} selectedRange={selectedRange} />
-        case "paragraph": {
-            const lines = block.text.split("\n")
-            return (
-                <p className="my-2 whitespace-pre-wrap leading-6">
-                    {lines.map((line, index) => (
-                        <span key={index} {...lineProps(block.startLine + index, selectedRange)}>
-                            {renderInline(line)}
-                            {index < lines.length - 1 ? "\n" : null}
-                        </span>
-                    ))}
-                </p>
-            )
-        }
+    if (block.type === "code") {
+        return block.diagram ? <MermaidBlock block={block} selectedRange={selectedRange} /> : <HighlightedCodeBlock block={block} selectedRange={selectedRange} />
     }
+    return <RenderedMarkdownBlock block={block} selectedRange={selectedRange} />
 }
 
-function getLineNumber(element: Element): number | null {
-    const value = element.getAttribute("data-markdown-line")
-    if (!value) return null
-    const line = Number(value)
-    return Number.isInteger(line) ? line : null
+function getLineRange(element: Element): { start: number; end: number } | null {
+    const start = Number(element.getAttribute("data-markdown-start") ?? element.getAttribute("data-markdown-line"))
+    const end = Number(element.getAttribute("data-markdown-end") ?? element.getAttribute("data-markdown-line"))
+    if (!Number.isInteger(start) || !Number.isInteger(end)) return null
+    return { start, end }
 }
 
 export function getMarkdownSelectionRange(container: Element, selection: Selection | null): { start: number; end: number; side: AnnotationSide } | null {
@@ -383,31 +414,54 @@ export function getMarkdownSelectionRange(container: Element, selection: Selecti
     const range = selection.getRangeAt(0)
     if (!range.intersectsNode(container)) return null
 
-    const lines = Array.from(container.querySelectorAll<HTMLElement>("[data-markdown-line]"))
+    const ranges = Array.from(container.querySelectorAll<HTMLElement>("[data-markdown-start], [data-markdown-line]"))
         .filter((line) => range.intersectsNode(line))
-        .map(getLineNumber)
-        .filter((line): line is number => line !== null)
+        .map(getLineRange)
+        .filter((line): line is { start: number; end: number } => line !== null)
 
-    if (lines.length === 0) return null
+    if (ranges.length === 0) return null
     return {
-        start: Math.min(...lines),
-        end: Math.max(...lines),
+        start: Math.min(...ranges.map((line) => line.start)),
+        end: Math.max(...ranges.map((line) => line.end)),
         side: "additions",
     }
 }
 
 export function annotationBelongsToMarkdownBlock(annotation: { lineNumber: number }, block: MarkdownBlock): boolean {
-    return annotation.lineNumber >= block.startLine && annotation.lineNumber <= block.endLine
+    const range = markdownLineRange(block)
+    return annotation.lineNumber >= range.start && annotation.lineNumber <= range.end
+}
+
+function MarkdownMessageFrame({ text, children, onMouseUp }: { text: string; children: ReactNode; onMouseUp?: MouseEventHandler<HTMLDivElement> }) {
+    const openExternalLink = useCallback((event: MouseEvent<HTMLDivElement>) => {
+        const target = event.target instanceof Element ? event.target : null
+        const anchor = target?.closest<HTMLAnchorElement>("a[href]")
+        if (!anchor || !event.currentTarget.contains(anchor)) return
+
+        const url = getExternalUrlToOpen(anchor.getAttribute("href"))
+        if (!url) return
+
+        event.preventDefault()
+        event.stopPropagation()
+        openUrlInNativeBrowser(url)
+    }, [])
+
+    return (
+        <div className="group/markdown-message relative border border-border bg-base-100 px-3 py-2 font-sans text-sm leading-6" onClickCapture={openExternalLink} onMouseUp={onMouseUp}>
+            <CopyButton content={text} label="Copy markdown" className="absolute top-2 right-2 z-20 opacity-0 transition-opacity group-hover/markdown-message:opacity-100 group-focus-within/markdown-message:opacity-100" />
+            <div className="pr-0">{children}</div>
+        </div>
+    )
 }
 
 function MarkdownMessageStatic({ text }: { text: string }) {
     const blocks = useMemo(() => parseMarkdownBlocks(text), [text])
     return (
-        <div className="border border-border bg-base-100 px-3 py-2 font-sans text-sm leading-6">
+        <MarkdownMessageFrame text={text}>
             {blocks.map((block, index) => (
                 <MarkdownBlockView key={`${block.startLine}-${index}`} block={block} />
             ))}
-        </div>
+        </MarkdownMessageFrame>
     )
 }
 
@@ -439,7 +493,8 @@ const CommentableMarkdownMessage = observer(function CommentableMarkdownMessage(
 
     const selectBlock = (block: MarkdownBlock) => {
         if (commentHandlers.readOnly) return
-        annotations.handleLineSelectionEnd({ start: block.startLine, end: block.endLine, side: "additions" })
+        const range = markdownLineRange(block)
+        annotations.handleLineSelectionEnd({ start: range.start, end: range.end, side: "additions" })
     }
 
     const handleSelection = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -451,7 +506,7 @@ const CommentableMarkdownMessage = observer(function CommentableMarkdownMessage(
     }
 
     return (
-        <div className="group/markdown-message border border-border bg-base-100 px-3 py-2 font-sans text-sm leading-6" onMouseUp={handleSelection}>
+        <MarkdownMessageFrame text={text} onMouseUp={handleSelection}>
             {blocks.map((block, index) => {
                 const blockAnnotations = annotations.lineAnnotations.filter((annotation) => annotationBelongsToMarkdownBlock(annotation, block))
                 return (
@@ -479,7 +534,7 @@ const CommentableMarkdownMessage = observer(function CommentableMarkdownMessage(
                     </div>
                 )
             })}
-        </div>
+        </MarkdownMessageFrame>
     )
 })
 

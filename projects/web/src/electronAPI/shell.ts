@@ -6,6 +6,7 @@
  */
 
 import { localRuntimeClient } from "../runtime/localRuntimeClient"
+import { getExternalUrlToOpen } from "../utils/externalLinks"
 
 // ============================================================================
 // Type Definitions
@@ -66,11 +67,17 @@ export function openPathInFileManager(path: string): void {
  * Open URL in native browser
  */
 export function openUrlInNativeBrowser(url: string): void {
-    if (!window.openadeAPI) {
-        // Fallback for non-Electron environments
-        window.open(url, "_blank")
+    const externalUrl = getExternalUrlToOpen(url)
+    if (!externalUrl) {
+        console.warn("[ShellAPI] Refusing to open non-external URL", { url })
         return
     }
 
-    window.openadeAPI.shell.openUrl({ url })
+    if (!window.openadeAPI) {
+        // Fallback for non-Electron environments
+        window.open(externalUrl, "_blank", "noopener,noreferrer")
+        return
+    }
+
+    window.openadeAPI.shell.openUrl({ url: externalUrl })
 }
