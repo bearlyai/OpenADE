@@ -13,7 +13,7 @@ function rawMessageEvent({
     message,
 }: {
     executionId: string
-    harnessId: "claude-code" | "codex"
+    harnessId: "claude-code" | "codex" | "opencode"
     message: Record<string, unknown>
 }): HarnessStreamEvent {
     return {
@@ -34,7 +34,7 @@ function createActionEvent({
 }: {
     id: string
     userInput: string
-    harnessId: "claude-code" | "codex"
+    harnessId: "claude-code" | "codex" | "opencode"
     events: HarnessStreamEvent[]
 }): ActionEvent {
     return {
@@ -47,7 +47,7 @@ function createActionEvent({
         execution: {
             harnessId,
             executionId: `${id}-exec`,
-            modelId: harnessId === "claude-code" ? "opus" : "gpt-5.3-codex",
+            modelId: harnessId === "claude-code" ? "opus" : harnessId === "opencode" ? "claude-sonnet" : "gpt-5.3-codex",
             sessionId: `${id}-session`,
             events,
         },

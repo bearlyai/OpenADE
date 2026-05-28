@@ -7,10 +7,13 @@
 import { AlertTriangle, CheckCircle, Eye, EyeOff, Loader2, Minus, Plus, RefreshCw, RotateCcw, XCircle } from "lucide-react"
 import { observer } from "mobx-react"
 import { useEffect, useState } from "react"
+import { MODEL_REGISTRY } from "../../constants"
 import { type ManagedBinaryStatus, ensureBinary, getStatuses } from "../../electronAPI/binaries"
+import type { HarnessId } from "../../electronAPI/harnessEventTypes"
 import { type HarnessStatusMap, getHarnessStatuses, isHarnessStatusApiAvailable } from "../../electronAPI/harnessStatus"
 import { isSystemApiAvailable } from "../../electronAPI/system"
 import type { CodeStore } from "../../store/store"
+import { Select } from "../ui/Select"
 import { getHarnessAuthTypeLabel, getHarnessDisplayName, toHarnessStatusView } from "./harnessStatusUtils"
 
 interface KeyValuePair {
@@ -107,7 +110,7 @@ const KeyValueEditor = ({
     )
 }
 
-const HarnessStatusSection = () => {
+const HarnessStatusSection = observer(({ store }: { store: CodeStore }) => {
     const [statuses, setStatuses] = useState<HarnessStatusMap>({})
     const [isLoading, setIsLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
@@ -135,6 +138,10 @@ const HarnessStatusSection = () => {
     if (!isSystemApiAvailable()) return null
 
     const entries = Object.entries(statuses).sort((a, b) => getHarnessDisplayName(a[0]).localeCompare(getHarnessDisplayName(b[0])))
+    const defaultHarnessEntries = (Object.keys(MODEL_REGISTRY) as HarnessId[]).map((harnessId) => ({
+        id: harnessId,
+        content: getHarnessDisplayName(harnessId),
+    }))
 
     return (
         <section>
@@ -150,7 +157,23 @@ const HarnessStatusSection = () => {
                     <RefreshCw size={14} className={isLoading ? "animate-spin" : ""} />
                 </button>
             </div>
-            <p className="text-sm text-muted mb-4">Install and authentication status for each configured harness CLI.</p>
+            <p className="text-sm text-muted mb-4">Install and authentication status for each configured harness CLI. The default engine is used for new tasks.</p>
+
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-border bg-base-200/40 p-3">
+                <div>
+                    <p className="text-sm font-medium text-base-content">Default Engine</p>
+                    <p className="text-xs text-muted mt-1">Used for new tasks and plan generation.</p>
+                </div>
+                <Select
+                    selectedId={store.defaultHarnessId}
+                    entries={defaultHarnessEntries}
+                    onSelect={(entry) => store.setDefaultHarnessId(entry.id)}
+                    className={{
+                        trigger: "h-8 min-w-36 bg-base-100 text-sm",
+                        popup: "bg-base-200",
+                    }}
+                />
+            </div>
 
             {isLoading && entries.length === 0 && (
                 <div className="flex items-center gap-2 p-3 text-sm text-muted">
@@ -169,6 +192,7 @@ const HarnessStatusSection = () => {
                 <div className="flex flex-col gap-2">
                     {entries.map(([harnessId, status]) => {
                         const view = toHarnessStatusView(status)
+                        const isDefault = store.defaultHarnessId === harnessId
                         const toneClass =
                             view.tone === "success"
                                 ? "bg-success/15 text-success border-success/30"
@@ -184,9 +208,12 @@ const HarnessStatusSection = () => {
                                         <p className="text-sm font-medium text-base-content">{getHarnessDisplayName(harnessId)}</p>
                                         <p className="text-xs text-muted mt-1">{view.subtitle}</p>
                                     </div>
-                                    <div className={`px-2 py-1 border text-xs font-medium shrink-0 flex items-center gap-1.5 ${toneClass}`}>
-                                        <StatusIcon size={12} />
-                                        <span>{view.label}</span>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                        {isDefault && <div className="px-2 py-1 border text-xs font-medium bg-primary/15 text-primary border-primary/30">Default</div>}
+                                        <div className={`px-2 py-1 border text-xs font-medium flex items-center gap-1.5 ${toneClass}`}>
+                                            <StatusIcon size={12} />
+                                            <span>{view.label}</span>
+                                        </div>
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2 mt-2 text-xs text-muted">
@@ -200,7 +227,7 @@ const HarnessStatusSection = () => {
             )}
         </section>
     )
-}
+})
 
 const ManagedBinaryRow = ({ binary, onRefresh }: { binary: ManagedBinaryStatus; onRefresh: () => void }) => {
     const [isVerifying, setIsVerifying] = useState(false)
@@ -388,7 +415,7 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
     return (
         <div className="flex flex-col gap-8">
             {/* Harnesses Section */}
-            <HarnessStatusSection />
+            <HarnessStatusSection store={store} />
 
             {/* Managed Runtimes Section */}
             <ManagedBinariesSection />

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import { ClaudeCodeHarness } from "./harnesses/claude-code/index.js"
 import { CodexHarness } from "./harnesses/codex/index.js"
+import { OpencodeHarness } from "./harnesses/opencode/index.js"
 import {
     MODEL_REGISTRY,
     HARNESS_META,
@@ -28,8 +29,13 @@ describe("MODEL_REGISTRY sync", () => {
         expect(harness.models()).toEqual(MODEL_REGISTRY["codex"])
     })
 
+    it("matches OpencodeHarness.models()", () => {
+        const harness = new OpencodeHarness()
+        expect(harness.models()).toEqual(MODEL_REGISTRY["opencode"])
+    })
+
     it("HARNESS_META matches harness meta()", () => {
-        for (const harness of [new ClaudeCodeHarness(), new CodexHarness()]) {
+        for (const harness of [new ClaudeCodeHarness(), new CodexHarness(), new OpencodeHarness()]) {
             const meta = harness.meta()
             expect(HARNESS_META[meta.id]).toEqual({ name: meta.name, vendor: meta.vendor })
         }
@@ -49,7 +55,7 @@ describe("defaults", () => {
         expect(DEFAULT_HARNESS_ID).toBe("claude-code")
     })
 
-    it("DEFAULT_MODEL is opus", () => {
+    it("DEFAULT_MODEL is the Claude Code default", () => {
         expect(DEFAULT_MODEL).toBe("opus")
     })
 })
@@ -97,6 +103,12 @@ describe("getModelsForHarness", () => {
         expect(models.map((m) => m.id)).toEqual(["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark"])
     })
 
+    it("returns models for opencode", () => {
+        const models = getModelsForHarness("opencode")
+        expect(models.length).toBe(4)
+        expect(models.map((m) => m.id)).toEqual(["claude-sonnet", "claude-opus", "gpt-5.1-codex", "gpt-5"])
+    })
+
     it("returns empty array for unknown harness", () => {
         expect(getModelsForHarness("unknown" as never)).toEqual([])
     })
@@ -113,6 +125,10 @@ describe("getDefaultModelForHarness", () => {
 
     it("returns gpt-5.5 for codex", () => {
         expect(getDefaultModelForHarness("codex")).toBe("gpt-5.5")
+    })
+
+    it("returns claude-sonnet for opencode", () => {
+        expect(getDefaultModelForHarness("opencode")).toBe("claude-sonnet")
     })
 
     it("falls back to DEFAULT_MODEL for unknown harness", () => {
@@ -134,6 +150,8 @@ describe("resolveModelForHarness", () => {
         expect(resolveModelForHarness("claude-opus-4-7", "claude-code")).toBe("opus-4-7")
         expect(resolveModelForHarness("claude-opus-4-8", "claude-code")).toBe("opus-4-8")
         expect(resolveModelForHarness("gpt-5.3-codex", "codex")).toBe("gpt-5.3-codex")
+        expect(resolveModelForHarness("anthropic/claude-sonnet-4-5", "opencode")).toBe("claude-sonnet")
+        expect(resolveModelForHarness("opencode/gpt-5.1-codex", "opencode")).toBe("gpt-5.1-codex")
     })
 
     it("maps future Claude family full IDs to stable aliases", () => {
@@ -182,6 +200,8 @@ describe("normalizeModelClass", () => {
         expect(normalizeModelClass("gpt-5.3-codex")).toBe("Codex")
         expect(normalizeModelClass("gpt-5.5")).toBe("Codex")
         expect(normalizeModelClass("gpt-5.4")).toBe("Codex")
+        expect(normalizeModelClass("anthropic/claude-sonnet-4-5")).toBe("Sonnet")
+        expect(normalizeModelClass("opencode/gpt-5.1-codex")).toBe("Codex")
     })
 
     it("falls back to string matching for legacy model IDs", () => {

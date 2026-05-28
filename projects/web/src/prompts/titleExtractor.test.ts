@@ -24,15 +24,16 @@ vi.mock("../electronAPI/harnessQuery", () => ({
 }))
 
 vi.mock("../constants", () => ({
-    MODEL_REGISTRY: { "claude-code": { models: [{ id: "sonnet" }] } },
-    getDefaultModelForHarness: () => "sonnet",
-    getModelFullId: (alias: string) => `claude-${alias}`,
+    DEFAULT_HARNESS_ID: "codex",
+    MODEL_REGISTRY: { "claude-code": { models: [{ id: "sonnet" }] }, codex: { models: [{ id: "gpt-5.5" }] } },
+    getDefaultModelForHarness: (harnessId: string) => (harnessId === "codex" ? "gpt-5.5" : "sonnet"),
+    getModelFullId: (alias: string) => alias,
 }))
 
 function makeActionEvent(overrides: {
     id?: string
     userInput?: string
-    harnessId?: "claude-code" | "codex"
+    harnessId?: "claude-code" | "codex" | "opencode"
     streamEvents?: HarnessStreamEvent[]
 }): ActionEvent {
     const id = overrides.id ?? crypto.randomUUID()
@@ -112,6 +113,13 @@ describe("generateTitle", () => {
 
         expect(capturedPrompt).not.toContain("<task")
         expect(capturedPrompt).not.toContain("conversation so far")
+    })
+
+    it("uses the configured default harness when no harness is provided", async () => {
+        await generateTitle("Fix login", new AbortController())
+
+        expect(capturedOptions?.harnessId).toBe("codex")
+        expect(capturedOptions?.model).toBe("gpt-5.5")
     })
 
     it("does not include thread context when events array is empty", async () => {
