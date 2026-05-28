@@ -91,4 +91,19 @@ describe("calculateCodexCostUsd", () => {
         const cost = calculateCodexCostUsd("gpt-5.1-codex-mini", 1_000_000, 1_000_000)
         expect(cost).toBeCloseTo(0.25 + 2.0)
     })
+
+    it("uses GPT-5.5 fast mode pricing when enabled", () => {
+        const cost = calculateCodexCostUsd("gpt-5.5", 1_000_000, 1_000_000, 1_000_000, { fastMode: true })
+        expect(cost).toBeCloseTo(1.25 + 75.0)
+    })
+
+    it("uses GPT-5.4 fast mode pricing when enabled", () => {
+        const cost = calculateCodexCostUsd("gpt-5.4", 1_000_000, 1_000_000, 1_000_000, { fastMode: true })
+        expect(cost).toBeCloseTo(0.5 + 30.0)
+    })
+
+    it("uses GPT-5.3 Codex fast mode pricing when enabled", () => {
+        const cost = calculateCodexCostUsd("gpt-5.3-codex-high", 1_000_000, 1_000_000, 1_000_000, { fastMode: true })
+        expect(cost).toBeCloseTo(0.35 + 28.0)
+    })
 })

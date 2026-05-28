@@ -15,6 +15,7 @@ interface CodexUsageSnapshot {
 interface UsageEntry {
     harnessId: HarnessId
     modelId: string
+    fastMode?: boolean
     events: HarnessStreamEvent[]
     sessionId?: string
     parentSessionId?: string
@@ -81,7 +82,9 @@ export function computeTaskUsage(events: Array<CodeEvent & { id: string }>): Tas
                 inputTokens += usageToAdd.inputTokens
                 outputTokens += usageToAdd.outputTokens
 
-                const computedCostUsd = calculateCodexCostUsd(entry.modelId, usageToAdd.inputTokens, usageToAdd.outputTokens, usageToAdd.cacheReadTokens)
+                const computedCostUsd = calculateCodexCostUsd(entry.modelId, usageToAdd.inputTokens, usageToAdd.outputTokens, usageToAdd.cacheReadTokens, {
+                    fastMode: entry.fastMode,
+                })
                 if (computedCostUsd !== undefined) {
                     totalCostUsd += computedCostUsd
                     costByModel[entry.modelId] = (costByModel[entry.modelId] ?? 0) + computedCostUsd
@@ -136,6 +139,7 @@ function getUsageEntries(event: ActionEvent & { id: string }): UsageEntry[] {
         entries.push({
             harnessId: sub.harnessId ?? "claude-code",
             modelId: sub.modelId ?? mainModelId,
+            fastMode: sub.fastMode ?? event.execution.fastMode,
             events: sub.events,
             sessionId: sub.sessionId,
             parentSessionId: sub.parentSessionId,
@@ -145,6 +149,7 @@ function getUsageEntries(event: ActionEvent & { id: string }): UsageEntry[] {
     entries.push({
         harnessId: event.execution.harnessId ?? "claude-code",
         modelId: mainModelId,
+        fastMode: event.execution.fastMode,
         events: event.execution.events,
         sessionId: event.execution.sessionId,
         parentSessionId: event.execution.parentSessionId,

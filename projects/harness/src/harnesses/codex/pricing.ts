@@ -1,20 +1,39 @@
 interface ModelPricing {
+    standard: TokenPricing
+    fast?: TokenPricing
+}
+
+interface TokenPricing {
     inputPerMillion: number
     outputPerMillion: number
     cacheReadPerMillion?: number
 }
 
-// Prices from https://openai.com/api/pricing/ and the GPT-5.5 release notes, per million tokens
+export interface CodexCostOptions {
+    fastMode?: boolean
+}
+
+// Prices from https://platform.openai.com/docs/pricing/ and model release notes, per million tokens.
+// Codex fast mode maps to OpenAI's priority/fast service-tier pricing where published.
 const CODEX_PRICING: Record<string, ModelPricing> = {
-    "codex-mini-latest": { inputPerMillion: 1.5, outputPerMillion: 6.0, cacheReadPerMillion: 0.375 },
-    "gpt-5-codex": { inputPerMillion: 1.25, outputPerMillion: 10.0, cacheReadPerMillion: 0.125 },
-    "gpt-5.1-codex": { inputPerMillion: 1.25, outputPerMillion: 10.0, cacheReadPerMillion: 0.125 },
-    "gpt-5.1-codex-max": { inputPerMillion: 1.25, outputPerMillion: 10.0, cacheReadPerMillion: 0.125 },
-    "gpt-5.1-codex-mini": { inputPerMillion: 0.25, outputPerMillion: 2.0, cacheReadPerMillion: 0.025 },
-    "gpt-5.2-codex": { inputPerMillion: 1.75, outputPerMillion: 14.0, cacheReadPerMillion: 0.175 },
-    "gpt-5.3-codex": { inputPerMillion: 1.75, outputPerMillion: 14.0, cacheReadPerMillion: 0.175 },
-    "gpt-5.5": { inputPerMillion: 5.0, outputPerMillion: 30.0, cacheReadPerMillion: 0.5 },
-    "gpt-5.4": { inputPerMillion: 2.50, outputPerMillion: 15.0, cacheReadPerMillion: 0.25 },
+    "codex-mini-latest": { standard: { inputPerMillion: 1.5, outputPerMillion: 6.0, cacheReadPerMillion: 0.375 } },
+    "gpt-5-codex": { standard: { inputPerMillion: 1.25, outputPerMillion: 10.0, cacheReadPerMillion: 0.125 } },
+    "gpt-5.1-codex": { standard: { inputPerMillion: 1.25, outputPerMillion: 10.0, cacheReadPerMillion: 0.125 } },
+    "gpt-5.1-codex-max": { standard: { inputPerMillion: 1.25, outputPerMillion: 10.0, cacheReadPerMillion: 0.125 } },
+    "gpt-5.1-codex-mini": { standard: { inputPerMillion: 0.25, outputPerMillion: 2.0, cacheReadPerMillion: 0.025 } },
+    "gpt-5.2-codex": { standard: { inputPerMillion: 1.75, outputPerMillion: 14.0, cacheReadPerMillion: 0.175 } },
+    "gpt-5.3-codex": {
+        standard: { inputPerMillion: 1.75, outputPerMillion: 14.0, cacheReadPerMillion: 0.175 },
+        fast: { inputPerMillion: 3.5, outputPerMillion: 28.0, cacheReadPerMillion: 0.35 },
+    },
+    "gpt-5.5": {
+        standard: { inputPerMillion: 5.0, outputPerMillion: 30.0, cacheReadPerMillion: 0.5 },
+        fast: { inputPerMillion: 12.5, outputPerMillion: 75.0, cacheReadPerMillion: 1.25 },
+    },
+    "gpt-5.4": {
+        standard: { inputPerMillion: 2.5, outputPerMillion: 15.0, cacheReadPerMillion: 0.25 },
+        fast: { inputPerMillion: 5.0, outputPerMillion: 30.0, cacheReadPerMillion: 0.5 },
+    },
 }
 
 // Suffixes appended by model_reasoning_effort config — don't affect per-token pricing
@@ -25,11 +44,13 @@ export function calculateCodexCostUsd(
     inputTokens: number,
     outputTokens: number,
     cacheReadTokens = 0,
+    options: CodexCostOptions = {},
 ): number | undefined {
     if (!model) return undefined
 
-    const pricing = resolvePricing(model)
-    if (!pricing) return undefined
+    const modelPricing = resolvePricing(model)
+    if (!modelPricing) return undefined
+    const pricing = options.fastMode && modelPricing.fast ? modelPricing.fast : modelPricing.standard
 
     const cachedInputTokens = Math.min(Math.max(cacheReadTokens, 0), Math.max(inputTokens, 0))
     const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens)

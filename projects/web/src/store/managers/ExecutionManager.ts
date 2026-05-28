@@ -807,6 +807,7 @@ export class ExecutionManager {
                         primitive: step.primitive,
                         harnessId: step.agent.harnessId,
                         modelId: step.agent.modelId,
+                        fastMode: taskModel.fastMode,
                         executionId: "", // Set when the query starts
                         status: "in_progress",
                         events: [],

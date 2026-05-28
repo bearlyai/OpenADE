@@ -305,7 +305,7 @@ export class CodexHarness implements Harness<CodexEvent> {
                             inputTokens,
                             outputTokens,
                             cacheReadTokens,
-                            costUsd: calculateCodexCostUsd(q.model, inputTokens, outputTokens, cacheReadTokens),
+                            costUsd: calculateCodexCostUsd(q.model, inputTokens, outputTokens, cacheReadTokens, { fastMode: q.fastMode }),
                             durationMs,
                         }
                         return { type: "complete", usage, structuredOutput }

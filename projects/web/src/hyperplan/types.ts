@@ -72,6 +72,7 @@ export interface HyperPlanSubExecution {
     primitive: StepPrimitive
     harnessId: HarnessId
     modelId: string
+    fastMode?: boolean
     executionId: string
     sessionId?: string
     parentSessionId?: string

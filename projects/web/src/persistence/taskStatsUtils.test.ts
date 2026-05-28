@@ -75,6 +75,7 @@ function codexAction({
     costUsd,
     includeComplete = true,
     modelId = "gpt-5.3-codex",
+    fastMode,
 }: {
     id: string
     sessionId: string
@@ -85,6 +86,7 @@ function codexAction({
     costUsd?: number
     includeComplete?: boolean
     modelId?: string
+    fastMode?: boolean
 }): ActionEvent & { id: string } {
     return {
         id,
@@ -99,6 +101,7 @@ function codexAction({
             sessionId,
             parentSessionId,
             modelId,
+            fastMode,
             events: codexEvents({
                 executionId: `${id}-exec`,
                 sessionId,
@@ -208,6 +211,24 @@ describe("computeTaskUsage - codex", () => {
         expect(usage.inputTokens).toBe(1_000_000)
         expect(usage.outputTokens).toBe(0)
         expect(usage.totalCostUsd).toBeCloseTo(0.175)
+    })
+
+    it("uses fast mode pricing for Codex stats when fast mode was enabled", () => {
+        const events = [
+            codexAction({
+                id: "a1",
+                sessionId: "session-1",
+                inputTokens: 1_000_000,
+                outputTokens: 1_000_000,
+                cacheReadTokens: 1_000_000,
+                modelId: "gpt-5.5",
+                fastMode: true,
+            }),
+        ]
+
+        const usage = computeTaskUsage(events)
+        expect(usage.totalCostUsd).toBeCloseTo(1.25 + 75.0)
+        expect(usage.costByModel["gpt-5.5"]).toBeCloseTo(1.25 + 75.0)
     })
 
     it("does not trust reported Codex cost when model pricing is unknown", () => {
