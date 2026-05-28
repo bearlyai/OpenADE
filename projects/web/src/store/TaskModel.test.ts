@@ -127,13 +127,13 @@ describe("TaskModel harness lock", () => {
         expect(model.model).toBe("opus-4-6")
     })
 
-    it("maps future Claude full model IDs to stable aliases", () => {
+    it("maps persisted Opus 4.8 full model IDs to versioned aliases", () => {
         const task = createTask([createActionEvent({ id: "a1", harnessId: "claude-code", modelId: "claude-opus-4-8" })])
 
         const model = new TaskModel(createStore(task), task.id)
 
         expect(model.harnessId).toBe("claude-code")
-        expect(model.model).toBe("opus")
+        expect(model.model).toBe("opus-4-8")
     })
 
     it("maps future Claude Sonnet full model IDs to stable aliases", () => {

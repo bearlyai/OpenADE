@@ -64,7 +64,7 @@ describe("getModelFullId", () => {
     })
 
     it("resolves versioned alias with harnessId", () => {
-        expect(getModelFullId("opus-4-7", "claude-code")).toBe("claude-opus-4-7")
+        expect(getModelFullId("opus-4-8", "claude-code")).toBe("claude-opus-4-8")
     })
 
     it("resolves alias searching all harnesses", () => {
@@ -87,8 +87,8 @@ describe("getModelFullId", () => {
 describe("getModelsForHarness", () => {
     it("returns models for claude-code", () => {
         const models = getModelsForHarness("claude-code")
-        expect(models.length).toBe(5)
-        expect(models.map((m) => m.id)).toEqual(["opus-4-6", "opus-4-7", "opus", "sonnet", "haiku"])
+        expect(models.length).toBe(6)
+        expect(models.map((m) => m.id)).toEqual(["opus-4-6", "opus-4-7", "opus-4-8", "opus", "sonnet", "haiku"])
     })
 
     it("returns models for codex", () => {
@@ -132,16 +132,18 @@ describe("resolveModelForHarness", () => {
     it("maps exact Opus full IDs to versioned aliases", () => {
         expect(resolveModelForHarness("claude-opus-4-6", "claude-code")).toBe("opus-4-6")
         expect(resolveModelForHarness("claude-opus-4-7", "claude-code")).toBe("opus-4-7")
+        expect(resolveModelForHarness("claude-opus-4-8", "claude-code")).toBe("opus-4-8")
         expect(resolveModelForHarness("gpt-5.3-codex", "codex")).toBe("gpt-5.3-codex")
     })
 
     it("maps future Claude family full IDs to stable aliases", () => {
-        expect(resolveModelForHarness("claude-opus-4-8", "claude-code")).toBe("opus")
+        expect(resolveModelForHarness("claude-opus-4-9", "claude-code")).toBe("opus")
         expect(resolveModelForHarness("claude-sonnet-4-7-20260601", "claude-code")).toBe("sonnet")
     })
 
     it("keeps known Opus versions when the full ID grows a suffix", () => {
         expect(resolveModelForHarness("claude-opus-4-7-preview", "claude-code")).toBe("opus-4-7")
+        expect(resolveModelForHarness("claude-opus-4-8-preview", "claude-code")).toBe("opus-4-8")
     })
 
     it("prefers the longest compatible Codex alias", () => {
@@ -169,12 +171,14 @@ describe("normalizeModelClass", () => {
     it("resolves from registry by alias", () => {
         expect(normalizeModelClass("opus")).toBe("Opus")
         expect(normalizeModelClass("opus-4-7")).toBe("Opus")
+        expect(normalizeModelClass("opus-4-8")).toBe("Opus")
         expect(normalizeModelClass("sonnet")).toBe("Sonnet")
         expect(normalizeModelClass("haiku")).toBe("Haiku")
     })
 
     it("resolves from registry by fullId", () => {
         expect(normalizeModelClass("claude-opus-4-7")).toBe("Opus")
+        expect(normalizeModelClass("claude-opus-4-8")).toBe("Opus")
         expect(normalizeModelClass("gpt-5.3-codex")).toBe("Codex")
         expect(normalizeModelClass("gpt-5.5")).toBe("Codex")
         expect(normalizeModelClass("gpt-5.4")).toBe("Codex")

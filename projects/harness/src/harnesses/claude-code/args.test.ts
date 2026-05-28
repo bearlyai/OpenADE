@@ -251,9 +251,9 @@ describe("buildClaudeArgs", () => {
         expect(JSON.parse(result.args[settingsIdx + 1])).toEqual({ fastMode: true })
     })
 
-    it("fastMode: true opts Opus 4.7 fast mode on by default", () => {
+    it("fastMode: true does not force an older Opus fast mode by default", () => {
         const result = buildClaudeArgs(makeQuery({ fastMode: true, model: "opus" }), {})
-        expect(result.env.CLAUDE_CODE_ENABLE_OPUS_4_7_FAST_MODE).toBe("1")
+        expect(result.env.CLAUDE_CODE_ENABLE_OPUS_4_7_FAST_MODE).toBeUndefined()
         expect(result.env.CLAUDE_CODE_OPUS_4_6_FAST_MODE_OVERRIDE).toBeUndefined()
     })
 

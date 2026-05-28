@@ -177,7 +177,7 @@ function getFastModeEnv(model: string | undefined): Record<string, string> {
         return { CLAUDE_CODE_OPUS_4_6_FAST_MODE_OVERRIDE: "1" }
     }
 
-    return { CLAUDE_CODE_ENABLE_OPUS_4_7_FAST_MODE: "1" }
+    return {}
 }
 
 function getReadOnlyAllowedMcpToolPatterns(query: HarnessQuery): string[] {
