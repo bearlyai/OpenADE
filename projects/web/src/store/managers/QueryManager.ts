@@ -14,13 +14,18 @@ export class QueryManager {
         makeAutoObservable(this)
     }
 
-    async abortTask(taskId: string): Promise<void> {
+    async interruptTask(taskId: string): Promise<boolean> {
         if (!this.store.isTaskRunning(taskId)) {
-            console.debug("[QueryManager] abortTask: No server-owned task is running", taskId)
-            return
+            console.debug("[QueryManager] interruptTask: No server-owned task is running", taskId)
+            return false
         }
 
-        await localOpenADEClient.interruptTurn(taskId).catch((err) => {
+        await localOpenADEClient.interruptTurn(taskId)
+        return true
+    }
+
+    async abortTask(taskId: string): Promise<void> {
+        await this.interruptTask(taskId).catch((err) => {
             console.error("[QueryManager] Failed to interrupt server-owned task:", err)
         })
     }

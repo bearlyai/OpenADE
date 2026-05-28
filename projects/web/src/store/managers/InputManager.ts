@@ -22,6 +22,7 @@ import {
     RefreshCw,
     Repeat,
     RotateCcw,
+    Send,
     Square,
     X,
 } from "lucide-react"
@@ -31,11 +32,14 @@ import { ReviewPickerModal } from "../../components/ReviewPickerModal"
 import { ACTION_PROMPTS } from "../../prompts/prompts"
 import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { ActionEvent, QueuedTurn, UserInputContext } from "../../types"
-import type { OpenADETurnStartRequest } from "../../../../openade-module/src"
+import type { OpenADETurnStartRequest, OpenADETurnStartResult } from "../../../../openade-module/src"
+import type { EditorSnapshot } from "./SmartEditorManager"
 import type { CodeStore } from "../store"
 import type { SmartEditorManager } from "./SmartEditorManager"
 
 const COMMIT_AND_PUSH_LABEL = "Commit & Push"
+const INTERRUPT_IDLE_TIMEOUT_MS = 30_000
+const INTERRUPT_IDLE_POLL_MS = 100
 
 // Command style customization
 export interface CommandStyle {
@@ -59,6 +63,7 @@ export interface Command {
 
 export class InputManager {
     private taskId: string
+    private optimisticQueuedTurns: QueuedTurn[] = []
 
     constructor(
         private store: CodeStore,
@@ -124,11 +129,17 @@ export class InputManager {
     }
 
     get queuedTurns(): QueuedTurn[] {
-        return (this.taskModel?.queuedTurns ?? []).filter((turn) => turn.status === "queued")
+        const storedTurns = this.taskModel?.queuedTurns ?? []
+        const storedIds = new Set(storedTurns.map((turn) => turn.id))
+        return [
+            ...storedTurns.filter((turn) => turn.status === "queued"),
+            ...this.optimisticQueuedTurns.filter((turn) => turn.status === "queued" && !storedIds.has(turn.id)),
+        ]
     }
 
     async cancelQueuedTurn(queuedTurnId: string): Promise<void> {
         await this.taskModel?.cancelQueuedTurn(queuedTurnId)
+        this.optimisticQueuedTurns = this.optimisticQueuedTurns.filter((turn) => turn.id !== queuedTurnId)
     }
 
     private get isCommitAndPushInProgress(): boolean {
@@ -188,16 +199,24 @@ export class InputManager {
         return { userInput, images }
     }
 
+    private captureSnapshotAndClear(): { input: UserInputContext; snapshot: EditorSnapshot } {
+        const snapshot = this.editorManager.captureSnapshot()
+        const input = { userInput: snapshot.value.trim(), images: [...snapshot.pendingImages] }
+        this.editorManager.clear({ revokeImagePreviews: false })
+        return { input, snapshot }
+    }
+
     private async executeRuntimeTurn(
         type: OpenADETurnStartRequest["type"],
         input: UserInputContext,
-        options: Pick<OpenADETurnStartRequest, "label" | "includeComments" | "appendSystemPrompt"> = {}
+        options: Pick<OpenADETurnStartRequest, "label" | "includeComments" | "appendSystemPrompt"> = {},
+        lifecycle: { onAccepted?: () => void } = {}
     ): Promise<void> {
         const taskModel = this.taskModel
         if (!taskModel?.repoId) return
 
         await this.store.getTaskStore(taskModel.repoId, this.taskId)
-        await localOpenADEClient.startTurn({
+        const result = await localOpenADEClient.startTurn({
             repoId: taskModel.repoId,
             type,
             input: input.userInput,
@@ -210,7 +229,91 @@ export class InputManager {
             fastMode: taskModel.fastMode,
             ...options,
         })
-        await this.store.refreshTaskStoreFromStorage(this.taskId)
+        lifecycle.onAccepted?.()
+        this.rememberQueuedTurn(type, result, input, taskModel, options)
+        try {
+            await this.store.refreshTaskStoreFromStorage(this.taskId)
+        } finally {
+            this.clearOptimisticQueuedTurns()
+        }
+    }
+
+    private rememberQueuedTurn(
+        type: OpenADETurnStartRequest["type"],
+        result: OpenADETurnStartResult,
+        input: UserInputContext,
+        taskModel: {
+            enabledMcpServerIds: string[]
+            harnessId: string
+            model: string
+            thinking: QueuedTurn["thinking"]
+            fastMode: boolean
+        },
+        options: Pick<OpenADETurnStartRequest, "label" | "includeComments" | "appendSystemPrompt">
+    ): void {
+        if (!result.queued || !result.queuedTurnId) return
+        if (type !== "do" && type !== "ask") return
+
+        const now = new Date().toISOString()
+        const turn: QueuedTurn = {
+            id: result.queuedTurnId,
+            type,
+            input: input.userInput,
+            images: input.images,
+            status: "queued",
+            createdAt: now,
+            updatedAt: now,
+            appendSystemPrompt: options.appendSystemPrompt,
+            enabledMcpServerIds: taskModel.enabledMcpServerIds,
+            harnessId: taskModel.harnessId,
+            modelId: taskModel.model,
+            label: options.label ?? (type === "ask" ? "Ask Next" : "Do Next"),
+            includeComments: options.includeComments,
+            thinking: taskModel.thinking,
+            fastMode: taskModel.fastMode,
+        }
+
+        this.optimisticQueuedTurns = [...this.optimisticQueuedTurns.filter((existing) => existing.id !== turn.id), turn]
+    }
+
+    private clearOptimisticQueuedTurns(): void {
+        this.optimisticQueuedTurns = []
+    }
+
+    private waitForTaskIdle(timeoutMs = INTERRUPT_IDLE_TIMEOUT_MS): Promise<void> {
+        const startedAt = Date.now()
+
+        return new Promise((resolve, reject) => {
+            const poll = () => {
+                if (!this.store.isTaskRunning(this.taskId)) {
+                    resolve()
+                    return
+                }
+
+                if (Date.now() - startedAt >= timeoutMs) {
+                    reject(new Error("Timed out waiting for the running turn to stop"))
+                    return
+                }
+
+                globalThis.setTimeout(poll, INTERRUPT_IDLE_POLL_MS)
+            }
+
+            poll()
+        })
+    }
+
+    private async interruptAndRunDo(): Promise<void> {
+        const { input, snapshot } = this.captureSnapshotAndClear()
+        let accepted = false
+
+        try {
+            const interrupted = await this.store.queries.interruptTask(this.taskId)
+            if (interrupted) await this.waitForTaskIdle()
+            await this.executeRuntimeTurn("do", input, {}, { onAccepted: () => (accepted = true) })
+        } catch (error) {
+            if (!accepted) this.editorManager.restoreSnapshot(snapshot)
+            throw error
+        }
     }
 
     // === Repeat mode ===
@@ -279,6 +382,21 @@ export class InputManager {
                 enabled: true,
                 action: async () => {
                     await this.store.queries.abortTask(this.taskId)
+                },
+            },
+
+            // Interrupt - gracefully stop the current turn, then send this message immediately.
+            {
+                id: "interrupt",
+                label: "Interrupt",
+                icon: Send,
+                order: 2,
+                group: "primary" as const,
+                style: { variant: "primary" },
+                show: this.isWorking && !this.hasActivePlan,
+                enabled: this.hasFeedback,
+                action: async () => {
+                    await this.interruptAndRunDo()
                 },
             },
 
@@ -376,7 +494,7 @@ export class InputManager {
             // Do - direct action without planning (consumes comments)
             {
                 id: "do",
-                label: this.isWorking ? "Queue Do" : "Do",
+                label: this.isWorking ? "Do Next" : "Do",
                 icon: Play,
                 order: 10,
                 group: "primary" as const,
@@ -408,7 +526,7 @@ export class InputManager {
             // Ask - read-only exploration (consumes comments)
             {
                 id: "ask",
-                label: this.isWorking ? "Queue Ask" : "Ask",
+                label: this.isWorking ? "Ask Next" : "Ask",
                 icon: MessageCircleQuestion,
                 order: 20,
                 group: "primary" as const,
@@ -535,7 +653,7 @@ export class InputManager {
         if (!cmd || !cmd.enabled) return
 
         // Track command execution for execution-related commands
-        const trackableCommands = ["plan", "do", "ask", "revise", "runPlan", "retry", "review", "reviewPlan"]
+        const trackableCommands = ["plan", "do", "ask", "revise", "runPlan", "retry", "review", "reviewPlan", "interrupt"]
         if (trackableCommands.includes(id)) {
             track("command_run", { commandType: id })
         }

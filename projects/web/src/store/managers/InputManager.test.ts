@@ -3,16 +3,40 @@ import type { QueuedTurn } from "../../types"
 import { InputManager } from "./InputManager"
 
 const mocks = vi.hoisted(() => ({
-    startTurn: vi.fn(async () => ({ taskId: "task-1", queued: true, queuedTurnId: "queued-1" })),
+    startTurn: vi.fn(async (request: { type: string }): Promise<{ taskId: string; eventId?: string; queued?: boolean; queuedTurnId?: string }> => ({
+        taskId: "task-1",
+        queued: true,
+        queuedTurnId: `queued-${request.type}`,
+    })),
+    interruptTurn: vi.fn(async (_taskId: string) => undefined),
 }))
 
 vi.mock("../../runtime/localOpenADEClient", () => ({
     localOpenADEClient: {
         startTurn: mocks.startTurn,
+        interruptTurn: mocks.interruptTurn,
     },
 }))
 
-function createManager({ queuedTurns = [] }: { queuedTurns?: QueuedTurn[] } = {}) {
+function createDeferred<T>() {
+    let resolve!: (value: T | PromiseLike<T>) => void
+    let reject!: (error?: unknown) => void
+    const promise = new Promise<T>((promiseResolve, promiseReject) => {
+        resolve = promiseResolve
+        reject = promiseReject
+    })
+    return { promise, resolve, reject }
+}
+
+function createManager({
+    queuedTurns = [],
+    isTaskRunning = () => true,
+    refreshTaskStoreFromStorage = vi.fn(async () => undefined),
+}: {
+    queuedTurns?: QueuedTurn[]
+    isTaskRunning?: (taskId: string) => boolean
+    refreshTaskStoreFromStorage?: (taskId: string) => Promise<void>
+} = {}) {
     const cancelQueuedTurn = vi.fn(async () => undefined)
     const task = {
         id: "task-1",
@@ -34,10 +58,18 @@ function createManager({ queuedTurns = [] }: { queuedTurns?: QueuedTurn[] } = {}
         queuedTurns,
         cancelQueuedTurn,
     }
+    const interruptTask = vi.fn(async (taskId: string) => {
+        await mocks.interruptTurn(taskId)
+        return true
+    })
     const store = {
-        isTaskRunning: (taskId: string) => taskId === "task-1",
+        isTaskRunning: vi.fn((taskId: string) => taskId === "task-1" && isTaskRunning(taskId)),
         getTaskStore: vi.fn(async () => undefined),
-        refreshTaskStoreFromStorage: vi.fn(async () => undefined),
+        refreshTaskStoreFromStorage,
+        queries: {
+            interruptTask,
+            abortTask: vi.fn(async () => undefined),
+        },
         repeat: {
             activeTaskId: null,
             isActive: false,
@@ -60,6 +92,14 @@ function createManager({ queuedTurns = [] }: { queuedTurns?: QueuedTurn[] } = {}
         pendingImages: [],
         clear: vi.fn(),
         setValue: vi.fn(),
+        captureSnapshot: vi.fn(() => ({
+            value: "follow up after this",
+            files: [],
+            editorContent: null,
+            pendingImages: [],
+            pendingImageDataUrls: new Map(),
+        })),
+        restoreSnapshot: vi.fn(),
         files: [],
     }
 
@@ -68,11 +108,13 @@ function createManager({ queuedTurns = [] }: { queuedTurns?: QueuedTurn[] } = {}
         store,
         editor,
         cancelQueuedTurn,
+        interruptTask,
     }
 }
 
 beforeEach(() => {
     mocks.startTurn.mockClear()
+    mocks.interruptTurn.mockClear()
 })
 
 describe("InputManager queueable desktop commands", () => {
@@ -83,8 +125,8 @@ describe("InputManager queueable desktop commands", () => {
         const askCommand = manager.commands.find((command) => command.id === "ask")
 
         expect(manager.commands.map((command) => command.id)).toContain("stop")
-        expect(doCommand).toMatchObject({ id: "do", enabled: true })
-        expect(askCommand).toMatchObject({ id: "ask", enabled: true })
+        expect(doCommand).toMatchObject({ id: "do", label: "Do Next", enabled: true })
+        expect(askCommand).toMatchObject({ id: "ask", label: "Ask Next", enabled: true })
 
         await manager.runCommand("do")
         await manager.runCommand("ask")
@@ -106,6 +148,82 @@ describe("InputManager queueable desktop commands", () => {
                 input: "follow up after this",
             })
         )
+    })
+
+    it("shows an optimistic queued row while the queued request is settling, then lets storage own the real queue", async () => {
+        const refresh = createDeferred<void>()
+        const { manager } = createManager({
+            refreshTaskStoreFromStorage: vi.fn(() => refresh.promise),
+        })
+
+        const run = manager.runCommand("do")
+
+        await vi.waitFor(() => {
+            expect(manager.queuedTurns).toEqual([
+                expect.objectContaining({
+                    id: "queued-do",
+                    type: "do",
+                    input: "follow up after this",
+                    status: "queued",
+                    label: "Do Next",
+                }),
+            ])
+        })
+
+        refresh.resolve()
+        await run
+
+        expect(manager.queuedTurns).toEqual([])
+    })
+
+    it("interrupts the running turn and submits the typed message immediately instead of queueing it", async () => {
+        let running = true
+        mocks.interruptTurn.mockImplementationOnce(async () => {
+            running = false
+        })
+        mocks.startTurn.mockResolvedValueOnce({ taskId: "task-1", eventId: "event-2" })
+        const { manager, editor, interruptTask } = createManager({
+            isTaskRunning: () => running,
+        })
+
+        expect(manager.commands.find((command) => command.id === "interrupt")).toMatchObject({
+            id: "interrupt",
+            label: "Interrupt",
+            enabled: true,
+        })
+
+        await manager.runCommand("interrupt")
+
+        expect(interruptTask).toHaveBeenCalledWith("task-1")
+        expect(mocks.interruptTurn).toHaveBeenCalledWith("task-1")
+        expect(mocks.startTurn).toHaveBeenCalledWith(
+            expect.objectContaining({
+                repoId: "repo-1",
+                inTaskId: "task-1",
+                type: "do",
+                input: "follow up after this",
+            })
+        )
+        expect(editor.clear).toHaveBeenCalledWith({ revokeImagePreviews: false })
+    })
+
+    it("does not restore the interrupted draft after the replacement turn has been accepted", async () => {
+        let running = true
+        mocks.interruptTurn.mockImplementationOnce(async () => {
+            running = false
+        })
+        mocks.startTurn.mockResolvedValueOnce({ taskId: "task-1", eventId: "event-2" })
+        const { manager, editor } = createManager({
+            isTaskRunning: () => running,
+            refreshTaskStoreFromStorage: vi.fn(async () => {
+                throw new Error("refresh failed")
+            }),
+        })
+
+        await expect(manager.runCommand("interrupt")).rejects.toThrow("refresh failed")
+
+        expect(mocks.startTurn).toHaveBeenCalledTimes(1)
+        expect(editor.restoreSnapshot).not.toHaveBeenCalled()
     })
 
     it("exposes cancellable queued turns without showing old queue history", async () => {

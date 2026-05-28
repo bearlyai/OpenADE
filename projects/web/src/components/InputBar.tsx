@@ -3,7 +3,7 @@ import { Tooltip } from "@base-ui-components/react/tooltip"
 import cx from "classnames"
 import { ExternalLink, GitBranch, ImagePlus, Plug, X } from "lucide-react"
 import { observer } from "mobx-react"
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
+import { useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { Z_INDEX } from "../constants"
 import { onFocusInputShortcut } from "../electronAPI/app"
 import type { GitSummaryResponse } from "../electronAPI/git"
@@ -17,7 +17,7 @@ import type { Command, InputManager } from "../store/managers/InputManager"
 import type { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager"
 import type { SmartEditorManager } from "../store/managers/SmartEditorManager"
 import type { TrayManager } from "../store/managers/TrayManager"
-import type { Comment, QueuedTurn } from "../types"
+import type { Comment } from "../types"
 import { processImageBlob } from "../utils/imageAttachment"
 import {
     getMetaDigitShortcutIndex,
@@ -55,67 +55,6 @@ const COMMAND_SHORTCUT_BY_ID: Partial<Record<string, number>> = {
     cancelPlan: 8,
     close: 9,
     reopen: 9,
-}
-
-export const QUEUED_TURNS_PREVIEW_STORAGE_KEY = "openade.previewQueuedTurns"
-export const QUEUED_TURNS_PREVIEW_CHANGED_EVENT = "openade:queued-turn-preview-changed"
-
-declare global {
-    interface Window {
-        openadePreviewQueuedTurns?: (enabled?: boolean) => void
-    }
-}
-
-const SAMPLE_QUEUED_TURNS: QueuedTurn[] = [
-    {
-        id: "preview-queued-do",
-        type: "do",
-        input: "Run this follow-up after the current agent turn finishes.",
-        status: "queued",
-        createdAt: "2026-05-28T00:00:00.000Z",
-        updatedAt: "2026-05-28T00:00:00.000Z",
-        label: "Do",
-    },
-    {
-        id: "preview-queued-ask",
-        type: "ask",
-        input: "Then explain what changed and what still needs attention.",
-        status: "queued",
-        createdAt: "2026-05-28T00:00:00.000Z",
-        updatedAt: "2026-05-28T00:00:00.000Z",
-        label: "Ask",
-    },
-]
-
-function isQueuedTurnsPreviewEnabled(): boolean {
-    try {
-        return window.localStorage.getItem(QUEUED_TURNS_PREVIEW_STORAGE_KEY) === "1"
-    } catch {
-        return false
-    }
-}
-
-export function setInputBarQueuedTurnsPreviewEnabled(enabled: boolean): void {
-    try {
-        if (enabled) {
-            window.localStorage.setItem(QUEUED_TURNS_PREVIEW_STORAGE_KEY, "1")
-        } else {
-            window.localStorage.removeItem(QUEUED_TURNS_PREVIEW_STORAGE_KEY)
-        }
-    } catch {
-        return
-    }
-
-    window.dispatchEvent(new Event(QUEUED_TURNS_PREVIEW_CHANGED_EVENT))
-}
-
-if (typeof window !== "undefined") {
-    window.openadePreviewQueuedTurns = (enabled = true) => setInputBarQueuedTurnsPreviewEnabled(enabled)
-}
-
-export function getInputBarQueuedTurns(queuedTurns: QueuedTurn[], previewEnabled = isQueuedTurnsPreviewEnabled()): { turns: QueuedTurn[]; preview: boolean } {
-    if (queuedTurns.length > 0) return { turns: queuedTurns, preview: false }
-    return previewEnabled ? { turns: SAMPLE_QUEUED_TURNS, preview: true } : { turns: [], preview: false }
 }
 
 // Semantic button styles - each variant has enabled and disabled states
@@ -261,9 +200,7 @@ export const InputBar = observer(function InputBar({
     const { commands } = input
     const hasComments = unsubmittedComments.length > 0
     const hasPendingImages = editorManager.pendingImages.length > 0
-    const [queuedTurnsPreviewEnabled, setQueuedTurnsPreviewEnabled] = useState(() => isQueuedTurnsPreviewEnabled())
-    const queuedTurnsState = getInputBarQueuedTurns(input.queuedTurns, queuedTurnsPreviewEnabled)
-    const queuedTurns = queuedTurnsState.turns
+    const queuedTurns = input.queuedTurns
     const focusEditorAtEnd = useCallback(() => {
         if (input.isDisabled) return
 
@@ -298,18 +235,6 @@ export const InputBar = observer(function InputBar({
         window.addEventListener("keydown", handleCommandShortcut, true)
         return () => window.removeEventListener("keydown", handleCommandShortcut, true)
     }, [commands, input, tray])
-
-    useEffect(() => {
-        const refreshPreview = () => setQueuedTurnsPreviewEnabled(isQueuedTurnsPreviewEnabled())
-
-        window.addEventListener(QUEUED_TURNS_PREVIEW_CHANGED_EVENT, refreshPreview)
-        window.addEventListener("storage", refreshPreview)
-
-        return () => {
-            window.removeEventListener(QUEUED_TURNS_PREVIEW_CHANGED_EVENT, refreshPreview)
-            window.removeEventListener("storage", refreshPreview)
-        }
-    }, [])
 
     useEffect(() => {
         const handleFocusShortcut = (event: KeyboardEvent) => {
@@ -433,27 +358,20 @@ export const InputBar = observer(function InputBar({
 
                 {queuedTurns.length > 0 && (
                     <div className="border-t border-border bg-base-100 px-2 py-2">
-                        <div className="mb-1 flex items-center gap-2 text-[10px] font-medium uppercase tracking-wide text-muted">
-                            <span>Queued</span>
-                            {queuedTurnsState.preview && <span className="text-primary">Preview</span>}
-                        </div>
+                        <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted">Queued</div>
                         <div className="flex flex-col gap-1">
                             {queuedTurns.map((turn) => (
                                 <div key={turn.id} className="flex min-w-0 items-center gap-2 border border-border bg-base-200 px-2 py-1.5 text-xs">
-                                    <span className="shrink-0 font-medium text-primary">{turn.label ?? (turn.type === "ask" ? "Ask" : "Do")}</span>
+                                    <span className="shrink-0 font-medium text-primary">{turn.label ?? (turn.type === "ask" ? "Ask Next" : "Do Next")}</span>
                                     <span className="min-w-0 flex-1 truncate text-base-content" title={turn.input}>
                                         {turn.input || "No message"}
                                     </span>
                                     <button
                                         type="button"
-                                        className={cx(
-                                            "btn shrink-0 p-1 text-muted",
-                                            queuedTurnsState.preview ? "cursor-default opacity-50" : "hover:bg-base-300 hover:text-base-content"
-                                        )}
-                                        disabled={queuedTurnsState.preview}
+                                        className="btn shrink-0 cursor-pointer p-1 text-muted hover:bg-base-300 hover:text-base-content"
                                         onClick={() => void input.cancelQueuedTurn(turn.id)}
                                         aria-label={`Cancel queued ${turn.type}`}
-                                        title={queuedTurnsState.preview ? "Preview only" : "Cancel queued message"}
+                                        title="Cancel queued message"
                                     >
                                         <X size={12} />
                                     </button>
