@@ -23,10 +23,14 @@ import type {
     OpenADERepoDeleteRequest,
     OpenADERepoUpdateRequest,
     OpenADEProject,
+    OpenADEQueuedTurnCancelRequest,
+    OpenADEQueuedTurnCancelResult,
     OpenADESnapshotEventCreateRequest,
     OpenADESnapshot,
     OpenADESnapshotEventCreateResult,
     OpenADETask,
+    OpenADETaskReadOptions,
+    OpenADETaskReadRequest,
     OpenADETaskDeleteRequest,
     OpenADETaskDeleteResult,
     OpenADETaskEnvironmentSetupRequest,
@@ -38,7 +42,7 @@ import type {
 
 export type OpenADERuntimeBridgeEvent =
     | { type: "snapshot_changed"; at: string }
-    | { type: "task_changed"; repoId: string; taskId: string; at: string }
+    | { type: "task_changed"; repoId: string; taskId: string; previewChanged?: boolean; at: string }
     | { type: "task_deleted"; repoId: string; taskId: string; at: string }
     | { type: "repo_changed"; repoId: string; at: string }
     | { type: "repo_deleted"; repoId: string; at: string }
@@ -49,7 +53,7 @@ export interface OpenADEReadAdapter {
     readSnapshot(options?: { version?: string; hostName?: string; workingTaskIds?: string[] }): Promise<OpenADESnapshot>
     readProjects(options?: { workingTaskIds?: string[] }): Promise<OpenADEProject[]>
     readTaskList(repoId: string, options?: { workingTaskIds?: string[] }): Promise<OpenADETaskPreview[]>
-    readTask(repoId: string, taskId: string): Promise<OpenADETask>
+    readTask(repoId: string, taskId: string, options?: OpenADETaskReadOptions): Promise<OpenADETask>
     listDataDocuments(): Promise<string[]>
     readDataDocumentBase64(id: string): Promise<{ id: string; data: string } | null>
 }
@@ -63,6 +67,7 @@ export interface OpenADEWriteAdapter {
     startTurn(params: OpenADETurnStartRequest, context?: OpenADETurnStartContext): Promise<unknown>
     startReview(params: OpenADEReviewStartRequest, context?: OpenADETurnStartContext): Promise<unknown>
     interruptTurn(params: { taskId: string }): Promise<unknown>
+    cancelQueuedTurn(params: OpenADEQueuedTurnCancelRequest): Promise<OpenADEQueuedTurnCancelResult>
     deleteTask(params: OpenADETaskDeleteRequest): Promise<OpenADETaskDeleteResult>
     setupTaskEnvironment(params: OpenADETaskEnvironmentSetupRequest): Promise<unknown>
     createActionEvent(params: OpenADEActionEventCreateRequest): Promise<unknown>
@@ -714,16 +719,27 @@ function taskListParams(params: unknown): { repoId: string } {
     return { repoId: stringParam(record, "repoId") }
 }
 
-function taskReadParams(params: unknown): { repoId: string; taskId: string } {
+function taskReadParams(params: unknown): OpenADETaskReadRequest {
     const record = asRecord(params)
     return {
         repoId: stringParam(record, "repoId"),
         taskId: stringParam(record, "taskId"),
+        hydrateSessionEvents: booleanParam(record, "hydrateSessionEvents"),
     }
 }
 
 function turnInterruptParams(params: unknown): { taskId: string } {
     return { taskId: stringParam(asRecord(params), "taskId") }
+}
+
+function queuedTurnCancelParams(params: unknown): OpenADEQueuedTurnCancelRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        queuedTurnId: stringParam(record, "queuedTurnId"),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
 }
 
 export function createOpenADEModule(adapters: OpenADEModuleAdapters): RuntimeModule {
@@ -794,8 +810,8 @@ export function createOpenADEModule(adapters: OpenADEModuleAdapters): RuntimeMod
                 return adapters.readTaskList(repoId, { workingTaskIds: activeOpenADETaskIds(context.server) })
             }, { validateParams: validateWith(taskListParams) })
             server.register("openade/task/read", (params) => {
-                const { repoId, taskId } = taskReadParams(params)
-                return adapters.readTask(repoId, taskId)
+                const { repoId, taskId, hydrateSessionEvents } = taskReadParams(params)
+                return adapters.readTask(repoId, taskId, { hydrateSessionEvents })
             }, { validateParams: validateWith(taskReadParams) })
             server.register("openade/repo/create", (params) => runIdempotentMutation("openade/repo/create", params, () => adapters.createRepo(repoCreateParams(params))), {
                 validateParams: validateWith(repoCreateParams),
@@ -953,6 +969,9 @@ export function createOpenADEModule(adapters: OpenADEModuleAdapters): RuntimeMod
             server.register("openade/turn/interrupt", (params) => runIdempotentMutation("openade/turn/interrupt", params, () => {
                 return adapters.interruptTurn(turnInterruptParams(params))
             }), { validateParams: validateWith(turnInterruptParams) })
+            server.register("openade/queued-turn/cancel", (params) => runIdempotentMutation("openade/queued-turn/cancel", params, () => {
+                return adapters.cancelQueuedTurn(queuedTurnCancelParams(params))
+            }), { validateParams: validateWith(queuedTurnCancelParams) })
             server.register("openade/task/environment/setup", (params) =>
                 runIdempotentMutation("openade/task/environment/setup", params, () => adapters.setupTaskEnvironment(taskEnvironmentSetupParams(params)))
             , { validateParams: validateWith(taskEnvironmentSetupParams) })
@@ -1048,7 +1067,7 @@ export function publishOpenADECompanionEvent(server: RuntimeServer, event: OpenA
         case "task_changed":
             server.supervisor.touchByOwner("openade-task", event.taskId)
             server.notify("openade/task/updated", event)
-            server.notify("openade/task/previewChanged", event)
+            if (event.previewChanged !== false) server.notify("openade/task/previewChanged", event)
             break
         case "task_deleted":
             server.notify("openade/task/deleted", event)

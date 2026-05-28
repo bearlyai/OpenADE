@@ -5,6 +5,8 @@ const runtimeClients: RuntimeClient[] = []
 const openadeClients: OpenADEClient[] = []
 const changeListeners: Array<(notification: { method: string; params?: unknown }) => void> = []
 let testRun = 0
+let startTurnResult: unknown = { taskId: "task-1" }
+let getTaskFailures = 0
 
 class RuntimeClientError extends Error {
     constructor(
@@ -31,8 +33,14 @@ class OpenADEClient {
         workingTaskIds: [],
         server: { version: "test", hostName: "test", theme: { setting: "system", className: "code-theme-light" } },
     }))
-    getTask = vi.fn(async () => ({ id: "task-1", repoId: "repo-1", events: [] }))
-    startTurn = vi.fn(async () => ({ taskId: "task-1" }))
+    getTask = vi.fn(async () => {
+        if (getTaskFailures > 0) {
+            getTaskFailures -= 1
+            throw new Error("Runtime socket disconnected")
+        }
+        return { id: "task-1", repoId: "repo-1", events: [] }
+    })
+    startTurn = vi.fn(async () => startTurnResult)
     interruptTurn = vi.fn(async () => undefined)
     subscribeToChanges = vi.fn((listener: (notification: { method: string; params?: unknown }) => void) => {
         changeListeners.push(listener)
@@ -78,6 +86,9 @@ beforeEach(() => {
     runtimeClients.length = 0
     openadeClients.length = 0
     changeListeners.length = 0
+    startTurnResult = { taskId: "task-1" }
+    getTaskFailures = 0
+    vi.useRealTimers()
 })
 
 describe("companion remote runtime client cache", () => {
@@ -94,12 +105,33 @@ describe("companion remote runtime client cache", () => {
         expect(runtimeClients).toHaveLength(1)
         expect(openadeClients).toHaveLength(1)
         expect(openadeClients[0].getSnapshot).toHaveBeenCalledTimes(1)
-        expect(openadeClients[0].getTask).toHaveBeenCalledWith("repo-1", "task-1")
+        expect(openadeClients[0].getTask).toHaveBeenCalledWith("repo-1", "task-1", {})
         expect(openadeClients[0].subscribeToChanges).toHaveBeenCalledTimes(2)
         expect(openadeClients[0].startTurn).toHaveBeenCalledWith({ repoId: "repo-1", type: "ask", input: "hello" })
 
         unsubscribeA()
         unsubscribeB()
+    })
+
+    it("passes task read hydration options through to the runtime protocol", async () => {
+        const { getTask } = await importClient()
+        const remote = config()
+
+        await getTask(remote, "repo-1", "task-1", { hydrateSessionEvents: false })
+
+        expect(openadeClients[0].getTask).toHaveBeenCalledWith("repo-1", "task-1", { hydrateSessionEvents: false })
+    })
+
+    it("retries transient runtime socket failures for reads", async () => {
+        vi.useFakeTimers()
+        const { getTask } = await importClient()
+        getTaskFailures = 1
+
+        const task = getTask(config(), "repo-1", "task-1", { hydrateSessionEvents: false })
+        await vi.advanceTimersByTimeAsync(250)
+
+        await expect(task).resolves.toEqual({ id: "task-1", repoId: "repo-1", events: [] })
+        expect(openadeClients[0].getTask).toHaveBeenCalledTimes(2)
     })
 
     it("closes and replaces the runtime socket client when saved credentials change", async () => {
@@ -114,7 +146,7 @@ describe("companion remote runtime client cache", () => {
         expect(openadeClients).toHaveLength(2)
     })
 
-    it("forwards realtime socket statuses and lag notifications to the mobile UI", async () => {
+    it("forwards realtime socket statuses without treating lag as a connection state", async () => {
         const { subscribeRemoteChanges } = await importClient()
         const onEvent = vi.fn()
         const onStatus = vi.fn()
@@ -125,7 +157,37 @@ describe("companion remote runtime client cache", () => {
         changeListeners[0]({ method: "connection/lagged", params: { requestedCursor: "1", oldestCursor: "10" } })
 
         expect(onStatus).toHaveBeenCalledWith("connected")
-        expect(onStatus).toHaveBeenCalledWith("lagged")
+        expect(onStatus).not.toHaveBeenCalledWith("lagged")
         expect(onEvent).toHaveBeenCalledTimes(1)
+        expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ method: "connection/lagged" }))
+    })
+
+    it("replays the current runtime socket status to a new mobile subscription", async () => {
+        const { subscribeRemoteChanges } = await importClient()
+        const remote = config()
+        const firstStatus = vi.fn()
+
+        const unsubscribe = subscribeRemoteChanges(remote, vi.fn(), firstStatus)
+        const runtimeOptions = runtimeClients[0].options as { onStatus?: (status: string) => void }
+        runtimeOptions.onStatus?.("connected")
+        unsubscribe()
+
+        const secondStatus = vi.fn()
+        subscribeRemoteChanges(remote, vi.fn(), secondStatus)
+        await Promise.resolve()
+
+        expect(secondStatus).toHaveBeenCalledWith("connected")
+        expect(runtimeClients).toHaveLength(1)
+    })
+
+    it("preserves queued turn start results from the runtime protocol", async () => {
+        const { startRemoteTurn } = await importClient()
+        startTurnResult = { taskId: "task-1", queued: true, queuedTurnId: "queued-1" }
+
+        await expect(startRemoteTurn(config(), { repoId: "repo-1", type: "do", input: "after this" })).resolves.toEqual({
+            taskId: "task-1",
+            queued: true,
+            queuedTurnId: "queued-1",
+        })
     })
 })

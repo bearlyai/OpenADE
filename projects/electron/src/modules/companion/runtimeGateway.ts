@@ -23,6 +23,7 @@ import {
     type OpenADEActionEventSource,
     type OpenADEHyperPlanStep,
     type OpenADEHyperPlanStrategy,
+    type OpenADEQueuedTurn,
     type OpenADESnapshotChangedFile,
     type OpenADESetupEnvironmentEventCreateRequest,
     type OpenADETask,
@@ -215,8 +216,223 @@ function taskIdForClientRequest(repoId: string, clientRequestId: string | undefi
     return `task-${hash}`
 }
 
+function queuedTurnIdForClientRequest(taskId: string, clientRequestId: string | undefined): string {
+    if (!clientRequestId) return `queued-${randomUUID()}`
+    const hash = createHash("sha256").update(taskId).update("\0").update(clientRequestId).digest("hex").slice(0, 26)
+    return `queued-${hash}`
+}
+
 function canCreateTaskInRuntime(params: OpenADETurnStartRequest): boolean {
     return !params.inTaskId
+}
+
+function queuedTurnFromParams(taskId: string, params: OpenADETurnStartRequest): OpenADEQueuedTurn {
+    const now = new Date().toISOString()
+    return {
+        id: queuedTurnIdForClientRequest(taskId, params.clientRequestId),
+        clientRequestId: params.clientRequestId,
+        type: params.type === "ask" ? "ask" : "do",
+        input: params.input,
+        status: "queued",
+        createdAt: now,
+        updatedAt: now,
+        appendSystemPrompt: params.appendSystemPrompt,
+        enabledMcpServerIds: params.enabledMcpServerIds,
+        harnessId: params.harnessId,
+        modelId: params.modelId,
+        label: params.label,
+        includeComments: params.includeComments,
+        images: params.images,
+        thinking: params.thinking,
+        fastMode: params.fastMode,
+    }
+}
+
+function queuedTurnParams(repoId: string, taskId: string, turn: OpenADEQueuedTurn): OpenADETurnStartRequest {
+    return {
+        repoId,
+        inTaskId: taskId,
+        type: turn.type,
+        input: turn.input,
+        appendSystemPrompt: turn.appendSystemPrompt,
+        enabledMcpServerIds: turn.enabledMcpServerIds,
+        harnessId: turn.harnessId,
+        modelId: turn.modelId,
+        label: turn.label,
+        includeComments: turn.includeComments,
+        images: turn.images,
+        thinking: turn.thinking,
+        fastMode: turn.fastMode,
+        clientRequestId: turn.clientRequestId,
+    }
+}
+
+function sessionBackedStreamEventId(executionId: string, index: number, event: unknown): string {
+    const hash = createHash("sha256").update(executionId).update("\0").update(String(index)).update("\0").update(JSON.stringify(event)).digest("hex").slice(0, 24)
+    return `session-${hash}`
+}
+
+function streamEventSemanticKey(event: unknown): string {
+    if (typeof event !== "object" || event === null || Array.isArray(event)) return JSON.stringify(event)
+    const { id: _id, ...rest } = event as Record<string, unknown>
+    return JSON.stringify(rest)
+}
+
+function sessionHarnessEventToStreamEvent(params: { executionId: string; harnessId: string; index: number; event: unknown }): Record<string, unknown> | null {
+    if (typeof params.event !== "object" || params.event === null || Array.isArray(params.event)) return null
+    const event = params.event as Record<string, unknown>
+    const type = typeof event.type === "string" ? event.type : undefined
+    const base = {
+        id: sessionBackedStreamEventId(params.executionId, params.index, event),
+        direction: "execution",
+        executionId: params.executionId,
+        harnessId: params.harnessId,
+    }
+
+    if (type === "session_started" && typeof event.sessionId === "string") {
+        return { ...base, type: "session_started", sessionId: event.sessionId }
+    }
+    if (type === "message") {
+        return { ...base, type: "raw_message", message: event.message }
+    }
+    if (type === "stderr" && typeof event.data === "string") {
+        return { ...base, type: "stderr", data: event.data }
+    }
+    if (type === "complete") {
+        return { ...base, type: "complete", usage: event.usage }
+    }
+    if (type === "error") {
+        return { ...base, type: "error", error: typeof event.error === "string" ? event.error : "Session error", code: event.code }
+    }
+
+    return {
+        ...base,
+        type: "raw_message",
+        message: {
+            type: "raw_json",
+            original_type: type ?? "session_event",
+            raw: event,
+        },
+    }
+}
+
+function mergeSessionBackedStreamEvents(storedEvents: unknown[], sessionEvents: Record<string, unknown>[]): unknown[] {
+    if (sessionEvents.length === 0) return storedEvents
+    const seen = new Set(sessionEvents.map(streamEventSemanticKey))
+    const storedOnly = storedEvents.filter((event) => {
+        const key = streamEventSemanticKey(event)
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+    })
+    return [...sessionEvents, ...storedOnly]
+}
+
+async function readHarnessSessionStreamEvents(params: {
+    server: RuntimeServer
+    harnessId: string
+    executionId: string
+    sessionId: string
+    cwd?: string
+}): Promise<Record<string, unknown>[]> {
+    const response = await params.server.handleRequest(
+        {
+            id: `session-read-${params.executionId}`,
+            method: "agent/session/read",
+            params: {
+                providerId: params.harnessId,
+                sessionId: params.sessionId,
+                cwd: params.cwd,
+            },
+        },
+        {
+            id: "openade-session-hydrator",
+            send() {},
+        }
+    )
+    if (response.error || !Array.isArray(response.result)) return []
+
+    return response.result
+        .map((event, index) =>
+            sessionHarnessEventToStreamEvent({
+                executionId: params.executionId,
+                harnessId: params.harnessId,
+                index,
+                event,
+            })
+        )
+        .filter((event): event is Record<string, unknown> => event !== null)
+}
+
+async function hydrateOpenADETaskSessionEvents(params: { server: RuntimeServer; task: OpenADETask; repoPath?: string }): Promise<OpenADETask> {
+    const hydratedEvents: unknown[] = []
+
+    for (const event of params.task.events) {
+        if (typeof event !== "object" || event === null || Array.isArray(event)) {
+            hydratedEvents.push(event)
+            continue
+        }
+
+        const record = event as Record<string, unknown>
+        if (record.type !== "action" || typeof record.execution !== "object" || record.execution === null || Array.isArray(record.execution)) {
+            hydratedEvents.push(event)
+            continue
+        }
+
+        const execution = record.execution as Record<string, unknown>
+        const harnessId = typeof execution.harnessId === "string" ? execution.harnessId : undefined
+        const executionId = typeof execution.executionId === "string" ? execution.executionId : undefined
+        const sessionId = typeof execution.sessionId === "string" ? execution.sessionId : undefined
+
+        let hydratedExecution = execution
+        if (harnessId && executionId && sessionId) {
+            const sessionEvents = await readHarnessSessionStreamEvents({
+                server: params.server,
+                harnessId,
+                executionId,
+                sessionId,
+                cwd: params.repoPath,
+            })
+            const storedEvents = Array.isArray(execution.events) ? execution.events : []
+            hydratedExecution = {
+                ...execution,
+                events: mergeSessionBackedStreamEvents(storedEvents, sessionEvents),
+            }
+        }
+
+        const hydratedSubExecutions = Array.isArray(record.hyperplanSubExecutions)
+            ? await Promise.all(
+                  record.hyperplanSubExecutions.map(async (subExecution) => {
+                      if (typeof subExecution !== "object" || subExecution === null || Array.isArray(subExecution)) return subExecution
+                      const sub = subExecution as Record<string, unknown>
+                      const subHarnessId = typeof sub.harnessId === "string" ? sub.harnessId : undefined
+                      const subExecutionId = typeof sub.executionId === "string" ? sub.executionId : undefined
+                      const subSessionId = typeof sub.sessionId === "string" ? sub.sessionId : undefined
+                      if (!subHarnessId || !subExecutionId || !subSessionId) return subExecution
+                      const sessionEvents = await readHarnessSessionStreamEvents({
+                          server: params.server,
+                          harnessId: subHarnessId,
+                          executionId: subExecutionId,
+                          sessionId: subSessionId,
+                          cwd: params.repoPath,
+                      })
+                      const storedEvents = Array.isArray(sub.events) ? sub.events : []
+                      return { ...sub, events: mergeSessionBackedStreamEvents(storedEvents, sessionEvents) }
+                  })
+              )
+            : record.hyperplanSubExecutions
+
+        hydratedEvents.push({
+            ...record,
+            execution: hydratedExecution,
+            ...(hydratedSubExecutions ? { hyperplanSubExecutions: hydratedSubExecutions } : {}),
+        })
+    }
+
+    return {
+        ...params.task,
+        events: hydratedEvents,
+    }
 }
 
 function registerConfiguredServerProtocolBridges(server: RuntimeServer): void {
@@ -688,14 +904,14 @@ async function buildRuntimeMcpServerConfigs(storage: OpenADEYjsStorage, enabledS
     return Object.keys(configs).length > 0 ? configs : undefined
 }
 
-function publishTaskChanged(server: RuntimeServer, repoId: string, taskId: string): void {
+function publishTaskChanged(server: RuntimeServer, repoId: string, taskId: string, options: { previewChanged?: boolean } = {}): void {
     publishOpenADECompanionEvent(server, {
         type: "task_changed",
         repoId,
         taskId,
+        previewChanged: options.previewChanged,
         at: new Date().toISOString(),
     })
-    publishOpenADECompanionEvent(server, { type: "snapshot_changed", at: new Date().toISOString() })
 }
 
 function publishWorkingTasks(server: RuntimeServer): void {
@@ -705,6 +921,159 @@ function publishWorkingTasks(server: RuntimeServer): void {
         taskIds: [...activeTaskExecutions.keys()],
         at: new Date().toISOString(),
     })
+}
+
+async function saveQueuedTurns(params: {
+    writer: ReturnType<typeof createOpenADEYjsWriter>
+    server: RuntimeServer
+    repoId: string
+    taskId: string
+    queuedTurns: OpenADEQueuedTurn[]
+}): Promise<void> {
+    await params.writer.updateTaskMetadata({
+        taskId: params.taskId,
+        queuedTurns: params.queuedTurns,
+        updatedAt: new Date().toISOString(),
+    })
+    publishTaskChanged(params.server, params.repoId, params.taskId)
+}
+
+async function updateQueuedTurn(params: {
+    writer: ReturnType<typeof createOpenADEYjsWriter>
+    projection: ReturnType<typeof createOpenADEYjsProjection>
+    server: RuntimeServer
+    repoId: string
+    taskId: string
+    queuedTurnId: string
+    patch: Partial<OpenADEQueuedTurn>
+}): Promise<void> {
+    const task = await params.projection.readTask(params.repoId, params.taskId)
+    const queuedTurns = (task.queuedTurns ?? []).map((turn) =>
+        turn.id === params.queuedTurnId
+            ? {
+                  ...turn,
+                  ...params.patch,
+                  updatedAt: new Date().toISOString(),
+              }
+            : turn
+    )
+    await saveQueuedTurns({
+        writer: params.writer,
+        server: params.server,
+        repoId: params.repoId,
+        taskId: params.taskId,
+        queuedTurns,
+    })
+}
+
+async function enqueueDoTurn(params: {
+    writer: ReturnType<typeof createOpenADEYjsWriter>
+    server: RuntimeServer
+    task: OpenADETask
+    turn: OpenADETurnStartRequest
+}): Promise<{ taskId: string; queued: true; queuedTurnId: string }> {
+    if (params.turn.type !== "do" && params.turn.type !== "ask") throw new Error("Only Do and Ask turns can be queued while another turn is running")
+
+    const queuedTurn = queuedTurnFromParams(params.task.id, params.turn)
+    const existing = params.task.queuedTurns?.find(
+        (turn) => turn.id === queuedTurn.id || (queuedTurn.clientRequestId && turn.clientRequestId === queuedTurn.clientRequestId)
+    )
+    if (existing) return { taskId: params.task.id, queued: true, queuedTurnId: existing.id }
+
+    await saveQueuedTurns({
+        writer: params.writer,
+        server: params.server,
+        repoId: params.turn.repoId,
+        taskId: params.task.id,
+        queuedTurns: [...(params.task.queuedTurns ?? []), queuedTurn],
+    })
+    return { taskId: params.task.id, queued: true, queuedTurnId: queuedTurn.id }
+}
+
+async function cancelQueuedTurn(params: {
+    writer: ReturnType<typeof createOpenADEYjsWriter>
+    projection: ReturnType<typeof createOpenADEYjsProjection>
+    server: RuntimeServer
+    repoId: string
+    taskId: string
+    queuedTurnId: string
+}): Promise<{ taskId: string; queuedTurnId: string; cancelled: boolean }> {
+    const task = await params.projection.readTask(params.repoId, params.taskId)
+    let cancelled = false
+    const queuedTurns = (task.queuedTurns ?? []).map((turn) => {
+        if (turn.id !== params.queuedTurnId) return turn
+        if (turn.status !== "queued") return turn
+        cancelled = true
+        return { ...turn, status: "cancelled" as const, updatedAt: new Date().toISOString() }
+    })
+
+    if (cancelled) {
+        await saveQueuedTurns({
+            writer: params.writer,
+            server: params.server,
+            repoId: params.repoId,
+            taskId: params.taskId,
+            queuedTurns,
+        })
+    }
+
+    return { taskId: params.taskId, queuedTurnId: params.queuedTurnId, cancelled }
+}
+
+async function drainNextQueuedTurn(params: {
+    server: RuntimeServer
+    writer: ReturnType<typeof createOpenADEYjsWriter>
+    projection: ReturnType<typeof createOpenADEYjsProjection>
+    yjsStorage: OpenADEYjsStorage
+    repoId: string
+    taskId: string
+}): Promise<void> {
+    if (activeTaskExecutions.has(params.taskId)) return
+    const task = await params.projection.readTask(params.repoId, params.taskId)
+    const next = (task.queuedTurns ?? []).find((turn) => turn.status === "queued")
+    if (!next) return
+
+    await updateQueuedTurn({
+        writer: params.writer,
+        projection: params.projection,
+        server: params.server,
+        repoId: params.repoId,
+        taskId: params.taskId,
+        queuedTurnId: next.id,
+        patch: { status: "running" },
+    })
+
+    try {
+        const started = await startHeadModeTurn({
+            server: params.server,
+            writer: params.writer,
+            projection: params.projection,
+            yjsStorage: params.yjsStorage,
+            params: queuedTurnParams(params.repoId, params.taskId, next),
+            taskId: params.taskId,
+            queuedTurnId: next.id,
+        })
+        await updateQueuedTurn({
+            writer: params.writer,
+            projection: params.projection,
+            server: params.server,
+            repoId: params.repoId,
+            taskId: params.taskId,
+            queuedTurnId: next.id,
+            patch: { status: "running", eventId: started.eventId },
+        })
+    } catch (error) {
+        await updateQueuedTurn({
+            writer: params.writer,
+            projection: params.projection,
+            server: params.server,
+            repoId: params.repoId,
+            taskId: params.taskId,
+            queuedTurnId: next.id,
+            patch: { status: "error" },
+        })
+        console.warn("[RuntimeGateway] Failed to drain queued turn", error)
+    }
 }
 
 async function reconcileCheckpointedOpenADEActionEvents(
@@ -1170,6 +1539,14 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
     server.registerModule(
         createOpenADEModule({
             ...projection,
+            readTask: async (repoId, taskId, options) => {
+                const task = await projection.readTask(repoId, taskId)
+                if (options?.hydrateSessionEvents === false) return task
+
+                const projects = await projection.readProjects()
+                const repoPath = projects.find((project) => project.id === repoId)?.path
+                return hydrateOpenADETaskSessionEvents({ server, task, repoPath })
+            },
             version: () => process.env.RELEASE ?? "local",
             saveDataDocumentBase64: (id, data) => yjsStorage.saveDocumentUpdate(id, Buffer.from(data, "base64")),
             deleteDataDocument: (id) => yjsStorage.deleteDocument(id),
@@ -1194,6 +1571,14 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                     const existingTask = await projection.readTask(params.repoId, params.inTaskId)
                     if (!canExecuteTaskInRuntime(existingTask)) {
                         throw new Error("Server-owned execution supports head and worktree tasks only")
+                    }
+                    if (activeTaskExecutions.has(existingTask.id)) {
+                        return enqueueDoTurn({
+                            writer,
+                            server,
+                            task: existingTask,
+                            turn: params,
+                        })
                     }
                     const started = await startHeadModeTurn({
                         server,
@@ -1267,6 +1652,15 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                 }
                 return { ok: false, error: "No server-owned turn is running for this task" }
             },
+            cancelQueuedTurn: async (params) =>
+                cancelQueuedTurn({
+                    writer,
+                    projection,
+                    server,
+                    repoId: params.repoId,
+                    taskId: params.taskId,
+                    queuedTurnId: params.queuedTurnId,
+                }),
             setupTaskEnvironment: async (params) => {
                 await writer.setupTaskEnvironment(params)
                 await publishChangedTask(params.taskId)
@@ -1369,6 +1763,7 @@ async function startHeadModeTurn({
     params,
     taskId,
     context,
+    queuedTurnId,
 }: {
     server: RuntimeServer
     writer: ReturnType<typeof createOpenADEYjsWriter>
@@ -1377,6 +1772,7 @@ async function startHeadModeTurn({
     params: OpenADETurnStartRequest
     taskId: string
     context?: OpenADETurnStartContext
+    queuedTurnId?: string
 }): Promise<{ eventId: string }> {
     const task = await projection.readTask(params.repoId, taskId)
     if (params.type === "hyperplan") {
@@ -1493,6 +1889,17 @@ async function startHeadModeTurn({
     server.notify("runtime/updated", runtime)
     const activeExecution: ActiveTaskExecution = { executionId, runtimeId, repoId: params.repoId, eventId: createdEvent.eventId }
     activeTaskExecutions.set(taskId, activeExecution)
+    if (queuedTurnId) {
+        await updateQueuedTurn({
+            writer,
+            projection,
+            server,
+            repoId: params.repoId,
+            taskId,
+            queuedTurnId,
+            patch: { status: "running", eventId: createdEvent.eventId },
+        })
+    }
     publishWorkingTasks(server)
     publishTaskChanged(server, params.repoId, taskId)
 
@@ -1519,6 +1926,9 @@ async function startHeadModeTurn({
         fastMode: params.fastMode,
         resumeSessionId: sessionContext?.sessionId,
         runtimeId,
+        queuedTurnId,
+        projection,
+        yjsStorage,
         isStopping: () => activeExecution.stopping === true,
     })
 
@@ -1622,6 +2032,8 @@ async function startReviewTurn({
     void runHeadModeTurnExecution({
         server,
         writer,
+        projection,
+        yjsStorage,
         repoId: params.repoId,
         task,
         taskId: params.taskId,
@@ -1699,6 +2111,8 @@ async function startReviewTurn({
             void runHeadModeTurnExecution({
                 server,
                 writer,
+                projection,
+                yjsStorage,
                 repoId: params.repoId,
                 task: currentTask,
                 taskId: params.taskId,
@@ -1727,6 +2141,8 @@ async function startReviewTurn({
 async function runHeadModeTurnExecution({
     server,
     writer,
+    projection,
+    yjsStorage,
     repoId,
     task,
     taskId,
@@ -1747,11 +2163,14 @@ async function runHeadModeTurnExecution({
     fastMode,
     resumeSessionId,
     runtimeId,
+    queuedTurnId,
     onCompleted,
     isStopping,
 }: {
     server: RuntimeServer
     writer: ReturnType<typeof createOpenADEYjsWriter>
+    projection: ReturnType<typeof createOpenADEYjsProjection>
+    yjsStorage: OpenADEYjsStorage
     repoId: string
     task: OpenADETask
     taskId: string
@@ -1772,6 +2191,7 @@ async function runHeadModeTurnExecution({
     fastMode?: boolean
     resumeSessionId?: string
     runtimeId: string
+    queuedTurnId?: string
     onCompleted?: (result: { events: Array<Record<string, unknown>>; sessionId?: string; parentSessionId?: string }) => Promise<void> | void
     isStopping?: () => boolean
 }): Promise<void> {
@@ -1817,11 +2237,25 @@ async function runHeadModeTurnExecution({
 
         clearRuntimeHarnessBuffer({ executionId })
         activeTaskExecutions.delete(taskId)
+        if (queuedTurnId) {
+            await updateQueuedTurn({
+                writer,
+                projection,
+                server,
+                repoId,
+                taskId,
+                queuedTurnId,
+                patch: { status: terminalStatus === "completed" ? "completed" : terminalStatus === "stopped" ? "stopped" : "error", eventId },
+            })
+        }
         publishWorkingTasks(server)
         publishTaskChanged(server, repoId, taskId)
 
         if (terminalStatus === "completed" && onCompleted) {
             await onCompleted({ events: observedEvents, sessionId: savedSessionId, parentSessionId: resumeSessionId })
+        }
+        if (!activeTaskExecutions.has(taskId)) {
+            void drainNextQueuedTurn({ server, writer, projection, yjsStorage, repoId, taskId })
         }
     }
 
@@ -1856,7 +2290,7 @@ async function runHeadModeTurnExecution({
                 if (event.direction === "execution" && event.type === "error") {
                     void finalize(event.code === "aborted" ? "stopped" : "failed", event.error)
                 }
-                publishTaskChanged(server, repoId, taskId)
+                publishTaskChanged(server, repoId, taskId, { previewChanged: false })
             },
             onSettled(result) {
                 if (result.status === "completed") void finalize("completed")
@@ -2310,7 +2744,7 @@ async function runHyperPlanStep({
                         )
                     }
                 }
-                publishTaskChanged(server, repoId, taskId)
+                publishTaskChanged(server, repoId, taskId, { previewChanged: false })
             },
             onSettled(result) {
                 settledResult = result

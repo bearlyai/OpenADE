@@ -4,18 +4,11 @@ import { observer } from "mobx-react"
 import { useEffect } from "react"
 import { useCodeNavigate } from "../routing"
 import { useCodeStore } from "../store/context"
-import type { CreationPhase } from "../store/managers/TaskCreationManager"
+import { getTaskCreationPhaseLabel } from "./taskCreationPhaseLabel"
 
 interface TaskCreationPageProps {
     workspaceId: string
     creationId: string
-}
-
-const phaseLabels: Record<CreationPhase | "pending" | "completing" | "error", string> = {
-    pending: "Starting...",
-    workspace: "Creating workspace",
-    completing: "Finalizing task",
-    error: "Setup failed",
 }
 
 export const TaskCreationPage = observer(({ workspaceId, creationId }: TaskCreationPageProps) => {
@@ -62,7 +55,9 @@ export const TaskCreationPage = observer(({ workspaceId, creationId }: TaskCreat
                     <div className="flex items-center justify-center gap-2">
                         {isError ? <AlertCircle size="1.25rem" className="text-error" /> : <Loader2 size="1.25rem" className="animate-spin text-primary" />}
                         <span className={`text-base font-medium ${isError ? "text-error" : "text-base-content"}`}>
-                            {isError ? phaseLabels.error : phaseLabels[phase]}
+                            {isError
+                                ? getTaskCreationPhaseLabel("error", creation.isolationStrategy)
+                                : getTaskCreationPhaseLabel(phase, creation.isolationStrategy)}
                         </span>
                     </div>
                 </div>

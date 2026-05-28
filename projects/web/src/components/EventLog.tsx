@@ -4,8 +4,7 @@
 
 import { Code } from "lucide-react"
 import { observer } from "mobx-react"
-import type { CodeEvent, SetupEnvironmentEvent } from "../types"
-import { getDeviceId } from "../utils/deviceId"
+import type { CodeEvent } from "../types"
 import { EventItem, NO_AUTO_EXPAND_TYPES } from "./EventItem"
 
 export const EventLog = observer(
@@ -16,17 +15,7 @@ export const EventLog = observer(
         taskId: string
         events: CodeEvent[]
     }) => {
-        // Filter out setup_environment events from other devices
-        const currentDeviceId = getDeviceId()
-        const filteredEvents = events.filter((event) => {
-            if (event.type === "setup_environment") {
-                const setupEvent = event as SetupEnvironmentEvent
-                return setupEvent.deviceId === currentDeviceId
-            }
-            return true
-        })
-
-        if (filteredEvents.length === 0) {
+        if (events.length === 0) {
             return (
                 <div className="h-full flex flex-col items-center justify-center text-muted px-8 py-16">
                     <Code size="3rem" className="mb-4 opacity-30" />
@@ -37,18 +26,18 @@ export const EventLog = observer(
         }
 
         // Find the latest plan event ID (plan or revise source types)
-        const latestPlanId = [...filteredEvents].reverse().find((e) => e.type === "action" && (e.source.type === "plan" || e.source.type === "revise"))?.id
+        const latestPlanId = [...events].reverse().find((e) => e.type === "action" && (e.source.type === "plan" || e.source.type === "revise"))?.id
 
         // Find last event index that can auto-expand (excludes noAutoExpand types like snapshot)
         const lastAutoExpandIndex =
-            filteredEvents
+            events
                 .map((e, i) => ({ e, i }))
                 .filter(({ e }) => !NO_AUTO_EXPAND_TYPES.has(e.type))
                 .pop()?.i ?? -1
 
         return (
             <div className="flex flex-col">
-                {filteredEvents.map((event, index) => {
+                {events.map((event, index) => {
                     const isLast = index === lastAutoExpandIndex
                     return (
                         <EventItem

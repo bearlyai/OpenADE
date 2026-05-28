@@ -6,6 +6,13 @@ work_dir = "projects/web"
 url = "http://localhost:5173"
 
 [[process]]
+name = "mobile"
+type = "daemon"
+command = "npm run start -- --host 127.0.0.1 --port 5174"
+work_dir = "projects/mobile"
+url = "http://127.0.0.1:5174"
+
+[[process]]
 name = "electron"
 type = "daemon"
 command = "npm run start"

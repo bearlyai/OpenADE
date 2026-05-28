@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { createOpenADEModule, type OpenADEModuleAdapters } from "../../../../openade-module/src"
+import { createOpenADEModule, publishOpenADECompanionEvent, type OpenADEModuleAdapters } from "../../../../openade-module/src"
 import type { RuntimeMessage } from "../../../../runtime-protocol/src"
 import { RuntimeServer } from "../../../../runtime/src"
 
@@ -44,6 +44,7 @@ function adapters(startTurn: OpenADEModuleAdapters["startTurn"]): OpenADEModuleA
         startTurn,
         startReview: async () => ({ taskId: "task-1" }),
         interruptTurn: async () => ({ ok: true }),
+        cancelQueuedTurn: async (params) => ({ taskId: params.taskId, queuedTurnId: params.queuedTurnId, cancelled: true }),
         deleteTask: async (_params) => ({ repoId: "repo-1", taskId: "task-1", deleted: true }),
         setupTaskEnvironment: async () => ({ ok: true }),
         createActionEvent: async () => ({ eventId: "event-1", createdAt: "2026-05-26T00:00:00.000Z" }),
@@ -77,7 +78,7 @@ describe("OpenADE runtime module", () => {
             .filter((method) => method.split("/").some((segment) => productModes.has(segment)))
 
         expect(leakedMethods).toEqual([])
-        expect(runtime.capabilities().methods).toEqual(expect.arrayContaining(["openade/turn/start", "openade/review/start"]))
+        expect(runtime.capabilities().methods).toEqual(expect.arrayContaining(["openade/turn/start", "openade/review/start", "openade/queued-turn/cancel"]))
     })
 
     it("retains completed clientRequestId results so retrying does not duplicate turns", async () => {
@@ -100,6 +101,51 @@ describe("OpenADE runtime module", () => {
         expect(first.result).toEqual({ taskId: "task-1" })
         expect(retry.result).toEqual({ taskId: "task-1" })
         expect(startTurn).toHaveBeenCalledTimes(1)
+    })
+
+    it("passes fast task read options to adapters", async () => {
+        const runtime = new RuntimeServer({ serverName: "test-runtime" })
+        const readTask = vi.fn<OpenADEModuleAdapters["readTask"]>(async (_repoId, taskId) => ({
+            id: taskId,
+            repoId: "repo-1",
+            slug: taskId,
+            title: taskId,
+            description: "",
+            deviceEnvironments: [],
+            events: [],
+            comments: [],
+        }))
+        runtime.registerModule(createOpenADEModule({ ...adapters(async () => ({ taskId: "task-1" })), readTask }))
+
+        const response = await runtime.handleRequest(
+            { id: 1, method: "openade/task/read", params: { repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false } },
+            connection()
+        )
+
+        expect(response.error).toBeUndefined()
+        expect(readTask).toHaveBeenCalledWith("repo-1", "task-1", { hydrateSessionEvents: false })
+    })
+
+    it("can suppress task preview notifications for stream-only task changes", () => {
+        const runtime = new RuntimeServer({ serverName: "test-runtime" })
+        runtime.registerModule(createOpenADEModule(adapters(async () => ({ taskId: "task-1" }))))
+        const sent: RuntimeMessage[] = []
+        runtime.connect({
+            id: "notification-client",
+            send(message) {
+                sent.push(message)
+            },
+        })
+
+        publishOpenADECompanionEvent(runtime, {
+            type: "task_changed",
+            repoId: "repo-1",
+            taskId: "task-1",
+            previewChanged: false,
+            at: "2026-05-28T00:00:00.000Z",
+        })
+
+        expect(sent.map((message) => ("method" in message ? message.method : ""))).toEqual(["openade/task/updated"])
     })
 
     it("does not retain failed clientRequestId attempts", async () => {

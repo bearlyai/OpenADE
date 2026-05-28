@@ -1,6 +1,7 @@
 import type { RuntimeServer } from "../../../../runtime/src"
 import {
     createRuntimeNodeAgentBridgeRegistry,
+    createRuntimeNodeHarnessAgentExecutor,
     registerRuntimeNodeAgentModule,
     registerRuntimeNodeServerProtocolAgentBridge,
     type RuntimeNodeAgentExecutor,
@@ -21,6 +22,7 @@ import {
 
 export type ServerProtocolAgentBridge = RuntimeNodeServerProtocolAgentBridge
 const electronAgentBridgeRegistry = createRuntimeNodeAgentBridgeRegistry()
+const sessionAgentExecutor = createRuntimeNodeHarnessAgentExecutor()
 
 export function registerServerProtocolAgentBridge(bridge: RuntimeNodeServerProtocolAgentBridge): () => void {
     return registerRuntimeNodeServerProtocolAgentBridge(bridge, electronAgentBridgeRegistry)
@@ -84,6 +86,15 @@ const electronAgentExecutor: RuntimeNodeAgentExecutor = {
             options: params.options as unknown as RuntimeHarnessStructuredParams["options"],
             outputSchema: params.outputSchema,
         })
+    },
+    listSessions(params) {
+        return sessionAgentExecutor.listSessions?.(params) ?? []
+    },
+    readSession(params) {
+        return sessionAgentExecutor.readSession?.(params) ?? null
+    },
+    activeSession(params) {
+        return sessionAgentExecutor.activeSession?.(params) ?? { active: false }
     },
     deleteSession(params) {
         return deleteRuntimeHarnessSession(params)

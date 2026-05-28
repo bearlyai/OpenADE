@@ -1,3 +1,1 @@
-# Runtime Client
-
-See CLAUDE.md.
+CLAUDE.md

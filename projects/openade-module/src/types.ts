@@ -44,6 +44,56 @@ export interface OpenADETurnStartRequest extends OpenADEClientRequest {
     hyperplanStrategy?: OpenADEHyperPlanStrategy
 }
 
+export interface OpenADETurnStartResult {
+    taskId: string
+    eventId?: string
+    queued?: boolean
+    queuedTurnId?: string
+}
+
+export type OpenADEQueuedTurnStatus = "queued" | "running" | "completed" | "error" | "stopped" | "cancelled"
+
+export interface OpenADEQueuedTurn {
+    id: string
+    clientRequestId?: string
+    type: "do" | "ask"
+    input: string
+    status: OpenADEQueuedTurnStatus
+    createdAt: string
+    updatedAt: string
+    eventId?: string
+    appendSystemPrompt?: string
+    enabledMcpServerIds?: string[]
+    harnessId?: string
+    modelId?: string
+    label?: string
+    includeComments?: boolean
+    images?: unknown[]
+    thinking?: "low" | "med" | "high" | "max"
+    fastMode?: boolean
+}
+
+export interface OpenADEQueuedTurnCancelRequest extends OpenADEClientRequest {
+    repoId: string
+    taskId: string
+    queuedTurnId: string
+}
+
+export interface OpenADEQueuedTurnCancelResult {
+    taskId: string
+    queuedTurnId: string
+    cancelled: boolean
+}
+
+export interface OpenADETaskReadOptions {
+    hydrateSessionEvents?: boolean
+}
+
+export interface OpenADETaskReadRequest extends OpenADETaskReadOptions {
+    repoId: string
+    taskId: string
+}
+
 export interface OpenADEReviewStartRequest extends OpenADEClientRequest {
     repoId: string
     taskId: string
@@ -359,6 +409,7 @@ export interface OpenADETaskMetadataUpdateRequest extends OpenADEClientRequest {
     usage?: OpenADETaskPreviewUsage
     enabledMcpServerIds?: string[]
     sessionIds?: Record<string, string>
+    queuedTurns?: OpenADEQueuedTurn[]
     updatedAt?: string
 }
 
@@ -421,6 +472,7 @@ export interface OpenADETask {
     isolationStrategy?: OpenADEIsolationStrategy
     enabledMcpServerIds?: string[]
     sessionIds?: Record<string, string>
+    queuedTurns?: OpenADEQueuedTurn[]
     cancelledPlanEventId?: string
     deviceEnvironments: OpenADETaskDeviceEnvironment[]
     closed?: boolean

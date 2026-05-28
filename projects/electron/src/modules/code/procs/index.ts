@@ -14,6 +14,7 @@ import { serializeProcsFile } from "./serialize"
 import type { CronInput, EditableProcsFile, ProcessInput, ProcsConfig, ProcsConfigError, ReadProcsResult, SaveEditableProcsResult } from "./types"
 
 const logger = log.scope("procs")
+const TRACE_PROCS_READS = process.env.OPENADE_TRACE_PROCS === "1"
 
 /** Config filenames that can be read/written through the trusted runtime host methods. */
 const ALLOWED_CONFIG_FILENAMES = new Set(["openade.toml"])
@@ -39,15 +40,15 @@ function validateConfigFilePath(filePath: string): void {
  */
 export async function readRuntimeProcs(params: { path: string }): Promise<ReadProcsResult> {
     const searchRoot = params.path
-    logger.info(`[Procs] Reading config from ${searchRoot}`)
+    if (TRACE_PROCS_READS) logger.debug(`[Procs] Reading config from ${searchRoot}`)
 
     // Detect git info
     const gitInfo = await detectGitInfo(searchRoot)
-    logger.debug(`[Procs] Git info:`, JSON.stringify(gitInfo))
+    if (TRACE_PROCS_READS) logger.debug(`[Procs] Git info:`, JSON.stringify(gitInfo))
 
     // Find all config files (openade.toml)
     const configFiles = await findProcsFiles(searchRoot, gitInfo)
-    logger.info(`[Procs] Found ${configFiles.length} config files`)
+    if (TRACE_PROCS_READS) logger.debug(`[Procs] Found ${configFiles.length} config files`)
 
     // Parse each file
     const configs: ProcsConfig[] = []
@@ -61,7 +62,7 @@ export async function readRuntimeProcs(params: { path: string }): Promise<ReadPr
 
             if ("config" in result) {
                 configs.push(result.config)
-                logger.debug(`[Procs] Parsed ${relativePath}: ${result.config.processes.length} processes, ${result.config.crons.length} crons`)
+                if (TRACE_PROCS_READS) logger.debug(`[Procs] Parsed ${relativePath}: ${result.config.processes.length} processes, ${result.config.crons.length} crons`)
             } else {
                 errors.push(result.error)
                 logger.warn(`[Procs] Parse error in ${relativePath}: ${result.error.error}`)

@@ -368,12 +368,12 @@ export class InputManager {
             // Do - direct action without planning (consumes comments)
             {
                 id: "do",
-                label: "Do",
+                label: this.isWorking ? "Queue Do" : "Do",
                 icon: Play,
                 order: 10,
                 group: "primary" as const,
                 style: { variant: "success" },
-                show: !this.hasActivePlan && !this.isWorking,
+                show: !this.hasActivePlan,
                 enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()
@@ -400,12 +400,12 @@ export class InputManager {
             // Ask - read-only exploration (consumes comments)
             {
                 id: "ask",
-                label: "Ask",
+                label: this.isWorking ? "Queue Ask" : "Ask",
                 icon: MessageCircleQuestion,
                 order: 20,
                 group: "primary" as const,
                 style: { variant: "neutral" },
-                show: !this.isWorking,
+                show: true,
                 enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()

@@ -13,7 +13,7 @@ import {
     listClaudeSessions,
 } from "./sessions.js"
 import type { HarnessEvent } from "../../types.js"
-import type { ClaudeEvent, ClaudeAssistantEvent, ClaudeUserEvent } from "./types.js"
+import type { ClaudeEvent, ClaudeAssistantEvent, ClaudeRawJsonEvent, ClaudeUserEvent } from "./types.js"
 
 // ── Fixtures ──
 
@@ -123,21 +123,38 @@ describe("parseClaudeSessionLine", () => {
         }
     })
 
-    it("skips queue-operation lines", () => {
+    it("preserves queue-operation lines as raw_json", () => {
         const event = parseClaudeSessionLine(QUEUE_OP_LINE as unknown as Record<string, unknown>)
-        expect(event).toBeNull()
+        expect(event).toMatchObject({
+            type: "message",
+            message: {
+                type: "raw_json",
+                original_type: "queue-operation",
+                raw: QUEUE_OP_LINE,
+            },
+        })
     })
 
     it("skips lines without type", () => {
         expect(parseClaudeSessionLine({ data: "no type" })).toBeNull()
     })
 
-    it("skips assistant lines without message", () => {
-        expect(parseClaudeSessionLine({ type: "assistant" })).toBeNull()
+    it("preserves malformed assistant lines as raw_json", () => {
+        const event = parseClaudeSessionLine({ type: "assistant", uuid: "bad-assistant" })
+        expect(event?.type).toBe("message")
+        if (event?.type === "message") {
+            expect((event.message as ClaudeRawJsonEvent).type).toBe("raw_json")
+            expect((event.message as ClaudeRawJsonEvent).original_type).toBe("assistant")
+        }
     })
 
-    it("skips user lines without message", () => {
-        expect(parseClaudeSessionLine({ type: "user" })).toBeNull()
+    it("preserves malformed user lines as raw_json", () => {
+        const event = parseClaudeSessionLine({ type: "user", uuid: "bad-user" })
+        expect(event?.type).toBe("message")
+        if (event?.type === "message") {
+            expect((event.message as ClaudeRawJsonEvent).type).toBe("raw_json")
+            expect((event.message as ClaudeRawJsonEvent).original_type).toBe("user")
+        }
     })
 })
 
@@ -179,12 +196,16 @@ describe("session file operations", () => {
             expect(events![3].type).toBe("message")
         })
 
-        it("skips queue-operation and corrupted lines", async () => {
+        it("preserves queue-operation lines and skips only corrupted lines", async () => {
             await createSessionFile("/test/project", [QUEUE_OP_LINE, ASSISTANT_LINE, "not json"])
 
             const events = await readClaudeSession(sessionId, { cwd: "/test/project" })
             expect(events).not.toBeNull()
-            expect(events!.length).toBe(2) // session_started + 1 assistant
+            expect(events!.length).toBe(3) // session_started + queue-operation raw_json + 1 assistant
+            expect(events![1]).toMatchObject({
+                type: "message",
+                message: { type: "raw_json", original_type: "queue-operation" },
+            })
         })
 
         it("returns null for missing session", async () => {

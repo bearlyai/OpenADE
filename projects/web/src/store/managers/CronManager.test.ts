@@ -46,9 +46,9 @@ function makeReadProcsResult(crons: CronDef[]): ReadProcsResult {
     }
 }
 
-function makeMockStore(): CodeStore {
+function makeMockStore(repos: Array<{ id: string; path: string }> = []): CodeStore {
     return {
-        repos: { repos: [] },
+        repos: { repos },
         execution: { onAfterEvent: vi.fn(() => vi.fn()) },
         refreshRepoStoreFromStorage: vi.fn().mockResolvedValue(undefined),
         refreshTaskStoreFromStorage: vi.fn().mockResolvedValue(undefined),
@@ -199,6 +199,70 @@ describe("CronManager scheduling", () => {
         await vi.advanceTimersByTimeAsync(3_000)
 
         // Now readProcs should have been called once more (coalesced)
+        expect(readProcs).toHaveBeenCalledTimes(2)
+
+        manager.stop()
+    })
+
+    it("bounds concurrent procs refreshes across repos to avoid host memory spikes", async () => {
+        const store = makeMockStore([
+            { id: "repo-1", path: "/repo-1" },
+            { id: "repo-2", path: "/repo-2" },
+            { id: "repo-3", path: "/repo-3" },
+            { id: "repo-4", path: "/repo-4" },
+        ])
+        const manager = new CronManager(store)
+        const releases: Array<() => void> = []
+        let active = 0
+        let maxActive = 0
+
+        vi.mocked(readProcs).mockImplementation(
+            () =>
+                new Promise<ReadProcsResult>((resolve) => {
+                    active += 1
+                    maxActive = Math.max(maxActive, active)
+                    releases.push(() => {
+                        active -= 1
+                        resolve(makeReadProcsResult([]))
+                    })
+                })
+        )
+
+        const started = manager.startAll()
+        await vi.waitFor(() => expect(readProcs).toHaveBeenCalledTimes(2))
+        expect(maxActive).toBeLessThanOrEqual(2)
+
+        releases.splice(0).forEach((release) => release())
+        await vi.waitFor(() => expect(readProcs).toHaveBeenCalledTimes(4))
+        expect(maxActive).toBeLessThanOrEqual(2)
+
+        releases.splice(0).forEach((release) => release())
+        await started
+        expect(maxActive).toBeLessThanOrEqual(2)
+
+        manager.stop()
+    })
+
+    it("does not run another all-repo procs refresh on focus immediately after startup", async () => {
+        vi.setSystemTime(new Date("2026-01-01T10:00:00.000Z"))
+
+        const store = makeMockStore([{ id: "repo-1", path: "/repo" }])
+        const manager = new CronManager(store)
+
+        vi.mocked(readProcs).mockResolvedValue(makeReadProcsResult([]))
+
+        await manager.startAll()
+        expect(readProcs).toHaveBeenCalledTimes(1)
+
+        window.dispatchEvent(new Event("focus"))
+        await vi.advanceTimersByTimeAsync(3_000)
+
+        expect(readProcs).toHaveBeenCalledTimes(1)
+
+        await vi.advanceTimersByTimeAsync(60_001)
+        window.dispatchEvent(new Event("focus"))
+        await vi.advanceTimersByTimeAsync(3_000)
+
         expect(readProcs).toHaveBeenCalledTimes(2)
 
         manager.stop()

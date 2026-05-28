@@ -484,7 +484,6 @@ export class CodeStore {
             return
         }
         const model = this.tasks.getTaskModel(taskId)
-        model?.invalidateEnvironmentCache()
         model?.syncHarnessFromHistory()
     }
 

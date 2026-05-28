@@ -16,6 +16,8 @@ import type {
     OpenADEHyperPlanSubExecutionAddRequest,
     OpenADEHyperPlanSubExecutionStreamAppendRequest,
     OpenADEHyperPlanSubExecutionUpdateRequest,
+    OpenADEQueuedTurnCancelRequest,
+    OpenADEQueuedTurnCancelResult,
     OpenADERepoCreateRequest,
     OpenADERepoCreateResult,
     OpenADERepoDeleteRequest,
@@ -24,12 +26,14 @@ import type {
     OpenADESnapshotEventCreateRequest,
     OpenADESnapshotEventCreateResult,
     OpenADETask,
+    OpenADETaskReadOptions,
     OpenADETaskDeleteRequest,
     OpenADETaskDeleteResult,
     OpenADETaskEnvironmentSetupRequest,
     OpenADETaskMetadataUpdateRequest,
     OpenADEReviewStartRequest,
     OpenADETurnStartRequest,
+    OpenADETurnStartResult,
 } from "../../openade-module/src/types"
 import type { RuntimeNotification } from "../../runtime-protocol/src"
 import type { RuntimeClientStatus } from "../../runtime-client/src"
@@ -80,8 +84,8 @@ export class OpenADEClient {
         return this.request("openade/snapshot/read")
     }
 
-    async getTask(repoId: string, taskId: string): Promise<OpenADETask> {
-        return this.request("openade/task/read", { repoId, taskId })
+    async getTask(repoId: string, taskId: string, options: OpenADETaskReadOptions = {}): Promise<OpenADETask> {
+        return this.request("openade/task/read", { repoId, taskId, ...options })
     }
 
     async createRepo(args: OpenADERepoCreateRequest, options: OpenADERequestOptions = {}): Promise<OpenADERepoCreateResult> {
@@ -96,7 +100,7 @@ export class OpenADEClient {
         return this.request("openade/repo/delete", withClientRequestId(args, options))
     }
 
-    async startTurn(args: OpenADETurnStartRequest, options: OpenADETurnStartOptions = {}): Promise<{ taskId: string }> {
+    async startTurn(args: OpenADETurnStartRequest, options: OpenADETurnStartOptions = {}): Promise<OpenADETurnStartResult> {
         return this.request("openade/turn/start", withClientRequestId(args, options))
     }
 
@@ -106,6 +110,10 @@ export class OpenADEClient {
 
     async interruptTurn(taskId: string, options: OpenADERequestOptions = {}): Promise<void> {
         return this.request("openade/turn/interrupt", withClientRequestId({ taskId }, options))
+    }
+
+    async cancelQueuedTurn(args: OpenADEQueuedTurnCancelRequest, options: OpenADERequestOptions = {}): Promise<OpenADEQueuedTurnCancelResult> {
+        return this.request("openade/queued-turn/cancel", withClientRequestId(args, options))
     }
 
     async createActionEvent(args: OpenADEActionEventCreateRequest, options: OpenADERequestOptions = {}): Promise<OpenADEActionEventCreateResult> {

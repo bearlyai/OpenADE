@@ -154,6 +154,67 @@ async function seedExistingTaskWithCompletedPlan(taskId: string): Promise<void> 
     })
 }
 
+async function seedExistingTaskWithSessionBackedAction(taskId: string, sessionId: string): Promise<void> {
+    const createdAt = "2026-05-26T00:00:00.000Z"
+    await saveDoc("code:repos", (doc) => {
+        pushOrdered(doc, "repos", [
+            {
+                id: "repo-1",
+                name: "Runtime Repo",
+                path: "/tmp/runtime-repo",
+                archived: false,
+                createdAt,
+                updatedAt: createdAt,
+                createdBy: { id: "user-1", email: "user@example.com" },
+                tasks: [{ id: taskId, slug: taskId, title: "Session Task", createdAt }],
+            },
+        ])
+    })
+    await saveDoc(`code:task:${taskId}`, (doc) => {
+        const meta = doc.getMap("task:meta")
+        meta.set("id", taskId)
+        meta.set("repoId", "repo-1")
+        meta.set("slug", taskId)
+        meta.set("title", "Session Task")
+        meta.set("description", "Session task")
+        meta.set("isolationStrategy", toY({ type: "head" }))
+        meta.set("sessionIds", toY({}))
+        meta.set("createdBy", toY({ id: "user-1", email: "user@example.com" }))
+        meta.set("createdAt", createdAt)
+        meta.set("updatedAt", createdAt)
+        pushOrdered(doc, "task:deviceEnvironments", [
+            { id: "device-1", deviceId: "device-1", setupComplete: true, createdAt, lastUsedAt: createdAt },
+        ])
+        pushOrdered(doc, "task:events", [
+            {
+                id: "action-1",
+                type: "action",
+                status: "completed",
+                createdAt,
+                completedAt: createdAt,
+                userInput: "Use session",
+                source: { type: "do", userLabel: "Do" },
+                includesCommentIds: [],
+                execution: {
+                    harnessId: "claude-code",
+                    executionId: "execution-session-1",
+                    sessionId,
+                    events: [],
+                },
+                result: { success: true },
+            },
+        ])
+    })
+}
+
+async function writeClaudeSession(cwd: string, sessionId: string, rows: Record<string, JsonValue>[]): Promise<void> {
+    const claudeHome = path.join(tempHome, ".claude")
+    vi.stubEnv("CLAUDE_CONFIG_DIR", claudeHome)
+    const projectDir = path.join(claudeHome, "projects", cwd.replace(/[/\\]/g, "-"))
+    await fs.promises.mkdir(projectDir, { recursive: true })
+    await fs.promises.writeFile(path.join(projectDir, `${sessionId}.jsonl`), rows.map((row) => JSON.stringify(row)).join("\n") + "\n")
+}
+
 function connection() {
     return {
         id: "trusted-runtime-turn-start-test",
@@ -450,6 +511,231 @@ describe("OpenADE runtime turn start integration", () => {
                     },
                 }),
             })
+        )
+    })
+
+    it("queues do and ask turns for a task that already has a running server-owned turn and drains them after settle", async () => {
+        await seedExistingTaskWithCompletedPlan("task-with-queue")
+        const settleCallbacks: Array<(result: Record<string, unknown>) => void> = []
+        harnessMock.startRuntimeHarnessQuery.mockImplementation(
+            async (request: { onSettled?: (result: Record<string, unknown>) => void }) => {
+                if (request.onSettled) settleCallbacks.push(request.onSettled)
+                return { ok: true }
+            }
+        )
+
+        const runtime = getRuntimeServer()
+        const first = await runtime.handleRequest(
+            { id: 1, method: "openade/turn/start", params: { repoId: "repo-1", inTaskId: "task-with-queue", type: "do", input: "First running turn" } },
+            connection()
+        )
+        expect(first.error).toBeUndefined()
+        expect(harnessMock.startRuntimeHarnessQuery).toHaveBeenCalledTimes(1)
+
+        const queued = await runtime.handleRequest(
+            {
+                id: 2,
+                method: "openade/turn/start",
+                params: {
+                    repoId: "repo-1",
+                    inTaskId: "task-with-queue",
+                    type: "do",
+                    input: "Queued turn",
+                    clientRequestId: "queued-turn-1",
+                },
+            },
+            connection()
+        )
+
+        expect(queued.error).toBeUndefined()
+        expect(queued.result).toMatchObject({ taskId: "task-with-queue", queued: true, queuedTurnId: expect.any(String) })
+        const queuedAsk = await runtime.handleRequest(
+            {
+                id: 3,
+                method: "openade/turn/start",
+                params: {
+                    repoId: "repo-1",
+                    inTaskId: "task-with-queue",
+                    type: "ask",
+                    input: "Queued ask",
+                    clientRequestId: "queued-ask-1",
+                },
+            },
+            connection()
+        )
+
+        expect(queuedAsk.error).toBeUndefined()
+        expect(queuedAsk.result).toMatchObject({ taskId: "task-with-queue", queued: true, queuedTurnId: expect.any(String) })
+        expect(harnessMock.startRuntimeHarnessQuery).toHaveBeenCalledTimes(1)
+
+        const queuedTask = await runtime.handleRequest({ id: 4, method: "openade/task/read", params: { repoId: "repo-1", taskId: "task-with-queue" } }, connection())
+        expect(queuedTask.result).toMatchObject({
+            queuedTurns: [
+                expect.objectContaining({
+                    id: (queued.result as { queuedTurnId: string }).queuedTurnId,
+                    type: "do",
+                    input: "Queued turn",
+                    status: "queued",
+                }),
+                expect.objectContaining({
+                    id: (queuedAsk.result as { queuedTurnId: string }).queuedTurnId,
+                    type: "ask",
+                    input: "Queued ask",
+                    status: "queued",
+                }),
+            ],
+        })
+
+        settleCallbacks[0]?.({ status: "completed" })
+        await vi.waitFor(() => {
+            expect(harnessMock.startRuntimeHarnessQuery).toHaveBeenCalledTimes(2)
+        })
+        expect(harnessMock.startRuntimeHarnessQuery.mock.calls[1][0]).toMatchObject({
+            prompt: expect.stringContaining("Queued turn"),
+        })
+
+        const drainedTask = await runtime.handleRequest({ id: 5, method: "openade/task/read", params: { repoId: "repo-1", taskId: "task-with-queue" } }, connection())
+        expect(drainedTask.result).toMatchObject({
+            queuedTurns: expect.arrayContaining([
+                expect.objectContaining({
+                    id: (queued.result as { queuedTurnId: string }).queuedTurnId,
+                    status: "running",
+                    eventId: expect.any(String),
+                }),
+                expect.objectContaining({
+                    id: (queuedAsk.result as { queuedTurnId: string }).queuedTurnId,
+                    status: "queued",
+                }),
+            ]),
+        })
+    })
+
+    it("cancels queued turns before they drain", async () => {
+        await seedExistingTaskWithCompletedPlan("task-with-cancellable-queue")
+        const settleCallbacks: Array<(result: Record<string, unknown>) => void> = []
+        harnessMock.startRuntimeHarnessQuery.mockImplementation(
+            async (request: { onSettled?: (result: Record<string, unknown>) => void }) => {
+                if (request.onSettled) settleCallbacks.push(request.onSettled)
+                return { ok: true }
+            }
+        )
+
+        const runtime = getRuntimeServer()
+        const first = await runtime.handleRequest(
+            { id: 1, method: "openade/turn/start", params: { repoId: "repo-1", inTaskId: "task-with-cancellable-queue", type: "do", input: "Running" } },
+            connection()
+        )
+        expect(first.error).toBeUndefined()
+
+        const queued = await runtime.handleRequest(
+            {
+                id: 2,
+                method: "openade/turn/start",
+                params: { repoId: "repo-1", inTaskId: "task-with-cancellable-queue", type: "ask", input: "Cancel me", clientRequestId: "cancel-me" },
+            },
+            connection()
+        )
+        expect(queued.error).toBeUndefined()
+
+        const cancel = await runtime.handleRequest(
+            {
+                id: 3,
+                method: "openade/queued-turn/cancel",
+                params: {
+                    repoId: "repo-1",
+                    taskId: "task-with-cancellable-queue",
+                    queuedTurnId: (queued.result as { queuedTurnId: string }).queuedTurnId,
+                },
+            },
+            connection()
+        )
+        expect(cancel.error).toBeUndefined()
+        expect(cancel.result).toMatchObject({ taskId: "task-with-cancellable-queue", cancelled: true })
+
+        const cancelledTask = await runtime.handleRequest(
+            { id: 4, method: "openade/task/read", params: { repoId: "repo-1", taskId: "task-with-cancellable-queue" } },
+            connection()
+        )
+        expect(cancelledTask.result).toMatchObject({
+            queuedTurns: [expect.objectContaining({ input: "Cancel me", type: "ask", status: "cancelled" })],
+        })
+
+        settleCallbacks[0]?.({ status: "completed" })
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        expect(harnessMock.startRuntimeHarnessQuery).toHaveBeenCalledTimes(1)
+    })
+
+    it("rejects non-do and non-ask turns while a task has a running server-owned turn", async () => {
+        await seedExistingTaskWithCompletedPlan("task-with-active-turn")
+        harnessMock.startRuntimeHarnessQuery.mockResolvedValue({ ok: true })
+
+        const runtime = getRuntimeServer()
+        const first = await runtime.handleRequest(
+            { id: 1, method: "openade/turn/start", params: { repoId: "repo-1", inTaskId: "task-with-active-turn", type: "do", input: "Keep running" } },
+            connection()
+        )
+        expect(first.error).toBeUndefined()
+
+        const rejected = await runtime.handleRequest(
+            { id: 2, method: "openade/turn/start", params: { repoId: "repo-1", inTaskId: "task-with-active-turn", type: "plan", input: "Can I plan now?" } },
+            connection()
+        )
+
+        expect(rejected.error).toMatchObject({
+            code: "handler_error",
+            message: expect.stringContaining("Only Do and Ask turns can be queued"),
+        })
+        expect(harnessMock.startRuntimeHarnessQuery).toHaveBeenCalledTimes(1)
+    })
+
+    it("hydrates action stream events from harness sessions when reading a task", async () => {
+        const sessionId = "session-backed-1"
+        await seedExistingTaskWithSessionBackedAction("task-with-session", sessionId)
+        await writeClaudeSession("/tmp/runtime-repo", sessionId, [
+            {
+                type: "assistant",
+                message: {
+                    id: "msg-1",
+                    type: "message",
+                    role: "assistant",
+                    content: [{ type: "text", text: "Loaded from session" }],
+                    model: "claude-sonnet-4-20250514",
+                    stop_reason: "end_turn",
+                    usage: { input_tokens: 1, output_tokens: 2 },
+                },
+                uuid: "assistant-1",
+                sessionId,
+            },
+            {
+                type: "future_event",
+                sessionId,
+                payload: { preserved: true },
+            },
+        ])
+
+        const runtime = getRuntimeServer()
+        const task = await runtime.handleRequest({ id: 1, method: "openade/task/read", params: { repoId: "repo-1", taskId: "task-with-session" } }, connection())
+
+        expect(task.error).toBeUndefined()
+        const events = (task.result as { events: Array<{ execution: { events: Array<Record<string, unknown>> } }> }).events[0].execution.events
+        expect(events).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    type: "raw_message",
+                    message: expect.objectContaining({
+                        type: "assistant",
+                        message: expect.objectContaining({ content: [{ type: "text", text: "Loaded from session" }] }),
+                    }),
+                }),
+                expect.objectContaining({
+                    type: "raw_message",
+                    message: expect.objectContaining({
+                        type: "raw_json",
+                        original_type: "future_event",
+                        raw: expect.objectContaining({ payload: { preserved: true } }),
+                    }),
+                }),
+            ])
         )
     })
 

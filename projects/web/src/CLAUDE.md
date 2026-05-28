@@ -59,6 +59,8 @@ Also add to `TrayType` union in `store/managers/TrayManager.ts`.
 - **Destructured params for 3+ args** - Use inline destructured params
 - **Remove unused methods** - After refactors, grep and clean up
 - **No string-containment tests on prompts** — `expect(prompt).toContain("some phrase")` tests are brittle, break on every wording change, and verify nothing meaningful. Test prompt builder *logic* (conditional inclusion, merging, undefined returns) not prompt *text*.
+- **No mirror tests** — Do not export constants, split out helpers, or write tests whose only purpose is to repeat labels, classes, config arrays, or branches from the implementation. If a harmless copy/style/refactor forces the test to change in lockstep, delete it or rewrite it around the actual user-visible behavior or data contract.
+- **No implementation-only styling tests** — Do not test Tailwind/class-name substrings, snapshots, or incidental DOM wrappers just to lock layout. Test behavior, accessibility, state transitions, parsing, integration paths, or use browser/visual checks when layout matters. CSS class assertions are only acceptable when the class string itself is an explicit public API.
 
 ## Architecture
 

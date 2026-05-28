@@ -1,6 +1,7 @@
 import type { RemoteRealtimeConnectionStatus } from "./client"
 
 export type RemoteStatusTone = "ok" | "warn" | "bad" | "muted"
+export const REMOTE_STATUS_GRACE_MS = 1200
 
 export function statusCopy(status: RemoteRealtimeConnectionStatus): { label: string; tone: RemoteStatusTone } {
     switch (status) {
@@ -19,4 +20,8 @@ export function statusCopy(status: RemoteRealtimeConnectionStatus): { label: str
 
 export function isRemoteRealtimeOnline(status: RemoteRealtimeConnectionStatus): boolean {
     return status === "connected" || status === "lagged"
+}
+
+export function shouldDelayRemoteStatusDisplay(current: RemoteRealtimeConnectionStatus, next: RemoteRealtimeConnectionStatus): boolean {
+    return isRemoteRealtimeOnline(current) && !isRemoteRealtimeOnline(next)
 }

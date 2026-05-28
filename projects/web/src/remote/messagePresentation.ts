@@ -51,6 +51,15 @@ function compactInline(value: string, maxLength = 96): string {
     return `${normalized.slice(0, maxLength).trim()}...`
 }
 
+function stringifyRaw(value: unknown): string {
+    try {
+        const json = JSON.stringify(value, null, 2)
+        return json ?? String(value)
+    } catch {
+        return String(value)
+    }
+}
+
 function eventSourceLabel(event: Record<string, unknown>): string {
     const source = isRecord(event.source) ? event.source : null
     return firstString(source?.userLabel, source?.type, event.type) ?? "Event"
@@ -282,7 +291,17 @@ export function taskMessages(task: RemoteTask | null): RemoteMessage[] {
             id: `${eventId}:event`,
             kind: "system",
             title: eventSourceLabel(rawEvent),
-            body: asString(rawEvent.status) ?? "updated",
+            body: compactText(asString(rawEvent.status) ?? stringifyRaw(rawEvent), 2000),
+        })
+    }
+
+    for (const turn of task.queuedTurns ?? []) {
+        messages.push({
+            id: `${turn.id}:queued-turn`,
+            kind: "system",
+            title: turn.type === "ask" ? "Queued Ask" : "Queued Do",
+            body: compactText(turn.input, 1800),
+            status: turn.status,
         })
     }
 

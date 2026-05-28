@@ -83,7 +83,7 @@ export function attachRuntimeSocketServer(server: http.Server): RuntimeSocketSer
     }
 }
 
-const MAX_BUFFERED_BYTES = 1024 * 1024
+const MAX_BUFFERED_BYTES = 16 * 1024 * 1024
 const HEARTBEAT_MS = 30_000
 type DeviceSocketMap = Map<string, Set<WebSocket>>
 const deviceSocketGroups = new Set<DeviceSocketMap>()
@@ -143,6 +143,7 @@ function attachRuntimeSocket(webSocket: WebSocket, deviceId: string): void {
             "openade/turn/start",
             "openade/review/start",
             "openade/turn/interrupt",
+            "openade/queued-turn/cancel",
         ],
         notificationPermissions: ["connection/lagged", "remote/*", "openade/*", "agent/approval/*"],
         send(message: unknown) {

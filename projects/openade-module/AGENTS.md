@@ -1,3 +1,1 @@
-# OpenADE Module
-
-See CLAUDE.md for package guidance.
+CLAUDE.md

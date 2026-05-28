@@ -8,6 +8,7 @@ describe("createPersonalSettingsStore", () => {
         const store = createPersonalSettingsStore(doc)
 
         expect(store.settings.current.theme).toBe("system")
+        expect(store.settings.current.renderMarkdownMessages).toBe(true)
     })
 
     it("normalizes legacy light and dark theme settings", () => {

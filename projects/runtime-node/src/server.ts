@@ -67,7 +67,7 @@ function isAuthorized(request: http.IncomingMessage, options: Required<Pick<Runt
 
 function attachSocket(runtime: RuntimeServer, socket: WebSocket, request: http.IncomingMessage, options: RuntimeNodeHttpServerOptions): void {
     const connectionId = `node:${randomUUID()}`
-    const maxBufferedBytes = options.maxBufferedBytes ?? 1024 * 1024
+    const maxBufferedBytes = options.maxBufferedBytes ?? 16 * 1024 * 1024
     const heartbeatMs = options.heartbeatMs ?? 30_000
     let alive = true
     let disposed = false

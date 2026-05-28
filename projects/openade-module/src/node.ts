@@ -714,6 +714,21 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
             const firstError = results.find((result) => !result.ok)
             return firstError ?? { ok: true }
         },
+        cancelQueuedTurn: async (params) => {
+            const task = await projection.readTask(params.repoId, params.taskId)
+            let cancelled = false
+            const queuedTurns = (task.queuedTurns ?? []).map((turn) => {
+                if (turn.id !== params.queuedTurnId) return turn
+                if (turn.status !== "queued") return turn
+                cancelled = true
+                return { ...turn, status: "cancelled" as const, updatedAt: now() }
+            })
+            if (cancelled) {
+                await writer.updateTaskMetadata({ taskId: params.taskId, queuedTurns })
+                notifyTaskChanged(server, params.repoId, params.taskId)
+            }
+            return { taskId: params.taskId, queuedTurnId: params.queuedTurnId, cancelled }
+        },
         setupTaskEnvironment: (params) => writer.setupTaskEnvironment(params),
         createActionEvent: (params) => writer.createActionEvent(params),
         appendActionStreamEvent: (params) => writer.appendActionStreamEvent(params),

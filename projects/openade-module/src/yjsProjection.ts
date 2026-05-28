@@ -1,4 +1,4 @@
-import type { OpenADEProject, OpenADESnapshot, OpenADETask, OpenADETaskPreview } from "./types"
+import type { OpenADEProject, OpenADEQueuedTurn, OpenADESnapshot, OpenADETask, OpenADETaskPreview } from "./types"
 
 export interface OpenADEYjsStorageAdapter {
     hostName?: () => string | undefined
@@ -54,6 +54,15 @@ function stringRecord(value: unknown): Record<string, string> | undefined {
         if (typeof nested === "string" && nested.length > 0) result[key] = nested
     }
     return result
+}
+
+function queuedTurns(value: unknown): OpenADEQueuedTurn[] | undefined {
+    if (!Array.isArray(value)) return undefined
+    const result = value.filter((item): item is OpenADEQueuedTurn => {
+        if (!isRecord(item)) return false
+        return typeof item.id === "string" && (item.type === "do" || item.type === "ask") && typeof item.input === "string" && typeof item.status === "string"
+    })
+    return result.length > 0 ? result : undefined
 }
 
 function lastEventTime(task: OpenADETaskPreview): string {
@@ -217,6 +226,7 @@ export function createOpenADEYjsProjection(storage: OpenADEYjsStorageAdapter): O
                 ? meta.enabledMcpServerIds.filter((id): id is string => typeof id === "string")
                 : undefined,
             sessionIds: stringRecord(meta.sessionIds),
+            queuedTurns: queuedTurns(meta.queuedTurns),
             cancelledPlanEventId: optionalString(meta.cancelledPlanEventId),
             deviceEnvironments: (deviceEnvironments ?? []) as unknown as OpenADETask["deviceEnvironments"],
             closed: optionalBoolean(meta.closed),

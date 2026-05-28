@@ -48,13 +48,19 @@ function getProcessContext(tray: TrayManager): RunContext | null {
     return isWorktree ? { type: "worktree", root: env.taskWorkingDir } : { type: "repo", root: env.taskWorkingDir }
 }
 
+function isGitBackedTrayVisible(tray: TrayManager): boolean {
+    const env = tray.taskModel.environment
+    if (env) return env.hasGit
+    return !tray.taskModel.needsEnvironmentSetup
+}
+
 export const TRAY_CONFIGS: TrayConfig[] = [
     {
         id: "changes",
         label: "Changes",
         icon: GitCompare,
         shortcut: { key: "mod+shift+g", display: "⌘⇧G" },
-        isVisible: (tray) => tray.taskModel.environment?.hasGit ?? false,
+        isVisible: isGitBackedTrayVisible,
         onOpen: (tray) => {
             tray.taskModel.refreshGitState()
             tray.taskModel.changes.initializeForTray()
@@ -88,7 +94,7 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         label: "Git Log",
         icon: GitCommitHorizontal,
         shortcut: { key: "mod+shift+l", display: "⌘⇧L" },
-        isVisible: (tray) => tray.taskModel.environment?.hasGit ?? false,
+        isVisible: isGitBackedTrayVisible,
         renderContent: (tray) => {
             const env = tray.taskModel.environment
             if (!env?.taskWorkingDir) {

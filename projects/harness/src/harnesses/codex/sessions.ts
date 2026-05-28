@@ -13,6 +13,7 @@ import type {
     CodexAgentMessageItem,
     CodexReasoningItem,
     CodexCommandExecutionItem,
+    CodexRawJsonEvent,
 } from "./types.js"
 
 function resolveCodexHome(): string {
@@ -63,6 +64,17 @@ function readFirstSessionMeta(content: string): CodexRolloutLine | null {
     return null
 }
 
+function rawJsonEvent(raw: CodexRolloutLine, originalType?: string): HarnessEvent<CodexRawJsonEvent> {
+    return {
+        type: "message",
+        message: {
+            type: "raw_json",
+            original_type: originalType ?? raw.type,
+            raw: raw as unknown as Record<string, unknown>,
+        },
+    }
+}
+
 export function parseCodexSessionLine(
     raw: CodexRolloutLine,
     callOutputs?: Map<string, FunctionCallCorrelation>,
@@ -96,19 +108,18 @@ export function parseCodexSessionLine(
             return { type: "message", message: event }
         }
 
-        // token_count, etc. — no matching CodexEvent type
-        return null
+        return rawJsonEvent(raw, eventType ?? "event_msg")
     }
 
-    if (raw.type !== "response_item") return null
+    if (raw.type !== "response_item") return rawJsonEvent(raw)
 
     const payload = raw.payload
     const itemType = payload.type as string | undefined
-    if (!itemType) return null
+    if (!itemType) return rawJsonEvent(raw, "response_item")
 
     if (itemType === "message") {
         const role = payload.role as string | undefined
-        if (role !== "assistant") return null
+        if (role !== "assistant") return rawJsonEvent(raw, "message")
 
         // Extract text from content array
         const contentArr = payload.content as Array<{ type: string; text?: string }> | undefined
@@ -188,8 +199,8 @@ export function parseCodexSessionLine(
         return { type: "message", message: event }
     }
 
-    // Skip function_call_output (consumed via callOutputs correlation), user messages, etc.
-    return null
+    // Preserve function_call_output, user messages, and future response item types.
+    return rawJsonEvent(raw, itemType)
 }
 
 export async function readCodexSession(sessionId: string, _options?: GetSessionEventsOptions): Promise<HarnessEvent<CodexEvent>[] | null> {

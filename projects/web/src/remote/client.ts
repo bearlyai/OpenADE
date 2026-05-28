@@ -1,4 +1,6 @@
-import type { PairRequest, RemoteSnapshot, RemoteTask, RemoteTurnStartRequest } from "../../../shared/companion/src"
+import type { RuntimeNotification } from "../../../runtime-protocol/src"
+import type { PairRequest, RemoteSnapshot, RemoteTask, RemoteTurnStartRequest, RemoteTurnStartResult } from "../../../shared/companion/src"
+import type { OpenADETaskReadOptions } from "../../../openade-module/src"
 import { OpenADEClient } from "../../../openade-client/src"
 import { RuntimeClient, RuntimeClientError, type RuntimeClientStatus } from "../../../runtime-client/src"
 
@@ -33,7 +35,8 @@ type RemoteConfigInput = Pick<RemoteConfig, "baseUrl" | "token"> & Partial<Omit<
 interface RuntimeClientEntry {
     client: RuntimeClient
     openade: OpenADEClient
-    statusListeners: Set<(status: RuntimeClientStatus) => void>
+    statusListeners: Set<(status: RemoteRealtimeConnectionStatus) => void>
+    status?: RemoteRealtimeConnectionStatus
     url: string
     token: string
 }
@@ -218,7 +221,27 @@ function runtimeSocketUrl(config: RemoteConfig): string {
     return url.toString()
 }
 
-function runtimeEntry(config: RemoteConfig, onStatus?: (status: RuntimeClientStatus) => void): { entry: RuntimeClientEntry; removeStatus: () => void } {
+function isTransientRuntimeReadError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error)
+    return /Runtime socket (closed|disconnected|failed|is not connected)|WebSocket/i.test(message)
+}
+
+async function retryTransientRead<T>(read: () => Promise<T>): Promise<T> {
+    try {
+        return await read()
+    } catch (error) {
+        if (!isTransientRuntimeReadError(error)) throw error
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 250))
+        return read()
+    }
+}
+
+function notifyRuntimeEntryStatus(entry: RuntimeClientEntry, status: RemoteRealtimeConnectionStatus): void {
+    entry.status = status
+    for (const listener of entry.statusListeners) listener(status)
+}
+
+function runtimeEntry(config: RemoteConfig, onStatus?: (status: RemoteRealtimeConnectionStatus) => void): { entry: RuntimeClientEntry; removeStatus: () => void } {
     const key = config.id
     const url = runtimeSocketUrl(config)
     let entry = runtimeClients.get(key)
@@ -228,7 +251,8 @@ function runtimeEntry(config: RemoteConfig, onStatus?: (status: RuntimeClientSta
         entry = undefined
     }
     if (!entry) {
-        const statusListeners = new Set<(status: RuntimeClientStatus) => void>()
+        const statusListeners = new Set<(status: RemoteRealtimeConnectionStatus) => void>()
+        let createdEntry: RuntimeClientEntry | null = null
         const runtime = new RuntimeClient({
             url,
             token: config.token,
@@ -237,7 +261,7 @@ function runtimeEntry(config: RemoteConfig, onStatus?: (status: RuntimeClientSta
             protocolVersion: 1,
             reconnect: true,
             onStatus(status) {
-                for (const listener of statusListeners) listener(status)
+                if (createdEntry) notifyRuntimeEntryStatus(createdEntry, status)
             },
         })
         entry = {
@@ -252,11 +276,18 @@ function runtimeEntry(config: RemoteConfig, onStatus?: (status: RuntimeClientSta
                 protocolVersion: 1,
             }),
         }
+        createdEntry = entry
         runtimeClients.set(key, entry)
     }
 
     if (!onStatus) return { entry, removeStatus: () => {} }
     entry.statusListeners.add(onStatus)
+    if (entry.status) {
+        const currentStatus = entry.status
+        queueMicrotask(() => {
+            if (entry?.statusListeners.has(onStatus)) onStatus(currentStatus)
+        })
+    }
     return {
         entry,
         removeStatus: () => {
@@ -283,14 +314,14 @@ export async function pairRemote(baseUrl: string, token: string): Promise<Remote
 }
 
 export function getSnapshot(config: RemoteConfig): Promise<RemoteSnapshot> {
-    return runtimeEntry(config).entry.openade.getSnapshot()
+    return retryTransientRead(() => runtimeEntry(config).entry.openade.getSnapshot())
 }
 
-export function getTask(config: RemoteConfig, repoId: string, taskId: string): Promise<RemoteTask> {
-    return runtimeEntry(config).entry.openade.getTask(repoId, taskId)
+export function getTask(config: RemoteConfig, repoId: string, taskId: string, options: OpenADETaskReadOptions = {}): Promise<RemoteTask> {
+    return retryTransientRead(() => runtimeEntry(config).entry.openade.getTask(repoId, taskId, options))
 }
 
-export function startRemoteTurn(config: RemoteConfig, args: RemoteTurnStartRequest): Promise<{ taskId: string }> {
+export function startRemoteTurn(config: RemoteConfig, args: RemoteTurnStartRequest): Promise<RemoteTurnStartResult> {
     return runtimeEntry(config).entry.openade.startTurn(args)
 }
 
@@ -298,11 +329,10 @@ export function abortRemote(config: RemoteConfig, taskId: string): Promise<void>
     return runtimeEntry(config).entry.openade.interruptTurn(taskId)
 }
 
-export function subscribeRemoteChanges(config: RemoteConfig, onEvent: () => void, onStatus?: (status: RemoteRealtimeConnectionStatus) => void): () => void {
+export function subscribeRemoteChanges(config: RemoteConfig, onEvent: (notification: RuntimeNotification) => void, onStatus?: (status: RemoteRealtimeConnectionStatus) => void): () => void {
     const { entry, removeStatus } = runtimeEntry(config, onStatus)
     const unsubscribe = entry.openade.subscribeToChanges((notification) => {
-        if (notification.method === "connection/lagged") onStatus?.("lagged")
-        onEvent()
+        onEvent(notification)
     })
 
     return () => {

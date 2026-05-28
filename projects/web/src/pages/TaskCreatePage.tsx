@@ -38,10 +38,11 @@ import { useShortcutHintsVisible } from "../hooks/useShortcutHintsVisible"
 import { useCodeNavigate } from "../routing"
 import { useCodeStore } from "../store/context"
 import type { StashedDraft } from "../store/managers/SmartEditorManager"
-import type { CreationPhase, TaskCreation } from "../store/managers/TaskCreationManager"
+import type { TaskCreation } from "../store/managers/TaskCreationManager"
 import { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager"
 import type { Repo } from "../types"
 import { processImageBlob } from "../utils/imageAttachment"
+import { getTaskCreationPhaseLabel } from "./taskCreationPhaseLabel"
 import {
     getMetaDigitShortcutIndex,
     isMetaOnlyShortcut,
@@ -69,12 +70,6 @@ const WORKTREE_SHORTCUT_LABEL = "⌥W"
 
 const getLastBranchKey = (workspaceId: string) => `code:lastBranch:${workspaceId}`
 const getCreateMoreKey = (workspaceId: string) => `code:createMore:${workspaceId}`
-
-const phaseLabels: Record<CreationPhase | "pending" | "completing", string> = {
-    pending: "Starting...",
-    workspace: "Creating workspace",
-    completing: "Finalizing",
-}
 
 function PendingTaskItem({
     creation,
@@ -110,7 +105,9 @@ function PendingTaskItem({
                         {creation.description.length > 60 ? `${creation.description.slice(0, 60)}...` : creation.description}
                     </p>
                     <div className="flex items-center gap-2 mt-1">
-                        <span className={cx("text-xs", hasError ? "text-error/70" : "text-muted")}>{hasError ? "Failed" : phaseLabels[creation.phase]}</span>
+                        <span className={cx("text-xs", hasError ? "text-error/70" : "text-muted")}>
+                            {hasError ? "Failed" : getTaskCreationPhaseLabel(creation.phase, creation.isolationStrategy)}
+                        </span>
                         {sourceBranch && (
                             <span className="text-xs text-muted flex items-center gap-1">
                                 <GitBranch size="0.75rem" />

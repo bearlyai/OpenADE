@@ -72,17 +72,20 @@ describe("getHarnessStatuses", () => {
     })
 
     it("loads and normalizes harness status payloads", async () => {
-        const request = vi.fn().mockResolvedValue({
-            id: 1,
-            result: {
-                "claude-code": {
-                    installed: true,
-                    version: "1.0.0",
-                    authType: "account",
-                    authenticated: true,
+        const request = vi.fn(async (runtimeRequest: { id: number; method: string }) => {
+            if (runtimeRequest.method === "initialize") return { id: runtimeRequest.id, result: {} }
+            return {
+                id: runtimeRequest.id,
+                result: {
+                    "claude-code": {
+                        installed: true,
+                        version: "1.0.0",
+                        authType: "account",
+                        authenticated: true,
+                    },
+                    invalid: 123,
                 },
-                invalid: 123,
-            },
+            }
         })
 
         testWindow.openadeAPI = {
@@ -95,9 +98,9 @@ describe("getHarnessStatuses", () => {
         } as unknown as NonNullable<Window["openadeAPI"]>
 
         const result = await getHarnessStatuses()
+        const statusRequests = request.mock.calls.filter(([runtimeRequest]) => runtimeRequest.method === "agent/provider/status")
 
-        expect(request).toHaveBeenCalledTimes(1)
-        expect(request.mock.calls[0]?.[0]).toMatchObject({ method: "agent/provider/status" })
+        expect(statusRequests).toHaveLength(1)
         expect(result.error).toBeNull()
         expect(result.statuses).toEqual({
             "claude-code": {

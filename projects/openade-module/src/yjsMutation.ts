@@ -1068,6 +1068,7 @@ export function createOpenADEYjsWriter(storage: OpenADEYjsMutationStorageAdapter
                             if (sessionId) sessionIds.set(key, sessionId)
                         }
                     }
+                    if (request.queuedTurns !== undefined) meta.set("queuedTurns", toYValue(request.queuedTurns))
                     meta.set("updatedAt", updatedAt)
                 })
                 await saveDoc(storage, `code:task:${request.taskId}`, taskDoc)

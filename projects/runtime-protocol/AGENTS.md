@@ -1,3 +1,1 @@
-# Runtime Protocol
-
-See CLAUDE.md.
+CLAUDE.md

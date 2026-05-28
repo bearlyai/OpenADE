@@ -11,7 +11,8 @@ import type { GitSummaryResponse } from "../electronAPI/git"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { computeTaskUsage } from "../persistence/taskStatsUtils"
 import { type TaskThreadFormat, type TaskThreadJson, buildTaskThreadJson, buildTaskThreadXml } from "../prompts/taskThreadSerializer"
-import type { ActionEvent, CodeEvent, IsolationStrategy, SetupEnvironmentEvent, SnapshotEvent, Task, TaskDeviceEnvironment } from "../types"
+import { localOpenADEClient } from "../runtime/localOpenADEClient"
+import type { ActionEvent, CodeEvent, IsolationStrategy, QueuedTurn, SetupEnvironmentEvent, SnapshotEvent, Task, TaskDeviceEnvironment } from "../types"
 import { getDeviceId } from "../utils/deviceId"
 import { ActionEventModel, type EventModel, SetupEnvironmentEventModel, SnapshotEventModel } from "./EventModel"
 import { TaskEnvironment } from "./TaskEnvironment"
@@ -256,6 +257,20 @@ export class TaskModel {
 
     get enabledMcpServerIds(): string[] {
         return this.task?.enabledMcpServerIds ?? []
+    }
+
+    get queuedTurns(): QueuedTurn[] {
+        return this.task?.queuedTurns ?? []
+    }
+
+    async cancelQueuedTurn(queuedTurnId: string): Promise<void> {
+        if (!this.repoId) return
+        await localOpenADEClient.cancelQueuedTurn({
+            repoId: this.repoId,
+            taskId: this.taskId,
+            queuedTurnId,
+        })
+        await this.store.refreshTaskStoreFromStorage(this.taskId)
     }
 
     setEnabledMcpServerIds(serverIds: string[]): void {

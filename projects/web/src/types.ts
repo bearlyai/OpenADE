@@ -34,6 +34,28 @@ export interface Execution {
     gitRefsAfter?: GitRefs
 }
 
+export type QueuedTurnStatus = "queued" | "running" | "completed" | "error" | "stopped" | "cancelled"
+
+export interface QueuedTurn {
+    id: string
+    clientRequestId?: string
+    type: "do"
+    input: string
+    status: QueuedTurnStatus
+    createdAt: string
+    updatedAt: string
+    eventId?: string
+    appendSystemPrompt?: string
+    enabledMcpServerIds?: string[]
+    harnessId?: string
+    modelId?: string
+    label?: string
+    includeComments?: boolean
+    images?: unknown[]
+    thinking?: "low" | "med" | "high" | "max"
+    fastMode?: boolean
+}
+
 export interface User {
     id: string
     email: string
@@ -208,6 +230,7 @@ export interface Task {
     events: CodeEvent[]
     comments: Comment[] // Task-level comments with source tracking
     sessionIds: Record<string, string>
+    queuedTurns?: QueuedTurn[]
     createdAt: string
     updatedAt: string
     closed?: boolean
