@@ -12,6 +12,7 @@ import { TaskCreateDraftsMenu, TaskCreatePage } from "./pages/TaskCreatePage"
 import { TaskCreationPage } from "./pages/TaskCreationPage"
 import { TaskPage } from "./pages/TaskPage"
 import { RemoteApp } from "./remote/RemoteApp"
+import { isCompanionFeatureEnabled } from "./featureFlags"
 import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage"
 import { WorkspaceSettingsPage } from "./pages/WorkspaceSettingsPage"
 import { useCodeNavigate } from "./routing"
@@ -101,7 +102,7 @@ export const CodeBaseRoute = observer(() => {
     return <Navigate to={navigate.path("CodeWorkspaceTaskCreate", { workspaceId: firstWorkspace.id })} replace />
 })
 
-export const RemoteRoute = () => <RemoteApp />
+export const RemoteRoute = () => (isCompanionFeatureEnabled ? <RemoteApp /> : <Navigate to="/dashboard/code" replace />)
 
 // ==================== Route: /dashboard/code/workspace/create ====================
 

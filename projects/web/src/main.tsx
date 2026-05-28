@@ -19,6 +19,7 @@ import {
     CodeWorkspaceTaskRoute,
     RemoteRoute,
 } from "./Routes"
+import { isCompanionFeatureEnabled } from "./featureFlags"
 import { codeRoutes } from "./routing"
 import { registerCompanionController } from "./remote/registerCompanionController"
 import { CodeStoreProvider } from "./store/context"
@@ -57,7 +58,9 @@ function App() {
     useEffect(() => {
         let disposeCompanion: (() => void) | null = null
         codeStore.initializeStores().then(() => {
-            disposeCompanion = registerCompanionController(codeStore)
+            if (isCompanionFeatureEnabled) {
+                disposeCompanion = registerCompanionController(codeStore)
+            }
             setInitialized(true)
         })
 

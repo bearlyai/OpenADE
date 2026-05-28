@@ -33,7 +33,14 @@ import { load as loadBinaries, cleanup as cleanupBinaries } from "./modules/code
 import { load as loadCodeWindowFrame, cleanup as cleanupCodeWindowFrame } from "./modules/code/windowFrame"
 import { load as loadCompanion, cleanup as cleanupCompanion } from "./modules/companion"
 
+function envFlag(value: string | undefined): boolean {
+    if (!value) return false
+    return ["1", "true", "yes", "on"].includes(value.toLowerCase())
+}
+
 const main = () => {
+    const companionEnabled = envFlag(process.env.OPENADE_ENABLE_COMPANION ?? process.env.VITE_OPENADE_ENABLE_COMPANION)
+
     // OPENADE_SMOKE_TEST runs packaged smoke tests alongside any local production instance.
     if (!process.env.OPENADE_SMOKE_TEST) {
         const gotLock = app.requestSingleInstanceLock()
@@ -69,7 +76,9 @@ const main = () => {
     loadDataFolder()
     loadSnapshots()
     loadCodeWindowFrame()
-    loadCompanion()
+    if (companionEnabled) {
+        loadCompanion()
+    }
 
     ipcMain.handle("quit-app", () => {
         app.quit()
@@ -115,7 +124,9 @@ const main = () => {
         cleanupCapabilities()
         cleanupBinaries()
         cleanupCodeWindowFrame()
-        void cleanupCompanion()
+        if (companionEnabled) {
+            void cleanupCompanion()
+        }
         cleanupSubprocess()
     })
 
@@ -137,7 +148,9 @@ const main = () => {
         cleanupCapabilities()
         cleanupBinaries()
         cleanupCodeWindowFrame()
-        void cleanupCompanion()
+        if (companionEnabled) {
+            void cleanupCompanion()
+        }
         cleanupSubprocess()
         app.quit()
     })
@@ -160,7 +173,9 @@ const main = () => {
         cleanupCapabilities()
         cleanupBinaries()
         cleanupCodeWindowFrame()
-        void cleanupCompanion()
+        if (companionEnabled) {
+            void cleanupCompanion()
+        }
         cleanupSubprocess()
         app.quit()
     })

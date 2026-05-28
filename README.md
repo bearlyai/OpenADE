@@ -112,11 +112,6 @@ No subscription. No per-seat licensing. No payment to us, ever. OpenADE is free,
 ### 🔀 Multi-Harness: Claude Code & Codex
 Switch between Claude Code and OpenAI Codex as your execution engine. Same UI, same workflow, different models under the hood.
 
-### 📱 Companion Remote Control
-Pair an iPhone over Tailscale or a private LAN and control desktop OpenADE instances from a light mobile UI. The desktop remains authoritative: repos, files, credentials, harnesses, tools, and task execution all stay on the host. Pairing uses an in-app scanner or pasted HTTP pairing link for a short-lived token, one phone can switch between multiple hosts, and each device can be revoked from Settings → Companion.
-
-Codex's locked-Mac Computer Use is a Codex App feature that installs an Apple authorization plug-in. OpenADE does not reimplement remote unlock; Companion can keep the host awake while remote work is active, and Codex users can enable Codex Locked Use separately for Codex Computer Use flows.
-
 ### ⚡ Fast & Lean
 Snappy & Clean. We use the app 8+ hours a day so we make sure it is.
 

@@ -10,6 +10,7 @@ import { BarChart3, Bug, Palette, Plug, Settings, Smartphone, Terminal, X } from
 import { observer } from "mobx-react"
 import { useMemo, useState } from "react"
 import { useHotkeys } from "react-hotkeys-hook"
+import { isCompanionFeatureEnabled } from "../../featureFlags"
 import type { CodeStore } from "../../store/store"
 import { ScrollArea } from "../ui/ScrollArea"
 import { AppearanceTab } from "./AppearanceTab"
@@ -49,8 +50,11 @@ export const SettingsModal = NiceModal.create(
     observer(({ store, initialTab }: SettingsModalProps) => {
         const modal = useModal()
         const showDevTab = useMemo(() => isLocalDev(), [])
-        const tabs = useMemo(() => ALL_TABS.filter((t) => !t.devOnly || showDevTab), [showDevTab])
-        const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? store.personalSettingsStore?.settings.current.lastSettingsTab ?? "connectors")
+        const tabs = useMemo(() => ALL_TABS.filter((t) => (!t.devOnly || showDevTab) && (t.id !== "companion" || isCompanionFeatureEnabled)), [showDevTab])
+        const [activeTab, setActiveTab] = useState<SettingsTab>(() => {
+            const preferredTab = initialTab ?? store.personalSettingsStore?.settings.current.lastSettingsTab ?? "connectors"
+            return tabs.some((tab) => tab.id === preferredTab) ? preferredTab : "connectors"
+        })
 
         const handleTabChange = (tab: SettingsTab) => {
             setActiveTab(tab)
@@ -91,6 +95,7 @@ export const SettingsModal = NiceModal.create(
                 case "connectors":
                     return <ConnectorsTab store={store} />
                 case "companion":
+                    if (!isCompanionFeatureEnabled) return null
                     return <CompanionTab store={store} />
                 case "system":
                     return <SystemConfigTab store={store} />
