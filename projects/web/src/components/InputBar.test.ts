@@ -45,4 +45,10 @@ describe("InputBar queued turn preview", () => {
 
         window.removeEventListener("openade:queued-turn-preview-changed", listener)
     })
+
+    it("exposes the preview helper in built Electron renderers too", async () => {
+        await import("./InputBar")
+
+        expect(typeof window.openadePreviewQueuedTurns).toBe("function")
+    })
 })

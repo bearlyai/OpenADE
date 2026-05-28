@@ -109,6 +109,10 @@ export function setInputBarQueuedTurnsPreviewEnabled(enabled: boolean): void {
     window.dispatchEvent(new Event(QUEUED_TURNS_PREVIEW_CHANGED_EVENT))
 }
 
+if (typeof window !== "undefined") {
+    window.openadePreviewQueuedTurns = (enabled = true) => setInputBarQueuedTurnsPreviewEnabled(enabled)
+}
+
 export function getInputBarQueuedTurns(queuedTurns: QueuedTurn[], previewEnabled = isQueuedTurnsPreviewEnabled()): { turns: QueuedTurn[]; preview: boolean } {
     if (queuedTurns.length > 0) return { turns: queuedTurns, preview: false }
     return previewEnabled ? { turns: SAMPLE_QUEUED_TURNS, preview: true } : { turns: [], preview: false }
@@ -301,16 +305,9 @@ export const InputBar = observer(function InputBar({
         window.addEventListener(QUEUED_TURNS_PREVIEW_CHANGED_EVENT, refreshPreview)
         window.addEventListener("storage", refreshPreview)
 
-        if (import.meta.env.DEV) {
-            window.openadePreviewQueuedTurns = (enabled = true) => setInputBarQueuedTurnsPreviewEnabled(enabled)
-        }
-
         return () => {
             window.removeEventListener(QUEUED_TURNS_PREVIEW_CHANGED_EVENT, refreshPreview)
             window.removeEventListener("storage", refreshPreview)
-            if (window.openadePreviewQueuedTurns) {
-                delete window.openadePreviewQueuedTurns
-            }
         }
     }, [])
 
