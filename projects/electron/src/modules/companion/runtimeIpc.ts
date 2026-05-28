@@ -2,6 +2,7 @@ import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron"
 import type { RuntimeMessage, RuntimeRequest } from "../../../../runtime-protocol/src"
 import type { RuntimeConnection } from "../../../../runtime/src"
 import { getRuntimeServer } from "./runtimeGateway"
+import { cloneRuntimeMessageForIpc, serializationErrorResponse } from "./runtimeIpcSerialization"
 
 interface RendererRuntimeConnection {
     connection: RuntimeConnection
@@ -19,7 +20,11 @@ function connectionFor(webContents: WebContents): RendererRuntimeConnection {
         id: `renderer:${webContents.id}`,
         send(message: RuntimeMessage) {
             if (!webContents.isDestroyed()) {
-                webContents.send("runtime:message", message)
+                try {
+                    webContents.send("runtime:message", cloneRuntimeMessageForIpc(message))
+                } catch (error) {
+                    console.warn("[RuntimeIpc] Dropping non-serializable runtime message:", error)
+                }
             }
         },
     }
@@ -50,10 +55,15 @@ export function loadRuntimeIpc(): void {
         rendererConnections.get(event.sender.id)?.dispose()
         return { ok: true }
     })
-    ipcMain.handle("runtime:request", (event: IpcMainInvokeEvent, request: unknown) => {
+    ipcMain.handle("runtime:request", async (event: IpcMainInvokeEvent, request: unknown) => {
         if (!isRuntimeRequest(request)) throw new Error("Invalid runtime request")
         const { connection } = connectionFor(event.sender)
-        return getRuntimeServer().handleRequest(request, connection, { requireInitialized: true })
+        const response = await getRuntimeServer().handleRequest(request, connection, { requireInitialized: true })
+        try {
+            return cloneRuntimeMessageForIpc(response)
+        } catch (error) {
+            return serializationErrorResponse(request.id, error)
+        }
     })
 }
 

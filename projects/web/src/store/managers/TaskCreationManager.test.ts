@@ -106,7 +106,7 @@ describe("TaskCreationManager creation plumbing", () => {
 
     it("passes the selected model to server-owned turn start", async () => {
         vi.mocked(localOpenADEClient.startTurn).mockImplementation(async (args) => {
-            expect(() => structuredClone(args)).not.toThrow()
+            expect(JSON.parse(JSON.stringify(args))).toEqual(args)
             return { taskId: "task-1" }
         })
         const generateTitleSpy = vi

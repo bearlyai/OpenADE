@@ -28,7 +28,7 @@ describe("localRuntimeClient IPC serialization", () => {
 
         expect(isObservable(params)).toBe(true)
         expect(isObservable(cloned.params)).toBe(false)
-        expect(() => structuredClone(cloned)).not.toThrow()
+        expect(JSON.parse(JSON.stringify(cloned))).toEqual(cloned)
         expect(cloned).toEqual({
             id: 1,
             method: "openade/turn/start",
