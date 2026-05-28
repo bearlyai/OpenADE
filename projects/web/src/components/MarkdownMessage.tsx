@@ -2,17 +2,29 @@ import type { AnnotationSide } from "@pierre/diffs"
 import cx from "classnames"
 import { MessageSquarePlus } from "lucide-react"
 import { observer } from "mobx-react"
-import { type ReactNode, useCallback, useMemo } from "react"
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { codeToTokens } from "shiki/bundle/web"
+import type { BundledLanguage, SpecialLanguage } from "shiki/bundle/web"
 import type { CommentSelectedText } from "../types"
 import { useCommentAnnotations } from "./comments/hooks/useCommentAnnotations"
 import { extractSelectedText } from "./comments/utils"
 import type { CommentHandlers } from "./FilesAndDiffs"
+import { formatMarkdownTables } from "./utils/markdownTableFormatter"
 
 export type MarkdownBlock =
     | { type: "heading"; level: number; text: string; startLine: number; endLine: number }
     | { type: "paragraph"; text: string; startLine: number; endLine: number }
     | { type: "list"; items: string[]; startLine: number; endLine: number }
+    | { type: "table"; text: string; startLine: number; endLine: number }
     | { type: "code"; language?: string; text: string; startLine: number; endLine: number }
+
+type HighlightedCodeLine = {
+    content: string
+    color?: string
+    fontStyle?: number
+}[]
+
+const highlightedCodeCache = new Map<string, Promise<HighlightedCodeLine[]>>()
 
 function flushParagraph(blocks: MarkdownBlock[], lines: string[], startLine: number): void {
     if (lines.length === 0) return
@@ -22,6 +34,119 @@ function flushParagraph(blocks: MarkdownBlock[], lines: string[], startLine: num
         startLine,
         endLine: startLine + lines.length - 1,
     })
+}
+
+function isMarkdownTableRow(line: string): boolean {
+    return line.trim().includes("|")
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+    const trimmed = line.trim()
+    return trimmed.includes("|") && trimmed.includes("-") && /^[\s|:\-]+$/.test(trimmed)
+}
+
+function normalizeCodeLanguage(language?: string): string {
+    switch (language?.toLowerCase()) {
+        case "js":
+            return "javascript"
+        case "jsx":
+            return "jsx"
+        case "ts":
+            return "typescript"
+        case "tsx":
+            return "tsx"
+        case "py":
+            return "python"
+        case "sh":
+        case "zsh":
+        case "shell":
+            return "bash"
+        case "yml":
+            return "yaml"
+        case "md":
+            return "markdown"
+        default:
+            return language || "text"
+    }
+}
+
+function normalizeShikiTheme(theme: string): string {
+    switch (theme) {
+        case "light-plus":
+            return "light-plus"
+        case "tokyo-night":
+            return "tokyo-night"
+        case "dracula":
+            return "dracula"
+        case "pierre-light":
+        case "atom-one-light":
+            return "github-light"
+        case "pierre-dark":
+        default:
+            return "dark-plus"
+    }
+}
+
+function getHighlightedCodeLines(code: string, language: string | undefined, theme: string): Promise<HighlightedCodeLine[]> {
+    const normalizedLanguage = normalizeCodeLanguage(language) as BundledLanguage | SpecialLanguage
+    const normalizedTheme = normalizeShikiTheme(theme)
+    const cacheKey = `${normalizedTheme}\0${normalizedLanguage}\0${code}`
+    const cached = highlightedCodeCache.get(cacheKey)
+    if (cached) return cached
+
+    const highlighted = codeToTokens(code, {
+        lang: normalizedLanguage,
+        theme: normalizedTheme,
+    })
+        .then((result) => result.tokens.map((line) => line.map((token) => ({ content: token.content, color: token.color, fontStyle: token.fontStyle }))))
+        .catch(async () => {
+            const result = await codeToTokens(code, {
+                lang: "text",
+                theme: normalizedTheme,
+            })
+            return result.tokens.map((line) => line.map((token) => ({ content: token.content, color: token.color, fontStyle: token.fontStyle })))
+        })
+
+    highlightedCodeCache.set(cacheKey, highlighted)
+    return highlighted
+}
+
+function tokenStyle(token: HighlightedCodeLine[number]): CSSProperties {
+    return {
+        color: token.color,
+        fontStyle: token.fontStyle && (token.fontStyle & 1) !== 0 ? "italic" : undefined,
+        fontWeight: token.fontStyle && (token.fontStyle & 2) !== 0 ? 600 : undefined,
+        textDecoration: token.fontStyle && (token.fontStyle & 4) !== 0 ? "underline" : undefined,
+    }
+}
+
+function useShikiTheme(ref: React.RefObject<HTMLElement | null>): string {
+    const [theme, setTheme] = useState("pierre-dark")
+
+    useEffect(() => {
+        const el = ref.current
+        if (!el) return
+
+        const updateTheme = () => {
+            const computed = getComputedStyle(el).getPropertyValue("--editor-theme").trim()
+            setTheme(computed || "pierre-dark")
+        }
+
+        updateTheme()
+
+        const themeAncestor = el.closest(".code-theme")
+        if (!themeAncestor) return
+
+        const observer = new MutationObserver(updateTheme)
+        observer.observe(themeAncestor, {
+            attributes: true,
+            attributeFilter: ["class"],
+        })
+
+        return () => observer.disconnect()
+    }, [ref])
+
+    return theme
 }
 
 export function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
@@ -61,6 +186,25 @@ export function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
             flushParagraph(blocks, paragraphLines, paragraphStartLine)
             paragraphLines = []
             index++
+            continue
+        }
+
+        if (isMarkdownTableRow(line) && isMarkdownTableSeparator(sourceLines[index + 1] ?? "")) {
+            flushParagraph(blocks, paragraphLines, paragraphStartLine)
+            paragraphLines = []
+            const tableLines = [line, sourceLines[index + 1]]
+            const startLine = lineNumber
+            index += 2
+            while (index < sourceLines.length && isMarkdownTableRow(sourceLines[index]) && !isMarkdownTableSeparator(sourceLines[index])) {
+                tableLines.push(sourceLines[index])
+                index++
+            }
+            blocks.push({
+                type: "table",
+                text: formatMarkdownTables(tableLines.join("\n")),
+                startLine,
+                endLine: startLine + tableLines.length - 1,
+            })
             continue
         }
 
@@ -128,6 +272,65 @@ function lineProps(lineNumber: number, selectedRange: { start: number; end: numb
     }
 }
 
+function HighlightedCodeBlock({ block, selectedRange }: { block: Extract<MarkdownBlock, { type: "code" }>; selectedRange: { start: number; end: number } | null }) {
+    const ref = useRef<HTMLPreElement | null>(null)
+    const theme = useShikiTheme(ref)
+    const codeLines = useMemo(() => block.text.split("\n"), [block.text])
+    const [highlightedLines, setHighlightedLines] = useState<HighlightedCodeLine[] | null>(null)
+
+    useEffect(() => {
+        let cancelled = false
+        setHighlightedLines(null)
+        getHighlightedCodeLines(block.text, block.language, theme).then((lines) => {
+            if (!cancelled) setHighlightedLines(lines)
+        })
+        return () => {
+            cancelled = true
+        }
+    }, [block.language, block.text, theme])
+
+    const lines = highlightedLines ?? codeLines.map((line) => [{ content: line || " " }])
+
+    return (
+        <pre ref={ref} className="my-2 overflow-x-auto border border-border bg-base-200 p-3 font-mono text-sm leading-6">
+            <code>
+                {lines.map((line, index) => {
+                    const props = lineProps(block.startLine + index, selectedRange)
+                    return (
+                        <span key={index} {...props} className={cx(props.className, "block min-h-4 whitespace-pre")}>
+                            {line.length === 0
+                                ? " "
+                                : line.map((token, tokenIndex) => (
+                                      <span key={tokenIndex} style={tokenStyle(token)}>
+                                          {token.content}
+                                      </span>
+                                  ))}
+                        </span>
+                    )
+                })}
+            </code>
+        </pre>
+    )
+}
+
+function MarkdownTableBlock({ block, selectedRange }: { block: Extract<MarkdownBlock, { type: "table" }>; selectedRange: { start: number; end: number } | null }) {
+    const tableLines = block.text.split("\n")
+    return (
+        <pre className="my-2 overflow-x-auto border border-border bg-base-200 p-3 font-mono text-sm leading-6">
+            <code>
+                {tableLines.map((line, index) => {
+                    const props = lineProps(block.startLine + index, selectedRange)
+                    return (
+                        <span key={index} {...props} className={cx(props.className, "block min-h-4 whitespace-pre")}>
+                            {line || " "}
+                        </span>
+                    )
+                })}
+            </code>
+        </pre>
+    )
+}
+
 function MarkdownBlockView({ block, selectedRange = null }: { block: MarkdownBlock; selectedRange?: { start: number; end: number } | null }) {
     switch (block.type) {
         case "heading": {
@@ -149,22 +352,13 @@ function MarkdownBlockView({ block, selectedRange = null }: { block: MarkdownBlo
                 </ul>
             )
         case "code":
-            const codeLines = block.text.split("\n")
-            return (
-                <pre className="my-2 overflow-x-auto border border-border bg-base-200 p-3 font-mono text-[13px] leading-5">
-                    <code>
-                        {codeLines.map((line, index) => (
-                            <span key={index} {...lineProps(block.startLine + index, selectedRange)} className={cx(lineProps(block.startLine + index, selectedRange).className, "block min-h-4")}>
-                                {line || " "}
-                            </span>
-                        ))}
-                    </code>
-                </pre>
-            )
+            return <HighlightedCodeBlock block={block} selectedRange={selectedRange} />
+        case "table":
+            return <MarkdownTableBlock block={block} selectedRange={selectedRange} />
         case "paragraph": {
             const lines = block.text.split("\n")
             return (
-                <p className="my-2 whitespace-pre-wrap leading-5">
+                <p className="my-2 whitespace-pre-wrap leading-6">
                     {lines.map((line, index) => (
                         <span key={index} {...lineProps(block.startLine + index, selectedRange)}>
                             {renderInline(line)}
@@ -209,7 +403,7 @@ export function annotationBelongsToMarkdownBlock(annotation: { lineNumber: numbe
 function MarkdownMessageStatic({ text }: { text: string }) {
     const blocks = useMemo(() => parseMarkdownBlocks(text), [text])
     return (
-        <div className="border border-border bg-base-100 px-3 py-2 text-[13px] leading-5">
+        <div className="border border-border bg-base-100 px-3 py-2 font-sans text-sm leading-6">
             {blocks.map((block, index) => (
                 <MarkdownBlockView key={`${block.startLine}-${index}`} block={block} />
             ))}
@@ -257,7 +451,7 @@ const CommentableMarkdownMessage = observer(function CommentableMarkdownMessage(
     }
 
     return (
-        <div className="group/markdown-message border border-border bg-base-100 px-3 py-2 text-[13px] leading-5" onMouseUp={handleSelection}>
+        <div className="group/markdown-message border border-border bg-base-100 px-3 py-2 font-sans text-sm leading-6" onMouseUp={handleSelection}>
             {blocks.map((block, index) => {
                 const blockAnnotations = annotations.lineAnnotations.filter((annotation) => annotationBelongsToMarkdownBlock(annotation, block))
                 return (

@@ -15,6 +15,18 @@ describe("parseMarkdownBlocks", () => {
         ])
     })
 
+    it("parses markdown tables as aligned table blocks with source line ranges", () => {
+        const blocks = parseMarkdownBlocks("| Name | Role |\n| --- | --- |\n| Ada | Engineer |\n| Grace | Admiral |\n\nDone")
+
+        expect(blocks[0]?.type).toBe("table")
+        if (blocks[0]?.type !== "table") throw new Error("Expected table block")
+        expect(blocks[0].startLine).toBe(1)
+        expect(blocks[0].endLine).toBe(4)
+        const tableLines = blocks[0].text.split("\n")
+        expect(new Set(tableLines.map((line) => line.length)).size).toBe(1)
+        expect(blocks[1]).toEqual({ type: "paragraph", text: "Done", startLine: 6, endLine: 6 })
+    })
+
     it("renders a multi-line markdown comment form only on the block containing the annotation line", () => {
         const firstBlock = { type: "paragraph" as const, text: "first", startLine: 1, endLine: 2 }
         const secondBlock = { type: "paragraph" as const, text: "second", startLine: 3, endLine: 4 }
