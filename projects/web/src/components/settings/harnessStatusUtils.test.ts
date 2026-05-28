@@ -52,6 +52,7 @@ describe("getHarnessDisplayName", () => {
     it("uses known labels for standard harness IDs", () => {
         expect(getHarnessDisplayName("claude-code")).toBe("Claude Code")
         expect(getHarnessDisplayName("codex")).toBe("Codex")
+        expect(getHarnessDisplayName("opencode")).toBe("opencode")
     })
 
     it("formats unknown IDs as title-cased words", () => {

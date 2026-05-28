@@ -1,6 +1,6 @@
 import { makeAutoObservable, reaction, runInAction } from "mobx"
 import { analytics, track } from "../analytics"
-import { DEFAULT_MODEL, getDefaultModelForHarness } from "../constants"
+import { DEFAULT_HARNESS_ID, DEFAULT_MODEL, MODEL_REGISTRY, getDefaultModelForHarness } from "../constants"
 import { getDeviceConfig, setDeviceId as setDeviceConfigDeviceId, setTelemetryDisabled } from "../electronAPI/deviceConfig"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { setGlobalEnv } from "../electronAPI/subprocess"
@@ -53,6 +53,10 @@ type AnalyticsDeviceIdSource =
     | "local_storage"
     | "generated"
 
+function isHarnessId(value: string | undefined): value is HarnessId {
+    return !!value && Object.prototype.hasOwnProperty.call(MODEL_REGISTRY, value)
+}
+
 function getLocalAnalyticsDeviceIdBackup(): string | null {
     if (typeof window === "undefined") return null
 
@@ -84,7 +88,7 @@ export class CodeStore {
     defaultModel: string = DEFAULT_MODEL
     defaultThinking: ThinkingLevel = "max"
     defaultFastMode = false
-    defaultHarnessId: HarnessId = "claude-code"
+    defaultHarnessId: HarnessId = DEFAULT_HARNESS_ID
     workingTaskIds: Set<string> = new Set()
 
     repoStore: RepoStore | null = null
@@ -96,6 +100,7 @@ export class CodeStore {
     private taskStoreConnections: Map<string, TaskStoreConnection> = new Map()
     private envVarsReactionDisposer: (() => void) | null = null
     private telemetryReactionDisposer: (() => void) | null = null
+    private defaultHarnessReactionDisposer: (() => void) | null = null
     private pingIntervalId: ReturnType<typeof setInterval> | null = null
     private focusHandler: (() => void) | null = null
     private blurHandler: (() => void) | null = null
@@ -190,6 +195,8 @@ export class CodeStore {
 
             await Promise.all([repoConnection.sync(), mcpConnection.sync(), personalSettingsConnection.sync()])
 
+            const storedDefaultHarnessId = personalSettingsConnection.store.settings.get()?.defaultHarnessId
+
             runInAction(() => {
                 this.repoStoreConnection = repoConnection
                 this.repoStore = repoConnection.store
@@ -197,6 +204,7 @@ export class CodeStore {
                 this.mcpServerStore = mcpConnection.store
                 this.personalSettingsStoreConnection = personalSettingsConnection
                 this.personalSettingsStore = personalSettingsConnection.store
+                this.applyDefaultHarnessId(storedDefaultHarnessId)
                 this.storeInitialized = true
                 this.storeInitializing = false
             })
@@ -221,6 +229,13 @@ export class CodeStore {
                             console.error("[CodeStore] Failed to push env vars:", err)
                         })
                     }
+                }
+            )
+
+            this.defaultHarnessReactionDisposer = reaction(
+                () => this.personalSettingsStore?.settings.get()?.defaultHarnessId,
+                (harnessId) => {
+                    this.applyDefaultHarnessId(harnessId)
                 }
             )
 
@@ -440,6 +455,11 @@ export class CodeStore {
             this.telemetryReactionDisposer = null
         }
 
+        if (this.defaultHarnessReactionDisposer) {
+            this.defaultHarnessReactionDisposer()
+            this.defaultHarnessReactionDisposer = null
+        }
+
         if (this.pingIntervalId) {
             clearInterval(this.pingIntervalId)
             this.pingIntervalId = null
@@ -492,9 +512,14 @@ export class CodeStore {
     }
 
     setDefaultHarnessId(harnessId: HarnessId): void {
-        this.defaultHarnessId = harnessId
-        // Reset default model to match the new harness
-        this.defaultModel = getDefaultModelForHarness(harnessId)
+        this.applyDefaultHarnessId(harnessId)
+        this.personalSettingsStore?.settings.set({ defaultHarnessId: harnessId })
+    }
+
+    private applyDefaultHarnessId(harnessId: string | undefined): void {
+        const resolvedHarnessId = isHarnessId(harnessId) ? harnessId : DEFAULT_HARNESS_ID
+        this.defaultHarnessId = resolvedHarnessId
+        this.defaultModel = getDefaultModelForHarness(resolvedHarnessId)
     }
 
     // === HyperPlan Strategy Resolution ===

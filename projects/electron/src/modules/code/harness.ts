@@ -20,12 +20,14 @@ import {
     HarnessRegistry,
     ClaudeCodeHarness,
     CodexHarness,
+    OpencodeHarness,
     type HarnessEvent,
     type HarnessQuery,
     type HarnessId,
     type McpServerConfig,
     type ClientToolDefinition,
     type ClientToolResult,
+    DEFAULT_HARNESS_ID,
 } from "@openade/harness"
 import { isDev } from "../../config.js"
 import { setSdkCache } from "./capabilities.js"
@@ -39,9 +41,10 @@ export const registry = new HarnessRegistry()
 // Register harnesses at module level.
 // Binary resolution is handled by the harness internally via resolveExecutable().
 // The managed binaries (bun, rg) are on PATH via binaries.ts enhancePath(),
-// but claude/codex CLI resolution is done by each harness.
+// but agent CLI resolution is done by each harness.
 registry.register(new ClaudeCodeHarness())
 registry.register(new CodexHarness())
+registry.register(new OpencodeHarness())
 
 // ============================================================================
 // Shared Types (mirrors claudeEventTypes.ts in dashboard)
@@ -432,7 +435,7 @@ async function handleStartQuery(
     command: HarnessCommandEvent & { type: "start_query" }
 ): Promise<{ ok: boolean; error?: string }> {
     const { executionId, prompt, options } = command
-    const harnessId = options.harnessId || "claude-code"
+    const harnessId = options.harnessId || DEFAULT_HARNESS_ID
     const promptPreview =
         typeof prompt === "string" ? prompt.slice(0, 100) : `[${prompt.length} content blocks]`
 
@@ -613,7 +616,7 @@ async function handleStructuredQuery(
     error?: string
 }> {
     const { prompt, options, outputSchema } = command
-    const harnessId = options.harnessId || "claude-code"
+    const harnessId = options.harnessId || DEFAULT_HARNESS_ID
     const harness = registry.get(harnessId)
 
     if (!harness) {

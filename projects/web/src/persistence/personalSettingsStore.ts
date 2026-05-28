@@ -89,6 +89,8 @@ export interface PersonalSettings {
     shortcutHintsHidden?: boolean
     /** Version string of the latest release notes the user has seen */
     lastSeenReleaseVersion?: string
+    /** Default harness used for new tasks and plan generation */
+    defaultHarnessId?: string
 
     // === HyperPlan settings ===
 

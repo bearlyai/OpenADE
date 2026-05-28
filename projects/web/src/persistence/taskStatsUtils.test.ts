@@ -115,6 +115,50 @@ function codexAction({
     }
 }
 
+function opencodeAction({
+    id,
+    inputTokens,
+    outputTokens,
+    costUsd,
+    durationMs,
+    modelId = "claude-sonnet",
+}: {
+    id: string
+    inputTokens: number
+    outputTokens: number
+    costUsd: number
+    durationMs: number
+    modelId?: string
+}): ActionEvent & { id: string } {
+    return {
+        id,
+        type: "action",
+        status: "completed",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:00:01.000Z",
+        userInput: "test",
+        execution: {
+            harnessId: "opencode",
+            executionId: `${id}-exec`,
+            sessionId: `${id}-session`,
+            modelId,
+            events: [
+                {
+                    id: `${id}-complete`,
+                    direction: "execution",
+                    type: "complete",
+                    executionId: `${id}-exec`,
+                    harnessId: "opencode",
+                    usage: { inputTokens, outputTokens, costUsd, durationMs },
+                },
+            ],
+        },
+        source: { type: "do", userLabel: "Do" },
+        includesCommentIds: [],
+        result: { success: true },
+    }
+}
+
 describe("computeTaskUsage - codex", () => {
     it("adds token/cost deltas for resumed sessions with cumulative usage snapshots", () => {
         const events = [
@@ -487,5 +531,25 @@ describe("computeTaskUsage - codex", () => {
             durationMs: 0,
         })
         expect(needsTaskUsageBackfill(usage)).toBe(false)
+    })
+})
+
+describe("computeTaskUsage - opencode", () => {
+    it("uses opencode complete envelope usage and cost", () => {
+        const usage = computeTaskUsage([
+            opencodeAction({
+                id: "o1",
+                inputTokens: 100,
+                outputTokens: 25,
+                costUsd: 0.02,
+                durationMs: 1500,
+            }),
+        ])
+
+        expect(usage.inputTokens).toBe(100)
+        expect(usage.outputTokens).toBe(25)
+        expect(usage.totalCostUsd).toBe(0.02)
+        expect(usage.costByModel["claude-sonnet"]).toBe(0.02)
+        expect(usage.durationMs).toBe(1500)
     })
 })

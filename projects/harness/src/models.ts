@@ -12,6 +12,7 @@ export interface HarnessMetaEntry {
 export const HARNESS_META: Record<HarnessId, HarnessMetaEntry> = {
     "claude-code": { name: "Claude Code", vendor: "Anthropic" },
     codex: { name: "Codex", vendor: "OpenAI" },
+    opencode: { name: "opencode", vendor: "sst" },
 }
 
 // ============================================================================
@@ -42,13 +43,24 @@ export const CODEX_MODEL_CONFIG: HarnessModelConfig = {
     defaultModel: "gpt-5.5",
 }
 
+export const OPENCODE_MODEL_CONFIG: HarnessModelConfig = {
+    models: [
+        { id: "claude-sonnet", fullId: "anthropic/claude-sonnet-4-5-20250929", label: "Claude Sonnet 4.5", displayClass: "Sonnet" },
+        { id: "claude-opus", fullId: "anthropic/claude-opus-4-5-20251101", label: "Claude Opus 4.5", displayClass: "Opus" },
+        { id: "gpt-5.1-codex", fullId: "opencode/gpt-5.1-codex", label: "GPT-5.1 Codex", displayClass: "Codex" },
+        { id: "gpt-5", fullId: "openai/gpt-5", label: "GPT-5", displayClass: "Codex" },
+    ],
+    defaultModel: "claude-sonnet",
+}
+
 export const MODEL_REGISTRY: Record<HarnessId, HarnessModelConfig> = {
     "claude-code": CLAUDE_CODE_MODEL_CONFIG,
     codex: CODEX_MODEL_CONFIG,
+    opencode: OPENCODE_MODEL_CONFIG,
 }
 
 export const DEFAULT_HARNESS_ID: HarnessId = "claude-code"
-export const DEFAULT_MODEL = "opus"
+export const DEFAULT_MODEL = CLAUDE_CODE_MODEL_CONFIG.defaultModel
 
 // ============================================================================
 // Helpers
@@ -147,5 +159,6 @@ export function normalizeModelClass(modelId: string): string {
     if (lower.includes("haiku")) return "Haiku"
     if (lower.includes("codex")) return "Codex"
     if (lower.startsWith("gpt-")) return "Codex"
+    if (lower.includes("/gpt-")) return "Codex"
     return "Other"
 }

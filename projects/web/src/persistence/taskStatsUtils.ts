@@ -67,6 +67,22 @@ export function computeTaskUsage(events: Array<CodeEvent & { id: string }>): Tas
                 continue
             }
 
+            if (entry.harnessId === "opencode") {
+                const completeUsage = extractCompleteUsage(entry.events)
+                if (completeUsage) {
+                    inputTokens += completeUsage.inputTokens
+                    outputTokens += completeUsage.outputTokens
+                    if (completeUsage.costUsd !== undefined) {
+                        totalCostUsd += completeUsage.costUsd
+                        costByModel[entry.modelId] = (costByModel[entry.modelId] ?? 0) + completeUsage.costUsd
+                    }
+                    if (completeUsage.durationMs) {
+                        durationMs += completeUsage.durationMs
+                    }
+                }
+                continue
+            }
+
             const codexUsage = extractCodexUsageSnapshot(messageEvents, entry.events)
             if (codexUsage) {
                 const sessionId = entry.sessionId ?? extractCodexSessionId(messageEvents)

@@ -2,7 +2,7 @@
  * Plan Text Extraction
  *
  * Extracts the final assistant text from a completed execution's stream events.
- * Works for both Claude Code and Codex harnesses.
+ * Works for Claude Code, Codex, and opencode harnesses.
  */
 
 import type { HarnessId, HarnessRawMessageEvent, HarnessStreamEvent } from "../electronAPI/harnessEventTypes"
@@ -16,6 +16,8 @@ import { extractRawMessageEvents } from "../electronAPI/harnessEventTypes"
  *
  * For Codex: Concatenates all `agent_message` items from `item.completed` events.
  *
+ * For opencode: Concatenates assistant text events.
+ *
  * Returns null if no text could be extracted.
  */
 export function extractPlanText(events: HarnessStreamEvent[], harnessId: HarnessId): string | null {
@@ -27,6 +29,8 @@ export function extractPlanText(events: HarnessStreamEvent[], harnessId: Harness
             return extractClaudePlanText(rawMessages)
         case "codex":
             return extractCodexPlanText(rawMessages)
+        case "opencode":
+            return extractOpencodePlanText(rawMessages)
         default:
             return null
     }
@@ -81,4 +85,60 @@ function extractCodexPlanText(rawMessages: HarnessRawMessageEvent[]): string | n
     }
 
     return null
+}
+
+function extractOpencodePlanText(rawMessages: HarnessRawMessageEvent[]): string | null {
+    const textParts: string[] = []
+    const textDeltaPartIds = new Set<string>()
+
+    for (const raw of rawMessages) {
+        if (raw.harnessId !== "opencode") continue
+        const msg = raw.message
+        const text = getOpencodeMessageText(msg as unknown as Record<string, unknown>, textDeltaPartIds)
+        if (text) textParts.push(text)
+    }
+
+    const text = textParts.join("").trim()
+    return text.length > 0 ? text : null
+}
+
+function getOpencodeMessageText(msg: Record<string, unknown>, textDeltaPartIds: Set<string>): string | undefined {
+    if (msg.type === "text") {
+        const part = isRecord(msg.part) ? msg.part : undefined
+        if (typeof part?.text === "string") return part.text
+        return typeof msg.text === "string" ? msg.text : undefined
+    }
+
+    const properties = isRecord(msg.properties) ? msg.properties : undefined
+    if (!properties) return undefined
+
+    if (msg.type === "message.part.delta") {
+        if (properties.field !== "text" || typeof properties.delta !== "string") return undefined
+        const partId = pickString(properties, ["partID", "partId", "id"])
+        if (partId) textDeltaPartIds.add(partId)
+        return properties.delta
+    }
+
+    if (msg.type === "message.part.updated") {
+        const part = isRecord(properties.part) ? properties.part : undefined
+        if (!part || part.type !== "text") return undefined
+        const partId = pickString(properties, ["partID", "partId", "id"]) ?? pickString(part, ["partID", "partId", "id"])
+        if (partId && textDeltaPartIds.has(partId)) return undefined
+        const text = part.text ?? part.snapshot
+        return typeof text === "string" ? text : undefined
+    }
+
+    return undefined
+}
+
+function pickString(record: Record<string, unknown>, keys: string[]): string | undefined {
+    for (const key of keys) {
+        const value = record[key]
+        if (typeof value === "string") return value
+    }
+    return undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value)
 }

@@ -26,6 +26,18 @@ function codexRawEvent(message: Record<string, unknown>): HarnessStreamEvent {
     } as unknown as HarnessStreamEvent
 }
 
+/** Helper to build a raw_message execution event for opencode */
+function opencodeRawEvent(message: Record<string, unknown>): HarnessStreamEvent {
+    return {
+        id: crypto.randomUUID(),
+        type: "raw_message",
+        executionId: "exec-1",
+        harnessId: "opencode",
+        message,
+        direction: "execution",
+    } as unknown as HarnessStreamEvent
+}
+
 describe("extractPlanText", () => {
     describe("claude-code", () => {
         it("extracts text from result event", () => {
@@ -110,6 +122,30 @@ describe("extractPlanText", () => {
         it("returns null when no agent_message items exist", () => {
             const events = [codexRawEvent({ type: "item.completed", item: { type: "tool_call" } })]
             expect(extractPlanText(events, "codex")).toBeNull()
+        })
+    })
+
+    describe("opencode", () => {
+        it("extracts text from text events", () => {
+            const events = [
+                opencodeRawEvent({ type: "text", part: { type: "text", text: "Plan step 1" } }),
+                opencodeRawEvent({ type: "text", part: { type: "text", text: " and step 2" } }),
+            ]
+            expect(extractPlanText(events, "opencode")).toBe("Plan step 1 and step 2")
+        })
+
+        it("extracts text from JSON stream part deltas", () => {
+            const events = [
+                opencodeRawEvent({ type: "message.part.delta", properties: { partID: "part_1", field: "text", delta: "Plan step 1" } }),
+                opencodeRawEvent({ type: "message.part.delta", properties: { partID: "part_1", field: "text", delta: " and step 2" } }),
+                opencodeRawEvent({ type: "message.part.updated", properties: { part: { id: "part_1", type: "text", text: "Plan step 1 and step 2" } } }),
+            ]
+            expect(extractPlanText(events, "opencode")).toBe("Plan step 1 and step 2")
+        })
+
+        it("returns null when no text events exist", () => {
+            const events = [opencodeRawEvent({ type: "tool_use", part: { tool: "bash" } })]
+            expect(extractPlanText(events, "opencode")).toBeNull()
         })
     })
 

@@ -3,6 +3,7 @@ import type { HarnessInstallStatus } from "../../electronAPI/harnessStatus"
 const HARNESS_LABELS: Record<string, string> = {
     "claude-code": "Claude Code",
     codex: "Codex",
+    opencode: "opencode",
 }
 
 const AUTH_TYPE_LABELS: Record<HarnessInstallStatus["authType"], string> = {

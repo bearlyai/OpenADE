@@ -4,7 +4,7 @@
  * Provides synchronous slug generation and async title generation via harness execution.
  */
 
-import { getDefaultModelForHarness, getModelFullId, MODEL_REGISTRY } from "../constants"
+import { DEFAULT_HARNESS_ID, getDefaultModelForHarness, getModelFullId, MODEL_REGISTRY } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { getHarnessQueryManager } from "../electronAPI/harnessQuery"
 import type { CodeEvent } from "../types"
@@ -56,10 +56,12 @@ export async function generateTitle(
         }
     }
 
+    const resolvedHarnessId = (harnessId as HarnessId | undefined) ?? DEFAULT_HARNESS_ID
+
     const query = await manager.startExecution(prompt, {
-        harnessId: (harnessId as HarnessId) ?? "claude-code",
+        harnessId: resolvedHarnessId,
         cwd: "",
-        model: getTitleModel((harnessId as HarnessId) ?? "claude-code"),
+        model: getTitleModel(resolvedHarnessId),
         mode: "read-only",
         disablePlanningTools: true,
         appendSystemPrompt:

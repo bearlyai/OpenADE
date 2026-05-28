@@ -6,7 +6,7 @@
  */
 
 import { makeAutoObservable, runInAction } from "mobx"
-import { DEFAULT_MODEL, getDefaultModelForHarness, resolveModelForHarness } from "../constants"
+import { DEFAULT_HARNESS_ID, DEFAULT_MODEL, getDefaultModelForHarness, resolveModelForHarness } from "../constants"
 import type { GitSummaryResponse } from "../electronAPI/git"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { computeTaskUsage } from "../persistence/taskStatsUtils"
@@ -30,7 +30,7 @@ export class TaskModel {
     model: string = DEFAULT_MODEL
     thinking: ThinkingLevel = "max"
     fastMode = false
-    harnessId: HarnessId = "claude-code"
+    harnessId: HarnessId = DEFAULT_HARNESS_ID
     private gitStateLoading = false
     private _environmentCache: TaskEnvironment | null = null
     private _environmentDeviceId: string | null = null
