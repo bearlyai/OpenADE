@@ -277,13 +277,12 @@ function CopyButton({ content, label = "Copy", className }: { content: string; l
     return (
         <button
             type="button"
-            className={cx("btn flex items-center gap-1.5 border border-border bg-base-100/90 px-2 py-1 text-xs text-muted shadow-sm hover:bg-base-200 hover:text-base-content", className)}
+            className={cx("btn flex h-7 w-7 items-center justify-center border border-border bg-base-100/90 p-0 text-muted shadow-sm hover:bg-base-200 hover:text-base-content", className)}
             onClick={copy}
             aria-label={label}
             title={label}
         >
             {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
-            <span>{copied ? "Copied" : label}</span>
         </button>
     )
 }
