@@ -8,6 +8,15 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.78.0",
+        title: "Claude Opus 4.8",
+        date: "2026-05-28",
+        highlights: [
+            "Claude Code now includes Claude Opus 4.8 as an explicit model option",
+            "Rolling Opus fast mode no longer forces the older Opus 4.7 fast-mode override",
+        ],
+    },
+    {
         version: "0.77.0",
         title: "Editor-Safe Shortcuts & Clearer Reviews",
         date: "2026-05-24",
