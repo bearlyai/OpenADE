@@ -200,6 +200,7 @@ export const InputBar = observer(function InputBar({
     const { commands } = input
     const hasComments = unsubmittedComments.length > 0
     const hasPendingImages = editorManager.pendingImages.length > 0
+    const queuedTurns = input.queuedTurns
     const focusEditorAtEnd = useCallback(() => {
         if (input.isDisabled) return
 
@@ -354,6 +355,31 @@ export const InputBar = observer(function InputBar({
 
                 {/* Pending comments section */}
                 {hasComments && <CommentsSection comments={unsubmittedComments} variant="pending" />}
+
+                {queuedTurns.length > 0 && (
+                    <div className="border-t border-border bg-base-100 px-2 py-2">
+                        <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted">Queued</div>
+                        <div className="flex flex-col gap-1">
+                            {queuedTurns.map((turn) => (
+                                <div key={turn.id} className="flex min-w-0 items-center gap-2 border border-border bg-base-200 px-2 py-1.5 text-xs">
+                                    <span className="shrink-0 font-medium text-primary">{turn.label ?? (turn.type === "ask" ? "Ask" : "Do")}</span>
+                                    <span className="min-w-0 flex-1 truncate text-base-content" title={turn.input}>
+                                        {turn.input || "No message"}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        className="btn shrink-0 p-1 text-muted hover:bg-base-300 hover:text-base-content"
+                                        onClick={() => void input.cancelQueuedTurn(turn.id)}
+                                        aria-label={`Cancel queued ${turn.type}`}
+                                        title="Cancel queued message"
+                                    >
+                                        <X size={12} />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* Text input area with image attach overlay */}
                 <div className="relative">

@@ -39,7 +39,7 @@ export type QueuedTurnStatus = "queued" | "running" | "completed" | "error" | "s
 export interface QueuedTurn {
     id: string
     clientRequestId?: string
-    type: "do"
+    type: "do" | "ask"
     input: string
     status: QueuedTurnStatus
     createdAt: string

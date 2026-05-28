@@ -30,7 +30,7 @@ import { track } from "../../analytics"
 import { ReviewPickerModal } from "../../components/ReviewPickerModal"
 import { ACTION_PROMPTS } from "../../prompts/prompts"
 import { localOpenADEClient } from "../../runtime/localOpenADEClient"
-import type { ActionEvent, UserInputContext } from "../../types"
+import type { ActionEvent, QueuedTurn, UserInputContext } from "../../types"
 import type { OpenADETurnStartRequest } from "../../../../openade-module/src"
 import type { CodeStore } from "../store"
 import type { SmartEditorManager } from "./SmartEditorManager"
@@ -121,6 +121,14 @@ export class InputManager {
 
     private get isClosed(): boolean {
         return this.store.tasks.getTask(this.taskId)?.closed ?? false
+    }
+
+    get queuedTurns(): QueuedTurn[] {
+        return (this.taskModel?.queuedTurns ?? []).filter((turn) => turn.status === "queued")
+    }
+
+    async cancelQueuedTurn(queuedTurnId: string): Promise<void> {
+        await this.taskModel?.cancelQueuedTurn(queuedTurnId)
     }
 
     private get isCommitAndPushInProgress(): boolean {

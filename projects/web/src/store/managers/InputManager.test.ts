@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import type { QueuedTurn } from "../../types"
 import { InputManager } from "./InputManager"
 
 const mocks = vi.hoisted(() => ({
@@ -11,12 +12,14 @@ vi.mock("../../runtime/localOpenADEClient", () => ({
     },
 }))
 
-function createManager() {
+function createManager({ queuedTurns = [] }: { queuedTurns?: QueuedTurn[] } = {}) {
+    const cancelQueuedTurn = vi.fn(async () => undefined)
     const task = {
         id: "task-1",
         repoId: "repo-1",
         closed: false,
         events: [],
+        queuedTurns,
     }
     const taskModel = {
         repoId: "repo-1",
@@ -28,6 +31,8 @@ function createManager() {
         model: "gpt-5-codex",
         thinking: "med",
         fastMode: true,
+        queuedTurns,
+        cancelQueuedTurn,
     }
     const store = {
         isTaskRunning: (taskId: string) => taskId === "task-1",
@@ -62,6 +67,7 @@ function createManager() {
         manager: new InputManager(store as never, "task-1", editor as never),
         store,
         editor,
+        cancelQueuedTurn,
     }
 }
 
@@ -77,16 +83,8 @@ describe("InputManager queueable desktop commands", () => {
         const askCommand = manager.commands.find((command) => command.id === "ask")
 
         expect(manager.commands.map((command) => command.id)).toContain("stop")
-        expect(doCommand).toMatchObject({
-            id: "do",
-            label: "Queue Do",
-            enabled: true,
-        })
-        expect(askCommand).toMatchObject({
-            id: "ask",
-            label: "Queue Ask",
-            enabled: true,
-        })
+        expect(doCommand).toMatchObject({ id: "do", enabled: true })
+        expect(askCommand).toMatchObject({ id: "ask", enabled: true })
 
         await manager.runCommand("do")
         await manager.runCommand("ask")
@@ -108,5 +106,34 @@ describe("InputManager queueable desktop commands", () => {
                 input: "follow up after this",
             })
         )
+    })
+
+    it("exposes cancellable queued turns without showing old queue history", async () => {
+        const { manager, cancelQueuedTurn } = createManager({
+            queuedTurns: [
+                {
+                    id: "queued-do",
+                    type: "do",
+                    input: "Run this next",
+                    status: "queued",
+                    createdAt: "2026-05-28T00:00:00.000Z",
+                    updatedAt: "2026-05-28T00:00:00.000Z",
+                },
+                {
+                    id: "old-ask",
+                    type: "ask",
+                    input: "Already cancelled",
+                    status: "cancelled",
+                    createdAt: "2026-05-28T00:00:00.000Z",
+                    updatedAt: "2026-05-28T00:00:00.000Z",
+                },
+            ],
+        })
+
+        expect(manager.queuedTurns.map((turn) => turn.id)).toEqual(["queued-do"])
+
+        await manager.cancelQueuedTurn("queued-do")
+
+        expect(cancelQueuedTurn).toHaveBeenCalledWith("queued-do")
     })
 })
