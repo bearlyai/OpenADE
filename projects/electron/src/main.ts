@@ -31,6 +31,7 @@ import { load as loadBinaries, cleanup as cleanupBinaries } from "./modules/code
 import { load as loadCodeWindowFrame, cleanup as cleanupCodeWindowFrame } from "./modules/code/windowFrame"
 import { load as loadCompanion, cleanup as cleanupCompanion } from "./modules/companion"
 import { hasActiveRuntimeWork } from "./modules/companion/runtimeGateway"
+import { load as loadRuntimeCore, cleanup as cleanupRuntimeCore } from "./modules/runtimeCore"
 
 function envFlag(value: string | undefined): boolean {
     if (!value) return false
@@ -63,6 +64,7 @@ const main = () => {
     loadShell()
     loadDataFolder()
     loadCodeWindowFrame()
+    loadRuntimeCore()
     if (companionEnabled) {
         loadCompanion()
     }
@@ -109,6 +111,7 @@ const main = () => {
         cleanupCapabilities()
         cleanupBinaries()
         cleanupCodeWindowFrame()
+        cleanupRuntimeCore()
         if (companionEnabled) {
             void cleanupCompanion()
         }
@@ -132,6 +135,7 @@ const main = () => {
         cleanupCapabilities()
         cleanupBinaries()
         cleanupCodeWindowFrame()
+        cleanupRuntimeCore()
         if (companionEnabled) {
             void cleanupCompanion()
         }
@@ -156,6 +160,7 @@ const main = () => {
         cleanupCapabilities()
         cleanupBinaries()
         cleanupCodeWindowFrame()
+        cleanupRuntimeCore()
         if (companionEnabled) {
             void cleanupCompanion()
         }

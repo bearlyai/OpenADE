@@ -14,7 +14,6 @@ import {
 import { getPublicBaseUrl } from "./network"
 import { cleanupPowerKeeper, configurePowerKeeper } from "./powerKeeper"
 import { closeCompanionStreams, getBoundUrls, startCompanionServer, stopCompanionServer } from "./server"
-import { cleanupRuntimeIpc, loadRuntimeIpc } from "./runtimeIpc"
 
 async function ensureServer(): Promise<string[]> {
     const settings = loadSettings()
@@ -48,8 +47,6 @@ async function setEnabled(enabled: boolean) {
 }
 
 export function load(): void {
-    loadRuntimeIpc()
-
     ipcMain.handle("companion:getState", () => currentState())
     ipcMain.handle("companion:setEnabled", async (_event, enabled: boolean) => setEnabled(enabled === true))
     ipcMain.handle("companion:setKeepAwakeMode", async (_event, keepAwakeMode: KeepAwakeMode) => {
@@ -97,7 +94,6 @@ export async function cleanup(): Promise<void> {
     ipcMain.removeHandler("companion:revokeDevice")
     ipcMain.removeHandler("companion:dropAllDevices")
     flushLastSeen()
-    cleanupRuntimeIpc()
     cleanupPowerKeeper()
     await stopCompanionServer()
 }

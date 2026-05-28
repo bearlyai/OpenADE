@@ -10,6 +10,7 @@ interface RendererRuntimeConnection {
 }
 
 const rendererConnections = new Map<number, RendererRuntimeConnection>()
+let loaded = false
 
 function connectionFor(webContents: WebContents): RendererRuntimeConnection {
     const existing = rendererConnections.get(webContents.id)
@@ -47,6 +48,7 @@ function isRuntimeRequest(value: unknown): value is RuntimeRequest {
 }
 
 export function loadRuntimeIpc(): void {
+    if (loaded) return
     ipcMain.handle("runtime:connect", (event: IpcMainInvokeEvent) => {
         connectionFor(event.sender)
         return { ok: true }
@@ -65,9 +67,11 @@ export function loadRuntimeIpc(): void {
             return serializationErrorResponse(request.id, error)
         }
     })
+    loaded = true
 }
 
 export function cleanupRuntimeIpc(): void {
+    if (!loaded) return
     ipcMain.removeHandler("runtime:connect")
     ipcMain.removeHandler("runtime:disconnect")
     ipcMain.removeHandler("runtime:request")
@@ -75,4 +79,5 @@ export function cleanupRuntimeIpc(): void {
         entry.dispose()
     }
     rendererConnections.clear()
+    loaded = false
 }
