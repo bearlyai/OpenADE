@@ -17,7 +17,7 @@ import type { Command, InputManager } from "../store/managers/InputManager"
 import type { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager"
 import type { SmartEditorManager } from "../store/managers/SmartEditorManager"
 import type { TrayManager } from "../store/managers/TrayManager"
-import type { Comment } from "../types"
+import type { Comment, QueuedTurn } from "../types"
 import { processImageBlob } from "../utils/imageAttachment"
 import {
     getMetaDigitShortcutIndex,
@@ -55,6 +55,42 @@ const COMMAND_SHORTCUT_BY_ID: Partial<Record<string, number>> = {
     cancelPlan: 8,
     close: 9,
     reopen: 9,
+}
+
+export const QUEUED_TURNS_PREVIEW_STORAGE_KEY = "openade.previewQueuedTurns"
+
+const SAMPLE_QUEUED_TURNS: QueuedTurn[] = [
+    {
+        id: "preview-queued-do",
+        type: "do",
+        input: "Run this follow-up after the current agent turn finishes.",
+        status: "queued",
+        createdAt: "2026-05-28T00:00:00.000Z",
+        updatedAt: "2026-05-28T00:00:00.000Z",
+        label: "Do",
+    },
+    {
+        id: "preview-queued-ask",
+        type: "ask",
+        input: "Then explain what changed and what still needs attention.",
+        status: "queued",
+        createdAt: "2026-05-28T00:00:00.000Z",
+        updatedAt: "2026-05-28T00:00:00.000Z",
+        label: "Ask",
+    },
+]
+
+function isQueuedTurnsPreviewEnabled(): boolean {
+    try {
+        return window.localStorage.getItem(QUEUED_TURNS_PREVIEW_STORAGE_KEY) === "1"
+    } catch {
+        return false
+    }
+}
+
+export function getInputBarQueuedTurns(queuedTurns: QueuedTurn[], previewEnabled = isQueuedTurnsPreviewEnabled()): { turns: QueuedTurn[]; preview: boolean } {
+    if (queuedTurns.length > 0) return { turns: queuedTurns, preview: false }
+    return previewEnabled ? { turns: SAMPLE_QUEUED_TURNS, preview: true } : { turns: [], preview: false }
 }
 
 // Semantic button styles - each variant has enabled and disabled states
@@ -200,7 +236,8 @@ export const InputBar = observer(function InputBar({
     const { commands } = input
     const hasComments = unsubmittedComments.length > 0
     const hasPendingImages = editorManager.pendingImages.length > 0
-    const queuedTurns = input.queuedTurns
+    const queuedTurnsState = getInputBarQueuedTurns(input.queuedTurns)
+    const queuedTurns = queuedTurnsState.turns
     const focusEditorAtEnd = useCallback(() => {
         if (input.isDisabled) return
 
@@ -358,7 +395,10 @@ export const InputBar = observer(function InputBar({
 
                 {queuedTurns.length > 0 && (
                     <div className="border-t border-border bg-base-100 px-2 py-2">
-                        <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted">Queued</div>
+                        <div className="mb-1 flex items-center gap-2 text-[10px] font-medium uppercase tracking-wide text-muted">
+                            <span>Queued</span>
+                            {queuedTurnsState.preview && <span className="text-primary">Preview</span>}
+                        </div>
                         <div className="flex flex-col gap-1">
                             {queuedTurns.map((turn) => (
                                 <div key={turn.id} className="flex min-w-0 items-center gap-2 border border-border bg-base-200 px-2 py-1.5 text-xs">
@@ -368,10 +408,14 @@ export const InputBar = observer(function InputBar({
                                     </span>
                                     <button
                                         type="button"
-                                        className="btn shrink-0 p-1 text-muted hover:bg-base-300 hover:text-base-content"
+                                        className={cx(
+                                            "btn shrink-0 p-1 text-muted",
+                                            queuedTurnsState.preview ? "cursor-default opacity-50" : "hover:bg-base-300 hover:text-base-content"
+                                        )}
+                                        disabled={queuedTurnsState.preview}
                                         onClick={() => void input.cancelQueuedTurn(turn.id)}
                                         aria-label={`Cancel queued ${turn.type}`}
-                                        title="Cancel queued message"
+                                        title={queuedTurnsState.preview ? "Preview only" : "Cancel queued message"}
                                     >
                                         <X size={12} />
                                     </button>
