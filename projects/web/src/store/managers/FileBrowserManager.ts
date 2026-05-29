@@ -341,8 +341,11 @@ export class FileBrowserManager {
         const exactPath = this.resolveFileReferencePath(referencePath)
         if (exactPath && (await this.openResolvedPath(exactPath, options))) return
 
-        const fuzzyPath = await this.findFuzzyPathReference(referencePath, true)
-        if (fuzzyPath && (await this.openResolvedPath(fuzzyPath, options))) return
+        const fuzzyFilePath = await this.findFuzzyPathReference(referencePath, false)
+        if (fuzzyFilePath && (await this.openResolvedPath(fuzzyFilePath, options))) return
+
+        const fuzzyDirPath = await this.findFuzzyPathReference(referencePath, true)
+        if (fuzzyDirPath && (await this.openResolvedPath(fuzzyDirPath, options))) return
 
         if (exactPath && options.line) {
             await this.openFile(exactPath, options)

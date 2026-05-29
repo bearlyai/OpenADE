@@ -139,6 +139,28 @@ describe("FileBrowserManager file references", () => {
         expect([...manager.expandedPaths]).toEqual(["/repo", "/repo/src", "/repo/src/store"])
     })
 
+    it("opens fuzzy file matches through path references", async () => {
+        const manager = new FileBrowserManager()
+        manager.workingDir = "/repo"
+        mockRepoFiles()
+        vi.mocked(filesApi.fuzzySearch).mockResolvedValue({
+            results: ["src/store/TaskModel.ts"],
+            truncated: false,
+            source: "git",
+        })
+
+        await manager.openPathReference("TaskModel.ts")
+
+        expect(filesApi.fuzzySearch).toHaveBeenCalledWith({
+            dir: "/repo",
+            query: "TaskModel.ts",
+            matchDirs: false,
+            limit: 12,
+        })
+        expect(manager.activeFile).toBe("/repo/src/store/TaskModel.ts")
+        expect(manager.selectedPath).toBe("/repo/src/store/TaskModel.ts")
+    })
+
     it("keeps tab order stable when switching to an already-open file", async () => {
         const manager = new FileBrowserManager()
         manager.workingDir = "/repo"
