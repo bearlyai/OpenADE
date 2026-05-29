@@ -364,6 +364,8 @@ function isVisibleSystemSubtype(subtype: string | undefined): subtype is SystemG
         subtype === "compact_boundary" ||
         subtype === "status" ||
         subtype === "init" ||
+        subtype === "hook_started" ||
+        subtype === "hook_progress" ||
         subtype === "hook_response" ||
         subtype === "api_retry" ||
         subtype === "task_started" ||
