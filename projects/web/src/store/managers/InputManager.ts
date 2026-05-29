@@ -234,7 +234,7 @@ export class InputManager {
         try {
             await this.store.refreshTaskStoreFromStorage(this.taskId)
         } finally {
-            this.clearOptimisticQueuedTurns()
+            this.reconcileOptimisticQueuedTurnsWithStorage()
         }
     }
 
@@ -276,8 +276,9 @@ export class InputManager {
         this.optimisticQueuedTurns = [...this.optimisticQueuedTurns.filter((existing) => existing.id !== turn.id), turn]
     }
 
-    private clearOptimisticQueuedTurns(): void {
-        this.optimisticQueuedTurns = []
+    private reconcileOptimisticQueuedTurnsWithStorage(): void {
+        const storedIds = new Set((this.taskModel?.queuedTurns ?? []).map((turn) => turn.id))
+        this.optimisticQueuedTurns = this.optimisticQueuedTurns.filter((turn) => !storedIds.has(turn.id))
     }
 
     private waitForTaskIdle(timeoutMs = INTERRUPT_IDLE_TIMEOUT_MS): Promise<void> {

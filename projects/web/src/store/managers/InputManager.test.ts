@@ -150,7 +150,7 @@ describe("InputManager queueable desktop commands", () => {
         )
     })
 
-    it("shows an optimistic queued row while the queued request is settling, then lets storage own the real queue", async () => {
+    it("keeps the optimistic queued row when the first refresh has not observed the queued metadata yet", async () => {
         const refresh = createDeferred<void>()
         const { manager } = createManager({
             refreshTaskStoreFromStorage: vi.fn(() => refresh.promise),
@@ -172,6 +172,30 @@ describe("InputManager queueable desktop commands", () => {
 
         refresh.resolve()
         await run
+
+        expect(manager.queuedTurns).toEqual([
+            expect.objectContaining({
+                id: "queued-do",
+                status: "queued",
+            }),
+        ])
+    })
+
+    it("hides the optimistic queued row once storage knows that queued turn is no longer queued", async () => {
+        const queuedTurns: QueuedTurn[] = []
+        const { manager } = createManager({
+            queuedTurns,
+        })
+
+        await manager.runCommand("do")
+        queuedTurns.push({
+            id: "queued-do",
+            type: "do",
+            input: "follow up after this",
+            status: "running",
+            createdAt: "2026-05-28T00:00:00.000Z",
+            updatedAt: "2026-05-28T00:00:01.000Z",
+        })
 
         expect(manager.queuedTurns).toEqual([])
     })
