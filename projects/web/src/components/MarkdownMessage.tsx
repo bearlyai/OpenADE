@@ -13,7 +13,7 @@ import { type CSSProperties, type MouseEvent, type ReactNode, useCallback, useEf
 import { codeToTokens } from "shiki/bundle/web"
 import type { BundledLanguage, SpecialLanguage } from "shiki/bundle/web"
 import { openUrlInNativeBrowser } from "../electronAPI/shell"
-import { useCodeStore } from "../store/context"
+import { useOptionalCodeStore } from "../store/context"
 import type { CommentSelectedText } from "../types"
 import { getExternalUrlToOpen } from "../utils/externalLinks"
 import { useCommentAnnotations } from "./comments/hooks/useCommentAnnotations"
@@ -31,6 +31,9 @@ export type MarkdownBlock =
     | { type: "rendered"; html: string; startLine: number; endLine: number }
     | { type: "code"; language?: string; text: string; startLine: number; endLine: number; diagram: boolean }
 
+export type MarkdownMessageVariant = "framed" | "plain"
+export type MarkdownMessageDensity = "default" | "compact"
+
 type MarkdownToken = ReturnType<MarkdownIt["parse"]>[number]
 
 const highlightedCodeCache = new Map<string, Promise<HighlightedCodeLine[]>>()
@@ -40,10 +43,7 @@ const LOCAL_FILE_EXTENSION_PATTERN =
     "(?:[cm]?[jt]sx?|json|mdx?|ya?ml|toml|css|scss|sass|less|html?|py|rb|go|rs|java|kt|kts|swift|c|h|cc|cpp|hh|hpp|cs|php|sh|bash|zsh|fish|sql|xml|txt|csv|tsv|lock|conf|config|ini|env|png|jpe?g|gif|webp|svg|ico|pdf)"
 const LOCAL_FILE_PATH_PATTERN = `(?:[A-Za-z]:[/\\\\]|/|\\.\\/)?(?:(?:[A-Za-z0-9_.@-]+)[/\\\\])*(?:[A-Za-z0-9_@-][A-Za-z0-9_.@-]*)\\.${LOCAL_FILE_EXTENSION_PATTERN}`
 const LOCAL_DIRECTORY_PATH_PATTERN = "(?:[A-Za-z]:[/\\\\]|/|\\.\\/)?(?:(?:[A-Za-z0-9_.@-]+)[/\\\\])+(?:[A-Za-z0-9_@-][A-Za-z0-9_.@-]*)/?"
-const LOCAL_FILE_REFERENCE_REGEX = new RegExp(
-    `(^|[\\s([{<,;])(${LOCAL_FILE_PATH_PATTERN})(?::([1-9]\\d{0,6}))?(?=$|[\\s)\\]}>.,;!?])`,
-    "gi"
-)
+const LOCAL_FILE_REFERENCE_REGEX = new RegExp(`(^|[\\s([{<,;])(${LOCAL_FILE_PATH_PATTERN})(?::([1-9]\\d{0,6}))?(?=$|[\\s)\\]}>.,;!?])`, "gi")
 const SINGLE_LOCAL_FILE_REFERENCE_REGEX = new RegExp(`^(${LOCAL_FILE_PATH_PATTERN}|${LOCAL_DIRECTORY_PATH_PATTERN})(?::([1-9]\\d{0,6}))?$`, "i")
 const CODE_SYMBOL_REFERENCE_REGEX = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?$/
 const SHORT_ABSOLUTE_PATH_PARTS = 4
@@ -537,7 +537,8 @@ function CopyButton({ content, label = "Copy", className }: { content: string; l
 function HighlightedCodeBlock({
     block,
     selectedRange,
-}: { block: Extract<MarkdownBlock, { type: "code" }>; selectedRange: { start: number; end: number } | null }) {
+    density,
+}: { block: Extract<MarkdownBlock, { type: "code" }>; selectedRange: { start: number; end: number } | null; density: MarkdownMessageDensity }) {
     const ref = useRef<HTMLPreElement | null>(null)
     const theme = useEditorTheme(ref)
     const codeLines = useMemo(() => block.text.split("\n"), [block.text])
@@ -563,7 +564,13 @@ function HighlightedCodeBlock({
                 label="Copy code"
                 className="absolute top-2 right-2 z-10 opacity-0 transition-opacity group-hover/code:opacity-100 group-focus-within/code:opacity-100"
             />
-            <pre ref={ref} className="my-2 overflow-x-auto border border-border bg-base-200 p-3 pr-24 font-mono text-sm leading-6">
+            <pre
+                ref={ref}
+                className={cx(
+                    "my-2 border border-border bg-base-200 font-mono",
+                    density === "compact" ? "max-h-[22rem] overflow-auto p-2 pr-12 text-xs leading-5" : "overflow-x-auto p-3 pr-24 text-sm leading-6"
+                )}
+            >
                 <code>
                     {lines.map((line, index) => {
                         const lineNumber = block.startLine + index
@@ -586,7 +593,11 @@ function HighlightedCodeBlock({
     )
 }
 
-function MermaidBlock({ block, selectedRange }: { block: Extract<MarkdownBlock, { type: "code" }>; selectedRange: { start: number; end: number } | null }) {
+function MermaidBlock({
+    block,
+    selectedRange,
+    density,
+}: { block: Extract<MarkdownBlock, { type: "code" }>; selectedRange: { start: number; end: number } | null; density: MarkdownMessageDensity }) {
     const ref = useRef<HTMLDivElement | null>(null)
     const theme = useEditorTheme(ref)
     const [svg, setSvg] = useState<string | null>(null)
@@ -631,7 +642,7 @@ function MermaidBlock({ block, selectedRange }: { block: Extract<MarkdownBlock, 
                 // biome-ignore lint/security/noDangerouslySetInnerHtml: Mermaid renders SVG markup for diagram output.
                 <div className="overflow-x-auto [&_svg]:mx-auto [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} />
             ) : error ? (
-                <HighlightedCodeBlock block={block} selectedRange={selectedRange} />
+                <HighlightedCodeBlock block={block} selectedRange={selectedRange} density={density} />
             ) : (
                 <div className="text-sm text-muted">Rendering diagram…</div>
             )}
@@ -639,39 +650,46 @@ function MermaidBlock({ block, selectedRange }: { block: Extract<MarkdownBlock, 
     )
 }
 
-const renderedMarkdownClass = cx(
-    "markdown-rendered min-w-0 text-sm leading-6",
-    "[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2",
-    "[&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-primary/50 [&_blockquote]:bg-base-200/40 [&_blockquote]:py-1 [&_blockquote]:pl-4 [&_blockquote]:text-muted",
-    "[&_code]:rounded-sm [&_code]:bg-base-200 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em]",
-    "[&_h1]:mb-2 [&_h1]:mt-3 [&_h1]:text-3xl [&_h1]:font-semibold [&_h1]:leading-tight",
-    "[&_h2]:mb-2 [&_h2]:mt-3 [&_h2]:text-2xl [&_h2]:font-semibold [&_h2]:leading-tight",
-    "[&_h3]:mb-1 [&_h3]:mt-2 [&_h3]:text-xl [&_h3]:font-semibold [&_h3]:leading-snug",
-    "[&_h4]:mb-1 [&_h4]:mt-2 [&_h4]:text-base [&_h4]:font-semibold",
-    "[&_hr]:my-4 [&_hr]:border-border",
-    "[&_li]:my-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6",
-    "[&_table]:my-3 [&_table]:w-full [&_table]:table-fixed [&_table]:border-collapse [&_table]:font-mono [&_table]:text-sm",
-    "[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:bg-base-200 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left"
-)
+function renderedMarkdownClass(density: MarkdownMessageDensity) {
+    return cx(
+        "markdown-rendered min-w-0 text-sm leading-6",
+        "[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2",
+        "[&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-primary/50 [&_blockquote]:bg-base-200/40 [&_blockquote]:py-1 [&_blockquote]:pl-4 [&_blockquote]:text-muted",
+        "[&_code]:rounded-sm [&_code]:bg-base-200 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em]",
+        density === "compact"
+            ? "[&_h1]:mb-1.5 [&_h1]:mt-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:leading-tight [&_h2]:mb-1.5 [&_h2]:mt-2 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:leading-tight [&_h3]:mb-1 [&_h3]:mt-1.5 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:leading-snug"
+            : "[&_h1]:mb-2 [&_h1]:mt-3 [&_h1]:text-3xl [&_h1]:font-semibold [&_h1]:leading-tight [&_h2]:mb-2 [&_h2]:mt-3 [&_h2]:text-2xl [&_h2]:font-semibold [&_h2]:leading-tight [&_h3]:mb-1 [&_h3]:mt-2 [&_h3]:text-xl [&_h3]:font-semibold [&_h3]:leading-snug",
+        "[&_h4]:mb-1 [&_h4]:mt-2 [&_h4]:text-base [&_h4]:font-semibold",
+        "[&_hr]:my-4 [&_hr]:border-border",
+        "[&_li]:my-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6",
+        "[&_table]:my-3 [&_table]:w-full [&_table]:table-fixed [&_table]:border-collapse [&_table]:font-mono [&_table]:text-sm",
+        "[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:bg-base-200 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left"
+    )
+}
 
 function RenderedMarkdownBlock({
     block,
     selectedRange,
-}: { block: Extract<MarkdownBlock, { type: "rendered" }>; selectedRange: { start: number; end: number } | null }) {
+    density,
+}: { block: Extract<MarkdownBlock, { type: "rendered" }>; selectedRange: { start: number; end: number } | null; density: MarkdownMessageDensity }) {
     const props = rangeProps(block.startLine, block.endLine, selectedRange)
     // biome-ignore lint/security/noDangerouslySetInnerHtml: Markdown HTML is sanitized with DOMPurify before rendering.
-    return <div {...props} className={cx(props.className, renderedMarkdownClass)} dangerouslySetInnerHTML={{ __html: block.html }} />
+    return <div {...props} className={cx(props.className, renderedMarkdownClass(density))} dangerouslySetInnerHTML={{ __html: block.html }} />
 }
 
-function MarkdownBlockView({ block, selectedRange = null }: { block: MarkdownBlock; selectedRange?: { start: number; end: number } | null }) {
+function MarkdownBlockView({
+    block,
+    selectedRange = null,
+    density = "default",
+}: { block: MarkdownBlock; selectedRange?: { start: number; end: number } | null; density?: MarkdownMessageDensity }) {
     if (block.type === "code") {
         return block.diagram ? (
-            <MermaidBlock block={block} selectedRange={selectedRange} />
+            <MermaidBlock block={block} selectedRange={selectedRange} density={density} />
         ) : (
-            <HighlightedCodeBlock block={block} selectedRange={selectedRange} />
+            <HighlightedCodeBlock block={block} selectedRange={selectedRange} density={density} />
         )
     }
-    return <RenderedMarkdownBlock block={block} selectedRange={selectedRange} />
+    return <RenderedMarkdownBlock block={block} selectedRange={selectedRange} density={density} />
 }
 
 function getLineRange(element: Element): { start: number; end: number } | null {
@@ -707,13 +725,15 @@ export function annotationBelongsToMarkdownBlock(annotation: { lineNumber: numbe
 function MarkdownMessageFrame({
     text,
     taskId,
+    variant,
     children,
 }: {
     text: string
     taskId?: string
+    variant: MarkdownMessageVariant
     children: ReactNode
 }) {
-    const codeStore = useCodeStore()
+    const codeStore = useOptionalCodeStore()
     const openMarkdownLink = useCallback(
         (event: MouseEvent<HTMLDivElement>) => {
             const target = event.target instanceof Element ? event.target : null
@@ -731,7 +751,7 @@ function MarkdownMessageFrame({
                 ? { filePath: anchor.getAttribute("data-openade-file-path")!, line: parseFileLine(anchor) }
                 : (parsedTextReference ?? parsedTargetReference)
 
-            if (localPathReference && taskId) {
+            if (localPathReference && taskId && codeStore) {
                 const taskModel = codeStore.tasks.getTaskModel(taskId)
                 const fileBrowser = taskModel?.fileBrowser
                 if (!taskModel || !fileBrowser?.workingDir) return
@@ -747,7 +767,7 @@ function MarkdownMessageFrame({
             }
 
             const symbolQuery = parseCodeSymbolReference(anchor.textContent) ?? parseCodeSymbolReference(internalTarget)
-            if (symbolQuery && taskId) {
+            if (symbolQuery && taskId && codeStore) {
                 const taskModel = codeStore.tasks.getTaskModel(taskId)
                 if (!taskModel?.contentSearch.workingDir) return
                 taskModel.contentSearch.setQuery(symbolQuery)
@@ -757,27 +777,38 @@ function MarkdownMessageFrame({
         [codeStore, taskId]
     )
 
+    const isFramed = variant === "framed"
     return (
         <div
-            className="group/markdown-message relative border border-border bg-base-100 px-3 py-2 font-sans text-sm leading-6"
+            className={cx(
+                "group/markdown-message relative max-w-full font-sans text-sm leading-6",
+                isFramed ? "border border-border bg-base-100 px-3 py-2" : "min-w-0"
+            )}
             onClickCapture={openMarkdownLink}
         >
-            <CopyButton
-                content={text}
-                label="Copy markdown"
-                className="absolute top-2 right-2 z-20 opacity-0 transition-opacity group-hover/markdown-message:opacity-100 group-focus-within/markdown-message:opacity-100"
-            />
-            <div className="pr-0">{children}</div>
+            {isFramed && (
+                <CopyButton
+                    content={text}
+                    label="Copy markdown"
+                    className="absolute top-2 right-2 z-20 opacity-0 transition-opacity group-hover/markdown-message:opacity-100 group-focus-within/markdown-message:opacity-100"
+                />
+            )}
+            <div className={isFramed ? "pr-0" : "min-w-0"}>{children}</div>
         </div>
     )
 }
 
-function MarkdownMessageStatic({ text, taskId }: { text: string; taskId?: string }) {
+function MarkdownMessageStatic({
+    text,
+    taskId,
+    variant,
+    density,
+}: { text: string; taskId?: string; variant: MarkdownMessageVariant; density: MarkdownMessageDensity }) {
     const blocks = useMemo(() => parseMarkdownBlocks(text), [text])
     return (
-        <MarkdownMessageFrame text={text} taskId={taskId}>
+        <MarkdownMessageFrame text={text} taskId={taskId} variant={variant}>
             {blocks.map((block, index) => (
-                <MarkdownBlockView key={`${block.startLine}-${index}`} block={block} />
+                <MarkdownBlockView key={`${block.startLine}-${index}`} block={block} density={density} />
             ))}
         </MarkdownMessageFrame>
     )
@@ -787,10 +818,14 @@ const CommentableMarkdownMessage = observer(function CommentableMarkdownMessage(
     text,
     taskId,
     commentHandlers,
+    variant,
+    density,
 }: {
     text: string
     taskId?: string
     commentHandlers: CommentHandlers
+    variant: MarkdownMessageVariant
+    density: MarkdownMessageDensity
 }) {
     const blocks = useMemo(() => parseMarkdownBlocks(text), [text])
     const contentDeps = useMemo(() => [text], [text])
@@ -818,13 +853,13 @@ const CommentableMarkdownMessage = observer(function CommentableMarkdownMessage(
     }
 
     return (
-        <MarkdownMessageFrame text={text} taskId={taskId ?? commentHandlers.taskId}>
+        <MarkdownMessageFrame text={text} taskId={taskId ?? commentHandlers.taskId} variant={variant}>
             {blocks.map((block, index) => {
                 const blockAnnotations = annotations.lineAnnotations.filter((annotation) => annotationBelongsToMarkdownBlock(annotation, block))
                 return (
                     <div key={`${block.startLine}-${index}`} className="group/markdown-block relative -ml-6 pl-6">
                         <div>
-                            <MarkdownBlockView block={block} selectedRange={annotations.selectedRange} />
+                            <MarkdownBlockView block={block} selectedRange={annotations.selectedRange} density={density} />
                         </div>
                         {!commentHandlers.readOnly && (
                             <button
@@ -850,15 +885,19 @@ const CommentableMarkdownMessage = observer(function CommentableMarkdownMessage(
     )
 })
 
-export const MarkdownMessage = observer(function MarkdownMessage({
+export function MarkdownMessage({
     text,
     commentHandlers,
     taskId,
+    variant = "framed",
+    density = "default",
 }: {
     text: string
     commentHandlers: CommentHandlers | null
     taskId?: string
+    variant?: MarkdownMessageVariant
+    density?: MarkdownMessageDensity
 }) {
-    if (!commentHandlers) return <MarkdownMessageStatic text={text} taskId={taskId} />
-    return <CommentableMarkdownMessage text={text} taskId={taskId} commentHandlers={commentHandlers} />
-})
+    if (!commentHandlers) return <MarkdownMessageStatic text={text} taskId={taskId} variant={variant} density={density} />
+    return <CommentableMarkdownMessage text={text} taskId={taskId} commentHandlers={commentHandlers} variant={variant} density={density} />
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { RemoteTask } from "../../../shared/companion/src"
-import { taskMessages } from "./messagePresentation"
+import { taskEventBlocks } from "./messagePresentation"
 
 function remoteTask(events: unknown[], overrides: Partial<RemoteTask> = {}): RemoteTask {
     return {
@@ -16,9 +16,9 @@ function remoteTask(events: unknown[], overrides: Partial<RemoteTask> = {}): Rem
     }
 }
 
-describe("taskMessages", () => {
-    it("renders Codex assistant text and compact activity breadcrumbs", () => {
-        const messages = taskMessages(
+describe("taskEventBlocks", () => {
+    it("renders Codex assistant text and compact activity groups", () => {
+        const blocks = taskEventBlocks(
             remoteTask([
                 {
                     id: "event-1",
@@ -69,23 +69,20 @@ describe("taskMessages", () => {
             ])
         )
 
-        expect(messages).toMatchObject([
-            { kind: "user", body: "Check the tests" },
-            { kind: "assistant", body: "The tests are passing." },
+        expect(blocks).toMatchObject([
             {
-                kind: "activity",
-                activity: [
-                    {
-                        label: "Shell",
-                        detail: "npm test",
-                    },
+                kind: "action",
+                userInput: "Check the tests",
+                groups: [
+                    { type: "text", label: "Assistant", detail: "The tests are passing." },
+                    { type: "bash", label: "npm test", detail: "npm test" },
                 ],
             },
         ])
     })
 
     it("renders queued turn metadata so mobile users can see pending follow-ups", () => {
-        const messages = taskMessages(
+        const blocks = taskEventBlocks(
             remoteTask([], {
                 queuedTurns: [
                     {
@@ -108,19 +105,19 @@ describe("taskMessages", () => {
             })
         )
 
-        expect(messages).toContainEqual(
+        expect(blocks).toContainEqual(
             expect.objectContaining({
                 id: "queued-1:queued-turn",
-                kind: "system",
+                kind: "queued",
                 title: "Queued Do",
                 status: "queued",
                 body: "Continue after this finishes",
             })
         )
-        expect(messages).toContainEqual(
+        expect(blocks).toContainEqual(
             expect.objectContaining({
                 id: "queued-2:queued-turn",
-                kind: "system",
+                kind: "queued",
                 title: "Queued Ask",
                 status: "queued",
                 body: "Summarize after this finishes",
@@ -129,7 +126,7 @@ describe("taskMessages", () => {
     })
 
     it("renders unknown task events with raw details instead of hiding them", () => {
-        const messages = taskMessages(
+        const blocks = taskEventBlocks(
             remoteTask([
                 {
                     id: "future-1",
@@ -139,10 +136,10 @@ describe("taskMessages", () => {
             ])
         )
 
-        expect(messages).toContainEqual(
+        expect(blocks).toContainEqual(
             expect.objectContaining({
-                id: "future-1:event",
-                kind: "system",
+                id: "future-1",
+                kind: "unknown",
                 title: "future_event",
                 body: expect.stringContaining('"value": 42'),
             })

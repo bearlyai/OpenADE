@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
+import { createElement } from "react"
+import { flushSync } from "react-dom"
+import { createRoot } from "react-dom/client"
 import {
+    MarkdownMessage,
     annotationBelongsToMarkdownBlock,
     getMarkdownSelectionRange,
     parseMarkdownBlocks,
@@ -105,6 +109,27 @@ describe("MarkdownMessage", () => {
 
         expect(blocks[0]?.type).toBe("rendered")
         expect(blocks[0]?.type === "rendered" ? blocks[0].html : "").toContain("<table>")
+    })
+
+    it("renders static markdown without a CodeStore provider", () => {
+        const container = document.createElement("div")
+        document.body.appendChild(container)
+        const root = createRoot(container)
+
+        flushSync(() => {
+            root.render(
+                createElement(MarkdownMessage, {
+                    text: "**mobile** markdown",
+                    commentHandlers: null,
+                    variant: "plain",
+                    density: "compact",
+                })
+            )
+        })
+
+        expect(container.innerHTML).toContain("<strong>mobile</strong>")
+        root.unmount()
+        container.remove()
     })
 
     it("renders a multi-line markdown comment form only on the block containing the annotation line", () => {

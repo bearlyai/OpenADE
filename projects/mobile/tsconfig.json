@@ -5,14 +5,20 @@
         "moduleResolution": "bundler",
         "jsx": "react-jsx",
         "strict": true,
+        "noUnusedLocals": true,
         "skipLibCheck": true,
         "esModuleInterop": true,
-        "types": ["vite/client"]
+        "types": ["vite/client"],
+        "paths": {
+            "yjs": ["../web/node_modules/yjs"]
+        }
     },
     "include": [
         "src/**/*",
         "capacitor.config.ts",
         "vite.config.ts",
+        "../web/src/vite-env.d.ts",
+        "../web/src/types/**/*.d.ts",
         "../web/src/remote/RemoteApp.tsx",
         "../web/src/remote/client.ts",
         "../shared/companion/src/**/*",

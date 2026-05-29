@@ -241,7 +241,10 @@ function notifyRuntimeEntryStatus(entry: RuntimeClientEntry, status: RemoteRealt
     for (const listener of entry.statusListeners) listener(status)
 }
 
-function runtimeEntry(config: RemoteConfig, onStatus?: (status: RemoteRealtimeConnectionStatus) => void): { entry: RuntimeClientEntry; removeStatus: () => void } {
+function runtimeEntry(
+    config: RemoteConfig,
+    onStatus?: (status: RemoteRealtimeConnectionStatus) => void
+): { entry: RuntimeClientEntry; removeStatus: () => void } {
     const key = config.id
     const url = runtimeSocketUrl(config)
     let entry = runtimeClients.get(key)
@@ -329,7 +332,11 @@ export function abortRemote(config: RemoteConfig, taskId: string): Promise<void>
     return runtimeEntry(config).entry.openade.interruptTurn(taskId)
 }
 
-export function subscribeRemoteChanges(config: RemoteConfig, onEvent: (notification: RuntimeNotification) => void, onStatus?: (status: RemoteRealtimeConnectionStatus) => void): () => void {
+export function subscribeRemoteChanges(
+    config: RemoteConfig,
+    onEvent: (notification: RuntimeNotification) => void,
+    onStatus?: (status: RemoteRealtimeConnectionStatus) => void
+): () => void {
     const { entry, removeStatus } = runtimeEntry(config, onStatus)
     const unsubscribe = entry.openade.subscribeToChanges((notification) => {
         onEvent(notification)

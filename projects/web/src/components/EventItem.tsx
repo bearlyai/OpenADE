@@ -65,7 +65,12 @@ function UnknownEventItem({
             </button>
             {expanded && (
                 <div className="px-3 pb-3">
-                    <FileViewer file={{ name: "unknown-task-event.json", contents, lang: "json" }} copyContent={contents} disableFileHeader commentHandlers={null} />
+                    <FileViewer
+                        file={{ name: "unknown-task-event.json", contents, lang: "json" }}
+                        copyContent={contents}
+                        disableFileHeader
+                        commentHandlers={null}
+                    />
                 </div>
             )}
         </div>
@@ -112,7 +117,9 @@ export const EventItem = observer(
                 // plan/revise -> full, do/ask/run_plan -> compact
                 const displayMode: DisplayMode = isPlan ? "full" : "compact"
 
-                return <ActionEventItem {...baseProps} event={actionEvent} displayMode={displayMode} taskId={taskId} readOnlyComments={isPlan && !isLatestPlan} />
+                return (
+                    <ActionEventItem {...baseProps} event={actionEvent} displayMode={displayMode} taskId={taskId} readOnlyComments={isPlan && !isLatestPlan} />
+                )
             }
             case "setup_environment":
                 return <SetupEventItem {...baseProps} event={event as Extract<CodeEvent, { type: "setup_environment" }>} />

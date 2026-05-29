@@ -1,6 +1,4 @@
 declare module "markdown-it-task-lists" {
-    import type MarkdownIt from "markdown-it"
-
     interface TaskListOptions {
         enabled?: boolean
         label?: boolean
@@ -12,8 +10,6 @@ declare module "markdown-it-task-lists" {
 }
 
 declare module "markdown-it-texmath" {
-    import type MarkdownIt from "markdown-it"
-
     interface TexmathOptions {
         engine: unknown
         delimiters?: "dollars" | "brackets" | "gitlab" | "julia" | "kramdown"

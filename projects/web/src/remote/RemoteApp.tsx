@@ -42,7 +42,8 @@ import {
     type RemoteConfig,
     type RemoteRealtimeConnectionStatus,
 } from "./client"
-import { taskMessages, type RemoteActivity, type RemoteMessage } from "./messagePresentation"
+import { taskEventBlocks, type RemoteEventBlock } from "./messagePresentation"
+import { RemoteEventThread } from "./RemoteEventThread"
 import { remoteRefreshPlan } from "./refreshPolicy"
 import { nextRemoteRefreshDelay } from "./refreshQueue"
 import { REMOTE_STATUS_GRACE_MS, isRemoteRealtimeOnline, shouldDelayRemoteStatusDisplay, statusCopy, type RemoteStatusTone } from "./status"
@@ -1277,10 +1278,10 @@ function TaskScreen({
     onSend: () => void
     onAbort: () => void
 }) {
-    const messages = useMemo(() => taskMessages(task), [task])
+    const blocks = useMemo(() => taskEventBlocks(task), [task])
     return (
         <div className="flex h-full w-full max-w-full flex-col overflow-hidden">
-            <TaskMessages task={task} preview={preview} messages={messages} isRunning={isRunning} />
+            <TaskMessages task={task} preview={preview} blocks={blocks} isRunning={isRunning} />
             <Composer
                 input={input}
                 commandType={commandType}
@@ -1300,12 +1301,12 @@ function TaskScreen({
 function TaskMessages({
     task,
     preview,
-    messages,
+    blocks,
     isRunning,
 }: {
     task: RemoteTask | null
     preview: RemoteTaskPreview | null
-    messages: RemoteMessage[]
+    blocks: RemoteEventBlock[]
     isRunning: boolean
 }) {
     const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -1328,7 +1329,7 @@ function TaskMessages({
         } else {
             setShowJump(true)
         }
-    }, [messages.length, isRunning])
+    }, [blocks, isRunning])
 
     const handleScroll = () => {
         const el = scrollRef.current
@@ -1361,22 +1362,12 @@ function TaskMessages({
                 {task?.unavailableReason && (
                     <div className="mb-3 break-words border border-warning/30 bg-warning/10 p-3 text-sm text-warning">{task.unavailableReason}</div>
                 )}
-                {messages.length === 0 && (
+                {blocks.length === 0 && (
                     <div className="break-words border border-border bg-base-200/40 p-3 text-sm text-muted">
                         {preview?.title ?? "Task"} has no messages yet.
                     </div>
                 )}
-                <div className="flex w-full max-w-full flex-col gap-3 overflow-hidden">
-                    {messages.map((message) => (
-                        <MessageRow key={message.id} message={message} />
-                    ))}
-                    {isRunning && (
-                        <div className="flex items-center gap-2 text-xs text-muted">
-                            <Loader2 size={13} className="animate-spin text-primary" />
-                            Working
-                        </div>
-                    )}
-                </div>
+                <RemoteEventThread blocks={blocks} isRunning={isRunning} />
             </div>
             {showJump && (
                 <button
@@ -1388,68 +1379,6 @@ function TaskMessages({
                     Latest
                 </button>
             )}
-        </div>
-    )
-}
-
-function MessageRow({ message }: { message: RemoteMessage }) {
-    if (message.kind === "activity") return <ActivityRow message={message} />
-
-    const isUser = message.kind === "user"
-    const tone =
-        message.kind === "error"
-            ? "border-error/30 bg-error/10 text-error"
-            : message.kind === "snapshot"
-              ? "border-info/30 bg-info/10"
-              : message.kind === "tool"
-                ? "border-border bg-base-200/50"
-                : message.kind === "system"
-                  ? "border-border bg-base-200/40"
-                  : isUser
-                    ? "border-primary/25 bg-primary/10"
-                    : "border-border bg-base-200/60"
-
-    return (
-        <div className={`flex max-w-full ${isUser ? "justify-end pl-8" : "justify-start"}`}>
-            <div className={`${isUser ? "max-w-[92%]" : "max-w-full"} overflow-hidden border p-3 ${tone}`}>
-                {(message.title || message.meta || message.status) && (
-                    <div className="mb-1 flex flex-wrap items-center gap-2 text-[10px] font-medium uppercase tracking-wide text-muted">
-                        {message.title && <span>{message.title}</span>}
-                        {message.meta && <span>{message.meta}</span>}
-                        {message.status && <span>{message.status}</span>}
-                    </div>
-                )}
-                <div className="whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">{message.body}</div>
-            </div>
-        </div>
-    )
-}
-
-function activityToneClass(tone: RemoteActivity["tone"]): string {
-    if (tone === "ok") return "border-success/25 bg-success/10 text-success"
-    if (tone === "warn") return "border-warning/25 bg-warning/10 text-warning"
-    if (tone === "bad") return "border-error/25 bg-error/10 text-error"
-    if (tone === "info") return "border-info/25 bg-info/10 text-info"
-    return "border-border bg-base-200/50 text-muted"
-}
-
-function ActivityRow({ message }: { message: RemoteMessage }) {
-    const items = message.activity ?? []
-
-    return (
-        <div className="mr-auto max-w-full overflow-hidden">
-            <div className="flex max-w-full flex-wrap gap-1.5">
-                {items.length === 0 && <span className="border border-border bg-base-200/50 px-2 py-1 text-[11px] text-muted">{message.body}</span>}
-                {items.map((item) => (
-                    <span
-                        key={item.id}
-                        className={`inline-flex max-w-full items-center gap-1 overflow-hidden border px-2 py-1 text-[11px] ${activityToneClass(item.tone)}`}
-                    >
-                        <span className="shrink-0 font-medium uppercase">{item.label}</span>
-                        {item.detail && <span className="min-w-0 truncate normal-case opacity-80">{item.detail}</span>}
-                    </span>
-                ))}
-            </div>
         </div>
     )
 }

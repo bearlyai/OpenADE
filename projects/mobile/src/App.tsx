@@ -3,7 +3,6 @@ import { CapacitorUpdater } from "@capgo/capacitor-updater"
 import { Capacitor } from "@capacitor/core"
 import { SecureStoragePlugin } from "capacitor-secure-storage-plugin"
 import { Component, type ErrorInfo, type ReactNode, useEffect, useState } from "react"
-import { isCompanionFeatureEnabled } from "../../web/src/featureFlags"
 import { RemoteApp } from "../../web/src/remote/RemoteApp"
 import { REMOTE_CONFIG_STORAGE_KEY, clearRemoteConfig } from "../../web/src/remote/client"
 import "./index.css"
@@ -162,14 +161,6 @@ export function App() {
     }, [])
 
     if (!isStorageReady) {
-        return (
-            <main className="code-theme-black min-h-screen bg-base-100 px-4 text-base-content" style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}>
-                <div className="text-lg font-semibold">OpenADE</div>
-            </main>
-        )
-    }
-
-    if (!isCompanionFeatureEnabled) {
         return (
             <main className="code-theme-black min-h-screen bg-base-100 px-4 text-base-content" style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}>
                 <div className="text-lg font-semibold">OpenADE</div>

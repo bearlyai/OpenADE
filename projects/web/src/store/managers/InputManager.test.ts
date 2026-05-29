@@ -4,11 +4,13 @@ import { InputManager } from "./InputManager"
 import { QueuedTurnManager } from "./QueuedTurnManager"
 
 const mocks = vi.hoisted(() => ({
-    startTurn: vi.fn(async (request: { type: string }): Promise<{ taskId: string; eventId?: string; queued?: boolean; queuedTurnId?: string }> => ({
-        taskId: "task-1",
-        queued: true,
-        queuedTurnId: `queued-${request.type}`,
-    })),
+    startTurn: vi.fn(
+        async (request: { type: string }): Promise<{ taskId: string; eventId?: string; queued?: boolean; queuedTurnId?: string }> => ({
+            taskId: "task-1",
+            queued: true,
+            queuedTurnId: `queued-${request.type}`,
+        })
+    ),
     interruptTurn: vi.fn(async (_taskId: string) => undefined),
 }))
 
