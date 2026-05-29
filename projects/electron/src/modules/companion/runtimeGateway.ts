@@ -923,12 +923,22 @@ function publishWorkingTasks(server: RuntimeServer): void {
     })
 }
 
+function publishQueuedTurnUpdated(server: RuntimeServer, repoId: string, taskId: string, turn: OpenADEQueuedTurn): void {
+    server.notify("openade/queuedTurn/updated", {
+        repoId,
+        taskId,
+        turn,
+        at: new Date().toISOString(),
+    })
+}
+
 async function saveQueuedTurns(params: {
     writer: ReturnType<typeof createOpenADEYjsWriter>
     server: RuntimeServer
     repoId: string
     taskId: string
     queuedTurns: OpenADEQueuedTurn[]
+    changedTurn?: OpenADEQueuedTurn
 }): Promise<void> {
     await params.writer.updateTaskMetadata({
         taskId: params.taskId,
@@ -936,6 +946,7 @@ async function saveQueuedTurns(params: {
         updatedAt: new Date().toISOString(),
     })
     publishTaskChanged(params.server, params.repoId, params.taskId)
+    if (params.changedTurn) publishQueuedTurnUpdated(params.server, params.repoId, params.taskId, params.changedTurn)
 }
 
 async function updateQueuedTurn(params: {
@@ -948,21 +959,23 @@ async function updateQueuedTurn(params: {
     patch: Partial<OpenADEQueuedTurn>
 }): Promise<void> {
     const task = await params.projection.readTask(params.repoId, params.taskId)
-    const queuedTurns = (task.queuedTurns ?? []).map((turn) =>
-        turn.id === params.queuedTurnId
-            ? {
-                  ...turn,
-                  ...params.patch,
-                  updatedAt: new Date().toISOString(),
-              }
-            : turn
-    )
+    let changedTurn: OpenADEQueuedTurn | undefined
+    const queuedTurns = (task.queuedTurns ?? []).map((turn) => {
+        if (turn.id !== params.queuedTurnId) return turn
+        changedTurn = {
+            ...turn,
+            ...params.patch,
+            updatedAt: new Date().toISOString(),
+        }
+        return changedTurn
+    })
     await saveQueuedTurns({
         writer: params.writer,
         server: params.server,
         repoId: params.repoId,
         taskId: params.taskId,
         queuedTurns,
+        changedTurn,
     })
 }
 
@@ -978,7 +991,10 @@ async function enqueueDoTurn(params: {
     const existing = params.task.queuedTurns?.find(
         (turn) => turn.id === queuedTurn.id || (queuedTurn.clientRequestId && turn.clientRequestId === queuedTurn.clientRequestId)
     )
-    if (existing) return { taskId: params.task.id, queued: true, queuedTurnId: existing.id }
+    if (existing) {
+        publishQueuedTurnUpdated(params.server, params.turn.repoId, params.task.id, existing)
+        return { taskId: params.task.id, queued: true, queuedTurnId: existing.id }
+    }
 
     await saveQueuedTurns({
         writer: params.writer,
@@ -986,6 +1002,7 @@ async function enqueueDoTurn(params: {
         repoId: params.turn.repoId,
         taskId: params.task.id,
         queuedTurns: [...(params.task.queuedTurns ?? []), queuedTurn],
+        changedTurn: queuedTurn,
     })
     return { taskId: params.task.id, queued: true, queuedTurnId: queuedTurn.id }
 }
@@ -1000,11 +1017,13 @@ async function cancelQueuedTurn(params: {
 }): Promise<{ taskId: string; queuedTurnId: string; cancelled: boolean }> {
     const task = await params.projection.readTask(params.repoId, params.taskId)
     let cancelled = false
+    let changedTurn: OpenADEQueuedTurn | undefined
     const queuedTurns = (task.queuedTurns ?? []).map((turn) => {
         if (turn.id !== params.queuedTurnId) return turn
         if (turn.status !== "queued") return turn
         cancelled = true
-        return { ...turn, status: "cancelled" as const, updatedAt: new Date().toISOString() }
+        changedTurn = { ...turn, status: "cancelled" as const, updatedAt: new Date().toISOString() }
+        return changedTurn
     })
 
     if (cancelled) {
@@ -1014,6 +1033,7 @@ async function cancelQueuedTurn(params: {
             repoId: params.repoId,
             taskId: params.taskId,
             queuedTurns,
+            changedTurn,
         })
     }
 

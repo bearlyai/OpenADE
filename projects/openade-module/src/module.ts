@@ -793,6 +793,7 @@ export function createOpenADEModule(adapters: OpenADEModuleAdapters): RuntimeMod
             server.registerNotification("openade/task/previewChanged")
             server.registerNotification("openade/task/updated")
             server.registerNotification("openade/task/deleted")
+            server.registerNotification("openade/queuedTurn/updated")
             server.registerNotification("openade/workingTasks")
             server.registerNotification("remote/device/changed")
 

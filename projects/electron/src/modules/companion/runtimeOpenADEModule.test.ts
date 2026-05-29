@@ -79,6 +79,7 @@ describe("OpenADE runtime module", () => {
 
         expect(leakedMethods).toEqual([])
         expect(runtime.capabilities().methods).toEqual(expect.arrayContaining(["openade/turn/start", "openade/review/start", "openade/queued-turn/cancel"]))
+        expect(runtime.capabilities().notifications).toEqual(expect.arrayContaining(["openade/queuedTurn/updated"]))
     })
 
     it("retains completed clientRequestId results so retrying does not duplicate turns", async () => {

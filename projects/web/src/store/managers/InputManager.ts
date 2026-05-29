@@ -63,7 +63,6 @@ export interface Command {
 
 export class InputManager {
     private taskId: string
-    private optimisticQueuedTurns: QueuedTurn[] = []
 
     constructor(
         private store: CodeStore,
@@ -130,16 +129,12 @@ export class InputManager {
 
     get queuedTurns(): QueuedTurn[] {
         const storedTurns = this.taskModel?.queuedTurns ?? []
-        const storedIds = new Set(storedTurns.map((turn) => turn.id))
-        return [
-            ...storedTurns.filter((turn) => turn.status === "queued"),
-            ...this.optimisticQueuedTurns.filter((turn) => turn.status === "queued" && !storedIds.has(turn.id) && !this.hasStartedActionForQueuedTurn(turn)),
-        ]
+        return this.store.queuedTurns.queuedForTask(this.taskId, storedTurns)
     }
 
     async cancelQueuedTurn(queuedTurnId: string): Promise<void> {
         await this.taskModel?.cancelQueuedTurn(queuedTurnId)
-        this.optimisticQueuedTurns = this.optimisticQueuedTurns.filter((turn) => turn.id !== queuedTurnId)
+        this.store.queuedTurns.suppressQueuedTurn(this.taskId, queuedTurnId, this.taskModel?.queuedTurns ?? [])
     }
 
     private get isCommitAndPushInProgress(): boolean {
@@ -234,7 +229,7 @@ export class InputManager {
         try {
             await this.store.refreshTaskStoreFromStorage(this.taskId)
         } finally {
-            this.reconcileOptimisticQueuedTurnsWithStorage()
+            this.store.queuedTurns.reconcileTaskWithStorage(this.taskId, taskModel.queuedTurns)
         }
     }
 
@@ -273,22 +268,7 @@ export class InputManager {
             fastMode: taskModel.fastMode,
         }
 
-        this.optimisticQueuedTurns = [...this.optimisticQueuedTurns.filter((existing) => existing.id !== turn.id), turn]
-    }
-
-    private reconcileOptimisticQueuedTurnsWithStorage(): void {
-        const storedIds = new Set((this.taskModel?.queuedTurns ?? []).map((turn) => turn.id))
-        this.optimisticQueuedTurns = this.optimisticQueuedTurns.filter((turn) => !storedIds.has(turn.id) && !this.hasStartedActionForQueuedTurn(turn))
-    }
-
-    private hasStartedActionForQueuedTurn(turn: QueuedTurn): boolean {
-        const events = this.store.tasks.getTask(this.taskId)?.events ?? []
-        return events.some((event) => {
-            if (event.type !== "action") return false
-            if (event.source.type !== turn.type) return false
-            if (event.userInput !== turn.input) return false
-            return event.createdAt >= turn.createdAt
-        })
+        this.store.queuedTurns.acceptQueuedTurn(this.taskId, turn)
     }
 
     private waitForTaskIdle(timeoutMs = INTERRUPT_IDLE_TIMEOUT_MS): Promise<void> {

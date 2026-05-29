@@ -215,10 +215,12 @@ async function writeClaudeSession(cwd: string, sessionId: string, rows: Record<s
     await fs.promises.writeFile(path.join(projectDir, `${sessionId}.jsonl`), rows.map((row) => JSON.stringify(row)).join("\n") + "\n")
 }
 
-function connection() {
+function connection(messages?: RuntimeMessage[]) {
     return {
         id: "trusted-runtime-turn-start-test",
-        send(_message: RuntimeMessage) {},
+        send(message: RuntimeMessage) {
+            messages?.push(message)
+        },
     }
 }
 
@@ -517,6 +519,8 @@ describe("OpenADE runtime turn start integration", () => {
     it("queues do and ask turns for a task that already has a running server-owned turn and drains them after settle", async () => {
         await seedExistingTaskWithCompletedPlan("task-with-queue")
         const settleCallbacks: Array<(result: Record<string, unknown>) => void> = []
+        const messages: RuntimeMessage[] = []
+        const conn = connection(messages)
         harnessMock.startRuntimeHarnessQuery.mockImplementation(
             async (request: { onSettled?: (result: Record<string, unknown>) => void }) => {
                 if (request.onSettled) settleCallbacks.push(request.onSettled)
@@ -525,9 +529,12 @@ describe("OpenADE runtime turn start integration", () => {
         )
 
         const runtime = getRuntimeServer()
+        runtime.connect(conn)
+        await runtime.handleRequest({ id: "init", method: "initialize", params: {} }, conn)
+        await runtime.handleRequest({ id: "sub", method: "subscription/update", params: { methods: ["*"] } }, conn)
         const first = await runtime.handleRequest(
             { id: 1, method: "openade/turn/start", params: { repoId: "repo-1", inTaskId: "task-with-queue", type: "do", input: "First running turn" } },
-            connection()
+            conn
         )
         expect(first.error).toBeUndefined()
         expect(harnessMock.startRuntimeHarnessQuery).toHaveBeenCalledTimes(1)
@@ -544,11 +551,23 @@ describe("OpenADE runtime turn start integration", () => {
                     clientRequestId: "queued-turn-1",
                 },
             },
-            connection()
+            conn
         )
 
         expect(queued.error).toBeUndefined()
         expect(queued.result).toMatchObject({ taskId: "task-with-queue", queued: true, queuedTurnId: expect.any(String) })
+        expect(messages).toContainEqual(
+            expect.objectContaining({
+                method: "openade/queuedTurn/updated",
+                params: expect.objectContaining({
+                    taskId: "task-with-queue",
+                    turn: expect.objectContaining({
+                        id: (queued.result as { queuedTurnId: string }).queuedTurnId,
+                        status: "queued",
+                    }),
+                }),
+            })
+        )
         const queuedAsk = await runtime.handleRequest(
             {
                 id: 3,
@@ -561,7 +580,7 @@ describe("OpenADE runtime turn start integration", () => {
                     clientRequestId: "queued-ask-1",
                 },
             },
-            connection()
+            conn
         )
 
         expect(queuedAsk.error).toBeUndefined()
@@ -590,6 +609,19 @@ describe("OpenADE runtime turn start integration", () => {
         await vi.waitFor(() => {
             expect(harnessMock.startRuntimeHarnessQuery).toHaveBeenCalledTimes(2)
         })
+        expect(messages).toContainEqual(
+            expect.objectContaining({
+                method: "openade/queuedTurn/updated",
+                params: expect.objectContaining({
+                    taskId: "task-with-queue",
+                    turn: expect.objectContaining({
+                        id: (queued.result as { queuedTurnId: string }).queuedTurnId,
+                        status: "running",
+                        eventId: expect.any(String),
+                    }),
+                }),
+            })
+        )
         expect(harnessMock.startRuntimeHarnessQuery.mock.calls[1][0]).toMatchObject({
             prompt: expect.stringContaining("Queued turn"),
         })

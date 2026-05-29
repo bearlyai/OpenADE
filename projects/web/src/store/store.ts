@@ -28,6 +28,7 @@ import { ExecutionManager } from "./managers/ExecutionManager"
 import { McpServerManager } from "./managers/McpServerManager"
 import { NotificationManager } from "./managers/NotificationManager"
 import { QueryManager } from "./managers/QueryManager"
+import { QueuedTurnManager } from "./managers/QueuedTurnManager"
 import { RepeatManager } from "./managers/RepeatManager"
 import { RepoManager } from "./managers/RepoManager"
 import { RepoProcessesManager } from "./managers/RepoProcessesManager"
@@ -120,6 +121,7 @@ export class CodeStore {
     readonly mcpServers: McpServerManager
     readonly smartEditors: SmartEditorManagerStore
     readonly runtimes: RuntimeManager
+    readonly queuedTurns: QueuedTurnManager
     readonly crons: CronManager
     readonly repeat: RepeatManager
     readonly scratchpads: ScratchpadManager
@@ -139,6 +141,7 @@ export class CodeStore {
         this.mcpServers = new McpServerManager(this)
         this.smartEditors = new SmartEditorManagerStore()
         this.runtimes = new RuntimeManager()
+        this.queuedTurns = new QueuedTurnManager()
         this.crons = new CronManager(this)
         this.repeat = new RepeatManager(this)
         this.scratchpads = new ScratchpadManager()
@@ -162,6 +165,7 @@ export class CodeStore {
             mcpServers: false,
             smartEditors: false,
             runtimes: false,
+            queuedTurns: false,
             crons: false,
             repeat: false,
             scratchpads: false,
@@ -261,6 +265,13 @@ export class CodeStore {
         const settledTaskIds = this.runtimes.applyNotification(notification)
         for (const taskId of settledTaskIds) {
             await this.notifyRuntimeTaskSettled(taskId)
+        }
+
+        const queuedTurnTaskId = this.queuedTurns.applyNotification(notification)
+        if (queuedTurnTaskId) {
+            await this.refreshTaskStoreFromStorage(queuedTurnTaskId)
+            this.queuedTurns.reconcileTaskWithStorage(queuedTurnTaskId, this.tasks.getTaskModel(queuedTurnTaskId)?.queuedTurns ?? [])
+            return
         }
 
         if (notification.method === "openade/task/updated" || notification.method === "openade/task/previewChanged") {
@@ -533,6 +544,7 @@ export class CodeStore {
 
         this.scratchpads.disconnectAll()
         this.runtimes.clear()
+        this.queuedTurns.clear()
 
         if (this.envVarsReactionDisposer) {
             this.envVarsReactionDisposer()

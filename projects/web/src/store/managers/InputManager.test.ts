@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { QueuedTurn } from "../../types"
 import { InputManager } from "./InputManager"
+import { QueuedTurnManager } from "./QueuedTurnManager"
 
 const mocks = vi.hoisted(() => ({
     startTurn: vi.fn(async (request: { type: string }): Promise<{ taskId: string; eventId?: string; queued?: boolean; queuedTurnId?: string }> => ({
@@ -30,12 +31,10 @@ function createDeferred<T>() {
 
 function createManager({
     queuedTurns = [],
-    events = [],
     isTaskRunning = () => true,
     refreshTaskStoreFromStorage = vi.fn(async () => undefined),
 }: {
     queuedTurns?: QueuedTurn[]
-    events?: unknown[]
     isTaskRunning?: (taskId: string) => boolean
     refreshTaskStoreFromStorage?: (taskId: string) => Promise<void>
 } = {}) {
@@ -44,7 +43,7 @@ function createManager({
         id: "task-1",
         repoId: "repo-1",
         closed: false,
-        events,
+        events: [],
         queuedTurns,
     }
     const taskModel = {
@@ -64,10 +63,12 @@ function createManager({
         await mocks.interruptTurn(taskId)
         return true
     })
+    const queuedTurnManager = new QueuedTurnManager()
     const store = {
         isTaskRunning: vi.fn((taskId: string) => taskId === "task-1" && isTaskRunning(taskId)),
         getTaskStore: vi.fn(async () => undefined),
         refreshTaskStoreFromStorage,
+        queuedTurns: queuedTurnManager,
         queries: {
             interruptTask,
             abortTask: vi.fn(async () => undefined),
@@ -111,6 +112,7 @@ function createManager({
         editor,
         cancelQueuedTurn,
         interruptTask,
+        queuedTurnManager,
     }
 }
 
@@ -152,7 +154,7 @@ describe("InputManager queueable desktop commands", () => {
         )
     })
 
-    it("keeps the optimistic queued row when the first refresh has not observed the queued metadata yet", async () => {
+    it("keeps the accepted queued row when the first refresh has not observed the queued metadata yet", async () => {
         const refresh = createDeferred<void>()
         const { manager } = createManager({
             refreshTaskStoreFromStorage: vi.fn(() => refresh.promise),
@@ -183,7 +185,7 @@ describe("InputManager queueable desktop commands", () => {
         ])
     })
 
-    it("hides the optimistic queued row once storage knows that queued turn is no longer queued", async () => {
+    it("hides the accepted queued row once storage knows that queued turn is no longer queued", async () => {
         const queuedTurns: QueuedTurn[] = []
         const { manager } = createManager({
             queuedTurns,
@@ -202,11 +204,8 @@ describe("InputManager queueable desktop commands", () => {
         expect(manager.queuedTurns).toEqual([])
     })
 
-    it("hides the optimistic queued row once the queued turn has started as an action event", async () => {
-        const events: unknown[] = []
-        const { manager } = createManager({
-            events,
-        })
+    it("hides the queued row when the server reports that queued turn is running", async () => {
+        const { manager, queuedTurnManager } = createManager()
 
         await manager.runCommand("do")
 
@@ -217,15 +216,20 @@ describe("InputManager queueable desktop commands", () => {
             }),
         ])
 
-        events.push({
-            id: "event-2",
-            type: "action",
-            status: "in_progress",
-            userInput: "follow up after this",
-            createdAt: new Date().toISOString(),
-            source: { type: "do", userLabel: "Do" },
-            execution: { id: "execution-2", harnessId: "codex", events: [] },
-            includesCommentIds: [],
+        queuedTurnManager.applyNotification({
+            method: "openade/queuedTurn/updated",
+            params: {
+                repoId: "repo-1",
+                taskId: "task-1",
+                turn: {
+                    id: "queued-do",
+                    type: "do",
+                    input: "follow up after this",
+                    status: "running",
+                    createdAt: "2026-05-28T00:00:00.000Z",
+                    updatedAt: "2026-05-28T00:00:01.000Z",
+                },
+            },
         })
 
         expect(manager.queuedTurns).toEqual([])
