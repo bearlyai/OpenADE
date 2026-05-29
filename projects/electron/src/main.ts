@@ -29,10 +29,13 @@ import { load as loadDataFolder, cleanup as cleanupDataFolder } from "./modules/
 import { cleanup as cleanupCapabilities } from "./modules/code/capabilities"
 import { load as loadBinaries, cleanup as cleanupBinaries } from "./modules/code/binaries"
 import { load as loadCodeWindowFrame, cleanup as cleanupCodeWindowFrame } from "./modules/code/windowFrame"
+import { cleanup as cleanupFilePreviewProtocol, load as loadFilePreviewProtocol, registerSchemes as registerFilePreviewProtocolSchemes } from "./modules/code/filePreviewProtocol"
 import { load as loadCompanion, cleanup as cleanupCompanion } from "./modules/companion"
 import { hasActiveRuntimeWork } from "./modules/companion/runtimeGateway"
 import { isDev } from "./config"
 import { load as loadRuntimeCore, cleanup as cleanupRuntimeCore } from "./modules/runtimeCore"
+
+registerFilePreviewProtocolSchemes()
 
 function envFlag(value: string | undefined, fallback = false): boolean {
     if (!value) return fallback
@@ -65,6 +68,7 @@ const main = () => {
     loadShell()
     loadDataFolder()
     loadCodeWindowFrame()
+    loadFilePreviewProtocol()
     loadRuntimeCore()
     if (companionEnabled) {
         loadCompanion()
@@ -112,6 +116,7 @@ const main = () => {
         cleanupCapabilities()
         cleanupBinaries()
         cleanupCodeWindowFrame()
+        cleanupFilePreviewProtocol()
         cleanupRuntimeCore()
         if (companionEnabled) {
             void cleanupCompanion()
@@ -136,6 +141,7 @@ const main = () => {
         cleanupCapabilities()
         cleanupBinaries()
         cleanupCodeWindowFrame()
+        cleanupFilePreviewProtocol()
         cleanupRuntimeCore()
         if (companionEnabled) {
             void cleanupCompanion()
@@ -161,6 +167,7 @@ const main = () => {
         cleanupCapabilities()
         cleanupBinaries()
         cleanupCodeWindowFrame()
+        cleanupFilePreviewProtocol()
         cleanupRuntimeCore()
         if (companionEnabled) {
             void cleanupCompanion()

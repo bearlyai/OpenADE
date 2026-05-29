@@ -1,5 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
+import { classifyFileMetadata, FILE_SIGNATURE_SAMPLE_BYTES, type FileMetadata } from "./fileMetadata"
 import type { RuntimeNodeFilesAdapter } from "./files"
 
 interface PathEntry {
@@ -53,6 +54,18 @@ async function entryFor(dir: string, name: string): Promise<PathEntry | null> {
         }
     } catch {
         return null
+    }
+}
+
+async function readFileSample(filePath: string, size: number): Promise<Uint8Array> {
+    if (size <= 0) return new Uint8Array()
+    const handle = await fs.open(filePath, "r")
+    try {
+        const buffer = Buffer.alloc(Math.min(size, FILE_SIGNATURE_SAMPLE_BYTES))
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+        return buffer.subarray(0, bytesRead)
+    } finally {
+        await handle.close()
     }
 }
 
@@ -119,8 +132,27 @@ export function createRuntimeNodeLocalFilesAdapter(): RuntimeNodeFilesAdapter {
 
                 if (stat.isFile()) {
                     const tooLarge = stat.size > maxReadSize
-                    const content = readContents && !tooLarge ? await fs.readFile(targetPath, "utf8").catch(() => null) : null
-                    return { type: "file", path: targetPath, size: stat.size, mode: stat.mode, content, tooLarge, isReadable: content !== null || !readContents }
+                    let isReadable = true
+                    let metadata: FileMetadata | null = null
+                    if (readContents) {
+                        try {
+                            metadata = classifyFileMetadata(targetPath, await readFileSample(targetPath, stat.size))
+                        } catch {
+                            isReadable = false
+                        }
+                    }
+                    const content = readContents && isReadable && !tooLarge && metadata?.isBinary !== true ? await fs.readFile(targetPath, "utf8").catch(() => null) : null
+                    if (readContents && isReadable && !tooLarge && metadata?.isBinary !== true && content === null) isReadable = false
+                    return {
+                        type: "file",
+                        path: targetPath,
+                        size: stat.size,
+                        mode: stat.mode,
+                        content,
+                        tooLarge,
+                        isReadable,
+                        ...(metadata ? { isBinary: metadata.isBinary, mediaType: metadata.mediaType, previewKind: metadata.previewKind } : {}),
+                    }
                 }
 
                 return { type: "error", path: targetPath, message: "Path is neither a file nor directory" }

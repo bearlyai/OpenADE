@@ -57,7 +57,18 @@ export interface PathEntry {
 
 export type DescribePathResponse =
     | { type: "dir"; path: string; mode: number; entries: PathEntry[] }
-    | { type: "file"; path: string; size: number; mode: number; content: string | null; tooLarge: boolean; isReadable: boolean }
+    | {
+          type: "file"
+          path: string
+          size: number
+          mode: number
+          content: string | null
+          tooLarge: boolean
+          isReadable: boolean
+          isBinary?: boolean
+          mediaType?: string | null
+          previewKind?: "image" | null
+      }
     | { type: "not_found"; path: string }
     | { type: "error"; path: string; message: string }
 
@@ -135,9 +146,14 @@ export function isFilesApiAvailable(): boolean {
     return isCodeModuleAvailable()
 }
 
+export function getFilePreviewUrl(path: string): string {
+    return `openade-file://image?path=${encodeURIComponent(path)}`
+}
+
 export const filesApi = {
     fuzzySearch,
     describePath,
     contentSearch,
+    getFilePreviewUrl,
     isAvailable: isFilesApiAvailable,
 }

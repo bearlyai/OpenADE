@@ -12,6 +12,7 @@ import fuzzysort from "fuzzysort"
 import { getHotFiles } from "./git"
 import { execCommand } from "./subprocess"
 import { resolve as resolveBinary } from "./binaries"
+import { classifyFileMetadata, FILE_SIGNATURE_SAMPLE_BYTES, type FileMetadata } from "../../../../runtime-node/src/fileMetadata"
 
 // Cache file lists by directory (key: `${dir}:${matchDirs}`)
 const FILE_LIST_CACHE_TTL_MS = 20 * 1000 // 20 seconds
@@ -110,7 +111,7 @@ export interface PathEntry {
 
 export type DescribePathResponse =
     | { type: "dir"; path: string; mode: number; entries: PathEntry[] }
-    | { type: "file"; path: string; size: number; mode: number; content: string | null; tooLarge: boolean; isReadable: boolean }
+    | { type: "file"; path: string; size: number; mode: number; content: string | null; tooLarge: boolean; isReadable: boolean; isBinary?: boolean; mediaType?: string | null; previewKind?: "image" | null }
     | { type: "not_found"; path: string }
     | { type: "error"; path: string; message: string }
 
@@ -124,6 +125,18 @@ export type DescribePathResponse =
  */
 async function execCmd(cmd: string, args: string[], cwd?: string): Promise<{ stdout: string; stderr: string; success: boolean }> {
     return execCommand(cmd, args, { cwd, maxBuffer: 50 * 1024 * 1024 })
+}
+
+function readFileSampleSync(filePath: string, size: number): Uint8Array {
+    if (size <= 0) return new Uint8Array()
+    const fd = fs.openSync(filePath, "r")
+    try {
+        const buffer = Buffer.alloc(Math.min(size, FILE_SIGNATURE_SAMPLE_BYTES))
+        const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0)
+        return buffer.subarray(0, bytesRead)
+    } finally {
+        fs.closeSync(fd)
+    }
 }
 
 /**
@@ -620,10 +633,20 @@ async function handleDescribePath(params: DescribePathParams): Promise<DescribeP
 
         // Determine if too large (only if maxReadSize specified)
         const tooLarge = maxReadSize !== undefined && size > maxReadSize
+        let metadata: FileMetadata | null = null
+
+        if (readContents && isReadable) {
+            try {
+                metadata = classifyFileMetadata(targetPath, readFileSampleSync(targetPath, size))
+            } catch (err) {
+                logger.debug('[Files] Error reading file sample:', err)
+                isReadable = false
+            }
+        }
 
         // Read content if requested
         let content: string | null = null
-        if (readContents && isReadable && !tooLarge) {
+        if (readContents && isReadable && !tooLarge && metadata?.isBinary !== true) {
             try {
                 content = fs.readFileSync(targetPath, "utf8")
             } catch (err) {
@@ -632,7 +655,16 @@ async function handleDescribePath(params: DescribePathParams): Promise<DescribeP
             }
         }
 
-        logger.info("[Files:describePath] File described", JSON.stringify({ path: targetPath, size, tooLarge, isReadable, hasContent: content !== null }))
+        logger.info("[Files:describePath] File described", JSON.stringify({
+            path: targetPath,
+            size,
+            tooLarge,
+            isReadable,
+            hasContent: content !== null,
+            isBinary: metadata?.isBinary,
+            mediaType: metadata?.mediaType,
+            previewKind: metadata?.previewKind,
+        }))
         return {
             type: "file",
             path: targetPath,
@@ -641,6 +673,7 @@ async function handleDescribePath(params: DescribePathParams): Promise<DescribeP
             content,
             tooLarge,
             isReadable,
+            ...(metadata ? { isBinary: metadata.isBinary, mediaType: metadata.mediaType, previewKind: metadata.previewKind } : {}),
         }
     }
 
