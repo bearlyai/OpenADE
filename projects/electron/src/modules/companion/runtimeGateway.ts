@@ -44,6 +44,7 @@ import {
     deleteRuntimeHarnessSession,
     startRuntimeHarnessQuery,
 } from "../code/harness"
+import { listOrphanHarnessProcesses, terminateOrphanHarness } from "../code/orphanHarness"
 import { deleteRuntimeDataFile, loadRuntimeDataFile, saveRuntimeDataFile } from "../code/dataFolder"
 import {
     deleteRuntimeBranch,
@@ -1124,6 +1125,72 @@ async function reconcileCheckpointedOpenADEActionEvents(
     }
 }
 
+function inProgressActionEventIds(task: OpenADETask): string[] {
+    const ids: string[] = []
+    for (const rawEvent of task.events) {
+        const event = eventRecord(rawEvent)
+        if (!event || event.type !== "action" || event.status !== "in_progress") continue
+        if (typeof event.id === "string") ids.push(event.id)
+    }
+    return ids
+}
+
+/**
+ * Settle a task's dangling in-progress turn left behind by a previous main:
+ * terminate any orphaned harness process (reparented to PID 1) for the task,
+ * then mark its in-progress action event(s) as stopped. Never touches a turn
+ * this main instance still owns (tracked in activeTaskExecutions), so a live
+ * turn is always stopped through the in-memory abort path instead.
+ */
+async function reconcileStaleTaskExecution(params: {
+    server: RuntimeServer
+    writer: ReturnType<typeof createOpenADEYjsWriter>
+    projection: ReturnType<typeof createOpenADEYjsProjection>
+    taskId: string
+    repoId?: string
+}): Promise<{ killed: number; settled: number }> {
+    if (activeTaskExecutions.has(params.taskId)) return { killed: 0, settled: 0 }
+
+    const killed = terminateOrphanHarness(params.taskId).length
+
+    let settled = 0
+    try {
+        let repoId = params.repoId
+        if (!repoId) {
+            const projects = await params.projection.readProjects()
+            repoId = projects.find((project) => project.tasks.some((task) => task.id === params.taskId))?.id
+        }
+        if (repoId) {
+            const task = await params.projection.readTask(repoId, params.taskId)
+            for (const eventId of inProgressActionEventIds(task)) {
+                const result = await params.writer.reconcileActionEventRuntime({ taskId: params.taskId, eventId, status: "stopped" })
+                if (result.changed) settled++
+            }
+            if (settled > 0) publishTaskChanged(params.server, repoId, params.taskId)
+        }
+    } catch (error) {
+        console.warn("[RuntimeGateway] Failed to reconcile stale task execution", { taskId: params.taskId, error })
+    }
+
+    return { killed, settled }
+}
+
+/**
+ * On startup, reap harness processes orphaned by a previous main and settle the
+ * action events they left in-progress. Only live orphans (reparented to PID 1)
+ * are discoverable here; a buried dead in-progress event is settled lazily when
+ * the user next stops or starts a turn on that task.
+ */
+async function reconcileDanglingOpenADETurns(params: {
+    server: RuntimeServer
+    writer: ReturnType<typeof createOpenADEYjsWriter>
+    projection: ReturnType<typeof createOpenADEYjsProjection>
+}): Promise<void> {
+    for (const taskId of listOrphanHarnessProcesses().keys()) {
+        await reconcileStaleTaskExecution({ ...params, taskId })
+    }
+}
+
 async function stopActiveOpenADERuntime(
     server: RuntimeServer,
     writer: ReturnType<typeof createOpenADEYjsWriter>,
@@ -1600,6 +1667,9 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                             turn: params,
                         })
                     }
+                    // Heal a dangling turn from a previous main (orphan process + stuck
+                    // in-progress event) before starting a new one on this task.
+                    await reconcileStaleTaskExecution({ server, writer, projection, taskId: existingTask.id, repoId: params.repoId })
                     const started = await startHeadModeTurn({
                         server,
                         writer,
@@ -1670,6 +1740,10 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                     }
                     return { ok: true }
                 }
+                // No in-memory turn (e.g. main restarted): still kill any orphaned
+                // harness process for this task and settle its in-progress event.
+                const reconciled = await reconcileStaleTaskExecution({ server, writer, projection, taskId: params.taskId })
+                if (reconciled.killed > 0 || reconciled.settled > 0) return { ok: true }
                 return { ok: false, error: "No server-owned turn is running for this task" }
             },
             cancelQueuedTurn: async (params) =>
@@ -1772,6 +1846,7 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
     )
 
     void reconcileCheckpointedOpenADEActionEvents(server, writer)
+    void reconcileDanglingOpenADETurns({ server, writer, projection })
 
 }
 
