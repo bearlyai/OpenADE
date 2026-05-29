@@ -367,6 +367,9 @@ export class TaskManager {
         const description = task.description
         if (!description) return
 
+        const repo = this.store.repos.getRepo(task.repoId)
+        if (!repo) return
+
         const taskModel = this.getTaskModel(taskId)
         const harnessId = taskModel?.harnessId
 
@@ -374,7 +377,7 @@ export class TaskManager {
         try {
             const abortController = new AbortController()
             const events = taskStore.events.all()
-            const generatedTitle = await generateTitle(description, abortController, harnessId, events)
+            const generatedTitle = await generateTitle(description, abortController, { harnessId, cwd: repo.path, events })
             this.setTaskTitle(taskId, generatedTitle ?? fallbackTitle(description))
         } catch (err) {
             console.error("[TaskManager] Title regeneration failed:", err)

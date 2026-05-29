@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { ImageAttachment } from "../../types"
 import { localOpenADEClient } from "../../runtime/localOpenADEClient"
-import { TaskCreationManager, buildTaskCreationInput } from "./TaskCreationManager"
+import type { ImageAttachment } from "../../types"
 import type { CodeStore } from "../store"
+import { TaskCreationManager, buildTaskCreationInput } from "./TaskCreationManager"
 
 vi.mock("../../persistence", () => ({
     addTaskPreview: vi.fn(),
@@ -145,7 +145,14 @@ describe("TaskCreationManager creation plumbing", () => {
 
         await (manager as unknown as { runCreation: (id: string) => Promise<void> }).runCreation("creation-1")
 
-        expect(generateTitleSpy).toHaveBeenCalled()
+        expect(generateTitleSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                taskId: "task-1",
+                description: "describe task",
+                harnessId: "codex",
+                cwd: "/tmp/repo",
+            })
+        )
         expect(localOpenADEClient.startTurn).toHaveBeenCalledWith(
             expect.objectContaining({
                 repoId: "repo-1",

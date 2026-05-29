@@ -231,7 +231,12 @@ export class TaskCreationManager {
             })
 
             // Generate title async - don't block task creation
-            this.generateTitleAsync(result.taskId, creation.description, creation.harnessId)
+            this.generateTitleAsync({
+                taskId: result.taskId,
+                description: creation.description,
+                harnessId: creation.harnessId,
+                cwd: repo.path,
+            })
         } catch (err) {
             if (err instanceof Error && err.message === "Task creation cancelled") {
                 runInAction(() => {
@@ -247,10 +252,20 @@ export class TaskCreationManager {
     }
 
     /** Generate title async and update task when done (fire-and-forget) */
-    private async generateTitleAsync(taskId: string, description: string, harnessId?: HarnessId): Promise<void> {
+    private async generateTitleAsync({
+        taskId,
+        description,
+        harnessId,
+        cwd,
+    }: {
+        taskId: string
+        description: string
+        harnessId?: HarnessId
+        cwd: string
+    }): Promise<void> {
         try {
             const abortController = new AbortController()
-            const generatedTitle = await generateTitle(description, abortController, harnessId)
+            const generatedTitle = await generateTitle(description, abortController, { harnessId, cwd })
             this.store.tasks.setTaskTitle(taskId, generatedTitle ?? fallbackTitle(description))
         } catch (err) {
             console.error("[TaskCreationManager] Title generation failed:", err)

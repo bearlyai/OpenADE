@@ -6,15 +6,15 @@ import { Navigate, useParams } from "react-router"
 import { TaskStatsBar } from "./components/TaskStatsBar"
 import { getLastViewed } from "./constants"
 import { isCodeModuleAvailable } from "./electronAPI/capabilities"
+import { isCompanionFeatureEnabled } from "./featureFlags"
 import { CodeLayout, type CodeLayoutProps } from "./layout/CodeLayout"
 import { OnboardingPage } from "./pages/OnboardingPage"
 import { TaskCreateDraftsMenu, TaskCreatePage } from "./pages/TaskCreatePage"
 import { TaskCreationPage } from "./pages/TaskCreationPage"
 import { TaskPage } from "./pages/TaskPage"
-import { RemoteApp } from "./remote/RemoteApp"
-import { isCompanionFeatureEnabled } from "./featureFlags"
 import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage"
 import { WorkspaceSettingsPage } from "./pages/WorkspaceSettingsPage"
+import { RemoteApp } from "./remote/RemoteApp"
 import { useCodeNavigate } from "./routing"
 import { useCodeStore } from "./store/context"
 
@@ -233,19 +233,24 @@ export const CodeWorkspaceTaskRoute = observer(() => {
         return <Navigate to={navigate.path("Code")} replace />
     }
 
-    const isRegeneratingTitle = taskId ? codeStore.tasks.regeneratingTitleTaskIds.has(taskId) : false
-    const handleRegenerateTitle = useCallback(() => {
-        if (taskId) {
-            codeStore.tasks.regenerateTitle(taskId)
-        }
-    }, [codeStore, taskId])
     // Determine navbar title and icon
     const taskTitle = taskModel?.title || "Task"
     const isTaskClosed = taskModel?.isClosed ?? false
     // Inline title editing
     const [isEditingTitle, setIsEditingTitle] = useState(false)
     const titleInputRef = useRef<HTMLInputElement>(null)
-    const handleTitleCommit = () => {
+    const titleGenerateButtonRef = useRef<HTMLButtonElement>(null)
+    const isRegeneratingTitle = taskId ? codeStore.tasks.regeneratingTitleTaskIds.has(taskId) : false
+    const canRegenerateTitle = Boolean(taskModel?.description.trim())
+    const handleRegenerateTitle = useCallback(() => {
+        if (!taskId || isRegeneratingTitle || !canRegenerateTitle) return
+
+        setIsEditingTitle(false)
+        codeStore.tasks.regenerateTitle(taskId)
+    }, [canRegenerateTitle, codeStore, isRegeneratingTitle, taskId])
+    const handleTitleCommit = (nextFocus?: EventTarget | null) => {
+        if (nextFocus === titleGenerateButtonRef.current) return
+
         const value = titleInputRef.current?.value.trim()
         if (value && value !== taskTitle && taskId) {
             codeStore.tasks.setTaskTitle(taskId, value)
@@ -262,17 +267,19 @@ export const CodeWorkspaceTaskRoute = observer(() => {
                         className="font-medium text-base-content min-w-0 bg-transparent border border-base-300 px-1 outline-none"
                         defaultValue={taskTitle}
                         autoFocus
-                        onBlur={handleTitleCommit}
+                        onBlur={(event) => handleTitleCommit(event.relatedTarget)}
                         onKeyDown={(e) => {
                             if (e.key === "Enter") handleTitleCommit()
                             if (e.key === "Escape") setIsEditingTitle(false)
                         }}
                     />
                     <button
+                        ref={titleGenerateButtonRef}
                         type="button"
                         className="btn flex items-center gap-1 px-1.5 py-0.5 text-xs text-muted hover:bg-base-200 hover:text-base-content disabled:opacity-50 flex-shrink-0"
+                        onMouseDown={(event) => event.preventDefault()}
                         onClick={handleRegenerateTitle}
-                        disabled={isRegeneratingTitle}
+                        disabled={isRegeneratingTitle || !canRegenerateTitle}
                         title="Generate new title"
                         aria-label="Generate new title"
                     >
