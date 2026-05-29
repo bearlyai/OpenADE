@@ -52,6 +52,7 @@ import { shouldFollowRemoteThread } from "./threadScroll"
 type CommandType = RemoteTurnStartRequest["type"]
 type PendingConnection = PairingTarget & { mode: "pair" | "manual" }
 type RemoteScreen = "projects" | "project" | "task" | "new_task" | "sessions" | "settings"
+type SnapshotRefreshOptions = { repairNavigation?: boolean }
 const themeClasses = {
     "code-theme-light": { label: "Light" },
     "code-theme-bright": { label: "Bright" },
@@ -166,6 +167,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const configRef = useRef<RemoteConfig | null>(config)
     const snapshotRef = useRef<RemoteSnapshot | null>(snapshot)
     const snapshotRefreshTimerRef = useRef<number | null>(null)
+    const snapshotRefreshRepairsNavigationRef = useRef(false)
     const taskRefreshTimerRef = useRef<number | null>(null)
     const hydratedTaskRefreshTimerRef = useRef<number | null>(null)
     const sessionRefreshTimerRef = useRef<number | null>(null)
@@ -173,6 +175,21 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const taskRefreshPendingRef = useRef<{ repoId: string; taskId: string } | null>(null)
     const lastTaskRefreshAtRef = useRef(0)
     const submitLockRef = useRef(false)
+
+    const setScreenState = (nextScreen: RemoteScreen) => {
+        screenRef.current = nextScreen
+        setScreen(nextScreen)
+    }
+
+    const setSelectedRepoState = (nextRepoId: string | null) => {
+        selectedRepoIdRef.current = nextRepoId
+        setSelectedRepoId(nextRepoId)
+    }
+
+    const setSelectedTaskState = (nextTaskId: string | null) => {
+        selectedTaskIdRef.current = nextTaskId
+        setSelectedTaskId(nextTaskId)
+    }
 
     const visibleRepos = snapshot?.repos.filter((repo) => showArchivedProjects || !repo.archived) ?? []
     const selectedRepo = selectedRepoId ? (snapshot?.repos.find((repo) => repo.id === selectedRepoId) ?? null) : null
@@ -206,12 +223,13 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     }
 
     const resetRemoteView = () => {
+        snapshotRef.current = null
         setSnapshot(null)
-        setSelectedRepoId(null)
-        setSelectedTaskId(null)
+        setSelectedRepoState(null)
+        setSelectedTaskState(null)
         setTask(null)
         setRawConnectionStatus("disconnected")
-        setScreen("projects")
+        setScreenState("projects")
     }
 
     const configsKey = configs.map((item) => `${item.id}:${item.baseUrl}`).join("|")
@@ -226,25 +244,32 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         return () => window.removeEventListener("openade-pairing-url", updateFromUrl)
     }, [])
 
-    const refreshSnapshot = async (nextConfig = config): Promise<RemoteSnapshot | null> => {
+    const refreshSnapshot = async (nextConfig = config, options: SnapshotRefreshOptions = {}): Promise<RemoteSnapshot | null> => {
         if (!nextConfig) return null
         const next = await getSnapshot(nextConfig)
         const currentRepoId = selectedRepoIdRef.current
         const currentTaskId = selectedTaskIdRef.current
+        const shouldRepairNavigation = options.repairNavigation === true
         const nextRepoId = currentRepoId && next.repos.some((repo) => repo.id === currentRepoId) ? currentRepoId : null
         const nextRepo = next.repos.find((repo) => repo.id === nextRepoId) ?? null
 
         setSessionSnapshots((current) => ({ ...current, [nextConfig.id]: next }))
         snapshotRef.current = next
         setSnapshot(next)
-        setSelectedRepoId(nextRepoId)
-        setNewTaskRepoId((current) => current ?? nextRepoId ?? next.repos.find((repo) => !repo.archived)?.id ?? next.repos[0]?.id ?? null)
+        if (nextRepoId || shouldRepairNavigation) setSelectedRepoState(nextRepoId)
+        setNewTaskRepoId((current) => {
+            if (current && next.repos.some((repo) => repo.id === current)) return current
+            return nextRepoId ?? next.repos.find((repo) => !repo.archived)?.id ?? next.repos[0]?.id ?? null
+        })
 
-        if (currentTaskId && !nextRepo?.tasks.some((item) => item.id === currentTaskId)) {
-            selectedTaskIdRef.current = null
-            setSelectedTaskId(null)
+        if (currentRepoId && !nextRepoId && shouldRepairNavigation) {
+            setSelectedTaskState(null)
             setTask(null)
-            if (screenRef.current === "task") setScreen(nextRepoId ? "project" : "projects")
+            if (screenRef.current === "project" || screenRef.current === "task") setScreenState("projects")
+        } else if (currentTaskId && !nextRepo?.tasks.some((item) => item.id === currentTaskId) && shouldRepairNavigation) {
+            setSelectedTaskState(null)
+            setTask(null)
+            if (screenRef.current === "task") setScreenState(nextRepoId ? "project" : "projects")
         }
 
         return next
@@ -289,11 +314,14 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         }
     }
 
-    const scheduleSnapshotRefresh = (delayMs = 300) => {
+    const scheduleSnapshotRefresh = (delayMs = 300, options: SnapshotRefreshOptions = {}) => {
+        snapshotRefreshRepairsNavigationRef.current = snapshotRefreshRepairsNavigationRef.current || options.repairNavigation === true
         if (snapshotRefreshTimerRef.current) window.clearTimeout(snapshotRefreshTimerRef.current)
         snapshotRefreshTimerRef.current = window.setTimeout(() => {
+            const repairNavigation = snapshotRefreshRepairsNavigationRef.current
+            snapshotRefreshRepairsNavigationRef.current = false
             void runBackgroundRefresh(async () => {
-                await refreshSnapshot(configRef.current)
+                await refreshSnapshot(configRef.current, { repairNavigation })
             }, "Unable to refresh projects")
         }, delayMs)
     }
@@ -321,9 +349,12 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         if (!repoId || !taskId) return
         taskRefreshPendingRef.current = { repoId, taskId }
         if (taskRefreshTimerRef.current || taskRefreshInFlightRef.current) return
-        taskRefreshTimerRef.current = window.setTimeout(() => {
-            void runQueuedTaskRefresh()
-        }, nextRemoteRefreshDelay({ now: Date.now(), lastRefreshAt: lastTaskRefreshAtRef.current, requestedDelayMs: delayMs }))
+        taskRefreshTimerRef.current = window.setTimeout(
+            () => {
+                void runQueuedTaskRefresh()
+            },
+            nextRemoteRefreshDelay({ now: Date.now(), lastRefreshAt: lastTaskRefreshAtRef.current, requestedDelayMs: delayMs })
+        )
     }
 
     const scheduleHydratedTaskRefresh = (repoId: string | undefined | null, taskId: string | undefined | null, delayMs = 700) => {
@@ -373,13 +404,15 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             config,
             (notification) => {
                 const plan = remoteRefreshPlan(notification, selectedTaskIdRef.current)
+                const repairNavigation = notification.method === "openade/repo/deleted" || notification.method === "openade/task/deleted"
+                const taskWasDeleted = notification.method === "openade/task/deleted"
                 if (plan.type === "snapshot") {
-                    scheduleSnapshotRefresh()
+                    scheduleSnapshotRefresh(300, { repairNavigation })
                 } else if (plan.type === "task") {
                     scheduleTaskRefresh(plan.repoId ?? selectedRepoIdRef.current, plan.taskId)
                 } else if (plan.type === "snapshot-and-task") {
-                    scheduleSnapshotRefresh()
-                    scheduleTaskRefresh(plan.repoId ?? selectedRepoIdRef.current, plan.taskId ?? selectedTaskIdRef.current)
+                    scheduleSnapshotRefresh(300, { repairNavigation })
+                    if (!taskWasDeleted) scheduleTaskRefresh(plan.repoId ?? selectedRepoIdRef.current, plan.taskId ?? selectedTaskIdRef.current)
                 } else if (plan.type === "sessions" && screenRef.current === "sessions") {
                     scheduleSessionSnapshotsRefresh()
                 }
@@ -412,22 +445,19 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         syncConfigs()
         setConfig(nextConfig)
         setIsAddingHost(false)
-        selectedRepoIdRef.current = repoId
-        selectedTaskIdRef.current = null
-        setSelectedRepoId(repoId)
-        setSelectedTaskId(null)
+        setSelectedRepoState(repoId)
+        setSelectedTaskState(null)
         setTask(null)
         setNewTaskRepoId(repoId)
-        setScreen("project")
+        setScreenState("project")
         const nextSnapshot = sessionSnapshots[configId] ?? (await refreshSnapshot(nextConfig))
         if (nextSnapshot) setSnapshot(nextSnapshot)
     }
 
     const handleSelectTask = (taskId: string) => {
-        selectedTaskIdRef.current = taskId
         setTask(null)
-        setSelectedTaskId(taskId)
-        setScreen("task")
+        setSelectedTaskState(taskId)
+        setScreenState("task")
     }
 
     const beginConnection = (mode: PendingConnection["mode"], nextBaseUrl = baseUrl, nextToken = pairToken) => {
@@ -543,9 +573,8 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
                 inTaskId: submittedTaskId,
             })
             setInput("")
-            selectedTaskIdRef.current = result.taskId
-            setSelectedTaskId(result.taskId)
-            setScreen("task")
+            setSelectedTaskState(result.taskId)
+            setScreenState("task")
             await refreshSnapshot(config)
             await refreshTask(config, selectedRepo.id, result.taskId, { hydrateSessionEvents: false })
             if (result.queued) setNotice("Queued. It will run after the current turn finishes.")
@@ -574,11 +603,9 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             })
             setNewTaskPrompt("")
             setNewTaskTitle("")
-            selectedRepoIdRef.current = repoId
-            selectedTaskIdRef.current = result.taskId
-            setSelectedRepoId(repoId)
-            setSelectedTaskId(result.taskId)
-            setScreen("task")
+            setSelectedRepoState(repoId)
+            setSelectedTaskState(result.taskId)
+            setScreenState("task")
             await refreshSnapshot(config)
             await refreshTask(config, repoId, result.taskId, { hydrateSessionEvents: false })
         } catch (err) {
@@ -694,17 +721,15 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
                 isLoading={isLoading}
                 onBack={() => {
                     if (screen === "task") {
-                        selectedTaskIdRef.current = null
-                        setSelectedTaskId(null)
+                        setSelectedTaskState(null)
                         setTask(null)
-                        setScreen("project")
+                        setScreenState("project")
                         return
                     }
                     if (screen === "project") {
-                        selectedRepoIdRef.current = null
-                        setSelectedRepoId(null)
+                        setSelectedRepoState(null)
                     }
-                    setScreen("projects")
+                    setScreenState("projects")
                 }}
                 onRefresh={refreshAll}
             />
@@ -737,7 +762,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
                         onSelectTask={handleSelectTask}
                         onNewTask={() => {
                             setNewTaskRepoId(selectedRepo?.id ?? visibleRepos[0]?.id ?? null)
-                            setScreen("new_task")
+                            setScreenState("new_task")
                         }}
                     />
                 )}
@@ -791,14 +816,14 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
                         mobileTheme={mobileTheme}
                         onRefresh={refreshAll}
                         onForget={handleForget}
-                        onSessions={() => setScreen("sessions")}
+                        onSessions={() => setScreenState("sessions")}
                         onAdd={handleAddHost}
                         onThemeChange={handleMobileThemeChange}
                     />
                 )}
             </section>
 
-            <BottomNav active={screen} onNavigate={setScreen} />
+            <BottomNav active={screen} onNavigate={setScreenState} />
         </main>
     )
 }
@@ -1478,7 +1503,15 @@ function Composer({
                     value={input}
                     onChange={(event) => onInputChange(event.target.value)}
                     disabled={isSubmitting}
-                    placeholder={isSubmitting ? "Sending..." : !isOnline ? "Offline" : canQueueCurrentMode ? "Send to OpenADE" : "Only Do and Ask can be queued while running"}
+                    placeholder={
+                        isSubmitting
+                            ? "Sending..."
+                            : !isOnline
+                              ? "Offline"
+                              : canQueueCurrentMode
+                                ? "Send to OpenADE"
+                                : "Only Do and Ask can be queued while running"
+                    }
                     className="input min-h-12 max-h-28 min-w-0 flex-1 resize-none border border-border bg-base-200 p-2 text-sm"
                 />
                 <button

@@ -31,15 +31,16 @@ import { load as loadBinaries, cleanup as cleanupBinaries } from "./modules/code
 import { load as loadCodeWindowFrame, cleanup as cleanupCodeWindowFrame } from "./modules/code/windowFrame"
 import { load as loadCompanion, cleanup as cleanupCompanion } from "./modules/companion"
 import { hasActiveRuntimeWork } from "./modules/companion/runtimeGateway"
+import { isDev } from "./config"
 import { load as loadRuntimeCore, cleanup as cleanupRuntimeCore } from "./modules/runtimeCore"
 
-function envFlag(value: string | undefined): boolean {
-    if (!value) return false
+function envFlag(value: string | undefined, fallback = false): boolean {
+    if (!value) return fallback
     return ["1", "true", "yes", "on"].includes(value.toLowerCase())
 }
 
 const main = () => {
-    const companionEnabled = envFlag(process.env.OPENADE_ENABLE_COMPANION ?? process.env.VITE_OPENADE_ENABLE_COMPANION)
+    const companionEnabled = envFlag(process.env.OPENADE_ENABLE_COMPANION ?? process.env.VITE_OPENADE_ENABLE_COMPANION, isDev)
 
     // OPENADE_SMOKE_TEST runs packaged smoke tests alongside any local production instance.
     if (!process.env.OPENADE_SMOKE_TEST) {
