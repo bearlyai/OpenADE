@@ -141,7 +141,7 @@ export interface ResultGroup {
     subtype: "success" | "error_during_execution" | "error_max_turns" | "error_max_budget_usd" | "error_max_structured_output_retries"
     durationMs: number
     totalCostUsd: number
-    usage: { inputTokens: number; outputTokens: number }
+    usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }
     isError: boolean
     result?: string
     errors?: string[]

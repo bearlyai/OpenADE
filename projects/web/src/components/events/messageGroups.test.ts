@@ -85,6 +85,41 @@ describe("groupStreamEvents stderr grouping", () => {
 })
 
 describe("groupStreamEvents codex file changes", () => {
+    it("preserves Codex cached input tokens on completed turns", () => {
+        const groups = groupStreamEvents(
+            [
+                codexMessageEvent(
+                    {
+                        type: "turn.completed",
+                        usage: {
+                            input_tokens: 200,
+                            cached_input_tokens: 150,
+                            output_tokens: 50,
+                        },
+                    },
+                    "msg-1"
+                ),
+            ],
+            "codex"
+        )
+
+        expect(groups).toEqual([
+            {
+                type: "result",
+                subtype: "success",
+                durationMs: 0,
+                totalCostUsd: 0,
+                usage: {
+                    inputTokens: 200,
+                    outputTokens: 50,
+                    cacheReadTokens: 150,
+                },
+                isError: false,
+                messageIndex: 0,
+            },
+        ])
+    })
+
     it("renders one fileChange group per Codex file_change entry", () => {
         const groups = groupStreamEvents(
             [

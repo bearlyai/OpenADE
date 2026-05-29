@@ -94,6 +94,7 @@ export function groupCodexMessages(messages: CodexEvent[], completionUsage?: { c
                 usage: {
                     inputTokens: tc.usage.input_tokens,
                     outputTokens: tc.usage.output_tokens,
+                    cacheReadTokens: tc.usage.cached_input_tokens,
                 },
                 isError: false,
                 messageIndex: i,
