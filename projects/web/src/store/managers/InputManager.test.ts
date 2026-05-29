@@ -30,10 +30,12 @@ function createDeferred<T>() {
 
 function createManager({
     queuedTurns = [],
+    events = [],
     isTaskRunning = () => true,
     refreshTaskStoreFromStorage = vi.fn(async () => undefined),
 }: {
     queuedTurns?: QueuedTurn[]
+    events?: unknown[]
     isTaskRunning?: (taskId: string) => boolean
     refreshTaskStoreFromStorage?: (taskId: string) => Promise<void>
 } = {}) {
@@ -42,7 +44,7 @@ function createManager({
         id: "task-1",
         repoId: "repo-1",
         closed: false,
-        events: [],
+        events,
         queuedTurns,
     }
     const taskModel = {
@@ -195,6 +197,35 @@ describe("InputManager queueable desktop commands", () => {
             status: "running",
             createdAt: "2026-05-28T00:00:00.000Z",
             updatedAt: "2026-05-28T00:00:01.000Z",
+        })
+
+        expect(manager.queuedTurns).toEqual([])
+    })
+
+    it("hides the optimistic queued row once the queued turn has started as an action event", async () => {
+        const events: unknown[] = []
+        const { manager } = createManager({
+            events,
+        })
+
+        await manager.runCommand("do")
+
+        expect(manager.queuedTurns).toEqual([
+            expect.objectContaining({
+                id: "queued-do",
+                status: "queued",
+            }),
+        ])
+
+        events.push({
+            id: "event-2",
+            type: "action",
+            status: "in_progress",
+            userInput: "follow up after this",
+            createdAt: new Date().toISOString(),
+            source: { type: "do", userLabel: "Do" },
+            execution: { id: "execution-2", harnessId: "codex", events: [] },
+            includesCommentIds: [],
         })
 
         expect(manager.queuedTurns).toEqual([])

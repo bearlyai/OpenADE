@@ -133,7 +133,7 @@ export class InputManager {
         const storedIds = new Set(storedTurns.map((turn) => turn.id))
         return [
             ...storedTurns.filter((turn) => turn.status === "queued"),
-            ...this.optimisticQueuedTurns.filter((turn) => turn.status === "queued" && !storedIds.has(turn.id)),
+            ...this.optimisticQueuedTurns.filter((turn) => turn.status === "queued" && !storedIds.has(turn.id) && !this.hasStartedActionForQueuedTurn(turn)),
         ]
     }
 
@@ -278,7 +278,17 @@ export class InputManager {
 
     private reconcileOptimisticQueuedTurnsWithStorage(): void {
         const storedIds = new Set((this.taskModel?.queuedTurns ?? []).map((turn) => turn.id))
-        this.optimisticQueuedTurns = this.optimisticQueuedTurns.filter((turn) => !storedIds.has(turn.id))
+        this.optimisticQueuedTurns = this.optimisticQueuedTurns.filter((turn) => !storedIds.has(turn.id) && !this.hasStartedActionForQueuedTurn(turn))
+    }
+
+    private hasStartedActionForQueuedTurn(turn: QueuedTurn): boolean {
+        const events = this.store.tasks.getTask(this.taskId)?.events ?? []
+        return events.some((event) => {
+            if (event.type !== "action") return false
+            if (event.source.type !== turn.type) return false
+            if (event.userInput !== turn.input) return false
+            return event.createdAt >= turn.createdAt
+        })
     }
 
     private waitForTaskIdle(timeoutMs = INTERRUPT_IDLE_TIMEOUT_MS): Promise<void> {
