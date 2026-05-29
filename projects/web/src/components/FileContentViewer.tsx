@@ -1,9 +1,10 @@
 import { AlertTriangle } from "lucide-react"
 import { observer } from "mobx-react"
-import { useMemo } from "react"
+import { useEffect, useMemo, useRef } from "react"
 import { twMerge } from "tailwind-merge"
 import type { FileBrowserManager } from "../store/managers/FileBrowserManager"
 import { type AnnotationSide, type CommentHandlers, FileViewer } from "./FilesAndDiffs"
+import { scrollFileViewerToLine } from "./utils/fileViewerScroll"
 
 function formatFileSize(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`
@@ -18,7 +19,8 @@ interface FileContentViewerProps {
 }
 
 export const FileContentViewer = observer(function FileContentViewer({ fileBrowser, taskId, className }: FileContentViewerProps) {
-    const { activeFile, activeFileData, fileLoading, fileError } = fileBrowser
+    const { activeFile, activeFileData, activeLine, fileLoading, fileError } = fileBrowser
+    const contentRef = useRef<HTMLDivElement>(null)
 
     // Create comment handlers for the current file
     const commentHandlers: CommentHandlers | null = useMemo(() => {
@@ -36,6 +38,16 @@ export const FileContentViewer = observer(function FileContentViewer({ fileBrows
         return { taskId, sourceMatch, createSource }
     }, [taskId, activeFile])
 
+    useEffect(() => {
+        if (!activeLine || fileLoading || !activeFileData?.content) return
+
+        const timeoutId = setTimeout(() => {
+            scrollFileViewerToLine(contentRef.current, activeLine)
+        }, 50)
+
+        return () => clearTimeout(timeoutId)
+    }, [activeFile, activeFileData?.content, activeLine, fileLoading])
+
     if (!activeFile) {
         return <div className={twMerge("flex flex-col h-full items-center justify-center text-muted text-sm", className)}>Select a file to view</div>
     }
@@ -43,7 +55,7 @@ export const FileContentViewer = observer(function FileContentViewer({ fileBrows
     return (
         <div className={twMerge("flex flex-col h-full", className)}>
             {/* Content */}
-            <div className="flex-1 overflow-auto">
+            <div ref={contentRef} className="flex-1 overflow-auto">
                 {fileLoading ? (
                     <div className="flex items-center justify-center py-12 text-muted text-sm">Loading file...</div>
                 ) : fileError ? (
@@ -70,6 +82,7 @@ export const FileContentViewer = observer(function FileContentViewer({ fileBrows
                             }}
                             disableFileHeader
                             commentHandlers={commentHandlers}
+                            highlightLines={activeLine ? { start: activeLine, end: activeLine } : null}
                         />
                     </div>
                 ) : (

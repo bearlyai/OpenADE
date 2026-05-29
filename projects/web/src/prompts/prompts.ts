@@ -15,6 +15,8 @@ export const COMPACT_STYLE_RULES = `
 - If it could be bullets, make it bullets. Connected reasoning can use short paragraphs.
 - No filler. Never start with "Based on my analysis..." or end with "In summary..." or "Let me know if..."
 - Tradeoffs on labeled lines, never buried in prose.
+- Markdown is supported. Use concise markdown when it helps readability.
+- To link a local file, write its path relative to the cwd/project root with an optional line number, like src/store/TaskModel.ts:333; the UI opens it as a file link.
 - Omit empty sections. A one-section response is fine.
 - Code inline, not narrated.`
 

@@ -5,6 +5,7 @@ import { twMerge } from "tailwind-merge"
 import type { ContentSearchMatch } from "../electronAPI/files"
 import type { ContentSearchManager } from "../store/managers/ContentSearchManager"
 import { type AnnotationSide, type CommentHandlers, FileViewer } from "./FilesAndDiffs"
+import { scrollFileViewerToLine } from "./utils/fileViewerScroll"
 import { getDisambiguatedPaths } from "./utils/paths"
 
 const CONTEXT_BEFORE_HIGHLIGHT = 5
@@ -211,16 +212,7 @@ export const SearchTray = observer(function SearchTray({ contentSearch, taskId, 
             const container = previewContainerRef.current
             if (!container) return
 
-            const selector = `[data-line="${selectedMatch.line}"]`
-
-            // PierreFile renders inside a shadow root, so we need to query inside it
-            for (const host of Array.from(container.querySelectorAll("*"))) {
-                const lineEl = host.shadowRoot?.querySelector(selector)
-                if (lineEl) {
-                    lineEl.scrollIntoView({ block: "center", behavior: "instant" })
-                    break
-                }
-            }
+            scrollFileViewerToLine(container, selectedMatch.line)
         }, 50)
 
         return () => clearTimeout(timeoutId)

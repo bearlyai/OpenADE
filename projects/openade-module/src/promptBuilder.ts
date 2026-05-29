@@ -31,6 +31,8 @@ const COMPACT_STYLE_RULES = `
 - If it could be bullets, make it bullets. Connected reasoning can use short paragraphs.
 - No filler. Never start with "Based on my analysis..." or end with "In summary..." or "Let me know if..."
 - Tradeoffs on labeled lines, never buried in prose.
+- Markdown is supported. Use concise markdown when it helps readability.
+- To link a local file, write its path relative to the cwd/project root with an optional line number, like src/store/TaskModel.ts:333; the UI opens it as a file link.
 - Omit empty sections. A one-section response is fine.
 - Code inline, not narrated.`
 
@@ -128,6 +130,7 @@ const REVISE_MODE_REMINDER =
 const ACTION_RESPONSE_STYLE_INSTRUCTION = [
     "<action_response_style>",
     "Keep final user-facing completion reports compact.",
+    "Markdown is supported. To link a local file, write its path relative to the cwd/project root with an optional :line, e.g. src/store/TaskModel.ts:333; the UI opens it as a file link.",
     "Always end final user-facing completion reports with ## TL;DR containing 3-6 concise bullets chosen to fit the response; do not use predefined content slots. Do not add anything after this section.",
     "</action_response_style>",
 ].join("\n")

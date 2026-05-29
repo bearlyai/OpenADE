@@ -27,6 +27,8 @@ const COMPACT_STYLE_RULES = `
 - Bullets > paragraphs. One bullet = one fact, choice, risk, or action.
 - No filler. Never start with "Based on my analysis..." or end with "In summary...".
 - Tradeoffs on labeled lines, never buried in prose.
+- Markdown is supported. Use concise markdown when it helps readability.
+- To link a local file, write its path relative to the cwd/project root with an optional line number, like src/store/TaskModel.ts:333; the UI opens it as a file link.
 - Omit empty sections. A one-section response is fine.`
 
 const PLANNING_GUIDELINES = `

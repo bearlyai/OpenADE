@@ -165,7 +165,7 @@ export const HyperPlanEventItem = observer(function HyperPlanEventItem({ event, 
             expanded={expanded}
             onToggle={onToggle}
         >
-            {event.userInput && <UserInputMessage text={event.userInput} />}
+            {event.userInput && <UserInputMessage text={event.userInput} taskId={taskId} />}
             <div className="px-3 py-2">
                 {/* Status bar */}
                 <div className="flex items-center gap-2 text-xs text-muted mb-2">

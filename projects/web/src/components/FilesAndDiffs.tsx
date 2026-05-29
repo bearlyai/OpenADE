@@ -167,7 +167,7 @@ export const FileViewer = observer(function FileViewer({
                             disableFileHeader,
                             disableLineNumbers,
                             enableLineSelection: false,
-                            enableHoverUtility: false,
+                            enableGutterUtility: false,
                         }}
                         selectedLines={highlightLines}
                     />
@@ -220,7 +220,7 @@ const CommentableFileInner = observer(function CommentableFileInner({
         [file.contents]
     )
 
-    const { lineAnnotations, selectedRange, hasOpenForm, handleLineSelectionEnd, renderAnnotation, renderHoverUtility } = useCommentAnnotations({
+    const { lineAnnotations, selectedRange, hasOpenForm, handleLineSelectionEnd, renderAnnotation } = useCommentAnnotations({
         taskId,
         sourceMatch,
         createSource,
@@ -247,14 +247,13 @@ const CommentableFileInner = observer(function CommentableFileInner({
                     overflow: "wrap",
                     disableFileHeader,
                     disableLineNumbers,
-                    enableLineSelection: !readOnly && !hasOpenForm,
-                    enableHoverUtility: !readOnly && !hasOpenForm,
-                    onLineSelectionEnd: !readOnly ? handleLineSelectionEnd : undefined,
+                    enableLineSelection: false,
+                    enableGutterUtility: !readOnly && !hasOpenForm,
+                    onGutterUtilityClick: !readOnly && !hasOpenForm ? (range) => handleLineSelectionEnd(range) : undefined,
                 }}
                 selectedLines={mergedSelectedLines}
                 lineAnnotations={lineAnnotations}
                 renderAnnotation={renderAnnotation}
-                renderHoverUtility={!readOnly ? renderHoverUtility : undefined}
             />
         </CopyOverlay>
     )
@@ -307,7 +306,7 @@ export const FileDiffViewer = observer(function FileDiffViewer({
                             diffStyle,
                             disableFileHeader,
                             enableLineSelection: false,
-                            enableHoverUtility: false,
+                            enableGutterUtility: false,
                             ...options,
                             theme,
                         }}
@@ -371,7 +370,7 @@ const CommentableFileDiffInner = observer(function CommentableFileDiffInner({
         [fileDiff]
     )
 
-    const { diffLineAnnotations, selectedRange, hasOpenForm, handleLineSelectionEnd, renderAnnotation, renderHoverUtility } = useCommentAnnotations({
+    const { diffLineAnnotations, selectedRange, hasOpenForm, handleLineSelectionEnd, renderAnnotation } = useCommentAnnotations({
         taskId,
         sourceMatch,
         createSource,
@@ -397,14 +396,13 @@ const CommentableFileDiffInner = observer(function CommentableFileDiffInner({
                     disableFileHeader,
                     ...options,
                     theme,
-                    enableLineSelection: !readOnly && !hasOpenForm,
-                    enableHoverUtility: !readOnly && !hasOpenForm,
-                    onLineSelectionEnd: !readOnly ? handleLineSelectionEnd : undefined,
+                    enableLineSelection: false,
+                    enableGutterUtility: !readOnly && !hasOpenForm,
+                    onGutterUtilityClick: !readOnly && !hasOpenForm ? (range) => handleLineSelectionEnd(range) : undefined,
                 }}
                 selectedLines={selectedRange}
                 lineAnnotations={diffLineAnnotations}
                 renderAnnotation={renderAnnotation}
-                renderHoverUtility={!readOnly ? renderHoverUtility : undefined}
             />
         </CopyOverlay>
     )
@@ -476,7 +474,7 @@ export const MultiFileDiffViewer = observer(function MultiFileDiffViewer({
                             expansionLineCount,
                             disableFileHeader,
                             enableLineSelection: false,
-                            enableHoverUtility: false,
+                            enableGutterUtility: false,
                         }}
                     />
                 </CopyOverlay>
@@ -535,7 +533,7 @@ const CommentableMultiFileDiffInner = observer(function CommentableMultiFileDiff
         [oldFile.contents, newFile.contents]
     )
 
-    const { diffLineAnnotations, selectedRange, hasOpenForm, handleLineSelectionEnd, renderAnnotation, renderHoverUtility } = useCommentAnnotations({
+    const { diffLineAnnotations, selectedRange, hasOpenForm, handleLineSelectionEnd, renderAnnotation } = useCommentAnnotations({
         taskId,
         sourceMatch,
         createSource,
@@ -559,14 +557,13 @@ const CommentableMultiFileDiffInner = observer(function CommentableMultiFileDiff
                     expandUnchanged,
                     expansionLineCount,
                     disableFileHeader,
-                    enableLineSelection: !readOnly && !hasOpenForm,
-                    enableHoverUtility: !readOnly && !hasOpenForm,
-                    onLineSelectionEnd: !readOnly ? handleLineSelectionEnd : undefined,
+                    enableLineSelection: false,
+                    enableGutterUtility: !readOnly && !hasOpenForm,
+                    onGutterUtilityClick: !readOnly && !hasOpenForm ? (range) => handleLineSelectionEnd(range) : undefined,
                 }}
                 selectedLines={selectedRange}
                 lineAnnotations={diffLineAnnotations}
                 renderAnnotation={renderAnnotation}
-                renderHoverUtility={!readOnly ? renderHoverUtility : undefined}
             />
         </CopyOverlay>
     )

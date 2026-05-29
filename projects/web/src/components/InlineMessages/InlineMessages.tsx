@@ -176,7 +176,7 @@ export function InlineMessages({ events, harnessId, sourceType, sessionInfo: _se
 }
 
 /** Renders user input as a quoted File component with left accent border, collapsed by default */
-export function UserInputMessage({ text }: { text: string }) {
+export function UserInputMessage({ text, taskId }: { text: string; taskId?: string }) {
     const codeStore = useCodeStore()
     const renderMarkdown = codeStore.personalSettingsStore?.settings.current.renderMarkdownMessages ?? true
     const [expanded, setExpanded] = useState(false)
@@ -188,7 +188,7 @@ export function UserInputMessage({ text }: { text: string }) {
         <div className="border-t border-border">
             <div className="border-l-2 border-primary bg-primary/5 mx-5 my-2 overflow-hidden">
                 {renderMarkdown ? (
-                    <MarkdownMessage text={displayText} commentHandlers={null} />
+                    <MarkdownMessage text={displayText} commentHandlers={null} taskId={taskId} />
                 ) : (
                     <FileViewer
                         file={{ name: "input.md", contents: displayText, lang: "markdown" }}

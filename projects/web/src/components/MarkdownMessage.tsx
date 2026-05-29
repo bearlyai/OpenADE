@@ -9,15 +9,17 @@ import taskLists from "markdown-it-task-lists"
 import texmath from "markdown-it-texmath"
 import mermaid from "mermaid"
 import { observer } from "mobx-react"
-import { type CSSProperties, type MouseEvent, type MouseEventHandler, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { type CSSProperties, type MouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { codeToTokens } from "shiki/bundle/web"
 import type { BundledLanguage, SpecialLanguage } from "shiki/bundle/web"
 import { openUrlInNativeBrowser } from "../electronAPI/shell"
+import { useCodeStore } from "../store/context"
 import type { CommentSelectedText } from "../types"
+import { getExternalUrlToOpen } from "../utils/externalLinks"
 import { useCommentAnnotations } from "./comments/hooks/useCommentAnnotations"
 import { extractSelectedText } from "./comments/utils"
 import type { CommentHandlers } from "./FilesAndDiffs"
-import { getExternalUrlToOpen } from "../utils/externalLinks"
+import { splitPath } from "./utils/paths"
 
 type HighlightedCodeLine = {
     content: string
@@ -34,6 +36,170 @@ type MarkdownToken = ReturnType<MarkdownIt["parse"]>[number]
 const highlightedCodeCache = new Map<string, Promise<HighlightedCodeLine[]>>()
 let mermaidDiagramId = 0
 
+const LOCAL_FILE_EXTENSION_PATTERN =
+    "(?:[cm]?[jt]sx?|json|mdx?|ya?ml|toml|css|scss|sass|less|html?|py|rb|go|rs|java|kt|kts|swift|c|h|cc|cpp|hh|hpp|cs|php|sh|bash|zsh|fish|sql|xml|txt|csv|tsv|lock|conf|config|ini|env|png|jpe?g|gif|webp|svg|ico|pdf)"
+const LOCAL_FILE_PATH_PATTERN = `(?:[A-Za-z]:[/\\\\]|/|\\.\\/)?(?:(?:[A-Za-z0-9_.@-]+)[/\\\\])*(?:[A-Za-z0-9_@-][A-Za-z0-9_.@-]*)\\.${LOCAL_FILE_EXTENSION_PATTERN}`
+const LOCAL_DIRECTORY_PATH_PATTERN = "(?:[A-Za-z]:[/\\\\]|/|\\.\\/)?(?:(?:[A-Za-z0-9_.@-]+)[/\\\\])+(?:[A-Za-z0-9_@-][A-Za-z0-9_.@-]*)/?"
+const LOCAL_FILE_REFERENCE_REGEX = new RegExp(
+    `(^|[\\s([{<,;])(${LOCAL_FILE_PATH_PATTERN})(?::([1-9]\\d{0,6}))?(?=$|[\\s)\\]}>.,;!?])`,
+    "gi"
+)
+const SINGLE_LOCAL_FILE_REFERENCE_REGEX = new RegExp(`^(${LOCAL_FILE_PATH_PATTERN}|${LOCAL_DIRECTORY_PATH_PATTERN})(?::([1-9]\\d{0,6}))?$`, "i")
+const CODE_SYMBOL_REFERENCE_REGEX = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?$/
+const SHORT_ABSOLUTE_PATH_PARTS = 4
+const COMMON_REPO_DIRECTORY_ROOTS = new Set([
+    "app",
+    "apps",
+    "assets",
+    "client",
+    "components",
+    "docs",
+    "electron",
+    "lib",
+    "libs",
+    "mobile",
+    "packages",
+    "pages",
+    "projects",
+    "public",
+    "scripts",
+    "server",
+    "src",
+    "test",
+    "tests",
+    "web",
+])
+
+type MarkdownTokenConstructor = new (type: string, tag: string, nesting: -1 | 0 | 1) => MarkdownToken
+
+function makeMarkdownToken(base: MarkdownToken, type: string, tag: string, nesting: -1 | 0 | 1): MarkdownToken {
+    const TokenConstructor = base.constructor as MarkdownTokenConstructor
+    return new TokenConstructor(type, tag, nesting)
+}
+
+function makeTextToken(base: MarkdownToken, content: string): MarkdownToken {
+    const token = makeMarkdownToken(base, "text", "", 0)
+    token.content = content
+    return token
+}
+
+function isAbsoluteFileReference(filePath: string): boolean {
+    return filePath.startsWith("/") || filePath.startsWith("\\") || /^[A-Za-z]:[/\\]/.test(filePath)
+}
+
+function hasLocalFileExtension(path: string): boolean {
+    return new RegExp(`\\.${LOCAL_FILE_EXTENSION_PATTERN}$`, "i").test(path.replace(/:[1-9]\d{0,6}$/, ""))
+}
+
+function isLikelyLocalPathReference(path: string, options: { allowDirectories?: boolean } = {}): boolean {
+    if (hasLocalFileExtension(path)) return true
+    if (!options.allowDirectories) return false
+    if (isAbsoluteFileReference(path) || path.startsWith("./")) return true
+
+    const parts = splitPath(path)
+    return parts.length >= 2 && COMMON_REPO_DIRECTORY_ROOTS.has(parts[0]?.toLowerCase() ?? "")
+}
+
+function parseSingleLocalPathReference(value: string | null, options: { allowDirectories?: boolean } = {}): { filePath: string; line: number | null } | null {
+    const trimmed = value?.trim()
+    if (!trimmed) return null
+
+    const match = SINGLE_LOCAL_FILE_REFERENCE_REGEX.exec(trimmed)
+    const filePath = match?.[1]
+    if (!filePath || !isLikelyLocalPathReference(filePath, options)) return null
+
+    const line = match[2] ? Number(match[2]) : null
+    return {
+        filePath,
+        line: line && Number.isInteger(line) ? line : null,
+    }
+}
+
+function formatFileReferenceLabel(filePath: string, lineNumber?: string): string {
+    let label = filePath
+    if (isAbsoluteFileReference(filePath)) {
+        const parts = splitPath(filePath)
+        if (parts.length > SHORT_ABSOLUTE_PATH_PARTS) {
+            label = `.../${parts.slice(-SHORT_ABSOLUTE_PATH_PARTS).join("/")}`
+        }
+    }
+    return lineNumber ? `${label}:${lineNumber}` : label
+}
+
+function makeLocalFileLinkTokens(base: MarkdownToken, filePath: string, lineNumber?: string): MarkdownToken[] {
+    const open = makeMarkdownToken(base, "link_open", "a", 1)
+    open.attrSet("href", "#")
+    open.attrSet("data-openade-file-link", "true")
+    open.attrSet("data-openade-file-path", filePath)
+    open.attrSet("title", lineNumber ? `${filePath}:${lineNumber}` : filePath)
+    if (lineNumber) open.attrSet("data-openade-file-line", lineNumber)
+
+    const text = makeTextToken(base, formatFileReferenceLabel(filePath, lineNumber))
+    const close = makeMarkdownToken(base, "link_close", "a", -1)
+    return [open, text, close]
+}
+
+function isWebsiteUrl(href: string | null | undefined): boolean {
+    const urlToOpen = getExternalUrlToOpen(href)
+    if (!urlToOpen) return false
+
+    const url = new URL(urlToOpen)
+    if (url.protocol === "mailto:") return true
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false
+
+    const host = url.hostname.toLowerCase()
+    return host.includes(".") || host === "localhost" || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host === "[::1]"
+}
+
+function linkifyLocalFileReferenceTextToken(token: MarkdownToken): MarkdownToken[] {
+    const text = token.content
+    const result: MarkdownToken[] = []
+    let lastIndex = 0
+
+    LOCAL_FILE_REFERENCE_REGEX.lastIndex = 0
+    for (let match = LOCAL_FILE_REFERENCE_REGEX.exec(text); match; match = LOCAL_FILE_REFERENCE_REGEX.exec(text)) {
+        const prefix = match[1] ?? ""
+        const filePath = match[2]
+        if (!filePath) continue
+        if (!isLikelyLocalPathReference(filePath)) continue
+
+        const matchStart = match.index + prefix.length
+        const matchEnd = match.index + match[0].length
+        if (matchStart > lastIndex) result.push(makeTextToken(token, text.slice(lastIndex, matchStart)))
+        result.push(...makeLocalFileLinkTokens(token, filePath, match[3]))
+        lastIndex = matchEnd
+    }
+
+    if (result.length === 0) return [token]
+    if (lastIndex < text.length) result.push(makeTextToken(token, text.slice(lastIndex)))
+    return result
+}
+
+function linkifyLocalFileReferenceTokens(tokens: MarkdownToken[]): MarkdownToken[] {
+    const result: MarkdownToken[] = []
+    let linkDepth = 0
+
+    for (const token of tokens) {
+        if (token.type === "link_open") {
+            linkDepth += 1
+            result.push(token)
+            continue
+        }
+        if (token.type === "link_close") {
+            linkDepth = Math.max(0, linkDepth - 1)
+            result.push(token)
+            continue
+        }
+        if (linkDepth === 0 && token.type === "text") {
+            result.push(...linkifyLocalFileReferenceTextToken(token))
+            continue
+        }
+        result.push(token)
+    }
+
+    return result
+}
+
 const markdown = new MarkdownIt({
     html: true,
     linkify: true,
@@ -48,20 +214,102 @@ const markdown = new MarkdownIt({
         },
     })
 
+markdown.core.ruler.before("linkify", "openade_file_links", (state) => {
+    for (const token of state.tokens as MarkdownToken[]) {
+        if (token.type === "inline" && token.children) {
+            token.children = linkifyLocalFileReferenceTokens(token.children)
+        }
+    }
+})
+
 const defaultLinkOpenRule = markdown.renderer.rules.link_open
 markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
     const token = tokens[index]
-    token.attrSet("target", "_blank")
-    token.attrSet("rel", "noopener noreferrer")
-    token.attrSet("data-openade-external-link", "true")
-    token.attrJoin("class", "text-primary underline underline-offset-2 hover:opacity-80")
+    const isLocalFileLink = token.attrGet("data-openade-file-link") === "true"
+    if (isLocalFileLink) {
+        token.attrSet("href", "#")
+        token.attrJoin("class", "text-primary underline underline-offset-2 hover:opacity-80 cursor-pointer")
+    } else if (isWebsiteUrl(token.attrGet("href"))) {
+        token.attrSet("target", "_blank")
+        token.attrSet("rel", "noopener noreferrer")
+        token.attrSet("data-openade-external-link", "true")
+        token.attrJoin("class", "text-primary underline underline-offset-2 hover:opacity-80")
+    } else {
+        token.attrSet("data-openade-internal-link", "true")
+        token.attrSet("data-openade-link-target", token.attrGet("href") ?? "")
+        token.attrSet("href", "#")
+        token.attrJoin("class", "text-primary underline underline-offset-2 hover:opacity-80 cursor-pointer")
+    }
     return defaultLinkOpenRule ? defaultLinkOpenRule(tokens, index, options, env, self) : self.renderToken(tokens, index, options)
+}
+
+const defaultCodeInlineRule = markdown.renderer.rules.code_inline
+markdown.renderer.rules.code_inline = (tokens, index, options, env, self) => {
+    const token = tokens[index]
+    const reference = parseSingleLocalPathReference(token.content)
+    if (!reference) return defaultCodeInlineRule ? defaultCodeInlineRule(tokens, index, options, env, self) : self.renderToken(tokens, index, options)
+
+    const label = formatFileReferenceLabel(reference.filePath, reference.line?.toString())
+    const title = reference.line ? `${reference.filePath}:${reference.line}` : reference.filePath
+    return `<a href="#" data-openade-file-link="true" data-openade-file-path="${markdown.utils.escapeHtml(reference.filePath)}"${
+        reference.line ? ` data-openade-file-line="${reference.line}"` : ""
+    } title="${markdown.utils.escapeHtml(title)}" class="text-primary underline underline-offset-2 hover:opacity-80 cursor-pointer"><code>${markdown.utils.escapeHtml(label)}</code></a>`
 }
 
 function sanitizeHtml(html: string): string {
     return DOMPurify.sanitize(html, {
-        ADD_ATTR: ["target", "data-openade-external-link", "class"],
+        ADD_ATTR: [
+            "target",
+            "data-openade-external-link",
+            "data-openade-internal-link",
+            "data-openade-link-target",
+            "data-openade-file-link",
+            "data-openade-file-path",
+            "data-openade-file-line",
+            "class",
+            "title",
+        ],
     })
+}
+
+function parseFileLine(anchor: HTMLAnchorElement): number | null {
+    const line = Number(anchor.getAttribute("data-openade-file-line"))
+    return Number.isInteger(line) && line > 0 ? line : null
+}
+
+function normalizeInternalLinkTarget(value: string | null): string | null {
+    const trimmed = value?.trim()
+    if (!trimmed || trimmed === "#") return null
+
+    try {
+        const url = new URL(trimmed)
+        if ((url.protocol === "http:" || url.protocol === "https:") && !url.hostname.includes(".") && url.pathname !== "/") {
+            return `${url.hostname}${decodeURIComponent(url.pathname)}`
+        }
+    } catch {
+        // Relative/internal link target.
+    }
+
+    return decodeURIComponent(trimmed)
+}
+
+function parseLocalFileReferenceText(text: string | null, options: { allowDirectories?: boolean } = {}): { filePath: string; line: number | null } | null {
+    const trimmed = normalizeInternalLinkTarget(text)
+    if (!trimmed || /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(trimmed)) return null
+
+    return parseSingleLocalPathReference(trimmed, options)
+}
+
+function parseCodeSymbolReference(text: string | null): string | null {
+    const trimmed = normalizeInternalLinkTarget(text)
+        ?.replace(/^#/, "")
+        .replace(/[’']s$/, "")
+        .replace(/[.,;:!?)]$/, "")
+        .trim()
+    if (!trimmed || trimmed.length > 100) return null
+    if (!CODE_SYMBOL_REFERENCE_REGEX.test(trimmed)) return null
+    if (!/[A-Z_$]/.test(trimmed)) return null
+    return trimmed
 }
 
 export function renderMarkdownHtml(text: string): string {
@@ -104,7 +352,6 @@ function normalizeShikiTheme(theme: string): string {
         case "pierre-light":
         case "atom-one-light":
             return "github-light"
-        case "pierre-dark":
         default:
             return "dark-plus"
     }
@@ -178,10 +425,7 @@ function markdownLineRange(block: MarkdownBlock): { start: number; end: number }
 function rangeClass(startLine: number, endLine: number, selectedRange: { start: number; end: number } | null): string {
     const selectedStart = selectedRange ? Math.min(selectedRange.start, selectedRange.end) : null
     const selectedEnd = selectedRange ? Math.max(selectedRange.start, selectedRange.end) : null
-    return cx(
-        "rounded-sm px-0.5",
-        selectedStart !== null && selectedEnd !== null && endLine >= selectedStart && startLine <= selectedEnd && "bg-primary/10"
-    )
+    return cx("rounded-sm px-0.5", selectedStart !== null && selectedEnd !== null && endLine >= selectedStart && startLine <= selectedEnd && "bg-primary/10")
 }
 
 function rangeProps(startLine: number, endLine: number, selectedRange: { start: number; end: number } | null) {
@@ -277,7 +521,10 @@ function CopyButton({ content, label = "Copy", className }: { content: string; l
     return (
         <button
             type="button"
-            className={cx("btn flex h-7 w-7 items-center justify-center border border-border bg-base-100/90 p-0 text-muted shadow-sm hover:bg-base-200 hover:text-base-content", className)}
+            className={cx(
+                "btn flex h-7 w-7 items-center justify-center border border-border bg-base-100/90 p-0 text-muted shadow-sm hover:bg-base-200 hover:text-base-content",
+                className
+            )}
             onClick={copy}
             aria-label={label}
             title={label}
@@ -287,7 +534,10 @@ function CopyButton({ content, label = "Copy", className }: { content: string; l
     )
 }
 
-function HighlightedCodeBlock({ block, selectedRange }: { block: Extract<MarkdownBlock, { type: "code" }>; selectedRange: { start: number; end: number } | null }) {
+function HighlightedCodeBlock({
+    block,
+    selectedRange,
+}: { block: Extract<MarkdownBlock, { type: "code" }>; selectedRange: { start: number; end: number } | null }) {
     const ref = useRef<HTMLPreElement | null>(null)
     const theme = useEditorTheme(ref)
     const codeLines = useMemo(() => block.text.split("\n"), [block.text])
@@ -308,7 +558,11 @@ function HighlightedCodeBlock({ block, selectedRange }: { block: Extract<Markdow
 
     return (
         <div className="group/code relative">
-            <CopyButton content={block.text} label="Copy code" className="absolute top-2 right-2 z-10 opacity-0 transition-opacity group-hover/code:opacity-100 group-focus-within/code:opacity-100" />
+            <CopyButton
+                content={block.text}
+                label="Copy code"
+                className="absolute top-2 right-2 z-10 opacity-0 transition-opacity group-hover/code:opacity-100 group-focus-within/code:opacity-100"
+            />
             <pre ref={ref} className="my-2 overflow-x-auto border border-border bg-base-200 p-3 pr-24 font-mono text-sm leading-6">
                 <code>
                     {lines.map((line, index) => {
@@ -368,8 +622,19 @@ function MermaidBlock({ block, selectedRange }: { block: Extract<MarkdownBlock, 
 
     return (
         <div ref={ref} {...props} className={cx(props.className, "group/diagram relative my-2 border border-border bg-base-200 p-3")}>
-            <CopyButton content={block.text} label="Copy diagram" className="absolute top-2 right-2 z-10 opacity-0 transition-opacity group-hover/diagram:opacity-100 group-focus-within/diagram:opacity-100" />
-            {svg ? <div className="overflow-x-auto [&_svg]:mx-auto [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} /> : error ? <HighlightedCodeBlock block={block} selectedRange={selectedRange} /> : <div className="text-sm text-muted">Rendering diagram…</div>}
+            <CopyButton
+                content={block.text}
+                label="Copy diagram"
+                className="absolute top-2 right-2 z-10 opacity-0 transition-opacity group-hover/diagram:opacity-100 group-focus-within/diagram:opacity-100"
+            />
+            {svg ? (
+                // biome-ignore lint/security/noDangerouslySetInnerHtml: Mermaid renders SVG markup for diagram output.
+                <div className="overflow-x-auto [&_svg]:mx-auto [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} />
+            ) : error ? (
+                <HighlightedCodeBlock block={block} selectedRange={selectedRange} />
+            ) : (
+                <div className="text-sm text-muted">Rendering diagram…</div>
+            )}
         </div>
     )
 }
@@ -389,14 +654,22 @@ const renderedMarkdownClass = cx(
     "[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:bg-base-200 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left"
 )
 
-function RenderedMarkdownBlock({ block, selectedRange }: { block: Extract<MarkdownBlock, { type: "rendered" }>; selectedRange: { start: number; end: number } | null }) {
+function RenderedMarkdownBlock({
+    block,
+    selectedRange,
+}: { block: Extract<MarkdownBlock, { type: "rendered" }>; selectedRange: { start: number; end: number } | null }) {
     const props = rangeProps(block.startLine, block.endLine, selectedRange)
+    // biome-ignore lint/security/noDangerouslySetInnerHtml: Markdown HTML is sanitized with DOMPurify before rendering.
     return <div {...props} className={cx(props.className, renderedMarkdownClass)} dangerouslySetInnerHTML={{ __html: block.html }} />
 }
 
 function MarkdownBlockView({ block, selectedRange = null }: { block: MarkdownBlock; selectedRange?: { start: number; end: number } | null }) {
     if (block.type === "code") {
-        return block.diagram ? <MermaidBlock block={block} selectedRange={selectedRange} /> : <HighlightedCodeBlock block={block} selectedRange={selectedRange} />
+        return block.diagram ? (
+            <MermaidBlock block={block} selectedRange={selectedRange} />
+        ) : (
+            <HighlightedCodeBlock block={block} selectedRange={selectedRange} />
+        )
     }
     return <RenderedMarkdownBlock block={block} selectedRange={selectedRange} />
 }
@@ -431,32 +704,78 @@ export function annotationBelongsToMarkdownBlock(annotation: { lineNumber: numbe
     return annotation.lineNumber >= range.start && annotation.lineNumber <= range.end
 }
 
-function MarkdownMessageFrame({ text, children, onMouseUp }: { text: string; children: ReactNode; onMouseUp?: MouseEventHandler<HTMLDivElement> }) {
-    const openExternalLink = useCallback((event: MouseEvent<HTMLDivElement>) => {
-        const target = event.target instanceof Element ? event.target : null
-        const anchor = target?.closest<HTMLAnchorElement>("a[href]")
-        if (!anchor || !event.currentTarget.contains(anchor)) return
+function MarkdownMessageFrame({
+    text,
+    taskId,
+    children,
+}: {
+    text: string
+    taskId?: string
+    children: ReactNode
+}) {
+    const codeStore = useCodeStore()
+    const openMarkdownLink = useCallback(
+        (event: MouseEvent<HTMLDivElement>) => {
+            const target = event.target instanceof Element ? event.target : null
+            const anchor = target?.closest<HTMLAnchorElement>("a[href]")
+            if (!anchor || !event.currentTarget.contains(anchor)) return
 
-        const url = getExternalUrlToOpen(anchor.getAttribute("href"))
-        if (!url) return
+            event.preventDefault()
+            event.stopPropagation()
 
-        event.preventDefault()
-        event.stopPropagation()
-        openUrlInNativeBrowser(url)
-    }, [])
+            const href = anchor.getAttribute("href")
+            const internalTarget = anchor.getAttribute("data-openade-link-target")
+            const parsedTextReference = parseLocalFileReferenceText(anchor.textContent)
+            const parsedTargetReference = parseLocalFileReferenceText(internalTarget ?? href, { allowDirectories: true })
+            const localPathReference = anchor.getAttribute("data-openade-file-path")
+                ? { filePath: anchor.getAttribute("data-openade-file-path")!, line: parseFileLine(anchor) }
+                : (parsedTextReference ?? parsedTargetReference)
+
+            if (localPathReference && taskId) {
+                const taskModel = codeStore.tasks.getTaskModel(taskId)
+                const fileBrowser = taskModel?.fileBrowser
+                if (!taskModel || !fileBrowser?.workingDir) return
+                taskModel.tray.open("files")
+                void fileBrowser.openPathReference(localPathReference.filePath, { line: localPathReference.line })
+                return
+            }
+
+            const url = isWebsiteUrl(href) ? getExternalUrlToOpen(href) : null
+            if (url) {
+                openUrlInNativeBrowser(url)
+                return
+            }
+
+            const symbolQuery = parseCodeSymbolReference(anchor.textContent) ?? parseCodeSymbolReference(internalTarget)
+            if (symbolQuery && taskId) {
+                const taskModel = codeStore.tasks.getTaskModel(taskId)
+                if (!taskModel?.contentSearch.workingDir) return
+                taskModel.contentSearch.setQuery(symbolQuery)
+                taskModel.tray.open("search")
+            }
+        },
+        [codeStore, taskId]
+    )
 
     return (
-        <div className="group/markdown-message relative border border-border bg-base-100 px-3 py-2 font-sans text-sm leading-6" onClickCapture={openExternalLink} onMouseUp={onMouseUp}>
-            <CopyButton content={text} label="Copy markdown" className="absolute top-2 right-2 z-20 opacity-0 transition-opacity group-hover/markdown-message:opacity-100 group-focus-within/markdown-message:opacity-100" />
+        <div
+            className="group/markdown-message relative border border-border bg-base-100 px-3 py-2 font-sans text-sm leading-6"
+            onClickCapture={openMarkdownLink}
+        >
+            <CopyButton
+                content={text}
+                label="Copy markdown"
+                className="absolute top-2 right-2 z-20 opacity-0 transition-opacity group-hover/markdown-message:opacity-100 group-focus-within/markdown-message:opacity-100"
+            />
             <div className="pr-0">{children}</div>
         </div>
     )
 }
 
-function MarkdownMessageStatic({ text }: { text: string }) {
+function MarkdownMessageStatic({ text, taskId }: { text: string; taskId?: string }) {
     const blocks = useMemo(() => parseMarkdownBlocks(text), [text])
     return (
-        <MarkdownMessageFrame text={text}>
+        <MarkdownMessageFrame text={text} taskId={taskId}>
             {blocks.map((block, index) => (
                 <MarkdownBlockView key={`${block.startLine}-${index}`} block={block} />
             ))}
@@ -466,9 +785,11 @@ function MarkdownMessageStatic({ text }: { text: string }) {
 
 const CommentableMarkdownMessage = observer(function CommentableMarkdownMessage({
     text,
+    taskId,
     commentHandlers,
 }: {
     text: string
+    taskId?: string
     commentHandlers: CommentHandlers
 }) {
     const blocks = useMemo(() => parseMarkdownBlocks(text), [text])
@@ -496,21 +817,13 @@ const CommentableMarkdownMessage = observer(function CommentableMarkdownMessage(
         annotations.handleLineSelectionEnd({ start: range.start, end: range.end, side: "additions" })
     }
 
-    const handleSelection = (event: React.MouseEvent<HTMLDivElement>) => {
-        if (commentHandlers.readOnly || annotations.hasOpenForm) return
-        const range = getMarkdownSelectionRange(event.currentTarget, window.getSelection())
-        if (!range) return
-        annotations.handleLineSelectionEnd(range)
-        window.getSelection()?.removeAllRanges()
-    }
-
     return (
-        <MarkdownMessageFrame text={text} onMouseUp={handleSelection}>
+        <MarkdownMessageFrame text={text} taskId={taskId ?? commentHandlers.taskId}>
             {blocks.map((block, index) => {
                 const blockAnnotations = annotations.lineAnnotations.filter((annotation) => annotationBelongsToMarkdownBlock(annotation, block))
                 return (
                     <div key={`${block.startLine}-${index}`} className="group/markdown-block relative -ml-6 pl-6">
-                        <div onDoubleClick={() => selectBlock(block)}>
+                        <div>
                             <MarkdownBlockView block={block} selectedRange={annotations.selectedRange} />
                         </div>
                         {!commentHandlers.readOnly && (
@@ -540,10 +853,12 @@ const CommentableMarkdownMessage = observer(function CommentableMarkdownMessage(
 export const MarkdownMessage = observer(function MarkdownMessage({
     text,
     commentHandlers,
+    taskId,
 }: {
     text: string
     commentHandlers: CommentHandlers | null
+    taskId?: string
 }) {
-    if (!commentHandlers) return <MarkdownMessageStatic text={text} />
-    return <CommentableMarkdownMessage text={text} commentHandlers={commentHandlers} />
+    if (!commentHandlers) return <MarkdownMessageStatic text={text} taskId={taskId} />
+    return <CommentableMarkdownMessage text={text} taskId={taskId} commentHandlers={commentHandlers} />
 })

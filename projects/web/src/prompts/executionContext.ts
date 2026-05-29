@@ -20,10 +20,9 @@ export function buildWorktreeExecutionInstruction(isolationStrategy: IsolationSt
 
 const CODEX_RAW_RENDERER_STYLE_HINT = [
     "<raw_renderer_response_style>",
-    "Important: this UI renders your response as plain text. There is no markdown rendering, no link support, and no citation viewer.",
-    "- Never use markdown links (`[text](path)`) for local files — they render as raw noisy syntax.",
-    "- Never include absolute filesystem paths.",
-    "- Reference files as plain relative paths with optional :line, e.g. src/store/TaskModel.ts:333",
+    "Important: this UI renders markdown, including headings, lists, code fences, tables, task lists, and links.",
+    "- To link a local repository file, write its path relative to the cwd/project root with optional :line, e.g. src/store/TaskModel.ts:333; the UI opens it in the file tray.",
+    "- Use normal markdown links for web URLs; use project-relative paths for local files.",
     "- Do not wrap file paths in backticks inside plan steps — just use the bare path.",
     '- Keep it compact; avoid section-heavy templates like "What changed" and "Verification run" unless requested.',
     "</raw_renderer_response_style>",
@@ -34,6 +33,7 @@ const ACTION_RESPONSE_STYLE_SOURCE_TYPES: ReadonlySet<ActionEventSource["type"]>
 const ACTION_RESPONSE_STYLE_INSTRUCTION = [
     "<action_response_style>",
     "Keep final user-facing completion reports compact.",
+    "Markdown is supported. To link a local file, write its path relative to the cwd/project root with an optional :line, e.g. src/store/TaskModel.ts:333; the UI opens it as a file link.",
     "Always end final user-facing completion reports with ## TL;DR containing 3-6 concise bullets chosen to fit the response; do not use predefined content slots. Do not add anything after this section.",
     "</action_response_style>",
 ].join("\n")

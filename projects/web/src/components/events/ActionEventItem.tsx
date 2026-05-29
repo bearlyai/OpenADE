@@ -114,8 +114,8 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
                     <ImageAttachments images={event.images} />
                 </div>
             )}
-            {reviewUserInstructions && <UserInputMessage text={reviewUserInstructions} />}
-            {!hideUserInput && event.userInput && <UserInputMessage text={event.userInput} />}
+            {reviewUserInstructions && <UserInputMessage text={reviewUserInstructions} taskId={taskId} />}
+            {!hideUserInput && event.userInput && <UserInputMessage text={event.userInput} taskId={taskId} />}
             {includedComments.length > 0 && <CommentsSection comments={includedComments} variant="submitted" />}
 
             {event.execution.events.length > 0 && (

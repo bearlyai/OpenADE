@@ -44,6 +44,54 @@ describe("MarkdownMessage", () => {
         expect(block).not.toContain("<script")
     })
 
+    it("auto-links plain local file references with optional line numbers", () => {
+        const html = renderInlineMarkdownHtml(
+            "Changed /Users/me/repo/projects/web/src/components/MarkdownMessage.tsx:42, README.md, featureFlags.ts, projects/web/src/remote, and openade.ai"
+        )
+
+        expect(html).toContain('data-openade-file-link="true"')
+        expect(html).toContain('data-openade-file-path="/Users/me/repo/projects/web/src/components/MarkdownMessage.tsx"')
+        expect(html).toContain('data-openade-file-line="42"')
+        expect(html).toContain(".../web/src/components/MarkdownMessage.tsx:42")
+        expect(html).toContain('data-openade-file-path="README.md"')
+        expect(html).toContain('data-openade-file-path="featureFlags.ts"')
+        expect(html).not.toContain('data-openade-file-path="projects/web/src/remote"')
+        expect(html).not.toContain('href="http://featureFlags.ts"')
+        expect(html).not.toContain('data-openade-file-path="openade.ai"')
+        expect(html).toContain('href="http://openade.ai"')
+    })
+
+    it("does not auto-link slash-separated prose as directory references", () => {
+        const html = renderInlineMarkdownHtml("Use expand/select, browser/new-window, and Unsupported/internal as prose.")
+
+        expect(html).not.toContain('data-openade-file-link="true"')
+        expect(html).not.toContain('href="#"')
+    })
+
+    it("keeps non-website markdown links internal so Electron does not open a popup", () => {
+        const html = renderInlineMarkdownHtml("[RemoteApp](RemoteApp), [remote dir](projects/web/src/remote), and [OpenADE](https://openade.ai)")
+
+        expect(html).toContain('data-openade-internal-link="true"')
+        expect(html).toContain('data-openade-link-target="RemoteApp"')
+        expect(html).toContain('data-openade-link-target="projects/web/src/remote"')
+        expect(html).toContain('href="#"')
+        expect(html).toContain('data-openade-external-link="true"')
+        expect(html).toContain('href="https://openade.ai"')
+    })
+
+    it("links inline-code file paths but does not rewrite markdown link labels or directories", () => {
+        const html = renderMarkdownHtml("`src/foo.ts:1`, `projects/web/src/remote`, `not a path`, and [src/bar.ts:2](https://openade.ai)")
+
+        expect(html).toContain('data-openade-file-path="src/foo.ts"')
+        expect(html).toContain('data-openade-file-line="1"')
+        expect(html).not.toContain('data-openade-file-path="projects/web/src/remote"')
+        expect(html).not.toContain('data-openade-file-path="src/bar.ts"')
+        expect(html).toContain("<code>src/foo.ts:1</code>")
+        expect(html).toContain("<code>projects/web/src/remote</code>")
+        expect(html).toContain("<code>not a path</code>")
+        expect(html).toContain('href="https://openade.ai"')
+    })
+
     it("renders math formulas through KaTeX", () => {
         const html = renderMarkdownHtml("Inline $x^2$ and block:\n\n$$\ny = mx + b\n$$")
 
