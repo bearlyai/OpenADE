@@ -18,6 +18,11 @@ function isAbsolutePath(path: string): boolean {
     return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(path)
 }
 
+function normalizeFileReferenceInput(referencePath: string): string {
+    const trimmed = referencePath.trim()
+    return trimmed.startsWith("@") ? trimmed.slice(1).trimStart() : trimmed
+}
+
 function joinPath(basePath: string, relativePath: string): string {
     const sep = getPathSeparator()
     const base = basePath.endsWith(sep) && basePath.length > 1 ? basePath.slice(0, -1) : basePath
@@ -244,7 +249,7 @@ export class FileBrowserManager {
     }
 
     private resolveFileReferencePath(referencePath: string): string | null {
-        const trimmed = referencePath.trim()
+        const trimmed = normalizeFileReferenceInput(referencePath)
         if (!trimmed) return null
         if (isAbsolutePath(trimmed)) return trimmed
 
@@ -256,7 +261,7 @@ export class FileBrowserManager {
     }
 
     private fileReferenceSearchQuery(referencePath: string): string {
-        const trimmed = referencePath.trim()
+        const trimmed = normalizeFileReferenceInput(referencePath)
         if (!trimmed) return ""
         if (isAbsolutePath(trimmed)) {
             const relative = getRelativePath(this.workingDir, trimmed)
