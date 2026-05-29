@@ -1,11 +1,11 @@
 import http, { type IncomingMessage, type ServerResponse } from "node:http"
 import { URL } from "node:url"
 import logger from "electron-log"
-import type { CompanionEvent, PairRequest, RemotePlatform, RemoteRunRequest } from "../../../../shared/companion/src"
-import { authenticateDevice, pairDevice } from "./auth"
-import { CompanionEventHub } from "./events"
+import type { CompanionEvent, PairRequest, RemotePlatform } from "../../../../shared/companion/src"
+import { pairDevice } from "./auth"
 import { getCompanionBindAddresses } from "./network"
-import { callRenderer, setCompanionEventHub } from "./rendererBridge"
+import { publishCompanionRuntimeEvent, resetRuntimeServer } from "./runtimeGateway"
+import { attachRuntimeSocketServer, type RuntimeSocketServer } from "./runtimeSocket"
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024
 const PAIR_RATE_LIMIT_WINDOW_MS = 60 * 1000
@@ -13,16 +13,16 @@ const PAIR_RATE_LIMIT_MAX_ATTEMPTS = 20
 
 interface RunningServer {
     server: http.Server
+    runtimeSocket: RuntimeSocketServer
     url: string
 }
 
 let runningServers: RunningServer[] = []
-let eventHub = new CompanionEventHub()
 const pairAttempts = new Map<string, { count: number; resetAt: number }>()
 
 function setCors(response: ServerResponse): void {
     response.setHeader("Access-Control-Allow-Origin", "*")
-    response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Last-Event-ID")
+    response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type")
     response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 }
 
@@ -112,21 +112,8 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
     return JSON.parse(raw)
 }
 
-function bearerToken(request: IncomingMessage): string | undefined {
-    const header = request.headers.authorization
-    if (!header) return undefined
-    const match = /^Bearer\s+(.+)$/i.exec(header)
-    return match?.[1]
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null
-}
-
-function asOptionalString(value: unknown, field: string, maxLength: number): string | undefined {
-    if (value === undefined) return undefined
-    if (typeof value !== "string" || value.length > maxLength) throw new Error(`${field} is invalid`)
-    return value
 }
 
 function parsePairRequest(body: unknown): PairRequest {
@@ -140,62 +127,8 @@ function parsePairRequest(body: unknown): PairRequest {
     return { token, deviceName, platform: platform as RemotePlatform }
 }
 
-function parseRunRequest(body: unknown): RemoteRunRequest {
-    if (!isRecord(body)) throw new Error("Request body must be an object")
-    const repoId = body.repoId
-    const type = body.type
-    const input = body.input
-
-    if (typeof repoId !== "string" || repoId.length < 1) throw new Error("repoId is invalid")
-    if (type !== "plan" && type !== "do" && type !== "ask" && type !== "hyperplan") throw new Error("type is invalid")
-    if (typeof input !== "string" || input.length < 1 || input.length > 200_000) throw new Error("input is invalid")
-
-    const request: RemoteRunRequest = {
-        repoId,
-        type,
-        input,
-        appendSystemPrompt: asOptionalString(body.appendSystemPrompt, "appendSystemPrompt", 50_000),
-        inTaskId: body.inTaskId === null ? null : asOptionalString(body.inTaskId, "inTaskId", 200),
-        harnessId: asOptionalString(body.harnessId, "harnessId", 100),
-        thinking: body.thinking === "low" || body.thinking === "med" || body.thinking === "high" || body.thinking === "max" ? body.thinking : undefined,
-        fastMode: typeof body.fastMode === "boolean" ? body.fastMode : undefined,
-        title: asOptionalString(body.title, "title", 200),
-    }
-
-    if (body.thinking !== undefined && request.thinking === undefined) throw new Error("thinking is invalid")
-    if (body.fastMode !== undefined && typeof body.fastMode !== "boolean") throw new Error("fastMode is invalid")
-
-    if (body.enabledMcpServerIds !== undefined) {
-        if (!Array.isArray(body.enabledMcpServerIds) || body.enabledMcpServerIds.length > 50 || body.enabledMcpServerIds.some((id) => typeof id !== "string" || id.length < 1)) {
-            throw new Error("enabledMcpServerIds is invalid")
-        }
-        request.enabledMcpServerIds = body.enabledMcpServerIds
-    }
-
-    if (body.isolationStrategy !== undefined) {
-        if (!isRecord(body.isolationStrategy)) throw new Error("isolationStrategy is invalid")
-        if (body.isolationStrategy.type === "head") {
-            request.isolationStrategy = { type: "head" }
-        } else if (body.isolationStrategy.type === "worktree" && typeof body.isolationStrategy.sourceBranch === "string" && body.isolationStrategy.sourceBranch.length > 0) {
-            request.isolationStrategy = { type: "worktree", sourceBranch: body.isolationStrategy.sourceBranch }
-        } else {
-            throw new Error("isolationStrategy is invalid")
-        }
-    }
-
-    return request
-}
-
-function lastEventId(request: IncomingMessage): number | undefined {
-    const raw = request.headers["last-event-id"]
-    const value = Array.isArray(raw) ? raw[0] : raw
-    if (!value) return undefined
-    const parsed = Number(value)
-    return Number.isFinite(parsed) ? parsed : undefined
-}
-
 function publish(event: CompanionEvent): void {
-    eventHub.publish(event)
+    publishCompanionRuntimeEvent(event)
 }
 
 export function createCompanionRequestHandler(): http.RequestListener {
@@ -210,7 +143,6 @@ export function createCompanionRequestHandler(): http.RequestListener {
             }
 
             const url = new URL(request.url ?? "/", "http://127.0.0.1")
-            const pathParts = url.pathname.split("/").filter(Boolean)
 
             if (request.method === "GET" && url.pathname === "/v1/health") {
                 sendJson(response, 200, {
@@ -243,48 +175,6 @@ export function createCompanionRequestHandler(): http.RequestListener {
                 return
             }
 
-            const device = authenticateDevice(bearerToken(request))
-            if (!device) {
-                sendError(response, 401, "Unauthorized")
-                return
-            }
-
-            if (request.method === "GET" && url.pathname === "/v1/events") {
-                eventHub.addClient(device.id, response, lastEventId(request))
-                return
-            }
-
-            if (request.method === "GET" && url.pathname === "/v1/snapshot") {
-                const snapshot = await callRenderer("getSnapshot")
-                sendJson(response, 200, snapshot)
-                return
-            }
-
-            if (request.method === "POST" && url.pathname === "/v1/run") {
-                const body = parseRunRequest(await readJson(request))
-                const result = await callRenderer("run", body)
-                sendJson(response, 200, result)
-                return
-            }
-
-            if (request.method === "GET" && pathParts[0] === "v1" && pathParts[1] === "tasks" && pathParts[2]) {
-                const repoId = url.searchParams.get("repoId")
-                if (!repoId) {
-                    sendError(response, 400, "repoId is required")
-                    return
-                }
-
-                const task = await callRenderer("getTask", { repoId, taskId: pathParts[2] })
-                sendJson(response, 200, task)
-                return
-            }
-
-            if (request.method === "POST" && pathParts[0] === "v1" && pathParts[1] === "tasks" && pathParts[2] && pathParts[3] === "abort") {
-                await callRenderer("abort", { taskId: pathParts[2] })
-                sendJson(response, 200, { ok: true })
-                return
-            }
-
             sendError(response, 404, "Not found")
         } catch (error) {
             const message = error instanceof Error ? error.message : "Unknown error"
@@ -298,9 +188,6 @@ export function createCompanionRequestHandler(): http.RequestListener {
 export async function startCompanionServer(port: number): Promise<string[]> {
     if (runningServers.length > 0) return runningServers.map((entry) => entry.url)
 
-    eventHub = new CompanionEventHub()
-    setCompanionEventHub(eventHub)
-
     const handler = createCompanionRequestHandler()
     const addresses = getCompanionBindAddresses()
     const nextServers: RunningServer[] = []
@@ -308,6 +195,7 @@ export async function startCompanionServer(port: number): Promise<string[]> {
     try {
         for (const address of addresses) {
             const server = http.createServer(handler)
+            const runtimeSocket = attachRuntimeSocketServer(server)
             await new Promise<void>((resolve, reject) => {
                 server.once("error", reject)
                 server.listen(port, address.host, () => {
@@ -315,11 +203,10 @@ export async function startCompanionServer(port: number): Promise<string[]> {
                     resolve()
                 })
             })
-            nextServers.push({ server, url: `http://${address.host}:${port}` })
+            nextServers.push({ server, runtimeSocket, url: `http://${address.host}:${port}` })
         }
     } catch (error) {
         await stopServers(nextServers)
-        setCompanionEventHub(null)
         throw error
     }
 
@@ -328,8 +215,7 @@ export async function startCompanionServer(port: number): Promise<string[]> {
 }
 
 export async function stopCompanionServer(): Promise<void> {
-    eventHub.closeAll()
-    setCompanionEventHub(null)
+    resetRuntimeServer()
     await stopServers(runningServers)
     runningServers = []
 }
@@ -340,10 +226,10 @@ export function getBoundUrls(): string[] {
 
 export function closeCompanionStreams(deviceId?: string): void {
     if (deviceId) {
-        eventHub.closeDevice(deviceId)
+        for (const entry of runningServers) entry.runtimeSocket.closeDevice(deviceId)
         return
     }
-    eventHub.closeAll()
+    for (const entry of runningServers) entry.runtimeSocket.closeAll()
 }
 
 async function stopServers(servers: RunningServer[]): Promise<void> {
@@ -351,6 +237,7 @@ async function stopServers(servers: RunningServer[]): Promise<void> {
         servers.map(
             (entry) =>
                 new Promise<void>((resolve) => {
+                    entry.runtimeSocket.close()
                     entry.server.close(() => resolve())
                 })
         )

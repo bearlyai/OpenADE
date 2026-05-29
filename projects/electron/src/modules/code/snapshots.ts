@@ -1,41 +1,27 @@
-import { ipcMain, type IpcMainInvokeEvent } from "electron"
 import logger from "electron-log"
 import * as fs from "fs"
 import * as os from "os"
 import * as path from "path"
-import { isDev } from "../../config"
 import { buildSnapshotPatchIndex, type SnapshotPatchIndex } from "./snapshotsIndex"
 
-const SNAPSHOTS_DIR = path.join(os.homedir(), ".openade", "data", "snapshots")
+function getSnapshotsDir(): string {
+    return path.join(os.homedir(), ".openade", "data", "snapshots")
+}
 
-interface SaveBundleParams {
+export interface SaveBundleParams {
     id: string
     patch: string
     index: SnapshotPatchIndex
 }
 
-interface LoadSnapshotParams {
+export interface LoadSnapshotParams {
     id: string
 }
 
-interface LoadSnapshotSliceParams {
+export interface LoadSnapshotSliceParams {
     id: string
     start: number
     end: number
-}
-
-function checkAllowed(event: IpcMainInvokeEvent): boolean {
-    const origin = event.sender.getURL()
-    try {
-        const url = new URL(origin)
-        if (isDev) {
-            return url.hostname.endsWith("localhost")
-        }
-        return url.hostname.endsWith("localhost") || url.protocol === "file:"
-    } catch (error) {
-        logger.error("[Snapshots:checkAllowed] Failed to parse origin:", error)
-        return false
-    }
 }
 
 function sanitizeId(id: string): string | null {
@@ -47,17 +33,18 @@ function sanitizeId(id: string): string | null {
 }
 
 function ensureSnapshotsDir(): void {
-    if (!fs.existsSync(SNAPSHOTS_DIR)) {
-        fs.mkdirSync(SNAPSHOTS_DIR, { recursive: true })
+    const snapshotsDir = getSnapshotsDir()
+    if (!fs.existsSync(snapshotsDir)) {
+        fs.mkdirSync(snapshotsDir, { recursive: true })
     }
 }
 
 function getPatchPath(id: string): string {
-    return path.join(SNAPSHOTS_DIR, `${id}.patch`)
+    return path.join(getSnapshotsDir(), `${id}.patch`)
 }
 
 function getIndexPath(id: string): string {
-    return path.join(SNAPSHOTS_DIR, `${id}.json`)
+    return path.join(getSnapshotsDir(), `${id}.json`)
 }
 
 function writeFileAtomically(filePath: string, content: string): void {
@@ -182,31 +169,22 @@ async function handleDeleteBundle(params: LoadSnapshotParams): Promise<void> {
     deleteIfExists(getIndexPath(id))
 }
 
-export const load = () => {
-    ipcMain.handle("snapshots:saveBundle", async (event, params: SaveBundleParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleSaveBundle(params)
-    })
-
-    ipcMain.handle("snapshots:loadPatch", async (event, params: LoadSnapshotParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleLoadPatch(params)
-    })
-
-    ipcMain.handle("snapshots:loadIndex", async (event, params: LoadSnapshotParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleLoadIndex(params)
-    })
-
-    ipcMain.handle("snapshots:loadPatchSlice", async (event, params: LoadSnapshotSliceParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleLoadPatchSlice(params)
-    })
-
-    ipcMain.handle("snapshots:deleteBundle", async (event, params: LoadSnapshotParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleDeleteBundle(params)
-    })
+export async function saveRuntimeSnapshotBundle(params: SaveBundleParams): Promise<void> {
+    return handleSaveBundle(params)
 }
 
-export const cleanup = () => {}
+export async function loadRuntimeSnapshotPatch(params: LoadSnapshotParams): Promise<string | null> {
+    return handleLoadPatch(params)
+}
+
+export async function loadRuntimeSnapshotIndex(params: LoadSnapshotParams): Promise<SnapshotPatchIndex | null> {
+    return handleLoadIndex(params)
+}
+
+export async function loadRuntimeSnapshotPatchSlice(params: LoadSnapshotSliceParams): Promise<string | null> {
+    return handleLoadPatchSlice(params)
+}
+
+export async function deleteRuntimeSnapshotBundle(params: LoadSnapshotParams): Promise<void> {
+    return handleDeleteBundle(params)
+}

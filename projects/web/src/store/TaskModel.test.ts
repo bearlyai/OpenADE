@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { DEFAULT_MODEL, getDefaultModelForHarness } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
-import type { ActionEvent, Task } from "../types"
+import type { ActionEvent, SetupEnvironmentEvent, Task } from "../types"
 import { TaskModel } from "./TaskModel"
 import { EventManager } from "./managers/EventManager"
 import type { CodeStore } from "./store"
@@ -449,6 +449,96 @@ describe("HyperPlan handoff consistency", () => {
 })
 
 describe("TaskModel environment loading", () => {
+    it("does not force setup for legacy head-mode tasks without device environment rows", async () => {
+        const task: Task = createTask([])
+        const repo = {
+            id: "repo-1",
+            name: "Repo",
+            path: "/tmp/repo",
+            createdBy: { id: "u1", email: "u1@example.com" },
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+        }
+
+        const store = {
+            execution: {
+                onAfterEvent: () => () => {},
+            },
+            tasks: {
+                getTask: (taskId: string) => (taskId === task.id ? task : null),
+            },
+            repos: {
+                getRepo: (repoId: string) => (repoId === repo.id ? repo : undefined),
+                getGitInfo: vi.fn(async () => null),
+            },
+        } as unknown as CodeStore
+
+        localStorage.setItem("openade-device-id", "test-device")
+
+        try {
+            const model = new TaskModel(store, task.id)
+            const env = await model.loadEnvironment()
+
+            expect(model.needsEnvironmentSetup).toBe(false)
+            expect(env?.taskWorkingDir).toBe("/tmp/repo")
+        } finally {
+            localStorage.removeItem("openade-device-id")
+        }
+    })
+
+    it("derives worktree environment from legacy setup events", async () => {
+        const setupEvent: SetupEnvironmentEvent = {
+            id: "setup-1",
+            type: "setup_environment",
+            status: "completed",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            completedAt: "2026-01-01T00:00:00.000Z",
+            userInput: "Environment setup",
+            worktreeId: "task-1",
+            deviceId: "legacy-device",
+            workingDir: "/tmp/openade-worktrees/task-1/packages/web",
+            setupOutput: "Worktree: /tmp/openade-worktrees/task-1\nWorking directory: /tmp/openade-worktrees/task-1/packages/web",
+        }
+        const task: Task = {
+            ...createTask([]),
+            isolationStrategy: { type: "worktree", sourceBranch: "main" },
+            events: [setupEvent],
+        }
+        const repo = {
+            id: "repo-1",
+            name: "Repo",
+            path: "/tmp/repo/packages/web",
+            createdBy: { id: "u1", email: "u1@example.com" },
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+        }
+
+        const store = {
+            execution: {
+                onAfterEvent: () => () => {},
+            },
+            tasks: {
+                getTask: (taskId: string) => (taskId === task.id ? task : null),
+            },
+            repos: {
+                getRepo: (repoId: string) => (repoId === repo.id ? repo : undefined),
+                getGitInfo: vi.fn(async () => ({ isGitRepo: true, repoRoot: "/tmp/repo", relativePath: "packages/web", mainBranch: "main", hasGhCli: false })),
+            },
+        } as unknown as CodeStore
+
+        localStorage.setItem("openade-device-id", "test-device")
+
+        try {
+            const model = new TaskModel(store, task.id)
+            const env = await model.loadEnvironment()
+
+            expect(model.needsEnvironmentSetup).toBe(false)
+            expect(env?.taskWorkingDir).toBe("/tmp/openade-worktrees/task-1/packages/web")
+        } finally {
+            localStorage.removeItem("openade-device-id")
+        }
+    })
+
     it("coalesces concurrent loadEnvironment calls", async () => {
         const task: Task = {
             ...createTask([]),

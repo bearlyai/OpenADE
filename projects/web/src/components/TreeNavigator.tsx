@@ -96,6 +96,9 @@ interface TreeNavigatorProps {
 export const TreeNavigator = observer(function TreeNavigator({ fileBrowser, className, onEscapeClose }: TreeNavigatorProps) {
     const searchInputRef = useRef<HTMLInputElement>(null)
     const listRef = useRef<HTMLDivElement>(null)
+    const tree = fileBrowser.flattenedTree
+    const searchItems = fileBrowser.searchDisplayItems
+    const isSearching = fileBrowser.isSearching
 
     // Focus search on mount
     useEffect(() => {
@@ -107,9 +110,6 @@ export const TreeNavigator = observer(function TreeNavigator({ fileBrowser, clas
 
     const handleKeyDown = useCallback(
         (e: React.KeyboardEvent) => {
-            const tree = fileBrowser.flattenedTree
-            const searchItems = fileBrowser.searchDisplayItems
-            const isSearching = fileBrowser.isSearching
             const items = isSearching ? searchItems : tree
 
             const currentIndex = isSearching
@@ -188,7 +188,7 @@ export const TreeNavigator = observer(function TreeNavigator({ fileBrowser, clas
                     break
             }
         },
-        [fileBrowser, onEscapeClose]
+        [fileBrowser, isSearching, onEscapeClose, searchItems, tree]
     )
 
     // Scroll selected into view
@@ -200,11 +200,7 @@ export const TreeNavigator = observer(function TreeNavigator({ fileBrowser, clas
         if (selectedEl) {
             selectedEl.scrollIntoView({ block: "nearest" })
         }
-    }, [fileBrowser.selectedPath])
-
-    const tree = fileBrowser.flattenedTree
-    const searchItems = fileBrowser.searchDisplayItems
-    const isSearching = fileBrowser.isSearching
+    }, [fileBrowser.selectedPath, tree.length, searchItems.length, isSearching])
 
     return (
         <div className={twMerge("flex flex-col h-full bg-base-100 border-r border-border", className)} onKeyDown={handleKeyDown}>

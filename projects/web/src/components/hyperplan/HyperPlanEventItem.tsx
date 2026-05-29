@@ -68,6 +68,8 @@ function SubPlanStatusBadge({ status }: { status: HyperPlanSubExecution["status"
             return <span className="w-2 h-2 rounded-full bg-success" />
         case "error":
             return <span className="w-2 h-2 rounded-full bg-error" />
+        case "stopped":
+            return <span className="w-2 h-2 rounded-full bg-muted" />
         default:
             return <span className="w-2 h-2 rounded-full bg-base-300" />
     }
@@ -111,6 +113,7 @@ function SubPlanPane({
             </div>
             {/* Error display */}
             {sub.status === "error" && sub.error && <div className="px-2 py-1.5 bg-error/10 text-error text-xs border-t border-border">{sub.error}</div>}
+            {sub.status === "stopped" && <div className="px-2 py-1.5 bg-base-200 text-muted text-xs border-t border-border">Stopped</div>}
         </div>
     )
 }
@@ -134,7 +137,7 @@ export const HyperPlanEventItem = observer(function HyperPlanEventItem({ event, 
     const terminalEvents = event.execution.events
 
     // Determine phase
-    const allSubsComplete = subExecutions.length > 0 && subExecutions.every((s) => s.status === "completed" || s.status === "error")
+    const allSubsComplete = subExecutions.length > 0 && subExecutions.every((s) => s.status === "completed" || s.status === "error" || s.status === "stopped")
     const isReconciling = allSubsComplete && event.status === "in_progress"
     const isComplete = event.status === "completed"
     const isPlanning = !allSubsComplete && event.status === "in_progress"
@@ -162,7 +165,7 @@ export const HyperPlanEventItem = observer(function HyperPlanEventItem({ event, 
             expanded={expanded}
             onToggle={onToggle}
         >
-            {event.userInput && <UserInputMessage text={event.userInput} />}
+            {event.userInput && <UserInputMessage text={event.userInput} taskId={taskId} />}
             <div className="px-3 py-2">
                 {/* Status bar */}
                 <div className="flex items-center gap-2 text-xs text-muted mb-2">

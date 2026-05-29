@@ -6,6 +6,8 @@ const SYSTEM_DISPLAY_NAMES: Record<SystemGroup["subtype"], string> = {
     compact_boundary: "Compaction",
     status: "Status",
     init: "Session",
+    hook_started: "Hook started",
+    hook_progress: "Hook progress",
     hook_response: "Hook",
     api_retry: "API retry",
     task_started: "Task",
@@ -22,6 +24,8 @@ function getSystemIcon(group: SystemGroup): ReactNode {
             return <Info size="0.85em" className="text-primary flex-shrink-0" />
         case "init":
             return <Play size="0.85em" className="text-success flex-shrink-0" />
+        case "hook_started":
+        case "hook_progress":
         case "hook_response":
             return <Webhook size="0.85em" className="text-muted flex-shrink-0" />
         case "api_retry":

@@ -5,9 +5,42 @@ import { getPathSeparator } from "../../electronAPI/platform"
 
 const MAX_FILE_READ_SIZE = 5 * 1024 * 1024 // 5MB
 const MAX_OPEN_TABS = 8
+const FILE_REFERENCE_SEARCH_LIMIT = 12
 
 // Infrastructure directories to always hide in tree view (not searchable either via gitignore)
 const HIDDEN_INFRA_DIRS = new Set([".git"])
+
+function normalizePathForMatch(path: string): string {
+    return path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/").toLowerCase()
+}
+
+function isAbsolutePath(path: string): boolean {
+    return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(path)
+}
+
+function normalizeFileReferenceInput(referencePath: string): string {
+    const trimmed = referencePath.trim()
+    return trimmed.startsWith("@") ? trimmed.slice(1).trimStart() : trimmed
+}
+
+function joinPath(basePath: string, relativePath: string): string {
+    const sep = getPathSeparator()
+    const base = basePath.endsWith(sep) && basePath.length > 1 ? basePath.slice(0, -1) : basePath
+    return `${base}${sep}${splitPath(relativePath).join(sep)}`
+}
+
+function chooseBestFuzzyReferenceMatch(results: string[], query: string): string | null {
+    if (results.length === 0) return null
+
+    const normalizedQuery = normalizePathForMatch(query)
+    const exact = results.find((result) => normalizePathForMatch(result) === normalizedQuery)
+    if (exact) return exact
+
+    const suffix = results.find((result) => normalizePathForMatch(result).endsWith(`/${normalizedQuery}`))
+    if (suffix) return suffix
+
+    return results[0] ?? null
+}
 
 export interface TreeNode {
     path: string
@@ -40,12 +73,13 @@ export class FileBrowserManager {
     searchResults: string[] = []
     searchLoading = false
 
-    // Open tabs (LRU - most recent at end)
+    // Open tabs in stable display order
     openTabs: OpenTab[] = []
 
     // Currently active file
     activeFile: string | null = null
     activeFileData: Extract<DescribePathResponse, { type: "file" }> | null = null
+    activeLine: number | null = null
     fileLoading = false
     fileError: string | null = null
 
@@ -71,6 +105,7 @@ export class FileBrowserManager {
             this.openTabs = []
             this.activeFile = null
             this.activeFileData = null
+            this.activeLine = null
             // Auto-expand root
             this.expandedPaths.add(path)
             this.loadDirectoryContents(path)
@@ -140,25 +175,35 @@ export class FileBrowserManager {
         }
     }
 
-    expandPathToFile(filePath: string): void {
+    private expandPath(absolutePath: string, includeSelf: boolean): void {
         if (!this.workingDir) return
 
-        // Get all parent directories from repo root to the file
-        const relativePath = getRelativePath(this.workingDir, filePath)
+        // Get all directories from repo root to the target path.
+        const relativePath = getRelativePath(this.workingDir, absolutePath)
         const parts = splitPath(relativePath)
+        const lastIndex = includeSelf ? parts.length : parts.length - 1
 
-        // Expand each parent directory (excluding the file itself)
         let currentPath = this.workingDir
         this.expandedPaths.add(currentPath)
+        if (!this.directoryContents.has(currentPath)) {
+            this.loadDirectoryContents(currentPath)
+        }
         const sep = getPathSeparator()
-        for (let i = 0; i < parts.length - 1; i++) {
+        for (let i = 0; i < lastIndex; i++) {
             currentPath = `${currentPath}${sep}${parts[i]}`
             this.expandedPaths.add(currentPath)
-            // Load contents if not cached
             if (!this.directoryContents.has(currentPath)) {
                 this.loadDirectoryContents(currentPath)
             }
         }
+    }
+
+    expandPathToFile(filePath: string): void {
+        this.expandPath(filePath, false)
+    }
+
+    expandPathToDirectory(dirPath: string): void {
+        this.expandPath(dirPath, true)
     }
 
     setSearchQuery(query: string): void {
@@ -203,16 +248,129 @@ export class FileBrowserManager {
         }, 150)
     }
 
-    async openFile(absolutePath: string): Promise<void> {
-        // If opening from search, clear search and expand tree to show the file
+    private resolveFileReferencePath(referencePath: string): string | null {
+        const trimmed = normalizeFileReferenceInput(referencePath)
+        if (!trimmed) return null
+        if (isAbsolutePath(trimmed)) return trimmed
+
+        const parts = splitPath(trimmed).filter((part) => part !== ".")
+        if (parts.length === 0 || parts.some((part) => part === "..")) return null
+        if (!this.workingDir) return null
+
+        return joinPath(this.workingDir, parts.join(getPathSeparator()))
+    }
+
+    private fileReferenceSearchQuery(referencePath: string): string {
+        const trimmed = normalizeFileReferenceInput(referencePath)
+        if (!trimmed) return ""
+        if (isAbsolutePath(trimmed)) {
+            const relative = getRelativePath(this.workingDir, trimmed)
+            if (relative !== trimmed) return relative
+            return getFileName(trimmed)
+        }
+        return trimmed
+    }
+
+    private async fileExists(path: string): Promise<boolean> {
+        try {
+            const result = await filesApi.describePath({ path })
+            return result.type === "file"
+        } catch {
+            return false
+        }
+    }
+
+    private async findFuzzyPathReference(referencePath: string, matchDirs: boolean): Promise<string | null> {
+        if (!this.workingDir) return null
+
+        const query = this.fileReferenceSearchQuery(referencePath)
+        if (!query) return null
+
+        try {
+            const result = await filesApi.fuzzySearch({
+                dir: this.workingDir,
+                query,
+                matchDirs,
+                limit: FILE_REFERENCE_SEARCH_LIMIT,
+            })
+            const match = chooseBestFuzzyReferenceMatch(result.results, query)
+            return match ? joinPath(this.workingDir, match) : null
+        } catch {
+            return null
+        }
+    }
+
+    private async describePath(path: string): Promise<DescribePathResponse | null> {
+        try {
+            return await filesApi.describePath({ path })
+        } catch {
+            return null
+        }
+    }
+
+    private async openResolvedPath(path: string, options: { line?: number | null } = {}): Promise<boolean> {
+        const result = await this.describePath(path)
+        if (result?.type === "file") {
+            await this.openFile(path, options)
+            return true
+        }
+        if (result?.type === "dir") {
+            this.focusDirectory(path)
+            return true
+        }
+        return false
+    }
+
+    async openFileReference(referencePath: string, options: { line?: number | null } = {}): Promise<void> {
+        const exactPath = this.resolveFileReferencePath(referencePath)
+        if (exactPath && (await this.fileExists(exactPath))) {
+            await this.openFile(exactPath, options)
+            return
+        }
+
+        const fuzzyPath = await this.findFuzzyPathReference(referencePath, false)
+        if (fuzzyPath) {
+            await this.openFile(fuzzyPath, options)
+            return
+        }
+
+        if (exactPath) {
+            await this.openFile(exactPath, options)
+            return
+        }
+
+        this.setSearchQuery(this.fileReferenceSearchQuery(referencePath))
+    }
+
+    async openPathReference(referencePath: string, options: { line?: number | null } = {}): Promise<void> {
+        const exactPath = this.resolveFileReferencePath(referencePath)
+        if (exactPath && (await this.openResolvedPath(exactPath, options))) return
+
+        const fuzzyFilePath = await this.findFuzzyPathReference(referencePath, false)
+        if (fuzzyFilePath && (await this.openResolvedPath(fuzzyFilePath, options))) return
+
+        const fuzzyDirPath = await this.findFuzzyPathReference(referencePath, true)
+        if (fuzzyDirPath && (await this.openResolvedPath(fuzzyDirPath, options))) return
+
+        if (exactPath && options.line) {
+            await this.openFile(exactPath, options)
+        }
+    }
+
+    async openFile(absolutePath: string, options: { line?: number | null } = {}): Promise<void> {
+        const line = options.line
+        this.activeLine = typeof line === "number" && Number.isInteger(line) && line > 0 ? line : null
+
+        // If opening from search, clear search so the tree can show the file.
         if (this.searchQuery) {
             this.searchQuery = ""
             this.searchResults = []
-            // Expand all parent directories to reveal the file
-            this.expandPathToFile(absolutePath)
         }
 
-        // Add to tabs (LRU)
+        // Expand all parent directories to reveal the file in the sidebar.
+        this.expandPathToFile(absolutePath)
+
+        // Add to tabs.
         this.addToTabs(absolutePath)
         this.activeFile = absolutePath
         this.selectedPath = absolutePath
@@ -227,6 +385,7 @@ export class FileBrowserManager {
                 maxReadSize: MAX_FILE_READ_SIZE,
             })
             runInAction(() => {
+                if (this.activeFile !== absolutePath) return
                 if (result.type === "file") {
                     this.activeFileData = result
                     this.fileError = null
@@ -241,20 +400,27 @@ export class FileBrowserManager {
             })
         } catch (err) {
             runInAction(() => {
+                if (this.activeFile !== absolutePath) return
                 this.fileError = err instanceof Error ? err.message : "Failed to load file"
                 this.fileLoading = false
             })
         }
     }
 
+    focusDirectory(absolutePath: string): void {
+        if (this.searchQuery) {
+            this.searchQuery = ""
+            this.searchResults = []
+        }
+        this.activeLine = null
+        this.expandPathToDirectory(absolutePath)
+        this.selectedPath = absolutePath
+    }
+
     private addToTabs(path: string): void {
         const name = getFileName(path)
 
-        // Remove if already exists (will re-add at end for LRU)
-        const existingIndex = this.openTabs.findIndex((t) => t.path === path)
-        if (existingIndex !== -1) {
-            this.openTabs.splice(existingIndex, 1)
-        }
+        if (this.openTabs.some((t) => t.path === path)) return
 
         // Add to end
         this.openTabs.push({ path, name })
@@ -280,6 +446,7 @@ export class FileBrowserManager {
             } else {
                 this.activeFile = null
                 this.activeFileData = null
+                this.activeLine = null
                 this.fileError = null
             }
         }
@@ -314,7 +481,7 @@ export class FileBrowserManager {
         // Reload active file contents if one is open
         if (this.activeFile) {
             console.debug("[FileBrowserManager] refreshTree: reloading active file", this.activeFile)
-            this.openFile(this.activeFile)
+            this.openFile(this.activeFile, { line: this.activeLine })
         }
     }
 
@@ -362,15 +529,6 @@ export class FileBrowserManager {
             name: relativePath,
             fullPath: `${this.workingDir}${sep}${relativePath}`,
         }))
-    }
-
-    // Legacy getters for compatibility
-    get viewingFile(): string | null {
-        return this.activeFile
-    }
-
-    get viewingFileData(): Extract<DescribePathResponse, { type: "file" }> | null {
-        return this.activeFileData
     }
 
     closeFile(): void {

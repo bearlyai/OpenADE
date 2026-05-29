@@ -1,56 +1,33 @@
+import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { ActionEvent, Comment, CommentSelectedText, CommentSource } from "../../types"
-import { ulid } from "../../utils/ulid"
 import type { CodeStore } from "../store"
 
 export class CommentManager {
     constructor(private store: CodeStore) {}
 
-    addComment(taskId: string, source: CommentSource, content: string, selectedText: CommentSelectedText): string {
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) {
-            throw new Error(`Task ${taskId} not loaded`)
-        }
-
-        const id = ulid()
-        const comment: Comment & { id: string } = {
-            id,
+    async addComment(taskId: string, source: CommentSource, content: string, selectedText: CommentSelectedText): Promise<string> {
+        const result = await localOpenADEClient.createComment({
+            taskId,
             content,
-            source,
+            source: source as unknown as Record<string, unknown>,
             selectedText,
             author: this.store.currentUser,
-            createdAt: new Date().toISOString(),
-        }
-
-        taskStore.comments.push(comment)
-        taskStore.meta.update((draft) => {
-            draft.updatedAt = new Date().toISOString()
         })
-
-        return id
+        await this.store.refreshTaskStoreFromStorage(taskId)
+        await this.store.refreshRepoStoreFromStorage()
+        return result.commentId
     }
 
-    removeComment(taskId: string, commentId: string): void {
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) return
-
-        taskStore.comments.delete(commentId)
-        taskStore.meta.update((draft) => {
-            draft.updatedAt = new Date().toISOString()
-        })
+    async removeComment(taskId: string, commentId: string): Promise<void> {
+        await localOpenADEClient.deleteComment({ taskId, commentId })
+        await this.store.refreshTaskStoreFromStorage(taskId)
+        await this.store.refreshRepoStoreFromStorage()
     }
 
-    editComment(taskId: string, commentId: string, newContent: string): void {
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) return
-
-        taskStore.comments.update(commentId, (draft) => {
-            draft.content = newContent
-            draft.updatedAt = new Date().toISOString()
-        })
-
-        taskStore.meta.update((draft) => {
-            draft.updatedAt = new Date().toISOString()
-        })
+    async editComment(taskId: string, commentId: string, newContent: string): Promise<void> {
+        await localOpenADEClient.editComment({ taskId, commentId, content: newContent })
+        await this.store.refreshTaskStoreFromStorage(taskId)
+        await this.store.refreshRepoStoreFromStorage()
     }
 
     /**

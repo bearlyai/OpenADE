@@ -28,136 +28,10 @@ interface OpenADEAPI {
         setDeviceId: (deviceId: string) => Promise<unknown>
         setTelemetryDisabled: (disabled: boolean) => Promise<void>
     }
-    dir: {
-        enabled: () => Promise<boolean>
-        list: (args: unknown) => Promise<unknown>
-        getDirFromPath: (args: unknown) => Promise<unknown>
-        fileContents: (args: unknown) => Promise<unknown>
-        selectDirectory: (args?: unknown) => Promise<unknown>
-    }
-    fetch: {
-        available: () => Promise<boolean>
-        fetch: (args: unknown) => Promise<unknown>
-    }
-    capabilities: {
-        get: () => Promise<unknown>
-        getSdk: (args: { cwd: string }) => Promise<unknown>
-        invalidateSdk: (args: { cwd: string }) => Promise<void>
-    }
-    files: {
-        fuzzySearch: (params: unknown) => Promise<unknown>
-        describePath: (params: unknown) => Promise<unknown>
-        contentSearch: (params: unknown) => Promise<unknown>
-    }
-    git: {
-        isGitInstalled: () => Promise<unknown>
-        isGitDir: (params: unknown) => Promise<unknown>
-        isGitDirectory: (params: unknown) => Promise<unknown>
-        checkGhCli: () => Promise<unknown>
-        getOrCreateWorkTree: (params: unknown) => Promise<unknown>
-        workTreeDiffPatch: (params: unknown) => Promise<unknown>
-        getMergeBase: (params: unknown) => Promise<unknown>
-        getGitSummary: (params: unknown) => Promise<unknown>
-        getGitStatus: (params: unknown) => Promise<unknown>
-        listFiles: (params: unknown) => Promise<unknown>
-        deleteWorkTree: (params: unknown) => Promise<unknown>
-        isBranchMerged: (params: unknown) => Promise<unknown>
-        deleteBranch: (params: unknown) => Promise<unknown>
-        listWorkTrees: (params: unknown) => Promise<unknown>
-        commitWorkTree: (params: unknown) => Promise<unknown>
-        listBranches: (params: unknown) => Promise<unknown>
-        resolvePath: (params: unknown) => Promise<unknown>
-        initGit: (params: unknown) => Promise<unknown>
-        getLog: (params: unknown) => Promise<unknown>
-        getCommitFiles: (params: unknown) => Promise<unknown>
-        getChangedFiles: (params: unknown) => Promise<unknown>
-        getFileAtTreeish: (params: unknown) => Promise<unknown>
-        getFilePair: (params: unknown) => Promise<unknown>
-        getWorktreeFilePatch: (params: unknown) => Promise<unknown>
-        getCommitFilePatch: (params: unknown) => Promise<unknown>
-    }
-    snapshots: {
-        saveBundle: (params: unknown) => Promise<void>
-        loadPatch: (params: unknown) => Promise<unknown>
-        loadIndex: (params: unknown) => Promise<unknown>
-        loadPatchSlice: (params: unknown) => Promise<unknown>
-        deleteBundle: (params: unknown) => Promise<void>
-    }
-    process: {
-        runCmd: (params: unknown) => Promise<unknown>
-        runScript: (params: unknown) => Promise<unknown>
-        reconnect: (args: unknown) => Promise<unknown>
-        kill: (args: unknown) => Promise<unknown>
-        list: () => Promise<unknown>
-        killAll: () => Promise<unknown>
-        // biome-ignore lint: callback types are cast by consumer
-        onOutput: (processId: string, cb: (chunk: unknown) => void) => () => void
-        // biome-ignore lint: callback types are cast by consumer
-        onExit: (processId: string, cb: (data: unknown) => void) => () => void
-        // biome-ignore lint: callback types are cast by consumer
-        onError: (processId: string, cb: (error: unknown) => void) => () => void
-    }
-    pty: {
-        spawn: (params: unknown) => Promise<unknown>
-        write: (params: unknown) => Promise<void>
-        resize: (params: unknown) => Promise<void>
-        kill: (params: unknown) => Promise<void>
-        reconnect: (params: unknown) => Promise<unknown>
-        killAll: () => Promise<unknown>
-        // biome-ignore lint: callback types are cast by consumer
-        onOutput: (ptyId: string, cb: (chunk: unknown) => void) => () => void
-        // biome-ignore lint: callback types are cast by consumer
-        onExit: (ptyId: string, cb: (data: unknown) => void) => () => void
-    }
-    harness: {
-        command: (command: unknown) => Promise<unknown>
-        query: (args: { executionId: string; prompt: unknown; options: unknown }) => Promise<unknown>
-        toolResponse: (args: { executionId: string; callId: string; result?: unknown; error?: string }) => Promise<unknown>
-        reconnect: (args: { executionId: string }) => Promise<unknown>
-        abort: (args: { executionId: string }) => Promise<unknown>
-        structuredQuery: (args: { prompt: unknown; options: unknown; outputSchema: unknown }) => Promise<unknown>
-        checkStatus: () => Promise<unknown>
-        deleteSession: (args: { harnessId: string; sessionId: string; cwd?: string }) => Promise<unknown>
-        onEvent: (cb: (event: unknown) => void) => () => void
-        onToolCall: (executionId: string, cb: (callId: string, name: string, args: unknown) => void) => () => void
-    }
-    mcp: {
-        testConnection: (params: unknown) => Promise<unknown>
-        initiateOAuth: (params: unknown) => Promise<unknown>
-        cancelOAuth: (params: unknown) => Promise<unknown>
-        refreshOAuth: (params: unknown) => Promise<unknown>
-        onOAuthComplete: (cb: (result: unknown) => void) => () => void
-    }
-    binaries: {
-        statuses: () => Promise<unknown>
-        ensure: (args: { name: string }) => Promise<unknown>
-        remove: (args: { name: string }) => Promise<unknown>
-        resolve: (args: { name: string }) => Promise<unknown>
-    }
-    platform: {
-        getInfo: () => Promise<unknown>
-        checkBinary: (args: { binary: string }) => Promise<unknown>
-        checkVendoredRipgrep: () => Promise<unknown>
-    }
     shell: {
         selectDirectory: (params: unknown) => Promise<unknown>
         openUrl: (params: unknown) => Promise<void>
         openPath: (params: unknown) => Promise<void>
-        createDirectory: (params: unknown) => Promise<unknown>
-    }
-    subprocess: {
-        setGlobalEnv: (args: { env: Record<string, string> }) => Promise<unknown>
-    }
-    yjs: {
-        save: (args: { id: string; data: Uint8Array }) => Promise<void>
-        load: (args: { id: string }) => Promise<unknown>
-        delete: (args: { id: string }) => Promise<void>
-        list: () => Promise<unknown>
-    }
-    data: {
-        save: (args: { folder: string; id: string; data: string | ArrayBuffer; ext: string }) => Promise<void>
-        load: (args: { folder: string; id: string; ext: string }) => Promise<ArrayBuffer | string | null>
-        delete: (args: { folder: string; id: string; ext: string }) => Promise<void>
     }
     codeWindowFrame: {
         enabled: () => Promise<boolean>
@@ -174,18 +48,12 @@ interface OpenADEAPI {
         startPairing: () => Promise<unknown>
         revokeDevice: (deviceId: string) => Promise<unknown>
         dropAllDevices: () => Promise<unknown>
-        onRequest: (cb: (request: unknown) => void) => () => void
-        respond: (response: unknown) => Promise<unknown>
-        notifyEvent: (event: unknown) => Promise<unknown>
     }
-    procs: {
-        read: (params: { path: string }) => Promise<unknown>
-        readFile: (params: { filePath: string }) => Promise<string>
-        writeFile: (params: { filePath: string; content: string }) => Promise<void>
-        loadEditable: (params: { filePath: string; searchPath?: string }) => Promise<unknown>
-        parseRaw: (params: { content: string; relativePath: string }) => Promise<unknown>
-        serializeEditable: (params: { processes: unknown[]; crons: unknown[] }) => Promise<unknown>
-        saveEditable: (params: { filePath: string; relativePath: string; processes: unknown[]; crons: unknown[]; searchPath?: string }) => Promise<unknown>
+    runtime: {
+        connect: () => Promise<unknown>
+        disconnect: () => Promise<unknown>
+        request: (request: unknown) => Promise<unknown>
+        onMessage: (cb: (message: unknown) => void) => () => void
     }
 }
 

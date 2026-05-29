@@ -1,5 +1,6 @@
-import { AlertCircle, CircleCheck, Clock, DollarSign, Zap } from "lucide-react"
+import { AlertCircle, CircleCheck, Clock, DollarSign, Percent, Zap } from "lucide-react"
 import type { CommentContext, GroupRenderer, ResultGroup } from "../../events/messageGroups"
+import { formatInputCacheRate, normalizedCacheReadTokens } from "../../events/usage"
 
 const RESULT_DISPLAY_NAMES: Record<ResultGroup["subtype"], string> = {
     success: "Completed",
@@ -10,6 +11,9 @@ const RESULT_DISPLAY_NAMES: Record<ResultGroup["subtype"], string> = {
 }
 
 function ResultContent({ group }: { group: ResultGroup; ctx: CommentContext }) {
+    const cacheRate = formatInputCacheRate(group.usage)
+    const cacheReadTokens = normalizedCacheReadTokens(group.usage)
+
     return (
         <div className="px-3 py-2 bg-base-100 space-y-2">
             <div className="grid grid-cols-2 gap-2 text-xs">
@@ -21,6 +25,14 @@ function ResultContent({ group }: { group: ResultGroup; ctx: CommentContext }) {
                     <span className="text-muted">Output tokens:</span>{" "}
                     <span className="text-base-content font-mono">{group.usage.outputTokens.toLocaleString()}</span>
                 </div>
+                {cacheRate && cacheReadTokens !== undefined && (
+                    <div>
+                        <span className="text-muted">Input cache rate:</span>{" "}
+                        <span className="text-base-content font-mono">
+                            {cacheRate} ({cacheReadTokens.toLocaleString()} cached)
+                        </span>
+                    </div>
+                )}
             </div>
             {group.result && (
                 <div>
@@ -62,9 +74,10 @@ export const resultRenderer: GroupRenderer<ResultGroup> = {
         const seconds = group.durationMs / 1000
         const duration = seconds < 60 ? `${seconds.toFixed(1)}s` : `${Math.floor(seconds / 60)}m ${(seconds % 60).toFixed(0)}s`
         const cost = group.totalCostUsd < 0.01 ? `$${group.totalCostUsd.toFixed(4)}` : `$${group.totalCostUsd.toFixed(2)}`
+        const cacheRate = formatInputCacheRate(group.usage)
 
         return (
-            <div className="flex items-center gap-3 text-xs text-muted">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
                 <span className="flex items-center gap-1">
                     <Clock size="0.85em" />
                     {duration}
@@ -77,6 +90,12 @@ export const resultRenderer: GroupRenderer<ResultGroup> = {
                     <Zap size="0.85em" />
                     {(group.usage.inputTokens + group.usage.outputTokens).toLocaleString()} tokens
                 </span>
+                {cacheRate && (
+                    <span className="flex items-center gap-1">
+                        <Percent size="0.85em" />
+                        {cacheRate} input cache
+                    </span>
+                )}
             </div>
         )
     },

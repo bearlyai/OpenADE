@@ -24,7 +24,11 @@
         "noEmit": true,
         "sourceMap": true,
         "outDir": "dist",
-        "types": ["node"]
+        "types": ["node"],
+        "paths": {
+            "yjs": ["./node_modules/yjs/dist/src/index.d.ts"],
+            "ws": ["./node_modules/@types/ws"]
+        }
     },
     "include": ["src/**/*"],
     "exclude": ["node_modules"]

@@ -4,7 +4,7 @@
  * Provides synchronous slug generation and async title generation via harness execution.
  */
 
-import { getDefaultModelForHarness, getModelFullId, MODEL_REGISTRY } from "../constants"
+import { MODEL_REGISTRY, getDefaultModelForHarness, getModelFullId } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { getHarnessQueryManager } from "../electronAPI/harnessQuery"
 import type { CodeEvent } from "../types"
@@ -35,14 +35,22 @@ export function generateSlug(): string {
 
 const TITLE_CONTEXT_MAX_BYTES = 2000
 
+export interface GenerateTitleOptions {
+    cwd: string
+    harnessId?: HarnessId | string
+    events?: CodeEvent[]
+}
+
 /** Generate a title from description using harness execution */
 export async function generateTitle(
     description: string,
     abortController: AbortController,
-    harnessId?: HarnessId | string,
-    events?: CodeEvent[]
+    { cwd, harnessId, events }: GenerateTitleOptions
 ): Promise<string | null> {
+    if (!cwd.trim()) return null
+
     const manager = getHarnessQueryManager()
+    const resolvedHarnessId = (harnessId || "claude-code") as HarnessId
 
     let prompt = `Generate a concise, descriptive title (aim for exactly 3 words) for this task:\n\n${description}`
 
@@ -57,9 +65,9 @@ export async function generateTitle(
     }
 
     const query = await manager.startExecution(prompt, {
-        harnessId: (harnessId as HarnessId) ?? "claude-code",
-        cwd: "",
-        model: getTitleModel((harnessId as HarnessId) ?? "claude-code"),
+        harnessId: resolvedHarnessId,
+        cwd,
+        model: getTitleModel(resolvedHarnessId),
         mode: "read-only",
         disablePlanningTools: true,
         appendSystemPrompt:

@@ -1,10 +1,14 @@
 import { MessageSquare } from "lucide-react"
 import { useCallback, useMemo } from "react"
+import { useCodeStore } from "../../../store/context"
 import type { Comment, CommentSource } from "../../../types"
 import { type AnnotationSide, type CommentHandlers, FileViewer } from "../../FilesAndDiffs"
+import { MarkdownMessage } from "../../MarkdownMessage"
 import type { CommentContext, GroupRenderer, TextGroup } from "../../events/messageGroups"
 
 function TextContent({ group, ctx }: { group: TextGroup; ctx: CommentContext }) {
+    const codeStore = useCodeStore()
+    const renderMarkdown = codeStore.personalSettingsStore?.settings.current.renderMarkdownMessages ?? true
     const sourceMatch = useCallback(
         (c: Comment) => {
             const src = c.source
@@ -25,6 +29,8 @@ function TextContent({ group, ctx }: { group: TextGroup; ctx: CommentContext }) 
     )
 
     const commentHandlers: CommentHandlers = useMemo(() => ({ taskId: ctx.taskId, sourceMatch, createSource }), [ctx.taskId, sourceMatch, createSource])
+
+    if (renderMarkdown) return <MarkdownMessage text={group.text} commentHandlers={commentHandlers} />
 
     return <FileViewer file={{ name: "message.md", contents: group.text, lang: "markdown" }} disableFileHeader commentHandlers={commentHandlers} />
 }

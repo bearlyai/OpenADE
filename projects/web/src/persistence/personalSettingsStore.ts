@@ -87,6 +87,8 @@ export interface PersonalSettings {
     devForceAllCommands?: boolean
     /** Hide shortcut hint overlays when holding Command */
     shortcutHintsHidden?: boolean
+    /** Render assistant markdown as formatted prose instead of source-style text. */
+    renderMarkdownMessages?: boolean
     /** Version string of the latest release notes the user has seen */
     lastSeenReleaseVersion?: string
 
@@ -123,6 +125,7 @@ export function createPersonalSettingsStore(doc: Y.Doc): PersonalSettingsStore {
     const settings = objectOfType<PersonalSettings>(doc, "personal_settings", () => ({
         envVars: {},
         theme: "system",
+        renderMarkdownMessages: true,
     }))
 
     const storedTheme = settings.current.theme as string | undefined
@@ -132,6 +135,9 @@ export function createPersonalSettingsStore(doc: Y.Doc): PersonalSettingsStore {
         settings.set({ theme: defaultDarkTheme })
     } else if (storedTheme === undefined) {
         settings.set({ theme: "system" })
+    }
+    if (settings.current.renderMarkdownMessages === undefined) {
+        settings.set({ renderMarkdownMessages: true })
     }
 
     return { settings }

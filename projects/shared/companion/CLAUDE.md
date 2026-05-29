@@ -12,9 +12,10 @@ Shared TypeScript contracts for the desktop companion service, web remote UI, an
 
 - RemoteSnapshot is the list/read model for projects, task previews, working task ids, and desktop theme metadata.
 - RemoteTask is the task detail read model. Events and comments may stay unknown[] at the wire boundary.
-- RemoteRunRequest is the only remote command entry point for Plan, Do, Ask, and HyperPlan.
+- RemoteTurnStartRequest aliases the OpenADE module turn-start payload used over `/v1/runtime`.
 - PairingPayload uses HTTP URL data, not custom deep-link schemes.
 - CompanionEvent is intentionally coarse. The client refreshes affected read models instead of syncing Yjs.
+- Do not add renderer request/response command DTOs here. Companion commands go through runtime protocol methods.
 
 ## Compatibility
 
@@ -25,4 +26,4 @@ Shared TypeScript contracts for the desktop companion service, web remote UI, an
 ## Security
 
 - Do not add raw shell, filesystem, Electron IPC, or Yjs write contracts here.
-- Remote control should stay scoped to snapshots, task detail, run, abort, pairing, device state, and events.
+- Remote control should stay scoped to OpenADE runtime methods, pairing, device state, and events.

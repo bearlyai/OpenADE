@@ -2,7 +2,7 @@
  * EventModel - Observable wrappers for CodeEvent
  *
  * Provides derived state and actions for events.
- * Models compute from store's tasksById - no caching needed.
+ * Models compute from loaded task stores - no event data is cached here.
  *
  * Note: We use decorators instead of makeAutoObservable because
  * subclasses (ActionEventModel, etc.) extend this class,
@@ -28,7 +28,7 @@ export class EventModel {
 
     @computed
     protected get event(): CodeEvent | undefined {
-        return this.store.tasks.tasksById.get(this.taskId)?.events.find((e) => e.id === this.eventId)
+        return this.store.tasks.getTask(this.taskId)?.events.find((e) => e.id === this.eventId)
     }
 
     // === Raw accessors ===

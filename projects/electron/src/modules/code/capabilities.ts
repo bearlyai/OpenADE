@@ -2,17 +2,13 @@
  * Code Module Capabilities
  *
  * Reports whether the code module is enabled and its version.
- * Allows the dashboard to detect code module availability via IPC
- * rather than relying on raw Electron detection.
  *
  * Also manages an in-memory cache of SDK capabilities (slash commands, skills, plugins)
  * per (harnessId, cwd). The cache is populated from system:init messages during normal
  * queries and can be probed on demand via the harness's discoverSlashCommands().
  */
 
-import { ipcMain, type IpcMainInvokeEvent } from "electron"
 import logger from "electron-log"
-import { isDev } from "../../config"
 import { registry } from "./harness"
 import type { HarnessId } from "@openade/harness"
 
@@ -21,7 +17,7 @@ import type { HarnessId } from "@openade/harness"
 // IMPORTANT: Keep in sync with projects/dashboard/src/pages/code/electronAPI/capabilities.ts
 // ============================================================================
 
-interface CodeModuleCapabilities {
+export interface CodeModuleCapabilities {
 	enabled: boolean
 	version: string
 }
@@ -31,25 +27,6 @@ export interface SdkCapabilities {
 	skills: string[]
 	plugins: { name: string; path: string }[]
 	cachedAt: number
-}
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-function checkAllowed(e: IpcMainInvokeEvent): boolean {
-	const origin = e.sender.getURL()
-	try {
-		const url = new URL(origin)
-		if (isDev) {
-			return url.hostname.endsWith("localhost")
-		} else {
-			return url.hostname.endsWith("localhost") || url.protocol === "file:"
-		}
-	} catch (error) {
-		logger.error("[Capabilities:checkAllowed] Failed to parse origin:", error)
-		return false
-	}
 }
 
 // ============================================================================
@@ -139,50 +116,26 @@ async function runProbe(cwd: string, harnessId: HarnessId = "claude-code"): Prom
 
 const CODE_MODULE_VERSION = "1.0.0"
 
-export const load = () => {
-	logger.info("[Capabilities] Registering IPC handlers")
+export function getRuntimeCodeCapabilities(): CodeModuleCapabilities {
+	return {
+		enabled: true,
+		version: CODE_MODULE_VERSION,
+	}
+}
 
-	ipcMain.handle("code:capabilities", async (event) => {
-		if (!checkAllowed(event)) throw new Error("not allowed")
-		return {
-			enabled: true,
-			version: CODE_MODULE_VERSION,
-		} satisfies CodeModuleCapabilities
-	})
+export async function getRuntimeSdkCapabilities(args: { cwd: string; harnessId?: HarnessId }): Promise<SdkCapabilities | null> {
+	const { cwd, harnessId = "claude-code" } = args
 
-	ipcMain.handle("code:sdk-capabilities", async (event, args: { cwd: string; harnessId?: HarnessId }) => {
-		if (!checkAllowed(event)) throw new Error("not allowed")
+	const cached = getSdkCache(cwd, harnessId)
+	if (cached) return cached
 
-		const { cwd, harnessId = "claude-code" } = args
+	return await runProbe(cwd, harnessId)
+}
 
-		// Return cached if available
-		const cached = getSdkCache(cwd, harnessId)
-		if (cached) return cached
-
-		// Run probe to discover capabilities
-		return await runProbe(cwd, harnessId)
-	})
-
-	ipcMain.handle("code:invalidate-sdk-capabilities", async (event, args: { cwd: string; harnessId?: HarnessId }) => {
-		if (!checkAllowed(event)) throw new Error("not allowed")
-		const harnessId = args.harnessId ?? "claude-code"
-		sdkCapabilitiesCache.delete(cacheKey(harnessId, args.cwd))
-		return { ok: true }
-	})
-
-	// New handler: check install status for all registered harnesses
-	ipcMain.handle("harness:check-status", async (event) => {
-		if (!checkAllowed(event)) throw new Error("not allowed")
-		const statusMap = await registry.checkAllInstallStatus()
-		// Convert Map to plain object for IPC serialization
-		const result: Record<string, unknown> = {}
-		for (const [id, status] of statusMap) {
-			result[id] = status
-		}
-		return result
-	})
-
-	logger.info("[Capabilities] IPC handlers registered successfully")
+export function invalidateRuntimeSdkCapabilities(args: { cwd: string; harnessId?: HarnessId }): { ok: true } {
+	const harnessId = args.harnessId ?? "claude-code"
+	sdkCapabilitiesCache.delete(cacheKey(harnessId, args.cwd))
+	return { ok: true }
 }
 
 export const cleanup = () => {

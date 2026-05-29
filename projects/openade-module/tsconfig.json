@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "paths": {
+      "ws": ["../electron/node_modules/@types/ws"],
+      "yjs": ["../web/node_modules/yjs/dist/src/index.d.ts"]
+    },
+    "types": ["node"],
+    "typeRoots": ["../electron/node_modules/@types"]
+  },
+  "include": ["src/**/*", "../runtime/src/**/*", "../runtime-node/src/**/*", "../runtime-protocol/src/**/*", "../shared/companion/src/**/*"]
+}

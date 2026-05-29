@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto"
 import { readFile, readdir, appendFile, rm, stat } from "node:fs/promises"
 
 import type { HarnessEvent, SessionMeta, ListSessionsOptions, GetSessionEventsOptions, WriteSessionEventsOptions, DeleteSessionOptions } from "../../types.js"
-import type { ClaudeEvent, ClaudeAssistantEvent, ClaudeUserEvent } from "./types.js"
+import { parseClaudeEvent, type ClaudeEvent, type ClaudeAssistantEvent, type ClaudeRawJsonEvent, type ClaudeUserEvent } from "./types.js"
 
 function resolveClaudeHome(): string {
     return process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
@@ -54,31 +54,40 @@ export function parseClaudeSessionLine(raw: Record<string, unknown>): HarnessEve
     const type = raw.type as string | undefined
     if (!type) return null
 
-    if (type === "assistant") {
-        const msg = raw.message as ClaudeAssistantEvent["message"] | undefined
-        if (!msg) return null
+    const malformed = (): HarnessEvent<ClaudeRawJsonEvent> => ({
+        type: "message",
+        message: {
+            type: "raw_json",
+            original_type: type,
+            raw,
+        },
+    })
+
+    if (type === "assistant" && !raw.message) return malformed()
+    if (type === "user" && !raw.message) return malformed()
+
+    const parsed = parseClaudeEvent(raw)
+    if (!parsed) return null
+
+    if (parsed.type === "assistant") {
         const event: ClaudeAssistantEvent = {
-            type: "assistant",
-            message: msg,
-            uuid: (raw.uuid as string) ?? "",
-            session_id: (raw.sessionId as string) ?? "",
-            parent_tool_use_id: (raw.sourceToolAssistantUUID as string) ?? null,
+            ...parsed,
+            uuid: (raw.uuid as string) ?? parsed.uuid ?? "",
+            session_id: (raw.sessionId as string) ?? parsed.session_id ?? "",
+            parent_tool_use_id: (raw.sourceToolAssistantUUID as string) ?? parsed.parent_tool_use_id ?? null,
         }
         return { type: "message", message: event }
     }
 
-    if (type === "user") {
-        const msg = raw.message as ClaudeUserEvent["message"] | undefined
-        if (!msg) return null
+    if (parsed.type === "user") {
         const event: ClaudeUserEvent = {
-            type: "user",
-            message: msg,
+            ...parsed,
+            message: parsed.message,
         }
         return { type: "message", message: event }
     }
 
-    // Skip queue-operation, metadata, and other non-message entries
-    return null
+    return { type: "message", message: parsed }
 }
 
 export async function readClaudeSession(sessionId: string, options?: GetSessionEventsOptions): Promise<HarnessEvent<ClaudeEvent>[] | null> {

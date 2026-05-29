@@ -2,8 +2,11 @@
  * Shell Utilities API Bridge
  *
  * Client-side API for shell/OS operations.
- * Communicates with Electron main process via openadeAPI.
+ * Uses direct Electron IPC for OS UI operations and local runtime for plain host operations.
  */
+
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
+import { getExternalUrlToOpen } from "../utils/externalLinks"
 
 // ============================================================================
 // Type Definitions
@@ -41,18 +44,18 @@ export async function selectDirectory(defaultPath?: string): Promise<string | nu
  * Create a directory at the specified path (recursive)
  */
 export async function createDirectory(path: string): Promise<CreateDirectoryResponse> {
-    if (!window.openadeAPI) {
+    if (!window.openadeAPI?.runtime) {
         console.warn("[ShellAPI] Not running in Electron")
         return { success: false, error: "Not running in Electron" }
     }
 
-    return (await window.openadeAPI.shell.createDirectory({ path })) as CreateDirectoryResponse
+    return localRuntimeClient.request<CreateDirectoryResponse>("host/shell/createDirectory", { path })
 }
 
 /**
- * Open a path in the native file manager (Finder, Explorer, etc.)
+ * Open a path in the native default app (Preview, Finder, Explorer, etc.)
  */
-export function openPathInFileManager(path: string): void {
+export function openPathInNativeApp(path: string): void {
     if (!window.openadeAPI) {
         console.warn("[ShellAPI] Not running in Electron")
         return
@@ -60,15 +63,23 @@ export function openPathInFileManager(path: string): void {
     window.openadeAPI.shell.openPath({ path })
 }
 
+export const openPathInFileManager = openPathInNativeApp
+
 /**
  * Open URL in native browser
  */
 export function openUrlInNativeBrowser(url: string): void {
-    if (!window.openadeAPI) {
-        // Fallback for non-Electron environments
-        window.open(url, "_blank")
+    const externalUrl = getExternalUrlToOpen(url)
+    if (!externalUrl) {
+        console.warn("[ShellAPI] Refusing to open non-external URL", { url })
         return
     }
 
-    window.openadeAPI.shell.openUrl({ url })
+    if (!window.openadeAPI) {
+        // Fallback for non-Electron environments
+        window.open(externalUrl, "_blank", "noopener,noreferrer")
+        return
+    }
+
+    window.openadeAPI.shell.openUrl({ url: externalUrl })
 }

@@ -267,6 +267,7 @@ export class ClaudeCodeHarness implements Harness<ClaudeEvent> {
                 env,
                 signal: q.signal,
                 argv0: q.processLabel,
+                onSpawn: q.onSpawn,
                 stdinData,
                 stdinLines,
                 parseLine: (line) => {

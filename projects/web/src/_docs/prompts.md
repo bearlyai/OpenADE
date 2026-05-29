@@ -62,6 +62,8 @@ Source types: plan, file, diff, patch, llm_output, edit_diff, write_diff, bash_o
 
 All modes share `COMPACT_STYLE_RULES` (bullets > paragraphs, no filler, tradeoffs on labeled lines). Plan and ask prompts add tighter brevity rules for short sections and fewer supporting details.
 
+Markdown rendering is supported for assistant output. To link local files, write project-relative file references with optional line numbers, such as `src/store/TaskModel.ts` or `src/store/TaskModel.ts:333`; the UI opens them as file links.
+
 ### Plan
 ```markdown
 ## 📋 Overview (Goal / Scope / Non-goals)

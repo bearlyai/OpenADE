@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react"
 import type { HarnessId, HarnessStreamEvent } from "../../electronAPI/harnessEventTypes"
+import { useCodeStore } from "../../store/context"
 import type { ActionEventSource } from "../../types"
 import { FileViewer } from "../FilesAndDiffs"
 import { type CommentContext, type DisplayContext, type GroupWithMeta, type MergedGroup, groupStreamEvents } from "../events/messageGroups"
+import { MarkdownMessage } from "../MarkdownMessage"
 import { getRenderMode } from "./getRenderMode"
 import { groupByRenderMode } from "./groupByRenderMode"
 import { getRenderer } from "./renderers"
@@ -174,7 +176,9 @@ export function InlineMessages({ events, harnessId, sourceType, sessionInfo: _se
 }
 
 /** Renders user input as a quoted File component with left accent border, collapsed by default */
-export function UserInputMessage({ text }: { text: string }) {
+export function UserInputMessage({ text, taskId }: { text: string; taskId?: string }) {
+    const codeStore = useCodeStore()
+    const renderMarkdown = codeStore.personalSettingsStore?.settings.current.renderMarkdownMessages ?? true
     const [expanded, setExpanded] = useState(false)
     const lines = text.split("\n")
     const isLong = lines.length > 7
@@ -183,13 +187,17 @@ export function UserInputMessage({ text }: { text: string }) {
     return (
         <div className="border-t border-border">
             <div className="border-l-2 border-primary bg-primary/5 mx-5 my-2 overflow-hidden">
-                <FileViewer
-                    file={{ name: "input.md", contents: displayText, lang: "markdown" }}
-                    copyContent={text}
-                    disableFileHeader
-                    disableLineNumbers
-                    commentHandlers={null}
-                />
+                {renderMarkdown ? (
+                    <MarkdownMessage text={displayText} commentHandlers={null} taskId={taskId} />
+                ) : (
+                    <FileViewer
+                        file={{ name: "input.md", contents: displayText, lang: "markdown" }}
+                        copyContent={text}
+                        disableFileHeader
+                        disableLineNumbers
+                        commentHandlers={null}
+                    />
+                )}
                 {isLong && (
                     <button
                         type="button"

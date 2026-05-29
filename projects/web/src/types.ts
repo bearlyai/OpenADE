@@ -34,6 +34,28 @@ export interface Execution {
     gitRefsAfter?: GitRefs
 }
 
+export type QueuedTurnStatus = "queued" | "running" | "completed" | "error" | "stopped" | "cancelled"
+
+export interface QueuedTurn {
+    id: string
+    clientRequestId?: string
+    type: "do" | "ask"
+    input: string
+    status: QueuedTurnStatus
+    createdAt: string
+    updatedAt: string
+    eventId?: string
+    appendSystemPrompt?: string
+    enabledMcpServerIds?: string[]
+    harnessId?: string
+    modelId?: string
+    label?: string
+    includeComments?: boolean
+    images?: unknown[]
+    thinking?: "low" | "med" | "high" | "max"
+    fastMode?: boolean
+}
+
 export interface User {
     id: string
     email: string
@@ -196,29 +218,6 @@ export interface TaskDeviceEnvironment {
     lastUsedAt: string
 }
 
-// ============================================================================
-// RunCmd — canonical interface for programmatic task execution
-// ============================================================================
-
-export interface RunCmdArgs {
-    repoId: string
-    type: "plan" | "do" | "ask" | "hyperplan"
-    input: string
-    images?: ImageAttachment[]
-    appendSystemPrompt?: string
-    inTaskId?: string | null // if set, run in existing task; if null/undefined, create new
-    isolationStrategy?: IsolationStrategy // defaults to { type: "head" }
-    enabledMcpServerIds?: string[]
-    harnessId?: HarnessId
-    thinking?: "low" | "med" | "high" | "max"
-    fastMode?: boolean
-    title?: string // if set, skip LLM title generation
-}
-
-export interface RunCmdResult {
-    taskId: string
-}
-
 export interface Task {
     id: string
     repoId: string
@@ -231,6 +230,7 @@ export interface Task {
     events: CodeEvent[]
     comments: Comment[] // Task-level comments with source tracking
     sessionIds: Record<string, string>
+    queuedTurns?: QueuedTurn[]
     createdAt: string
     updatedAt: string
     closed?: boolean

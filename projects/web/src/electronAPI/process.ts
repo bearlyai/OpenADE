@@ -2,7 +2,7 @@
  * Process Management API Bridge
  *
  * Client-side API for process spawning and management.
- * Communicates with Electron main process via openadeAPI.
+ * Communicates with the trusted local runtime protocol.
  * Supports reconnection after renderer refresh.
  */
 
@@ -11,7 +11,7 @@
 // IMPORTANT: Keep in sync with projects/electron/src/modules/code/process.ts
 // ============================================================================
 
-export interface RunCmdParams {
+export interface StartCommandParams {
     cmd: string
     args?: string[]
     cwd: string
@@ -19,14 +19,14 @@ export interface RunCmdParams {
     timeoutMs?: number // Default: 10 minutes (600000ms)
 }
 
-export interface RunScriptParams {
+export interface StartScriptParams {
     script: string
     cwd: string
     env?: Record<string, string>
     timeoutMs?: number // Default: 10 minutes (600000ms)
 }
 
-export interface RunProcessResponse {
+export interface StartProcessResponse {
     processId: string
 }
 
@@ -73,6 +73,7 @@ interface ListResponse {
 // ============================================================================
 
 import { isCodeModuleAvailable } from "./capabilities"
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
 
 type EventHandler = (...args: unknown[]) => void
 
@@ -124,9 +125,9 @@ export class ProcessHandle {
     }
 
     /**
-     * Run a command
+     * Start a command process
      */
-    static async runCmd(params: RunCmdParams): Promise<ProcessHandle | null> {
+    static async startCommand(params: StartCommandParams): Promise<ProcessHandle | null> {
         if (!window.openadeAPI) {
             console.warn("[ProcessHandle] Not running in Electron, returning null")
             return null
@@ -134,7 +135,7 @@ export class ProcessHandle {
 
         console.debug("[ProcessHandle] Starting command:", params.cmd, params.args)
 
-        const response = (await window.openadeAPI.process.runCmd(params)) as RunProcessResponse
+        const response = await localRuntimeClient.request<StartProcessResponse>("process/command/start", params)
         const handle = new ProcessHandle(response.processId)
         handle.setupListeners()
 
@@ -143,9 +144,9 @@ export class ProcessHandle {
     }
 
     /**
-     * Run a script
+     * Start a script process
      */
-    static async runScript(params: RunScriptParams): Promise<ProcessHandle | null> {
+    static async startScript(params: StartScriptParams): Promise<ProcessHandle | null> {
         if (!window.openadeAPI) {
             console.warn("[ProcessHandle] Not running in Electron, returning null")
             return null
@@ -153,7 +154,7 @@ export class ProcessHandle {
 
         console.debug("[ProcessHandle] Starting script, length:", params.script.length)
 
-        const response = (await window.openadeAPI.process.runScript(params)) as RunProcessResponse
+        const response = await localRuntimeClient.request<StartProcessResponse>("process/script/start", params)
         const handle = new ProcessHandle(response.processId)
         handle.setupListeners()
 
@@ -176,7 +177,11 @@ export class ProcessHandle {
         const handle = new ProcessHandle(processId)
         handle.setupListeners()
 
-        const result = (await window.openadeAPI.process.reconnect({ processId })) as ReconnectResponse
+        const result = (await localRuntimeClient.request<ReconnectResponse & { output?: ProcessOutputChunk[] }>("process/reconnect", {
+            processId,
+        })) as ReconnectResponse & {
+            output?: ProcessOutputChunk[]
+        }
 
         if (!result.found) {
             console.debug("[ProcessHandle] Process not found (cleaned up or never existed)")
@@ -185,12 +190,20 @@ export class ProcessHandle {
         }
 
         console.debug("[ProcessHandle] Reconnected, replayed", result.outputCount, "output chunks")
+        for (const chunk of result.output ?? []) {
+            handle.emit("output", chunk)
+        }
 
         if (result.completed) {
             handle._isComplete = true
             handle._exitCode = result.exitCode ?? null
             handle._signal = result.signal ?? null
             handle._error = result.error
+            if (result.error) {
+                handle.emit("error", result.error)
+            } else {
+                handle.emit("exit", { exitCode: handle._exitCode, signal: handle._signal })
+            }
         }
 
         return { handle, found: true }
@@ -199,31 +212,34 @@ export class ProcessHandle {
     private setupListeners() {
         if (!window.openadeAPI) return
 
-        // Subscribe to output events
-        const unsubOutput = window.openadeAPI.process.onOutput(this._processId, (chunk) => {
-            this.emit("output", chunk as ProcessOutputChunk)
-        })
-        this.unsubscribers.push(unsubOutput)
+        const unsubscribe = localRuntimeClient.subscribe((notification) => {
+            const params = notification.params as Record<string, unknown> | undefined
+            if (!params || params.processId !== this._processId) return
 
-        // Subscribe to exit events
-        const unsubExit = window.openadeAPI.process.onExit(this._processId, (data) => {
-            const exit = data as ProcessExitEvent
-            console.debug("[ProcessHandle] Process exited:", exit)
-            this._isComplete = true
-            this._exitCode = exit.exitCode
-            this._signal = exit.signal
-            this.emit("exit", exit)
-        })
-        this.unsubscribers.push(unsubExit)
+            if (notification.method === "process/output") {
+                this.emit("output", params.chunk as ProcessOutputChunk)
+                return
+            }
 
-        // Subscribe to error events
-        const unsubError = window.openadeAPI.process.onError(this._processId, (error) => {
-            console.error("[ProcessHandle] Process error:", error)
-            this._isComplete = true
-            this._error = error as string
-            this.emit("error", error)
+            if (notification.method === "process/exit") {
+                const exit = { exitCode: params.exitCode ?? null, signal: params.signal ?? null } as ProcessExitEvent
+                console.debug("[ProcessHandle] Process exited:", exit)
+                this._isComplete = true
+                this._exitCode = exit.exitCode
+                this._signal = exit.signal
+                this.emit("exit", exit)
+                return
+            }
+
+            if (notification.method === "process/error") {
+                const error = typeof params.error === "string" ? params.error : "Process error"
+                console.error("[ProcessHandle] Process error:", error)
+                this._isComplete = true
+                this._error = error
+                this.emit("error", error)
+            }
         })
-        this.unsubscribers.push(unsubError)
+        this.unsubscribers.push(unsubscribe)
     }
 
     private emit(event: string, ...args: unknown[]) {
@@ -311,7 +327,7 @@ export class ProcessHandle {
     async kill(): Promise<void> {
         if (!window.openadeAPI) return
 
-        const result = (await window.openadeAPI.process.kill({ processId: this._processId })) as KillResponse
+        const result = await localRuntimeClient.request<KillResponse>("process/kill", { processId: this._processId })
         if (!result.ok) {
             console.warn("[ProcessHandle] Kill failed:", result.error)
         }
@@ -344,17 +360,17 @@ function isProcessApiAvailable(): boolean {
 }
 
 /**
- * Run a command and get a process handle
+ * Start a command and get a process handle
  */
-async function runCmd(params: RunCmdParams): Promise<ProcessHandle | null> {
-    return ProcessHandle.runCmd(params)
+async function startCommand(params: StartCommandParams): Promise<ProcessHandle | null> {
+    return ProcessHandle.startCommand(params)
 }
 
 /**
- * Run a script and get a process handle
+ * Start a script and get a process handle
  */
-async function runScript(params: RunScriptParams): Promise<ProcessHandle | null> {
-    return ProcessHandle.runScript(params)
+async function startScript(params: StartScriptParams): Promise<ProcessHandle | null> {
+    return ProcessHandle.startScript(params)
 }
 
 /**
@@ -366,7 +382,7 @@ async function listProcesses(): Promise<ProcessInfo[]> {
         return []
     }
 
-    const result = (await window.openadeAPI.process.list()) as ListResponse
+    const result = await localRuntimeClient.request<ListResponse>("process/list")
     return result.processes
 }
 
@@ -379,7 +395,7 @@ async function killAll(): Promise<boolean> {
         return false
     }
 
-    const result = (await window.openadeAPI.process.killAll()) as { ok: boolean }
+    const result = await localRuntimeClient.request<{ ok: boolean }>("process/killAll")
     return result.ok
 }
 
@@ -387,8 +403,8 @@ async function killAll(): Promise<boolean> {
  * Process API namespace for convenient imports
  */
 export const processApi = {
-    runCmd,
-    runScript,
+    startCommand,
+    startScript,
     listProcesses,
     killAll,
     reconnect: ProcessHandle.reconnect,

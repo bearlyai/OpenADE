@@ -2,10 +2,11 @@
  * MCP Server API Bridge
  *
  * Client-side API for MCP server operations.
- * Communicates with Electron main process via openadeAPI.
+ * Communicates with the local runtime protocol bridge.
  */
 
 import type { McpOAuthTokens, McpServerItem } from "../persistence/mcpServerStore"
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
 import type { McpHttpServerConfig, McpServerConfig, McpStdioServerConfig } from "./harnessEventTypes"
 
 // Re-export types for convenience
@@ -80,13 +81,12 @@ export function isMcpApiAvailable(): boolean {
  * Returns connection status and available capabilities
  */
 export async function testMcpConnection(config: McpServerConfig): Promise<TestMcpConnectionResponse> {
-    if (!window.openadeAPI) {
+    if (!window.openadeAPI?.runtime) {
         return { success: false, error: "Not running in Electron" }
     }
 
     try {
-        const response = (await window.openadeAPI.mcp.testConnection({ config })) as TestMcpConnectionResponse
-        return response
+        return await localRuntimeClient.request<TestMcpConnectionResponse>("host/mcp/testConnection", { config })
     } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : "Unknown error" }
     }
@@ -97,13 +97,12 @@ export async function testMcpConnection(config: McpServerConfig): Promise<TestMc
  * Opens OAuth URL in system browser and handles callback
  */
 export async function initiateMcpOAuth(params: InitiateMcpOAuthParams): Promise<InitiateMcpOAuthResponse> {
-    if (!window.openadeAPI) {
+    if (!window.openadeAPI?.runtime) {
         return { success: false, error: "Not running in Electron" }
     }
 
     try {
-        const response = (await window.openadeAPI.mcp.initiateOAuth(params)) as InitiateMcpOAuthResponse
-        return response
+        return await localRuntimeClient.request<InitiateMcpOAuthResponse>("host/mcp/initiateOAuth", params)
     } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : "Unknown error" }
     }
@@ -113,13 +112,12 @@ export async function initiateMcpOAuth(params: InitiateMcpOAuthParams): Promise<
  * Cancel a pending OAuth flow for an MCP server
  */
 export async function cancelMcpOAuth(params: CancelMcpOAuthParams): Promise<CancelMcpOAuthResponse> {
-    if (!window.openadeAPI) {
+    if (!window.openadeAPI?.runtime) {
         return { success: false }
     }
 
     try {
-        const response = (await window.openadeAPI.mcp.cancelOAuth(params)) as CancelMcpOAuthResponse
-        return response
+        return await localRuntimeClient.request<CancelMcpOAuthResponse>("host/mcp/cancelOAuth", params)
     } catch (err) {
         console.error("[McpAPI] Failed to cancel OAuth:", err)
         return { success: false }
@@ -130,13 +128,12 @@ export async function cancelMcpOAuth(params: CancelMcpOAuthParams): Promise<Canc
  * Refresh OAuth tokens for an MCP server using the refresh token
  */
 export async function refreshMcpOAuthToken(params: RefreshMcpOAuthParams): Promise<RefreshMcpOAuthResponse> {
-    if (!window.openadeAPI) {
+    if (!window.openadeAPI?.runtime) {
         return { success: false, error: "Not running in Electron" }
     }
 
     try {
-        const response = (await window.openadeAPI.mcp.refreshOAuth(params)) as RefreshMcpOAuthResponse
-        return response
+        return await localRuntimeClient.request<RefreshMcpOAuthResponse>("host/mcp/refreshOAuth", params)
     } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : "Unknown error" }
     }
@@ -147,13 +144,14 @@ export async function refreshMcpOAuthToken(params: RefreshMcpOAuthParams): Promi
  * Returns an unsubscribe function
  */
 export function onMcpOAuthComplete(callback: OnMcpOAuthCompleteCallback): () => void {
-    if (!window.openadeAPI) {
+    if (!window.openadeAPI?.runtime) {
         console.warn("[McpAPI] Not running in Electron, cannot subscribe to OAuth events")
         return () => {}
     }
 
-    return window.openadeAPI.mcp.onOAuthComplete((result: unknown) => {
-        callback(result as Parameters<OnMcpOAuthCompleteCallback>[0])
+    return localRuntimeClient.subscribe((notification) => {
+        if (notification.method !== "host/mcp/oauthComplete") return
+        callback(notification.params as Parameters<OnMcpOAuthCompleteCallback>[0])
     })
 }
 

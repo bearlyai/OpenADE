@@ -85,6 +85,41 @@ describe("groupStreamEvents stderr grouping", () => {
 })
 
 describe("groupStreamEvents codex file changes", () => {
+    it("preserves Codex cached input tokens on completed turns", () => {
+        const groups = groupStreamEvents(
+            [
+                codexMessageEvent(
+                    {
+                        type: "turn.completed",
+                        usage: {
+                            input_tokens: 200,
+                            cached_input_tokens: 150,
+                            output_tokens: 50,
+                        },
+                    },
+                    "msg-1"
+                ),
+            ],
+            "codex"
+        )
+
+        expect(groups).toEqual([
+            {
+                type: "result",
+                subtype: "success",
+                durationMs: 0,
+                totalCostUsd: 0,
+                usage: {
+                    inputTokens: 200,
+                    outputTokens: 50,
+                    cacheReadTokens: 150,
+                },
+                isError: false,
+                messageIndex: 0,
+            },
+        ])
+    })
+
     it("renders one fileChange group per Codex file_change entry", () => {
         const groups = groupStreamEvents(
             [
@@ -714,6 +749,58 @@ describe("groupStreamEvents unknown harness events", () => {
                     retry_delay_ms: 1000,
                     error_status: 529,
                     error: "rate_limit",
+                },
+                messageIndex: 0,
+            },
+        ])
+    })
+
+    it("renders Claude hook_started events as system groups", () => {
+        const raw = {
+            type: "system",
+            subtype: "hook_started",
+            hook_name: "pre-bash",
+            hook_event: "PreToolUse",
+            session_id: "0848323a-5269-439c-9411-1decd4b8dc5f",
+            uuid: "e1d4c18f-ba8a-4fd4-a393-b269470a074d",
+        }
+        const groups = groupStreamEvents([claudeMessageEvent(raw, "msg-1")], "claude-code")
+
+        expect(groups).toEqual([
+            {
+                type: "system",
+                subtype: "hook_started",
+                metadata: {
+                    hook_name: "pre-bash",
+                    hook_event: "PreToolUse",
+                    session_id: "0848323a-5269-439c-9411-1decd4b8dc5f",
+                    uuid: "e1d4c18f-ba8a-4fd4-a393-b269470a074d",
+                },
+                messageIndex: 0,
+            },
+        ])
+    })
+
+    it("renders Claude hook_progress events as system groups", () => {
+        const raw = {
+            type: "system",
+            subtype: "hook_progress",
+            hook_name: "pre-bash",
+            content: "Checking command...",
+            session_id: "0848323a-5269-439c-9411-1decd4b8dc5f",
+            uuid: "e1d4c18f-ba8a-4fd4-a393-b269470a074d",
+        }
+        const groups = groupStreamEvents([claudeMessageEvent(raw, "msg-1")], "claude-code")
+
+        expect(groups).toEqual([
+            {
+                type: "system",
+                subtype: "hook_progress",
+                metadata: {
+                    hook_name: "pre-bash",
+                    content: "Checking command...",
+                    session_id: "0848323a-5269-439c-9411-1decd4b8dc5f",
+                    uuid: "e1d4c18f-ba8a-4fd4-a393-b269470a074d",
                 },
                 messageIndex: 0,
             },

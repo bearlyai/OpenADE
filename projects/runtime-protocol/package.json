@@ -1,0 +1,14 @@
+{
+  "name": "@openade/runtime-protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "../electron/node_modules/.bin/tsgo --noEmit"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./src": "./src/index.ts",
+    "./src/*": "./src/*"
+  }
+}

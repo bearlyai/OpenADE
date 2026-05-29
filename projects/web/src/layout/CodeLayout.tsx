@@ -7,8 +7,6 @@ import { SettingsModal, type SettingsTab } from "../components/settings/Settings
 import { setLastViewed, setWorkspaceLastViewed } from "../constants"
 import { initCodeModuleCapabilities } from "../electronAPI/capabilities"
 import { fetchPlatformInfo } from "../electronAPI/platform"
-import { processApi } from "../electronAPI/process"
-import { ptyApi } from "../electronAPI/pty"
 import { DesktopRequiredPage } from "../pages/DesktopRequiredPage"
 import { useCodeStore } from "../store/context"
 import { CodeAppLayout } from "./CodeAppLayout"
@@ -25,7 +23,6 @@ export interface CodeLayoutProps {
 export const CodeLayout = observer(({ children, isCodeModuleAvailable, workspaceId, taskId, title, icon, navbarRight }: CodeLayoutProps) => {
     const codeStore = useCodeStore()
     const [hasInitialized, setHasInitialized] = useState(false)
-    const [hasReconnected, setHasReconnected] = useState(false)
 
     // Gate access to desktop app with code modules only
     if (!isCodeModuleAvailable) {
@@ -97,56 +94,9 @@ export const CodeLayout = observer(({ children, isCodeModuleAvailable, workspace
         [handleOpenSettings]
     )
 
-    // Cleanup stale in-progress events on mount (mark as error if process died)
-    useEffect(() => {
-        if (!hasInitialized) return
-        if (hasReconnected) return
-
-        const cleanupStaleEvents = async () => {
-            if (!codeStore.repoStore) {
-                setHasReconnected(true)
-                return
-            }
-
-            // Find tasks with in-progress events from RepoStore previews
-            const staleTasks: Array<{ taskId: string; repoId: string }> = []
-            for (const repo of codeStore.repoStore.repos.all()) {
-                for (const preview of repo.tasks) {
-                    if (preview.lastEvent?.status === "in_progress") {
-                        staleTasks.push({ taskId: preview.id, repoId: repo.id })
-                    }
-                }
-            }
-
-            for (const { taskId, repoId } of staleTasks) {
-                // Clear any stale working state first (in case of prior crash)
-                codeStore.setTaskWorking(taskId, false)
-
-                try {
-                    const taskStore = await codeStore.getTaskStore(repoId, taskId)
-                    const events = taskStore.events.all()
-                    const lastEvent = events[events.length - 1]
-                    if (lastEvent?.status === "in_progress") {
-                        codeStore.events.errorEvent(taskId, lastEvent.id)
-                    }
-                } catch (err) {
-                    console.error(`[cleanup] failed to cleanup task ${taskId}:`, err)
-                }
-            }
-
-            setHasReconnected(true)
-        }
-
-        cleanupStaleEvents()
-    }, [hasInitialized, hasReconnected])
-
-    // Prevent page reload when tasks are running, and cleanup processes/PTYs on unload
+    // Prevent accidental page reload while runtime-owned work is active.
     useEffect(() => {
         const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-            // Kill all processes and PTYs when page unloads
-            processApi.killAll()
-            ptyApi.killAll()
-
             if (codeStore.isWorking) {
                 event.preventDefault()
                 event.returnValue = ""
@@ -166,7 +116,7 @@ export const CodeLayout = observer(({ children, isCodeModuleAvailable, workspace
     }, [workspaceId, taskId])
 
     // Show loading state
-    if (!hasInitialized || codeStore.repos.reposLoading || !tasksLoaded || !hasReconnected) {
+    if (!hasInitialized || codeStore.repos.reposLoading || !tasksLoaded) {
         return (
             <CodeAppLayout
                 navbar={{

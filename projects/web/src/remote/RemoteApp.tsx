@@ -21,8 +21,7 @@ import {
     WifiOff,
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
-import type { RemoteRepo, RemoteRunRequest, RemoteSnapshot, RemoteTask, RemoteTaskPreview } from "../../../shared/companion/src"
-import { type ThemeClass, themeClasses } from "../persistence/personalSettingsStore"
+import type { RemoteRepo, RemoteSnapshot, RemoteTask, RemoteTaskPreview, RemoteTurnStartRequest } from "../../../shared/companion/src"
 import {
     abortRemote,
     activateRemoteConfig,
@@ -35,18 +34,35 @@ import {
     parsePairingCode,
     pairRemote,
     removeRemoteConfig,
-    runRemote,
+    remoteErrorMessage,
+    startRemoteTurn,
     saveRemoteConfig,
-    subscribeRemoteEvents,
+    subscribeRemoteChanges,
     type PairingTarget,
     type RemoteConfig,
-    type RemoteEventConnectionStatus,
+    type RemoteRealtimeConnectionStatus,
 } from "./client"
-import { taskMessages, type RemoteActivity, type RemoteMessage } from "./messagePresentation"
+import { taskEventBlocks, type RemoteEventBlock } from "./messagePresentation"
+import { RemoteEventThread } from "./RemoteEventThread"
+import { remoteRefreshPlan } from "./refreshPolicy"
+import { nextRemoteRefreshDelay } from "./refreshQueue"
+import { REMOTE_STATUS_GRACE_MS, isRemoteRealtimeOnline, shouldDelayRemoteStatusDisplay, statusCopy, type RemoteStatusTone } from "./status"
+import { beginRemoteSubmission, finishRemoteSubmission } from "./submission"
+import { shouldFollowRemoteThread } from "./threadScroll"
 
-type CommandType = RemoteRunRequest["type"]
+type CommandType = RemoteTurnStartRequest["type"]
 type PendingConnection = PairingTarget & { mode: "pair" | "manual" }
 type RemoteScreen = "projects" | "project" | "task" | "new_task" | "sessions" | "settings"
+type SnapshotRefreshOptions = { repairNavigation?: boolean }
+const themeClasses = {
+    "code-theme-light": { label: "Light" },
+    "code-theme-bright": { label: "Bright" },
+    "code-theme-clean": { label: "Clean" },
+    "code-theme-black": { label: "Black" },
+    "code-theme-synthwave": { label: "Synthwave" },
+    "code-theme-dracula": { label: "Dracula" },
+} as const
+type ThemeClass = keyof typeof themeClasses
 type MobileThemeSetting = "desktop" | ThemeClass
 
 const mobileThemeStorageKey = "openade-companion-theme"
@@ -86,20 +102,7 @@ function looksLikePairingCode(value: string): boolean {
     }
 }
 
-function statusCopy(status: RemoteEventConnectionStatus): { label: string; tone: "ok" | "warn" | "bad" | "muted" } {
-    switch (status) {
-        case "connected":
-            return { label: "Online", tone: "ok" }
-        case "connecting":
-            return { label: "Connecting", tone: "muted" }
-        case "reconnecting":
-            return { label: "Reconnecting", tone: "warn" }
-        case "disconnected":
-            return { label: "Offline", tone: "bad" }
-    }
-}
-
-function toneClass(tone: "ok" | "warn" | "bad" | "muted"): string {
+function toneClass(tone: RemoteStatusTone): string {
     if (tone === "ok") return "text-success"
     if (tone === "warn") return "text-warning"
     if (tone === "bad") return "text-error"
@@ -108,6 +111,27 @@ function toneClass(tone: "ok" | "warn" | "bad" | "muted"): string {
 
 function formatHost(config: RemoteConfig | null): string {
     return config?.host ?? "OpenADE"
+}
+
+function isTransientRemoteRefreshError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error)
+    return /Runtime socket (closed|disconnected|failed|is not connected)|WebSocket/i.test(message)
+}
+
+function useSmoothedRemoteStatus(rawStatus: RemoteRealtimeConnectionStatus): RemoteRealtimeConnectionStatus {
+    const [visibleStatus, setVisibleStatus] = useState(rawStatus)
+
+    useEffect(() => {
+        if (!shouldDelayRemoteStatusDisplay(visibleStatus, rawStatus)) {
+            setVisibleStatus(rawStatus)
+            return
+        }
+
+        const timeout = window.setTimeout(() => setVisibleStatus(rawStatus), REMOTE_STATUS_GRACE_MS)
+        return () => window.clearTimeout(timeout)
+    }, [rawStatus, visibleStatus])
+
+    return visibleStatus
 }
 
 export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
@@ -135,11 +159,38 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const [newTaskPrompt, setNewTaskPrompt] = useState("")
     const [isLoading, setIsLoading] = useState(false)
     const [isSubmitting, setIsSubmitting] = useState(false)
-    const [connectionStatus, setConnectionStatus] = useState<RemoteEventConnectionStatus>("disconnected")
+    const [rawConnectionStatus, setRawConnectionStatus] = useState<RemoteRealtimeConnectionStatus>("disconnected")
     const [error, setError] = useState<string | null>(null)
+    const [notice, setNotice] = useState<string | null>(null)
     const selectedRepoIdRef = useRef<string | null>(null)
     const selectedTaskIdRef = useRef<string | null>(null)
+    const screenRef = useRef<RemoteScreen>(screen)
+    const configRef = useRef<RemoteConfig | null>(config)
+    const snapshotRef = useRef<RemoteSnapshot | null>(snapshot)
+    const snapshotRefreshTimerRef = useRef<number | null>(null)
+    const snapshotRefreshRepairsNavigationRef = useRef(false)
+    const taskRefreshTimerRef = useRef<number | null>(null)
+    const hydratedTaskRefreshTimerRef = useRef<number | null>(null)
+    const sessionRefreshTimerRef = useRef<number | null>(null)
+    const taskRefreshInFlightRef = useRef(false)
+    const taskRefreshPendingRef = useRef<{ repoId: string; taskId: string } | null>(null)
+    const lastTaskRefreshAtRef = useRef(0)
     const submitLockRef = useRef(false)
+
+    const setScreenState = (nextScreen: RemoteScreen) => {
+        screenRef.current = nextScreen
+        setScreen(nextScreen)
+    }
+
+    const setSelectedRepoState = (nextRepoId: string | null) => {
+        selectedRepoIdRef.current = nextRepoId
+        setSelectedRepoId(nextRepoId)
+    }
+
+    const setSelectedTaskState = (nextTaskId: string | null) => {
+        selectedTaskIdRef.current = nextTaskId
+        setSelectedTaskId(nextTaskId)
+    }
 
     const visibleRepos = snapshot?.repos.filter((repo) => showArchivedProjects || !repo.archived) ?? []
     const selectedRepo = selectedRepoId ? (snapshot?.repos.find((repo) => repo.id === selectedRepoId) ?? null) : null
@@ -147,24 +198,39 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const desktopThemeClass = snapshot?.server.theme?.className ?? "code-theme-black"
     const themeClass = mobileTheme === "desktop" ? desktopThemeClass : mobileTheme
     const rootClass = `code-theme ${themeClass} flex bg-base-100 text-base-content flex-col overflow-hidden`
+    const connectionStatus = useSmoothedRemoteStatus(rawConnectionStatus)
     const status = statusCopy(connectionStatus)
+    const isOnline = isRemoteRealtimeOnline(connectionStatus)
 
     useEffect(() => {
         selectedRepoIdRef.current = selectedRepoId
         selectedTaskIdRef.current = selectedTaskId
-    }, [selectedRepoId, selectedTaskId])
+        screenRef.current = screen
+        configRef.current = config
+        snapshotRef.current = snapshot
+    }, [selectedRepoId, selectedTaskId, screen, config, snapshot])
+
+    useEffect(() => {
+        return () => {
+            if (snapshotRefreshTimerRef.current) window.clearTimeout(snapshotRefreshTimerRef.current)
+            if (taskRefreshTimerRef.current) window.clearTimeout(taskRefreshTimerRef.current)
+            if (hydratedTaskRefreshTimerRef.current) window.clearTimeout(hydratedTaskRefreshTimerRef.current)
+            if (sessionRefreshTimerRef.current) window.clearTimeout(sessionRefreshTimerRef.current)
+        }
+    }, [])
 
     const syncConfigs = () => {
         setConfigs(loadRemoteConfigs())
     }
 
     const resetRemoteView = () => {
+        snapshotRef.current = null
         setSnapshot(null)
-        setSelectedRepoId(null)
-        setSelectedTaskId(null)
+        setSelectedRepoState(null)
+        setSelectedTaskState(null)
         setTask(null)
-        setConnectionStatus("disconnected")
-        setScreen("projects")
+        setRawConnectionStatus("disconnected")
+        setScreenState("projects")
     }
 
     const configsKey = configs.map((item) => `${item.id}:${item.baseUrl}`).join("|")
@@ -179,24 +245,32 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         return () => window.removeEventListener("openade-pairing-url", updateFromUrl)
     }, [])
 
-    const refreshSnapshot = async (nextConfig = config): Promise<RemoteSnapshot | null> => {
+    const refreshSnapshot = async (nextConfig = config, options: SnapshotRefreshOptions = {}): Promise<RemoteSnapshot | null> => {
         if (!nextConfig) return null
         const next = await getSnapshot(nextConfig)
         const currentRepoId = selectedRepoIdRef.current
         const currentTaskId = selectedTaskIdRef.current
+        const shouldRepairNavigation = options.repairNavigation === true
         const nextRepoId = currentRepoId && next.repos.some((repo) => repo.id === currentRepoId) ? currentRepoId : null
         const nextRepo = next.repos.find((repo) => repo.id === nextRepoId) ?? null
 
         setSessionSnapshots((current) => ({ ...current, [nextConfig.id]: next }))
+        snapshotRef.current = next
         setSnapshot(next)
-        setSelectedRepoId(nextRepoId)
-        setNewTaskRepoId((current) => current ?? nextRepoId ?? next.repos.find((repo) => !repo.archived)?.id ?? next.repos[0]?.id ?? null)
+        if (nextRepoId || shouldRepairNavigation) setSelectedRepoState(nextRepoId)
+        setNewTaskRepoId((current) => {
+            if (current && next.repos.some((repo) => repo.id === current)) return current
+            return nextRepoId ?? next.repos.find((repo) => !repo.archived)?.id ?? next.repos[0]?.id ?? null
+        })
 
-        if (currentTaskId && !nextRepo?.tasks.some((item) => item.id === currentTaskId)) {
-            selectedTaskIdRef.current = null
-            setSelectedTaskId(null)
+        if (currentRepoId && !nextRepoId && shouldRepairNavigation) {
+            setSelectedTaskState(null)
             setTask(null)
-            if (screen === "task") setScreen(nextRepoId ? "project" : "projects")
+            if (screenRef.current === "project" || screenRef.current === "task") setScreenState("projects")
+        } else if (currentTaskId && !nextRepo?.tasks.some((item) => item.id === currentTaskId) && shouldRepairNavigation) {
+            setSelectedTaskState(null)
+            setTask(null)
+            if (screenRef.current === "task") setScreenState(nextRepoId ? "project" : "projects")
         }
 
         return next
@@ -221,9 +295,85 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         })
     }
 
-    const refreshTask = async (nextConfig = config, repoId = selectedRepoIdRef.current ?? selectedRepo?.id, taskId = selectedTaskIdRef.current) => {
+    const refreshTask = async (
+        nextConfig = config,
+        repoId: string | null | undefined = selectedRepoIdRef.current ?? selectedRepo?.id,
+        taskId: string | null | undefined = selectedTaskIdRef.current,
+        options: { hydrateSessionEvents?: boolean } = { hydrateSessionEvents: false }
+    ) => {
         if (!nextConfig || !repoId || !taskId) return
-        setTask(await getTask(nextConfig, repoId, taskId))
+        const nextTask = await getTask(nextConfig, repoId, taskId, options)
+        if (selectedTaskIdRef.current === taskId) setTask(nextTask)
+        return nextTask
+    }
+
+    const runBackgroundRefresh = async (work: () => Promise<void>, fallback: string) => {
+        try {
+            await work()
+        } catch (err) {
+            if (!isTransientRemoteRefreshError(err)) setError(remoteErrorMessage(err, fallback))
+        }
+    }
+
+    const scheduleSnapshotRefresh = (delayMs = 300, options: SnapshotRefreshOptions = {}) => {
+        snapshotRefreshRepairsNavigationRef.current = snapshotRefreshRepairsNavigationRef.current || options.repairNavigation === true
+        if (snapshotRefreshTimerRef.current) window.clearTimeout(snapshotRefreshTimerRef.current)
+        snapshotRefreshTimerRef.current = window.setTimeout(() => {
+            const repairNavigation = snapshotRefreshRepairsNavigationRef.current
+            snapshotRefreshRepairsNavigationRef.current = false
+            void runBackgroundRefresh(async () => {
+                await refreshSnapshot(configRef.current, { repairNavigation })
+            }, "Unable to refresh projects")
+        }, delayMs)
+    }
+
+    const runQueuedTaskRefresh = async () => {
+        taskRefreshTimerRef.current = null
+        const pending = taskRefreshPendingRef.current
+        taskRefreshPendingRef.current = null
+        if (!pending) return
+
+        taskRefreshInFlightRef.current = true
+        try {
+            await runBackgroundRefresh(async () => {
+                await refreshTask(configRef.current, pending.repoId, pending.taskId, { hydrateSessionEvents: false })
+            }, "Unable to refresh task")
+        } finally {
+            lastTaskRefreshAtRef.current = Date.now()
+            taskRefreshInFlightRef.current = false
+            const nextPending = taskRefreshPendingRef.current as { repoId: string; taskId: string } | null
+            if (nextPending) scheduleTaskRefresh(nextPending.repoId, nextPending.taskId)
+        }
+    }
+
+    const scheduleTaskRefresh = (repoId: string | undefined | null, taskId: string | undefined | null, delayMs = 150) => {
+        if (!repoId || !taskId) return
+        taskRefreshPendingRef.current = { repoId, taskId }
+        if (taskRefreshTimerRef.current || taskRefreshInFlightRef.current) return
+        taskRefreshTimerRef.current = window.setTimeout(
+            () => {
+                void runQueuedTaskRefresh()
+            },
+            nextRemoteRefreshDelay({ now: Date.now(), lastRefreshAt: lastTaskRefreshAtRef.current, requestedDelayMs: delayMs })
+        )
+    }
+
+    const scheduleHydratedTaskRefresh = (repoId: string | undefined | null, taskId: string | undefined | null, delayMs = 700) => {
+        if (!repoId || !taskId) return
+        if (snapshotRef.current?.workingTaskIds.includes(taskId)) return
+        if (hydratedTaskRefreshTimerRef.current) window.clearTimeout(hydratedTaskRefreshTimerRef.current)
+        hydratedTaskRefreshTimerRef.current = window.setTimeout(() => {
+            void runBackgroundRefresh(async () => {
+                await refreshTask(configRef.current, repoId, taskId, { hydrateSessionEvents: true })
+            }, "Unable to hydrate task history")
+        }, delayMs)
+    }
+
+    const scheduleSessionSnapshotsRefresh = (delayMs = 1200) => {
+        if (sessionRefreshTimerRef.current) window.clearTimeout(sessionRefreshTimerRef.current)
+        sessionRefreshTimerRef.current = window.setTimeout(() => {
+            void runBackgroundRefresh(refreshSessionSnapshots, "Unable to refresh sessions")
+        }, delayMs)
     }
 
     const refreshAll = async () => {
@@ -231,12 +381,18 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         setError(null)
         setIsLoading(true)
         try {
-            const nextSnapshot = await refreshSnapshot(config)
-            const repoId = selectedRepoIdRef.current ?? nextSnapshot?.repos[0]?.id
+            const repoId = selectedRepoIdRef.current
             const taskId = selectedTaskIdRef.current
-            await refreshTask(config, repoId, taskId)
+            const [nextSnapshot] = await Promise.all([
+                refreshSnapshot(config),
+                taskId ? refreshTask(config, repoId, taskId, { hydrateSessionEvents: false }) : Promise.resolve(),
+            ])
+            if (!taskId && selectedTaskIdRef.current) {
+                await refreshTask(config, selectedRepoIdRef.current ?? nextSnapshot?.repos[0]?.id, selectedTaskIdRef.current, { hydrateSessionEvents: false })
+            }
+            scheduleHydratedTaskRefresh(repoId, taskId)
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Unable to refresh")
+            setError(remoteErrorMessage(err, "Unable to refresh"))
         } finally {
             setIsLoading(false)
         }
@@ -245,15 +401,39 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     useEffect(() => {
         if (!config) return
         void refreshAll()
-        return subscribeRemoteEvents(
+        return subscribeRemoteChanges(
             config,
-            () => {
-                void refreshAll()
-                void refreshSessionSnapshots()
+            (notification) => {
+                const plan = remoteRefreshPlan(notification, selectedTaskIdRef.current)
+                const repairNavigation = notification.method === "openade/repo/deleted" || notification.method === "openade/task/deleted"
+                const taskWasDeleted = notification.method === "openade/task/deleted"
+                if (plan.type === "snapshot") {
+                    scheduleSnapshotRefresh(300, { repairNavigation })
+                } else if (plan.type === "task") {
+                    scheduleTaskRefresh(plan.repoId ?? selectedRepoIdRef.current, plan.taskId)
+                } else if (plan.type === "snapshot-and-task") {
+                    scheduleSnapshotRefresh(300, { repairNavigation })
+                    if (!taskWasDeleted) scheduleTaskRefresh(plan.repoId ?? selectedRepoIdRef.current, plan.taskId ?? selectedTaskIdRef.current)
+                } else if (plan.type === "sessions" && screenRef.current === "sessions") {
+                    scheduleSessionSnapshotsRefresh()
+                }
             },
-            setConnectionStatus
+            setRawConnectionStatus
         )
-    }, [config, selectedRepoId, selectedTaskId])
+    }, [config])
+
+    useEffect(() => {
+        if (!config || screen !== "task" || !selectedRepoId || !selectedTaskId) return
+        setIsLoading(true)
+        void refreshTask(config, selectedRepoId, selectedTaskId, { hydrateSessionEvents: false })
+            .then(() => {
+                scheduleHydratedTaskRefresh(selectedRepoId, selectedTaskId)
+            })
+            .catch((err) => {
+                if (!isTransientRemoteRefreshError(err)) setError(remoteErrorMessage(err, "Unable to load task"))
+            })
+            .finally(() => setIsLoading(false))
+    }, [config, screen, selectedRepoId, selectedTaskId])
 
     useEffect(() => {
         if (configs.length === 0) return
@@ -266,22 +446,19 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         syncConfigs()
         setConfig(nextConfig)
         setIsAddingHost(false)
-        selectedRepoIdRef.current = repoId
-        selectedTaskIdRef.current = null
-        setSelectedRepoId(repoId)
-        setSelectedTaskId(null)
+        setSelectedRepoState(repoId)
+        setSelectedTaskState(null)
         setTask(null)
         setNewTaskRepoId(repoId)
-        setScreen("project")
+        setScreenState("project")
         const nextSnapshot = sessionSnapshots[configId] ?? (await refreshSnapshot(nextConfig))
         if (nextSnapshot) setSnapshot(nextSnapshot)
     }
 
     const handleSelectTask = (taskId: string) => {
-        selectedTaskIdRef.current = taskId
         setTask(null)
-        setSelectedTaskId(taskId)
-        setScreen("task")
+        setSelectedTaskState(taskId)
+        setScreenState("task")
     }
 
     const beginConnection = (mode: PendingConnection["mode"], nextBaseUrl = baseUrl, nextToken = pairToken) => {
@@ -312,12 +489,13 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const handleBaseUrlChange = (value: string) => {
         if (applyPairingText(value)) return
         setPairHostId(undefined)
+        setPairToken("")
         setBaseUrl(value)
     }
 
-    const handlePairTokenChange = (value: string) => {
-        if (applyPairingText(value)) return
-        setPairToken(value)
+    const handleSubmitPairingLink = () => {
+        if (applyPairingText(baseUrl)) return
+        beginConnection("pair")
     }
 
     const confirmConnection = async () => {
@@ -344,7 +522,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             setPendingConnection(null)
             await refreshSnapshot(next)
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Connection failed")
+            setError(remoteErrorMessage(err, "Connection failed"))
         } finally {
             setIsLoading(false)
         }
@@ -367,41 +545,42 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     }
 
     const beginSubmission = () => {
-        if (submitLockRef.current) return false
-        submitLockRef.current = true
-        setIsSubmitting(true)
-        setIsLoading(true)
-        return true
+        return beginRemoteSubmission(submitLockRef, {
+            setSubmitting: setIsSubmitting,
+            setLoading: setIsLoading,
+        })
     }
 
     const finishSubmission = () => {
-        submitLockRef.current = false
-        setIsSubmitting(false)
-        setIsLoading(false)
+        finishRemoteSubmission(submitLockRef, {
+            setSubmitting: setIsSubmitting,
+            setLoading: setIsLoading,
+        })
     }
 
     const handleRunInTask = async () => {
         if (!config || !selectedRepo || !input.trim()) return
         if (!beginSubmission()) return
         setError(null)
+        setNotice(null)
         const submittedInput = input
         const submittedType = commandType
         const submittedTaskId = task?.unavailableReason ? undefined : selectedTaskId
         try {
-            const result = await runRemote(config, {
+            const result = await startRemoteTurn(config, {
                 repoId: selectedRepo.id,
                 type: submittedType,
                 input: submittedInput,
                 inTaskId: submittedTaskId,
             })
             setInput("")
-            selectedTaskIdRef.current = result.taskId
-            setSelectedTaskId(result.taskId)
-            setScreen("task")
+            setSelectedTaskState(result.taskId)
+            setScreenState("task")
             await refreshSnapshot(config)
-            await refreshTask(config, selectedRepo.id, result.taskId)
+            await refreshTask(config, selectedRepo.id, result.taskId, { hydrateSessionEvents: false })
+            if (result.queued) setNotice("Queued. It will run after the current turn finishes.")
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Run failed")
+            setError(remoteErrorMessage(err, "Run failed"))
         } finally {
             finishSubmission()
         }
@@ -412,11 +591,12 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         if (!config || !repoId || !newTaskPrompt.trim()) return
         if (!beginSubmission()) return
         setError(null)
+        setNotice(null)
         const submittedTitle = newTaskTitle
         const submittedPrompt = newTaskPrompt
         const submittedMode = newTaskMode
         try {
-            const result = await runRemote(config, {
+            const result = await startRemoteTurn(config, {
                 repoId,
                 type: submittedMode,
                 input: submittedPrompt,
@@ -424,15 +604,13 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             })
             setNewTaskPrompt("")
             setNewTaskTitle("")
-            selectedRepoIdRef.current = repoId
-            selectedTaskIdRef.current = result.taskId
-            setSelectedRepoId(repoId)
-            setSelectedTaskId(result.taskId)
-            setScreen("task")
+            setSelectedRepoState(repoId)
+            setSelectedTaskState(result.taskId)
+            setScreenState("task")
             await refreshSnapshot(config)
-            await refreshTask(config, repoId, result.taskId)
+            await refreshTask(config, repoId, result.taskId, { hydrateSessionEvents: false })
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Task creation failed")
+            setError(remoteErrorMessage(err, "Task creation failed"))
         } finally {
             finishSubmission()
         }
@@ -496,16 +674,13 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             <ConnectScreen
                 scanPairingCode={scanPairingCode}
                 baseUrl={baseUrl}
-                pairToken={pairToken}
                 pendingConnection={pendingConnection}
                 isLoading={isLoading}
                 error={error}
                 canCancel={Boolean(config)}
                 onBaseUrlChange={handleBaseUrlChange}
-                onPairTokenChange={handlePairTokenChange}
                 onScan={handleScan}
-                onBeginPair={() => beginConnection("pair")}
-                onBeginManual={() => beginConnection("manual")}
+                onSubmitPairingLink={handleSubmitPairingLink}
                 onConfirm={confirmConnection}
                 onCancelPending={() => setPendingConnection(null)}
                 onCancelAdd={() => setIsAddingHost(false)}
@@ -547,22 +722,21 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
                 isLoading={isLoading}
                 onBack={() => {
                     if (screen === "task") {
-                        selectedTaskIdRef.current = null
-                        setSelectedTaskId(null)
+                        setSelectedTaskState(null)
                         setTask(null)
-                        setScreen("project")
+                        setScreenState("project")
                         return
                     }
                     if (screen === "project") {
-                        selectedRepoIdRef.current = null
-                        setSelectedRepoId(null)
+                        setSelectedRepoState(null)
                     }
-                    setScreen("projects")
+                    setScreenState("projects")
                 }}
                 onRefresh={refreshAll}
             />
 
             {error && <div className="mx-3 mt-3 max-w-full shrink-0 break-words border border-error/30 bg-error/10 p-2 text-xs text-error">{error}</div>}
+            {notice && <div className="mx-3 mt-3 max-w-full shrink-0 break-words border border-info/30 bg-info/10 p-2 text-xs text-info">{notice}</div>}
             {connectionStatus !== "connected" && (
                 <div className="mx-3 mt-3 flex max-w-full shrink-0 items-center gap-2 overflow-hidden border border-warning/30 bg-warning/10 p-2 text-xs text-warning">
                     <WifiOff size={13} />
@@ -589,7 +763,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
                         onSelectTask={handleSelectTask}
                         onNewTask={() => {
                             setNewTaskRepoId(selectedRepo?.id ?? visibleRepos[0]?.id ?? null)
-                            setScreen("new_task")
+                            setScreenState("new_task")
                         }}
                     />
                 )}
@@ -602,7 +776,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
                         commandType={commandType}
                         isLoading={isLoading}
                         isSubmitting={isSubmitting}
-                        isOnline={connectionStatus === "connected"}
+                        isOnline={isOnline}
                         onInputChange={setInput}
                         onCommandTypeChange={setCommandType}
                         onSend={handleRunInTask}
@@ -618,7 +792,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
                         prompt={newTaskPrompt}
                         isLoading={isLoading}
                         isSubmitting={isSubmitting}
-                        isOnline={connectionStatus === "connected"}
+                        isOnline={isOnline}
                         onRepoChange={setNewTaskRepoId}
                         onModeChange={setNewTaskMode}
                         onTitleChange={setNewTaskTitle}
@@ -643,14 +817,14 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
                         mobileTheme={mobileTheme}
                         onRefresh={refreshAll}
                         onForget={handleForget}
-                        onSessions={() => setScreen("sessions")}
+                        onSessions={() => setScreenState("sessions")}
                         onAdd={handleAddHost}
                         onThemeChange={handleMobileThemeChange}
                     />
                 )}
             </section>
 
-            <BottomNav active={screen} onNavigate={setScreen} />
+            <BottomNav active={screen} onNavigate={setScreenState} />
         </main>
     )
 }
@@ -658,103 +832,69 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
 function ConnectScreen({
     scanPairingCode,
     baseUrl,
-    pairToken,
     pendingConnection,
     isLoading,
     error,
     canCancel,
     onBaseUrlChange,
-    onPairTokenChange,
     onScan,
-    onBeginPair,
-    onBeginManual,
+    onSubmitPairingLink,
     onConfirm,
     onCancelPending,
     onCancelAdd,
 }: {
     scanPairingCode?: () => Promise<string | null>
     baseUrl: string
-    pairToken: string
     pendingConnection: PendingConnection | null
     isLoading: boolean
     error: string | null
     canCancel: boolean
     onBaseUrlChange: (value: string) => void
-    onPairTokenChange: (value: string) => void
     onScan: () => void
-    onBeginPair: () => void
-    onBeginManual: () => void
+    onSubmitPairingLink: () => void
     onConfirm: () => void
     onCancelPending: () => void
     onCancelAdd: () => void
 }) {
     return (
         <main
-            className="code-theme code-theme-black min-h-[100dvh] w-screen max-w-full overflow-x-hidden bg-base-100 px-4 pb-6 text-base-content"
-            style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}
+            className="code-theme code-theme-black flex min-h-[100dvh] w-screen max-w-full items-center justify-center overflow-x-hidden bg-base-100 px-5 py-8 text-base-content"
+            style={{ paddingTop: "max(2rem, env(safe-area-inset-top))", paddingBottom: "max(2rem, env(safe-area-inset-bottom))" }}
         >
-            <div className="mx-auto flex w-full max-w-sm flex-col gap-4">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-2 text-lg font-semibold">
-                        <Wifi size={18} className="shrink-0 text-primary" />
-                        <span className="truncate">OpenADE Companion</span>
-                    </div>
-                    {canCancel && (
-                        <button type="button" onClick={onCancelAdd} className="btn h-9 px-2 text-sm text-muted">
-                            Cancel
-                        </button>
-                    )}
-                </div>
-                {error && <div className="border border-error/30 bg-error/10 p-3 text-sm text-error">{error}</div>}
-                {scanPairingCode && (
-                    <button
-                        type="button"
-                        onClick={onScan}
-                        disabled={isLoading}
-                        className="btn flex h-12 items-center justify-center gap-2 bg-primary px-4 font-medium text-primary-content disabled:opacity-50"
-                    >
-                        <ScanLine size={17} />
-                        Scan QR
+            <div className="relative mx-auto flex min-h-[min(680px,calc(100dvh-4rem))] w-full max-w-sm flex-col justify-center">
+                {canCancel && (
+                    <button type="button" onClick={onCancelAdd} className="btn absolute right-0 top-0 h-9 px-2 text-sm text-muted">
+                        Cancel
                     </button>
                 )}
-                <input
-                    className="input h-12 w-full max-w-full border border-border bg-base-200 px-3 text-base"
-                    placeholder="Paste pairing link or host URL"
-                    value={baseUrl}
-                    onChange={(event) => onBaseUrlChange(event.target.value)}
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    inputMode="url"
-                />
-                <input
-                    className="input h-12 w-full max-w-full border border-border bg-base-200 px-3 text-base"
-                    placeholder="Pairing token or device token"
-                    value={pairToken}
-                    onChange={(event) => onPairTokenChange(event.target.value)}
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                />
-                <button
-                    type="button"
-                    onClick={onBeginPair}
-                    disabled={isLoading || !baseUrl || !pairToken}
-                    className="btn h-12 bg-primary px-4 font-medium text-primary-content disabled:opacity-50"
-                >
-                    Pair
-                </button>
-                <button
-                    type="button"
-                    onClick={onBeginManual}
-                    disabled={!baseUrl || !pairToken}
-                    className="btn h-12 bg-base-200 px-4 font-medium text-base-content disabled:opacity-50"
-                >
-                    Use Existing Device Token
-                </button>
-                {pendingConnection && (
-                    <div className="flex flex-col gap-3 border border-border bg-base-200/50 p-3">
-                        <div>
-                            <div className="text-sm font-medium text-base-content">Connect to {pendingConnection.host}?</div>
-                            <div className="mt-1 break-all text-xs text-muted">{pendingConnection.baseUrl}</div>
+
+                <div className="mb-10 flex flex-col items-center text-center">
+                    <div className="flex min-w-0 flex-col items-center">
+                        <div className="mb-4 flex h-12 w-12 items-center justify-center border border-primary/30 bg-primary text-primary-content">
+                            <Wifi size={22} />
+                        </div>
+                        <div className="text-[2.5rem] font-semibold leading-none tracking-normal text-base-content">OpenADE</div>
+                        <div className="mt-2 text-sm font-medium uppercase text-muted">Companion</div>
+                    </div>
+                </div>
+
+                {error && (
+                    <div className="mb-4 flex items-start gap-2 border border-error/30 bg-error/10 p-3 text-sm text-error">
+                        <CircleAlert size={16} className="mt-0.5 shrink-0" />
+                        <span className="min-w-0 break-words">{error}</span>
+                    </div>
+                )}
+
+                {pendingConnection ? (
+                    <div className="flex flex-col gap-4 border border-border bg-base-200/60 p-4">
+                        <div className="flex min-w-0 gap-3">
+                            <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-success/25 bg-success/10 text-success">
+                                <CheckCircle2 size={18} />
+                            </div>
+                            <div className="min-w-0">
+                                <div className="truncate text-sm font-semibold text-base-content">Connect to {pendingConnection.host}</div>
+                                <div className="mt-1 break-all text-xs text-muted">{pendingConnection.baseUrl}</div>
+                            </div>
                         </div>
                         <div className="flex gap-2">
                             <button
@@ -771,7 +911,41 @@ function ConnectScreen({
                                 disabled={isLoading}
                                 className="btn h-10 flex-1 bg-base-300 px-3 text-base-content disabled:opacity-50"
                             >
-                                Cancel
+                                Change
+                            </button>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="flex flex-col gap-3">
+                        {scanPairingCode && (
+                            <button
+                                type="button"
+                                onClick={onScan}
+                                disabled={isLoading}
+                                className="btn flex h-14 items-center justify-center gap-2 bg-primary px-4 text-base font-semibold text-primary-content disabled:opacity-50"
+                            >
+                                <ScanLine size={19} />
+                                Scan QR
+                            </button>
+                        )}
+
+                        <div className="flex flex-col gap-2">
+                            <input
+                                className="input h-[52px] w-full max-w-full border border-border bg-base-200 px-3 text-base"
+                                placeholder="Paste pairing link"
+                                value={baseUrl}
+                                onChange={(event) => onBaseUrlChange(event.target.value)}
+                                autoCapitalize="none"
+                                autoCorrect="off"
+                                inputMode="url"
+                            />
+                            <button
+                                type="button"
+                                onClick={onSubmitPairingLink}
+                                disabled={isLoading || !baseUrl.trim()}
+                                className="btn h-12 bg-base-200 px-4 font-medium text-base-content disabled:opacity-50"
+                            >
+                                Connect
                             </button>
                         </div>
                     </div>
@@ -1104,10 +1278,10 @@ function TaskScreen({
     onSend: () => void
     onAbort: () => void
 }) {
-    const messages = useMemo(() => taskMessages(task), [task])
+    const blocks = useMemo(() => taskEventBlocks(task), [task])
     return (
         <div className="flex h-full w-full max-w-full flex-col overflow-hidden">
-            <TaskMessages task={task} preview={preview} messages={messages} isRunning={isRunning} />
+            <TaskMessages task={task} preview={preview} blocks={blocks} isRunning={isRunning} />
             <Composer
                 input={input}
                 commandType={commandType}
@@ -1127,12 +1301,12 @@ function TaskScreen({
 function TaskMessages({
     task,
     preview,
-    messages,
+    blocks,
     isRunning,
 }: {
     task: RemoteTask | null
     preview: RemoteTaskPreview | null
-    messages: RemoteMessage[]
+    blocks: RemoteEventBlock[]
     isRunning: boolean
 }) {
     const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -1155,13 +1329,12 @@ function TaskMessages({
         } else {
             setShowJump(true)
         }
-    }, [messages.length, isRunning])
+    }, [blocks, isRunning])
 
     const handleScroll = () => {
         const el = scrollRef.current
         if (!el) return
-        const distance = el.scrollHeight - el.scrollTop - el.clientHeight
-        shouldFollowRef.current = distance < 80
+        shouldFollowRef.current = shouldFollowRemoteThread(el.scrollHeight, el.scrollTop, el.clientHeight)
         if (shouldFollowRef.current) setShowJump(false)
     }
 
@@ -1189,22 +1362,12 @@ function TaskMessages({
                 {task?.unavailableReason && (
                     <div className="mb-3 break-words border border-warning/30 bg-warning/10 p-3 text-sm text-warning">{task.unavailableReason}</div>
                 )}
-                {messages.length === 0 && (
+                {blocks.length === 0 && (
                     <div className="break-words border border-border bg-base-200/40 p-3 text-sm text-muted">
                         {preview?.title ?? "Task"} has no messages yet.
                     </div>
                 )}
-                <div className="flex w-full max-w-full flex-col gap-3 overflow-hidden">
-                    {messages.map((message) => (
-                        <MessageRow key={message.id} message={message} />
-                    ))}
-                    {isRunning && (
-                        <div className="flex items-center gap-2 text-xs text-muted">
-                            <Loader2 size={13} className="animate-spin text-primary" />
-                            Working
-                        </div>
-                    )}
-                </div>
+                <RemoteEventThread blocks={blocks} isRunning={isRunning} />
             </div>
             {showJump && (
                 <button
@@ -1216,68 +1379,6 @@ function TaskMessages({
                     Latest
                 </button>
             )}
-        </div>
-    )
-}
-
-function MessageRow({ message }: { message: RemoteMessage }) {
-    if (message.kind === "activity") return <ActivityRow message={message} />
-
-    const isUser = message.kind === "user"
-    const tone =
-        message.kind === "error"
-            ? "border-error/30 bg-error/10 text-error"
-            : message.kind === "snapshot"
-              ? "border-info/30 bg-info/10"
-              : message.kind === "tool"
-                ? "border-border bg-base-200/50"
-                : message.kind === "system"
-                  ? "border-border bg-base-200/40"
-                  : isUser
-                    ? "border-primary/25 bg-primary/10"
-                    : "border-border bg-base-200/60"
-
-    return (
-        <div className={`flex max-w-full ${isUser ? "justify-end pl-8" : "justify-start"}`}>
-            <div className={`${isUser ? "max-w-[92%]" : "max-w-full"} overflow-hidden border p-3 ${tone}`}>
-                {(message.title || message.meta || message.status) && (
-                    <div className="mb-1 flex flex-wrap items-center gap-2 text-[10px] font-medium uppercase tracking-wide text-muted">
-                        {message.title && <span>{message.title}</span>}
-                        {message.meta && <span>{message.meta}</span>}
-                        {message.status && <span>{message.status}</span>}
-                    </div>
-                )}
-                <div className="whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">{message.body}</div>
-            </div>
-        </div>
-    )
-}
-
-function activityToneClass(tone: RemoteActivity["tone"]): string {
-    if (tone === "ok") return "border-success/25 bg-success/10 text-success"
-    if (tone === "warn") return "border-warning/25 bg-warning/10 text-warning"
-    if (tone === "bad") return "border-error/25 bg-error/10 text-error"
-    if (tone === "info") return "border-info/25 bg-info/10 text-info"
-    return "border-border bg-base-200/50 text-muted"
-}
-
-function ActivityRow({ message }: { message: RemoteMessage }) {
-    const items = message.activity ?? []
-
-    return (
-        <div className="mr-auto max-w-full overflow-hidden">
-            <div className="flex max-w-full flex-wrap gap-1.5">
-                {items.length === 0 && <span className="border border-border bg-base-200/50 px-2 py-1 text-[11px] text-muted">{message.body}</span>}
-                {items.map((item) => (
-                    <span
-                        key={item.id}
-                        className={`inline-flex max-w-full items-center gap-1 overflow-hidden border px-2 py-1 text-[11px] ${activityToneClass(item.tone)}`}
-                    >
-                        <span className="shrink-0 font-medium uppercase">{item.label}</span>
-                        {item.detail && <span className="min-w-0 truncate normal-case opacity-80">{item.detail}</span>}
-                    </span>
-                ))}
-            </div>
         </div>
     )
 }
@@ -1305,6 +1406,7 @@ function Composer({
     onSend: () => void
     onAbort: () => void
 }) {
+    const canQueueCurrentMode = !isRunning || commandType === "do" || commandType === "ask"
     return (
         <footer className="w-full max-w-full shrink-0 overflow-hidden border-t border-border bg-base-100 p-3">
             <div className="mb-2 flex max-w-full gap-1 overflow-x-auto overscroll-x-contain">
@@ -1313,7 +1415,7 @@ function Composer({
                         key={type}
                         type="button"
                         onClick={() => onCommandTypeChange(type)}
-                        disabled={isSubmitting}
+                        disabled={isSubmitting || (isRunning && type !== "do" && type !== "ask")}
                         className={`btn shrink-0 border border-border px-2 py-1 text-xs ${commandType === type ? "bg-primary text-primary-content" : "bg-base-200 text-base-content"}`}
                     >
                         {type}
@@ -1330,13 +1432,21 @@ function Composer({
                     value={input}
                     onChange={(event) => onInputChange(event.target.value)}
                     disabled={isSubmitting}
-                    placeholder={isSubmitting ? "Sending..." : isOnline ? "Send to OpenADE" : "Offline"}
+                    placeholder={
+                        isSubmitting
+                            ? "Sending..."
+                            : !isOnline
+                              ? "Offline"
+                              : canQueueCurrentMode
+                                ? "Send to OpenADE"
+                                : "Only Do and Ask can be queued while running"
+                    }
                     className="input min-h-12 max-h-28 min-w-0 flex-1 resize-none border border-border bg-base-200 p-2 text-sm"
                 />
                 <button
                     type="button"
                     onClick={onSend}
-                    disabled={!input.trim() || isLoading || isSubmitting || !isOnline}
+                    disabled={!input.trim() || isLoading || isSubmitting || !isOnline || !canQueueCurrentMode}
                     className={`btn flex shrink-0 items-center justify-center gap-1 bg-primary px-2 text-primary-content disabled:opacity-50 ${
                         isSubmitting ? "w-24 text-xs" : "w-12"
                     }`}

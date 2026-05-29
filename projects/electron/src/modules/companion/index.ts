@@ -11,7 +11,6 @@ import {
     startPairing,
     updateSettings,
 } from "./auth"
-import { cleanupRendererBridge, loadRendererBridge } from "./rendererBridge"
 import { getPublicBaseUrl } from "./network"
 import { cleanupPowerKeeper, configurePowerKeeper } from "./powerKeeper"
 import { closeCompanionStreams, getBoundUrls, startCompanionServer, stopCompanionServer } from "./server"
@@ -48,8 +47,6 @@ async function setEnabled(enabled: boolean) {
 }
 
 export function load(): void {
-    loadRendererBridge()
-
     ipcMain.handle("companion:getState", () => currentState())
     ipcMain.handle("companion:setEnabled", async (_event, enabled: boolean) => setEnabled(enabled === true))
     ipcMain.handle("companion:setKeepAwakeMode", async (_event, keepAwakeMode: KeepAwakeMode) => {
@@ -97,7 +94,6 @@ export async function cleanup(): Promise<void> {
     ipcMain.removeHandler("companion:revokeDevice")
     ipcMain.removeHandler("companion:dropAllDevices")
     flushLastSeen()
-    cleanupRendererBridge()
     cleanupPowerKeeper()
     await stopCompanionServer()
 }

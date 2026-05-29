@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "lib": ["ESNext", "DOM"],
+    "paths": {
+      "yjs": ["../web/node_modules/yjs/dist/src/index.d.ts"]
+    }
+  },
+  "include": ["src/**/*", "../runtime-client/src/**/*", "../runtime-protocol/src/**/*", "../shared/companion/src/**/*"],
+  "exclude": ["../runtime-client/src/**/*.test.ts", "../runtime-protocol/src/**/*.test.ts"]
+}

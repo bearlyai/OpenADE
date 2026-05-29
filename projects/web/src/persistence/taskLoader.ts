@@ -15,6 +15,7 @@ import { type TaskStore, createTaskStore } from "./taskStore"
 export interface TaskStoreConnection {
     store: TaskStore
     sync: () => Promise<void>
+    refresh: () => Promise<boolean>
     disconnect: () => void
 }
 
@@ -33,7 +34,7 @@ export async function loadTaskStore(params: {
     initialTask?: Task
 }): Promise<TaskStoreConnection> {
     const storage = getStorageDriver()
-    const { doc, sync, disconnect } = await storage.getYDoc(`code:task:${params.taskId}`)
+    const { doc, sync, refresh, disconnect } = await storage.getYDoc(`code:task:${params.taskId}`)
 
     const store = createTaskStore(doc, params.initialTask)
 
@@ -44,6 +45,7 @@ export async function loadTaskStore(params: {
     return {
         store,
         sync,
+        refresh,
         disconnect,
     }
 }

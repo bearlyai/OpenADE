@@ -180,7 +180,7 @@ export class RepoProcessesManager {
                     ? 24 * 60 * 60 * 1000 // 24hr for daemons
                     : 10 * 60 * 1000 // 10min for setup/task/check
 
-            const handle = await ProcessHandle.runScript({
+            const handle = await ProcessHandle.startScript({
                 script: process.command,
                 cwd: workDir,
                 timeoutMs,
@@ -278,7 +278,7 @@ export class RepoProcessesManager {
         workDir: string,
         onOutput: (chunk: ProcessOutputChunk) => void
     ): Promise<{ success: boolean; exitCode: number | null }> {
-        const handle = await ProcessHandle.runScript({
+        const handle = await ProcessHandle.startScript({
             script: command,
             cwd: workDir,
             timeoutMs: 10 * 60 * 1000, // 10 minute timeout for setup

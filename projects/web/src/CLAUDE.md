@@ -59,6 +59,8 @@ Also add to `TrayType` union in `store/managers/TrayManager.ts`.
 - **Destructured params for 3+ args** - Use inline destructured params
 - **Remove unused methods** - After refactors, grep and clean up
 - **No string-containment tests on prompts** — `expect(prompt).toContain("some phrase")` tests are brittle, break on every wording change, and verify nothing meaningful. Test prompt builder *logic* (conditional inclusion, merging, undefined returns) not prompt *text*.
+- **No mirror tests** — Do not export constants, split out helpers, or write tests whose only purpose is to repeat labels, classes, config arrays, or branches from the implementation. If a harmless copy/style/refactor forces the test to change in lockstep, delete it or rewrite it around the actual user-visible behavior or data contract.
+- **No implementation-only styling tests** — Do not test Tailwind/class-name substrings, snapshots, or incidental DOM wrappers just to lock layout. Test behavior, accessibility, state transitions, parsing, integration paths, or use browser/visual checks when layout matters. CSS class assertions are only acceptable when the class string itself is an explicit public API.
 
 ## Architecture
 
@@ -68,7 +70,7 @@ CodeLayout.tsx      → Shared layout, sidebar, reconnection logic
 pages/*.tsx         → Page components (TaskPage, TaskCreatePage, etc.)
 store/              → MobX state management (runtime)
 persistence/        → YJS-backed sync (RepoStore, TaskStore)
-electronAPI/        → IPC wrappers for Electron main process
+electronAPI/        → Runtime/Electron host wrappers for renderer callers
 components/         → UI components
 routing.ts          → Local typesafe routing (isolated from @/state/routing)
 api.ts              → Data types, localStorage CRUD
@@ -112,15 +114,15 @@ Key observable wrappers:
 - `TaskModel` - Per-task state, environment, input manager
 - `EventModel` - Per-event derived state
 
-### Electron IPC
+### Runtime And Electron Host Access
 
-Dashboard (`electronAPI/`) ↔ Electron (`projects/electron/src/modules/code/`)
+Dashboard (`electronAPI/`) ↔ local runtime bridge/Electron host modules
 
-**All Electron APIs used in the code module must go through `electronAPI/`.** Do not import from `@/electronWindowApi` or other shared Electron utilities. This keeps the code module's dependencies isolated for easier migration.
+**All host APIs used in the code module must go through `electronAPI/`.** Prefer local runtime methods for plain request/response host operations. Use direct Electron IPC only for narrow OS/window integrations such as file dialogs, URL opening, window frame controls, and notifications.
 
-Main modules: harness (execution via `@openade/harness`), git (worktrees, diffs), process (scripts), pty (terminal), files (search), shell (directory picker, open URL), procs (typed read/edit/save for `openade.toml`)
+Main modules: runtime (agent/process/PTY/git/files transport), shell (directory picker, open URL), procs (typed read/edit/save for `openade.toml`)
 
-`harness:command` supports both streaming (`start_query`) and non-streaming structured helpers (`structured_query`). Use `runStructuredHarnessQuery()` for small JSON-constrained helpers (cron generation, config suggestions) instead of spinning up a full task flow.
+Task execution goes through the OpenADE runtime module (`openade/turn/start`, `openade/review/start`, `openade/turn/interrupt`). Durable repo/task/comment/task-metadata mutations should also use `runtime/localOpenADEClient.ts` (`openade/repo/*`, `openade/task/*`, `openade/comment/*`) and then refresh from storage or runtime notifications. Use `getHarnessQueryManager()` only for low-level harness helpers that are not task turns, such as small JSON-constrained helpers (cron generation, config suggestions).
 
 ## Task Lifecycle
 
@@ -207,12 +209,12 @@ See `_docs/design.md` for full patterns and `tw.css` for color definitions.
 
 ## Data Folder (Unified Storage)
 
-Files are stored at `~/.openade/data/{folder}/{id}.{ext}` via three IPC channels that take `folder` as a parameter:
-- `code:data:save` — atomic write (temp+rename)
-- `code:data:load` — returns Buffer/string or null
-- `code:data:delete` — best-effort unlink
+Files are stored at `~/.openade/data/{folder}/{id}.{ext}` through trusted local runtime methods:
+- `data/file/save` — atomic write (temp+rename)
+- `data/file/load` — returns base64 payload or null through the runtime wrapper
+- `data/file/delete` — best-effort unlink
 
-Allowed folders: `images`, `snapshots`. Web side uses `dataFolderApi` from `electronAPI/dataFolder.ts` for generic blobs. Snapshot diffs now use dedicated snapshot IPC (`electronAPI/snapshots.ts`) that stores `{id}.patch` plus `{id}.json`, loads the index first, and range-reads only the selected file slice.
+Allowed folders: `images`, `snapshots`, `cron`. Web side uses `dataFolderApi` from `electronAPI/dataFolder.ts` for generic blobs. Snapshot diffs use trusted runtime methods in `electronAPI/snapshots.ts` that store `{id}.patch` plus `{id}.json`, load the index first, and range-read only the selected file slice.
 
 ### Image Attachments
 
@@ -220,8 +222,8 @@ Users can paste images (Cmd+V) or click the attach button. Flow:
 1. **Capture**: Paste handler or file input → `processImageBlob()` in `utils/imageAttachment.ts`
 2. **Resize**: `resizeImage()` constrains to 1568px max dimension / 1.15MP (configurable in `IMAGE_CONSTRAINTS`)
 3. **Store**: Original saved to `~/.openade/data/images/{ulid}.{ext}`, preview held as in-memory data URL
-4. **Submit**: `SmartEditorManager.pendingImages` → `InputManager.captureAndClear()` → `UserInputContext` → `ExecutionManager` → prompt builders
-5. **Prompt**: `buildImageContentBlocks()` loads from disk, resizes, base64-encodes → `ContentBlock[]` sent to Claude SDK
+4. **Submit**: `SmartEditorManager.pendingImages` → `InputManager.captureAndClear()` → `openade-client` → `openade/turn/start`
+5. **Prompt**: Runtime host loads stored image files, base64-encodes them, and sends `ContentBlock[]` to the harness provider
 6. **Render**: `ActionEvent.images` → `ImageAttachments` component loads from disk, renders thumbnails with lightbox
 
 The `UserInputContext` type bundles `userInput` + `images` and threads from UI through execution to prompt building. `PromptBuildContext` extends it with `comments`.
@@ -242,7 +244,7 @@ Custom env vars automatically propagate to **all Electron subprocess calls**:
 **How it works:**
 
 1. User configures env vars in Settings modal
-2. `CodeStore.initializeStores()` pushes env vars to Electron via IPC
+2. `CodeStore.initializeStores()` pushes env vars to Electron through trusted runtime method `host/subprocess/setGlobalEnv`
 3. MobX reaction pushes updates whenever env vars change
 4. Electron's `subprocess.ts` caches env vars and merges them into all subprocess calls
 
@@ -259,11 +261,13 @@ Custom env vars automatically propagate to **all Electron subprocess calls**:
 | `persistence/personalSettingsStoreBootstrap.ts` | Store connection setup |
 | `components/settings/SettingsModal.tsx` | Settings modal with sidebar tabs |
 | `components/settings/SystemConfigTab.tsx` | Binary status, env vars editor |
-| `electronAPI/subprocess.ts` | Global env vars push to Electron |
+| `electronAPI/subprocess.ts` | Global env vars push through local runtime |
 
 ## MCP Connectors
 
 MCP (Model Context Protocol) servers extend Claude's capabilities. Managed via `ConnectorsPage` and `TaskMcpSelector`.
+
+MCP test/OAuth operations go through trusted runtime methods in `electronAPI/mcp.ts`; OAuth completion is delivered by runtime notification `host/mcp/oauthComplete`.
 
 ### Presets
 
@@ -313,7 +317,7 @@ Import from `../components/ui` not `@/funktionalChat/components`.
 |---------|------|
 | Data types, CRUD | `api.ts` |
 | Prompt templates | `prompts/prompts.ts` |
-| Review prompt templates and handoff text | `prompts/reviewPrompts.ts` |
+| Review prompt templates and handoff text | `projects/openade-module/src/review.ts` |
 | Task thread serializer (Task -> JSON/XML, supports bounded export via `maxEvents`) | `prompts/taskThreadSerializer.ts` |
 | XML helpers | `utils/makeXML.ts` |
 | Local routing | `routing.ts` |
@@ -324,12 +328,12 @@ Import from `../components/ui` not `@/funktionalChat/components`.
 | Harness execution | `store/managers/ExecutionManager.ts` |
 | Available commands | `store/managers/InputManager.ts` |
 | MCP server manager | `store/managers/McpServerManager.ts` |
-| Harness IPC | `electronAPI/harnessQuery.ts` |
+| Harness runtime bridge | `electronAPI/harnessQuery.ts` |
 | Harness event types | `electronAPI/harnessEventTypes.ts` |
 | Harness event compat | `electronAPI/harnessEventCompat.ts` |
-| Git IPC | `electronAPI/git.ts` |
+| Git runtime bridge | `electronAPI/git.ts` |
 | Shell IPC | `electronAPI/shell.ts` |
-| Data folder IPC | `electronAPI/dataFolder.ts` |
+| Data folder runtime bridge | `electronAPI/dataFolder.ts` |
 | Image resize utility | `utils/imageResize.ts` |
 | Image attachment pipeline | `utils/imageAttachment.ts` |
 | Image lightbox | `components/ui/ImageLightbox.tsx` |
@@ -339,6 +343,7 @@ Import from `../components/ui` not `@/funktionalChat/components`.
 | Terminal theme hook | `hooks/useTerminalTheme.ts` |
 
 HyperPlan planning can pass serialized main-thread context to sub-planners using `prompts/taskThreadSerializer.ts`.
+HyperPlan execution is server-owned through the OpenADE runtime module. The renderer may define/select strategies and display persisted sub-executions, but it must not reintroduce a renderer-owned HyperPlan executor or direct harness orchestration path.
 This context is capped by UTF-8 byte budget (default `240_000`) and includes the newest events that fit.
 
 Model version bumps should be made in `projects/harness/src/models.ts`. Web pickers and execution helpers read from that shared catalog, so avoid hardcoding new model versions in web components.
@@ -370,7 +375,7 @@ Call `TaskManager.invalidateTaskModel(taskId)` when task changes significantly.
 
 ### Event Hooks
 
-ExecutionManager broadcasts after events complete. Use `onAfterEvent()` to subscribe - returns disposer.
+ExecutionManager only broadcasts after-event notifications now. Server-owned runtime notifications refresh Yjs task state and call `onAfterEvent()` subscribers when a task leaves the working set.
 
 
 ## Access Control

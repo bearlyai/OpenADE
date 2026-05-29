@@ -10,12 +10,15 @@ import type { McpServerStore } from "../persistence/mcpServerStore"
 import { type McpServerStoreConnection, connectMcpServerStore } from "../persistence/mcpServerStoreBootstrap"
 import type { PersonalSettingsStore } from "../persistence/personalSettingsStore"
 import { type PersonalSettingsStoreConnection, connectPersonalSettingsStore } from "../persistence/personalSettingsStoreBootstrap"
-import { type RepoStore, getTaskPreview, updateTaskPreview } from "../persistence/repoStore"
+import { type RepoStore, getTaskPreview } from "../persistence/repoStore"
 import { type RepoStoreConnection, connectRepoStore } from "../persistence/repoStoreBootstrap"
 import { type TaskStoreConnection, loadTaskStore } from "../persistence/taskLoader"
-import { needsTaskUsageBackfill, normalizeTaskPreviewUsage } from "../persistence/taskStatsUtils"
-import { type TaskStore, syncTaskPreviewFromStore, syncTaskPreviewUsageFromStore } from "../persistence/taskStore"
+import { computeTaskUsage, needsTaskUsageBackfill, normalizeTaskPreviewUsage } from "../persistence/taskStatsUtils"
+import type { TaskStore } from "../persistence/taskStore"
+import type { RuntimeNotification } from "../../../runtime-protocol/src"
 import type { User } from "../types"
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
+import { localOpenADEClient } from "../runtime/localOpenADEClient"
 import type { ThinkingLevel } from "./TaskModel"
 
 import { CommentManager } from "./managers/CommentManager"
@@ -25,10 +28,11 @@ import { ExecutionManager } from "./managers/ExecutionManager"
 import { McpServerManager } from "./managers/McpServerManager"
 import { NotificationManager } from "./managers/NotificationManager"
 import { QueryManager } from "./managers/QueryManager"
+import { QueuedTurnManager } from "./managers/QueuedTurnManager"
 import { RepeatManager } from "./managers/RepeatManager"
 import { RepoManager } from "./managers/RepoManager"
 import { RepoProcessesManager } from "./managers/RepoProcessesManager"
-import { RunCmdManager } from "./managers/RunCmdManager"
+import { RuntimeManager } from "./managers/RuntimeManager"
 import { ScratchpadManager } from "./managers/ScratchpadManager"
 import { SmartEditorManagerStore } from "./managers/SmartEditorManager"
 import { type CreationPhase, type TaskCreation, TaskCreationManager, type TaskCreationOptions } from "./managers/TaskCreationManager"
@@ -85,7 +89,6 @@ export class CodeStore {
     defaultThinking: ThinkingLevel = "max"
     defaultFastMode = false
     defaultHarnessId: HarnessId = "claude-code"
-    workingTaskIds: Set<string> = new Set()
 
     repoStore: RepoStore | null = null
     mcpServerStore: McpServerStore | null = null
@@ -95,6 +98,8 @@ export class CodeStore {
     private personalSettingsStoreConnection: PersonalSettingsStoreConnection | null = null
     private taskStoreConnections: Map<string, TaskStoreConnection> = new Map()
     private envVarsReactionDisposer: (() => void) | null = null
+    private runtimeNotificationDisposer: (() => void) | null = null
+    private runtimeRefreshQueue: Promise<void> = Promise.resolve()
     private telemetryReactionDisposer: (() => void) | null = null
     private pingIntervalId: ReturnType<typeof setInterval> | null = null
     private focusHandler: (() => void) | null = null
@@ -115,7 +120,8 @@ export class CodeStore {
     readonly repoProcesses: RepoProcessesManager
     readonly mcpServers: McpServerManager
     readonly smartEditors: SmartEditorManagerStore
-    readonly runCmd: RunCmdManager
+    readonly runtimes: RuntimeManager
+    readonly queuedTurns: QueuedTurnManager
     readonly crons: CronManager
     readonly repeat: RepeatManager
     readonly scratchpads: ScratchpadManager
@@ -134,13 +140,13 @@ export class CodeStore {
         this.repoProcesses = new RepoProcessesManager()
         this.mcpServers = new McpServerManager(this)
         this.smartEditors = new SmartEditorManagerStore()
-        this.runCmd = new RunCmdManager(this)
+        this.runtimes = new RuntimeManager()
+        this.queuedTurns = new QueuedTurnManager()
         this.crons = new CronManager(this)
         this.repeat = new RepeatManager(this)
         this.scratchpads = new ScratchpadManager()
 
         makeAutoObservable(this, {
-            workingTaskIds: true,
             repoStore: true,
             mcpServerStore: true,
             personalSettingsStore: true,
@@ -158,7 +164,8 @@ export class CodeStore {
             repoProcesses: false,
             mcpServers: false,
             smartEditors: false,
-            runCmd: false,
+            runtimes: false,
+            queuedTurns: false,
             crons: false,
             repeat: false,
             scratchpads: false,
@@ -201,6 +208,12 @@ export class CodeStore {
                 this.storeInitializing = false
             })
 
+            this.runtimeNotificationDisposer?.()
+            this.runtimeNotificationDisposer = this.subscribeToRuntimeNotifications()
+            await this.runtimes.hydrateOpenADETasks().catch((err) => {
+                console.warn("[CodeStore] Failed to hydrate runtime state:", err)
+            })
+
             // Start cron tracking for all repos (runs in background, doesn't block init)
             this.crons.startAll().catch((err) => {
                 console.error("[CodeStore] Failed to start cron manager:", err)
@@ -231,6 +244,71 @@ export class CodeStore {
                 this.storeInitializing = false
             })
             throw err
+        }
+    }
+
+    private subscribeToRuntimeNotifications(): (() => void) | null {
+        if (typeof window === "undefined" || !window.openadeAPI?.runtime) return null
+
+        return localRuntimeClient.subscribe((notification) => {
+            this.runtimeRefreshQueue = this.runtimeRefreshQueue
+                .then(() => this.handleRuntimeNotification(notification))
+                .catch((err) => {
+                    console.warn("[CodeStore] Failed to refresh from runtime notification:", err)
+                })
+        })
+    }
+
+    private async handleRuntimeNotification(notification: RuntimeNotification): Promise<void> {
+        const params = typeof notification.params === "object" && notification.params !== null ? (notification.params as Record<string, unknown>) : {}
+
+        const settledTaskIds = this.runtimes.applyNotification(notification)
+        for (const taskId of settledTaskIds) {
+            await this.notifyRuntimeTaskSettled(taskId)
+        }
+
+        const queuedTurnTaskId = this.queuedTurns.applyNotification(notification)
+        if (queuedTurnTaskId) {
+            await this.refreshTaskStoreFromStorage(queuedTurnTaskId)
+            this.queuedTurns.reconcileTaskWithStorage(queuedTurnTaskId, this.tasks.getTaskModel(queuedTurnTaskId)?.queuedTurns ?? [])
+            return
+        }
+
+        if (notification.method === "openade/task/updated" || notification.method === "openade/task/previewChanged") {
+            await this.refreshRepoStoreFromStorage()
+            if (typeof params.taskId === "string") {
+                await this.refreshTaskStoreFromStorage(params.taskId)
+            }
+            return
+        }
+
+        if (notification.method === "openade/task/deleted") {
+            await this.refreshRepoStoreFromStorage()
+            if (typeof params.taskId === "string") {
+                this.disconnectTaskStore(params.taskId)
+                this.runtimes.removeTask(params.taskId)
+            }
+            return
+        }
+
+        if (
+            notification.method === "openade/snapshotChanged" ||
+            notification.method === "openade/repo/updated" ||
+            notification.method === "openade/repo/deleted"
+        ) {
+            await this.refreshRepoStoreFromStorage()
+        }
+    }
+
+    private async notifyRuntimeTaskSettled(taskId: string): Promise<void> {
+        await this.refreshTaskStoreFromStorage(taskId)
+        const events = this.getCachedTaskStore(taskId)?.events.all() ?? []
+        for (let index = events.length - 1; index >= 0; index--) {
+            const event = events[index]
+            if (event.type !== "action") continue
+            if (event.status !== "completed" && event.status !== "error" && event.status !== "stopped") continue
+            this.execution.notifyAfterEvent(taskId, event.source.type, event.status === "completed" && event.result?.success !== false)
+            return
         }
     }
 
@@ -346,9 +424,6 @@ export class CodeStore {
         }
 
         this.taskStoreConnections.set(taskId, connection)
-        if (meta.id === taskId) {
-            syncTaskPreviewFromStore(this.repoStore, repoId, connection.store)
-        }
 
         return connection.store
     }
@@ -364,9 +439,11 @@ export class CodeStore {
         const cached = this.taskStoreConnections.get(taskId)
         if (cached) {
             if (cached.store.meta.current.id === taskId) {
-                syncTaskPreviewUsageFromStore(this.repoStore, repoId, taskId, cached.store)
+                await localOpenADEClient.updateTaskMetadata({ taskId, usage: computeTaskUsage(cached.store.events.all()) })
+                await this.refreshRepoStoreFromStorage()
             } else {
-                updateTaskPreview(this.repoStore, repoId, taskId, { usage: normalizeTaskPreviewUsage(preview.usage) })
+                await localOpenADEClient.updateTaskMetadata({ taskId, usage: normalizeTaskPreviewUsage(preview.usage) })
+                await this.refreshRepoStoreFromStorage()
                 this.disconnectTaskStore(taskId)
             }
             return
@@ -375,10 +452,11 @@ export class CodeStore {
         const connection = await loadTaskStore({ taskId })
         try {
             if (connection.store.meta.current.id === taskId) {
-                syncTaskPreviewUsageFromStore(this.repoStore, repoId, taskId, connection.store)
+                await localOpenADEClient.updateTaskMetadata({ taskId, usage: computeTaskUsage(connection.store.events.all()) })
             } else {
-                updateTaskPreview(this.repoStore, repoId, taskId, { usage: normalizeTaskPreviewUsage(preview.usage) })
+                await localOpenADEClient.updateTaskMetadata({ taskId, usage: normalizeTaskPreviewUsage(preview.usage) })
             }
+            await this.refreshRepoStoreFromStorage()
         } finally {
             if (!this.taskStoreConnections.has(taskId)) {
                 connection.disconnect()
@@ -404,11 +482,47 @@ export class CodeStore {
         }
     }
 
+    async refreshRepoStoreFromStorage(): Promise<void> {
+        await this.repoStoreConnection?.refresh()
+    }
+
+    async refreshTaskStoreFromStorage(taskId: string): Promise<void> {
+        const connection = this.taskStoreConnections.get(taskId)
+        if (!connection) return
+        const refreshed = await connection.refresh()
+        if (!refreshed) {
+            this.disconnectTaskStore(taskId)
+            return
+        }
+        const model = this.tasks.getTaskModel(taskId)
+        model?.syncHarnessFromHistory()
+    }
+
+    async reloadRepoStoreFromStorage(): Promise<void> {
+        if (this.repoStoreConnection) {
+            await this.repoStoreConnection.sync()
+            this.repoStoreConnection.disconnect()
+        }
+
+        const repoConnection = await connectRepoStore()
+        await repoConnection.sync()
+
+        runInAction(() => {
+            this.repoStoreConnection = repoConnection
+            this.repoStore = repoConnection.store
+        })
+    }
+
     disconnectAllStores(): void {
         for (const connection of this.taskStoreConnections.values()) {
             connection.disconnect()
         }
         this.taskStoreConnections.clear()
+
+        if (this.runtimeNotificationDisposer) {
+            this.runtimeNotificationDisposer()
+            this.runtimeNotificationDisposer = null
+        }
 
         if (this.repoStoreConnection) {
             this.repoStoreConnection.disconnect()
@@ -429,6 +543,8 @@ export class CodeStore {
         }
 
         this.scratchpads.disconnectAll()
+        this.runtimes.clear()
+        this.queuedTurns.clear()
 
         if (this.envVarsReactionDisposer) {
             this.envVarsReactionDisposer()
@@ -460,23 +576,15 @@ export class CodeStore {
     }
 
     get isWorking(): boolean {
-        return this.workingTaskIds.size > 0
+        return this.runtimes.hasRunningTasks
     }
 
     get currentUser(): User {
         return this.config.getCurrentUser()
     }
 
-    setTaskWorking(taskId: string, working: boolean): void {
-        if (working) {
-            this.workingTaskIds.add(taskId)
-        } else {
-            this.workingTaskIds.delete(taskId)
-        }
-    }
-
-    isTaskWorking(taskId: string): boolean {
-        return this.workingTaskIds.has(taskId)
+    isTaskRunning(taskId: string): boolean {
+        return this.runtimes.isTaskRunning(taskId)
     }
 
     setDefaultModel(modelId: string): void {

@@ -120,7 +120,18 @@ export interface BashGroup {
 
 export interface SystemGroup {
     type: "system"
-    subtype: "compact_boundary" | "status" | "init" | "hook_response" | "api_retry" | "task_started" | "task_progress" | "task_notification" | "task_updated"
+    subtype:
+        | "compact_boundary"
+        | "status"
+        | "init"
+        | "hook_started"
+        | "hook_progress"
+        | "hook_response"
+        | "api_retry"
+        | "task_started"
+        | "task_progress"
+        | "task_notification"
+        | "task_updated"
     metadata: Record<string, unknown>
     messageIndex: number
 }
@@ -130,7 +141,7 @@ export interface ResultGroup {
     subtype: "success" | "error_during_execution" | "error_max_turns" | "error_max_budget_usd" | "error_max_structured_output_retries"
     durationMs: number
     totalCostUsd: number
-    usage: { inputTokens: number; outputTokens: number }
+    usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }
     isError: boolean
     result?: string
     errors?: string[]

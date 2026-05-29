@@ -28,7 +28,7 @@ describe("sortTaskPreviewsLikeSidebar", () => {
 
         const sorted = sortTaskPreviewsLikeSidebar(previews, {
             pinnedTaskIds: ["open-pinned-idle", "closed-pinned-old"],
-            workingTaskIds: ["open-unpinned-running"],
+            runningTaskIds: ["open-unpinned-running"],
         })
 
         expect(sorted.map((preview) => preview.id)).toEqual([

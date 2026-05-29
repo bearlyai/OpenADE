@@ -1,5 +1,4 @@
 import type { AnnotationSide, DiffLineAnnotation, LineAnnotation, SelectedLineRange } from "@pierre/diffs"
-import { Plus } from "lucide-react"
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react"
 import { useCodeStore } from "../../../store/context"
 import type { Comment, CommentSelectedText, CommentSource } from "../../../types"
@@ -33,7 +32,6 @@ interface UseCommentAnnotationsReturn {
     hasOpenForm: boolean
     handleLineSelectionEnd: (range: SelectedLineRange | null) => void
     renderAnnotation: (annotation: LineAnnotation<CommentAnnotationMeta> | DiffLineAnnotation<CommentAnnotationMeta>) => ReactNode
-    renderHoverUtility: () => ReactNode
 }
 
 export function useCommentAnnotations({
@@ -199,14 +197,6 @@ export function useCommentAnnotations({
         [handleSubmitComment, handleCancelComment, handleEditComment, handleDeleteComment, readOnly]
     )
 
-    const renderHoverUtility = useCallback(() => {
-        return (
-            <button type="button" className="flex items-center justify-center w-5 h-5 bg-primary text-primary-content hover:bg-primary/90 cursor-pointer">
-                <Plus size="0.75em" />
-            </button>
-        )
-    }, [])
-
     return {
         lineAnnotations,
         diffLineAnnotations,
@@ -214,6 +204,5 @@ export function useCommentAnnotations({
         hasOpenForm,
         handleLineSelectionEnd,
         renderAnnotation,
-        renderHoverUtility,
     }
 }

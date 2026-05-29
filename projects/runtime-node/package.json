@@ -1,0 +1,21 @@
+{
+  "name": "@openade/runtime-node",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "../electron/node_modules/.bin/tsgo --noEmit"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./src": "./src/index.ts",
+    "./src/*": "./src/*"
+  },
+  "bin": {
+    "runtime-node": "./src/cli.ts"
+  },
+  "dependencies": {
+    "ws": "^8.21.0",
+    "yjs": "^13.6.30"
+  }
+}

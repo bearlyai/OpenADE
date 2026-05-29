@@ -22,6 +22,7 @@ import {
     RefreshCw,
     Repeat,
     RotateCcw,
+    Send,
     Square,
     X,
 } from "lucide-react"
@@ -29,11 +30,16 @@ import { makeAutoObservable } from "mobx"
 import { track } from "../../analytics"
 import { ReviewPickerModal } from "../../components/ReviewPickerModal"
 import { ACTION_PROMPTS } from "../../prompts/prompts"
-import type { ActionEvent, UserInputContext } from "../../types"
+import { localOpenADEClient } from "../../runtime/localOpenADEClient"
+import type { ActionEvent, QueuedTurn, UserInputContext } from "../../types"
+import type { OpenADETurnStartRequest, OpenADETurnStartResult } from "../../../../openade-module/src"
+import type { EditorSnapshot } from "./SmartEditorManager"
 import type { CodeStore } from "../store"
 import type { SmartEditorManager } from "./SmartEditorManager"
 
 const COMMIT_AND_PUSH_LABEL = "Commit & Push"
+const INTERRUPT_IDLE_TIMEOUT_MS = 30_000
+const INTERRUPT_IDLE_POLL_MS = 100
 
 // Command style customization
 export interface CommandStyle {
@@ -78,7 +84,7 @@ export class InputManager {
     }
 
     private get isWorking(): boolean {
-        return this.store.isTaskWorking(this.taskId)
+        return this.store.isTaskRunning(this.taskId)
     }
 
     private get hasInput(): boolean {
@@ -119,6 +125,16 @@ export class InputManager {
 
     private get isClosed(): boolean {
         return this.store.tasks.getTask(this.taskId)?.closed ?? false
+    }
+
+    get queuedTurns(): QueuedTurn[] {
+        const storedTurns = this.taskModel?.queuedTurns ?? []
+        return this.store.queuedTurns.queuedForTask(this.taskId, storedTurns)
+    }
+
+    async cancelQueuedTurn(queuedTurnId: string): Promise<void> {
+        await this.taskModel?.cancelQueuedTurn(queuedTurnId)
+        this.store.queuedTurns.suppressQueuedTurn(this.taskId, queuedTurnId, this.taskModel?.queuedTurns ?? [])
     }
 
     private get isCommitAndPushInProgress(): boolean {
@@ -176,6 +192,119 @@ export class InputManager {
         const images = [...this.editorManager.pendingImages]
         this.editorManager.clear()
         return { userInput, images }
+    }
+
+    private captureSnapshotAndClear(): { input: UserInputContext; snapshot: EditorSnapshot } {
+        const snapshot = this.editorManager.captureSnapshot()
+        const input = { userInput: snapshot.value.trim(), images: [...snapshot.pendingImages] }
+        this.editorManager.clear({ revokeImagePreviews: false })
+        return { input, snapshot }
+    }
+
+    private async executeRuntimeTurn(
+        type: OpenADETurnStartRequest["type"],
+        input: UserInputContext,
+        options: Pick<OpenADETurnStartRequest, "label" | "includeComments" | "appendSystemPrompt"> = {},
+        lifecycle: { onAccepted?: () => void } = {}
+    ): Promise<void> {
+        const taskModel = this.taskModel
+        if (!taskModel?.repoId) return
+
+        await this.store.getTaskStore(taskModel.repoId, this.taskId)
+        const result = await localOpenADEClient.startTurn({
+            repoId: taskModel.repoId,
+            type,
+            input: input.userInput,
+            images: input.images,
+            inTaskId: this.taskId,
+            enabledMcpServerIds: taskModel.enabledMcpServerIds,
+            harnessId: taskModel.harnessId,
+            modelId: taskModel.model,
+            thinking: taskModel.thinking,
+            fastMode: taskModel.fastMode,
+            ...options,
+        })
+        lifecycle.onAccepted?.()
+        this.rememberQueuedTurn(type, result, input, taskModel, options)
+        try {
+            await this.store.refreshTaskStoreFromStorage(this.taskId)
+        } finally {
+            this.store.queuedTurns.reconcileTaskWithStorage(this.taskId, taskModel.queuedTurns)
+        }
+    }
+
+    private rememberQueuedTurn(
+        type: OpenADETurnStartRequest["type"],
+        result: OpenADETurnStartResult,
+        input: UserInputContext,
+        taskModel: {
+            enabledMcpServerIds: string[]
+            harnessId: string
+            model: string
+            thinking: QueuedTurn["thinking"]
+            fastMode: boolean
+        },
+        options: Pick<OpenADETurnStartRequest, "label" | "includeComments" | "appendSystemPrompt">
+    ): void {
+        if (!result.queued || !result.queuedTurnId) return
+        if (type !== "do" && type !== "ask") return
+
+        const now = new Date().toISOString()
+        const turn: QueuedTurn = {
+            id: result.queuedTurnId,
+            type,
+            input: input.userInput,
+            images: input.images,
+            status: "queued",
+            createdAt: now,
+            updatedAt: now,
+            appendSystemPrompt: options.appendSystemPrompt,
+            enabledMcpServerIds: taskModel.enabledMcpServerIds,
+            harnessId: taskModel.harnessId,
+            modelId: taskModel.model,
+            label: options.label ?? (type === "ask" ? "Ask Next" : "Do Next"),
+            includeComments: options.includeComments,
+            thinking: taskModel.thinking,
+            fastMode: taskModel.fastMode,
+        }
+
+        this.store.queuedTurns.acceptQueuedTurn(this.taskId, turn)
+    }
+
+    private waitForTaskIdle(timeoutMs = INTERRUPT_IDLE_TIMEOUT_MS): Promise<void> {
+        const startedAt = Date.now()
+
+        return new Promise((resolve, reject) => {
+            const poll = () => {
+                if (!this.store.isTaskRunning(this.taskId)) {
+                    resolve()
+                    return
+                }
+
+                if (Date.now() - startedAt >= timeoutMs) {
+                    reject(new Error("Timed out waiting for the running turn to stop"))
+                    return
+                }
+
+                globalThis.setTimeout(poll, INTERRUPT_IDLE_POLL_MS)
+            }
+
+            poll()
+        })
+    }
+
+    private async interruptAndRunDo(): Promise<void> {
+        const { input, snapshot } = this.captureSnapshotAndClear()
+        let accepted = false
+
+        try {
+            const interrupted = await this.store.queries.interruptTask(this.taskId)
+            if (interrupted) await this.waitForTaskIdle()
+            await this.executeRuntimeTurn("do", input, {}, { onAccepted: () => (accepted = true) })
+        } catch (error) {
+            if (!accepted) this.editorManager.restoreSnapshot(snapshot)
+            throw error
+        }
     }
 
     // === Repeat mode ===
@@ -247,6 +376,21 @@ export class InputManager {
                 },
             },
 
+            // Interrupt - gracefully stop the current turn, then send this message immediately.
+            {
+                id: "interrupt",
+                label: "Interrupt",
+                icon: Send,
+                order: 2,
+                group: "primary" as const,
+                style: { variant: "primary" },
+                show: this.isWorking && !this.hasActivePlan,
+                enabled: this.hasFeedback,
+                action: async () => {
+                    await this.interruptAndRunDo()
+                },
+            },
+
             // Retry - retry the last failed action by prompting the LLM
             {
                 id: "retry",
@@ -258,12 +402,14 @@ export class InputManager {
                 show: this.canRetry,
                 enabled: true,
                 action: async () => {
-                    await this.store.execution.executeAction({
-                        taskId: this.taskId,
-                        input: { userInput: ACTION_PROMPTS.retry, images: [] },
-                        label: this.retryLabel,
-                        includeComments: false,
-                    })
+                    await this.executeRuntimeTurn(
+                        "do",
+                        { userInput: ACTION_PROMPTS.retry, images: [] },
+                        {
+                            label: this.retryLabel,
+                            includeComments: false,
+                        }
+                    )
                 },
             },
 
@@ -279,7 +425,7 @@ export class InputManager {
                 enabled: true,
                 action: async () => {
                     const input = this.captureAndClear()
-                    await this.store.execution.executeRunPlan(this.taskId, input)
+                    await this.executeRuntimeTurn("run_plan", input)
                 },
             },
 
@@ -315,7 +461,7 @@ export class InputManager {
                 enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()
-                    await this.store.execution.executeRevise(this.taskId, input)
+                    await this.executeRuntimeTurn("revise", input)
                 },
             },
 
@@ -339,16 +485,16 @@ export class InputManager {
             // Do - direct action without planning (consumes comments)
             {
                 id: "do",
-                label: "Do",
+                label: this.isWorking ? "Do Next" : "Do",
                 icon: Play,
                 order: 10,
                 group: "primary" as const,
                 style: { variant: "success" },
-                show: !this.hasActivePlan && !this.isWorking,
+                show: !this.hasActivePlan,
                 enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()
-                    await this.store.execution.executeAction({ taskId: this.taskId, input })
+                    await this.executeRuntimeTurn("do", input)
                 },
             },
 
@@ -364,23 +510,23 @@ export class InputManager {
                 enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()
-                    await this.store.execution.executePlan(this.taskId, input)
+                    await this.executeRuntimeTurn("plan", input)
                 },
             },
 
             // Ask - read-only exploration (consumes comments)
             {
                 id: "ask",
-                label: "Ask",
+                label: this.isWorking ? "Ask Next" : "Ask",
                 icon: MessageCircleQuestion,
                 order: 20,
                 group: "primary" as const,
                 style: { variant: "neutral" },
-                show: !this.isWorking,
+                show: true,
                 enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()
-                    await this.store.execution.executeAsk({ taskId: this.taskId, input })
+                    await this.executeRuntimeTurn("ask", input)
                 },
             },
 
@@ -443,12 +589,14 @@ export class InputManager {
                     }
 
                     const branch = this.taskModel?.gitStatus?.branch ?? "HEAD"
-                    await this.store.execution.executeAction({
-                        taskId: this.taskId,
-                        input: { userInput: ACTION_PROMPTS.commitAndPush(input.userInput, hasGhCli, branch), images: input.images },
-                        label: COMMIT_AND_PUSH_LABEL,
-                        includeComments: false,
-                    })
+                    await this.executeRuntimeTurn(
+                        "do",
+                        { userInput: ACTION_PROMPTS.commitAndPush(input.userInput, hasGhCli, branch), images: input.images },
+                        {
+                            label: COMMIT_AND_PUSH_LABEL,
+                            includeComments: false,
+                        }
+                    )
                 },
             },
 
@@ -496,7 +644,7 @@ export class InputManager {
         if (!cmd || !cmd.enabled) return
 
         // Track command execution for execution-related commands
-        const trackableCommands = ["plan", "do", "ask", "revise", "runPlan", "retry", "review", "reviewPlan"]
+        const trackableCommands = ["plan", "do", "ask", "revise", "runPlan", "retry", "review", "reviewPlan", "interrupt"]
         if (trackableCommands.includes(id)) {
             track("command_run", { commandType: id })
         }

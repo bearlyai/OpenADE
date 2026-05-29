@@ -2,8 +2,8 @@
  * CronManager
  *
  * Manages cron job definitions, per-machine install state, scheduling,
- * and catch-up execution across ALL workspaces. Uses RunCmdManager.run()
- * to execute cron tasks.
+ * and catch-up execution across ALL workspaces. Uses openade-client to start
+ * server-owned cron turns.
  *
  * Scheduling: Each enabled cron gets its own setTimeout targeting a
  * specific timestamp computed via croner's nextRun(). When the timer
@@ -23,7 +23,9 @@ import { makeAutoObservable, observable, runInAction } from "mobx"
 import { dataFolderApi } from "../../electronAPI/dataFolder"
 import type { CronDef, ReadProcsResult } from "../../electronAPI/procs"
 import { readProcs } from "../../electronAPI/procs"
-import type { HarnessId, RunCmdArgs } from "../../types"
+import { localOpenADEClient } from "../../runtime/localOpenADEClient"
+import type { HarnessId } from "../../types"
+import type { OpenADETurnStartRequest } from "../../../../openade-module/src"
 import type { CodeStore } from "../store"
 
 // ============================================================================
@@ -71,6 +73,22 @@ interface RepoState {
 
 // Max safe delay for setTimeout (~24.8 days). Longer delays get chained.
 const MAX_TIMEOUT_DELAY = 0x7fffffff
+const PROCS_REFRESH_CONCURRENCY = 2
+const FOCUS_PROCS_REFRESH_MIN_INTERVAL_MS = 60_000
+
+async function runWithConcurrencyLimit<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
+    let index = 0
+    const workerCount = Math.max(1, Math.min(limit, items.length))
+    await Promise.all(
+        Array.from({ length: workerCount }, async () => {
+            while (index < items.length) {
+                const item = items[index]
+                index += 1
+                await worker(item)
+            }
+        })
+    )
+}
 
 // ============================================================================
 // CronManager
@@ -86,6 +104,7 @@ export class CronManager {
     private _refreshDebounceTimer: ReturnType<typeof setTimeout> | null = null
     private _refreshInFlight = false
     private _refreshPendingAgain = false
+    private _lastConfigRefreshAt = 0
 
     constructor(private store: CodeStore) {
         makeAutoObservable<CronManager, "store">(this, { store: false })
@@ -97,7 +116,7 @@ export class CronManager {
         this._started = true
 
         const repos = this.store.repos.repos
-        await Promise.all(repos.map((repo) => this.addRepo(repo.id, repo.path)))
+        await runWithConcurrencyLimit(repos, PROCS_REFRESH_CONCURRENCY, (repo) => this.addRepo(repo.id, repo.path))
 
         // Refresh config after any task event completes (e.g. a plan that edits openade.toml)
         this._afterEventDisposer = this.store.execution.onAfterEvent(() => {
@@ -105,7 +124,7 @@ export class CronManager {
         })
 
         // Refresh config + reschedule when window regains focus (catches sleep/wake misses)
-        this._focusHandler = () => this.requestRefresh()
+        this._focusHandler = () => this.requestFocusRefresh()
         window.addEventListener("focus", this._focusHandler)
     }
 
@@ -264,6 +283,11 @@ export class CronManager {
         }, 3_000)
     }
 
+    private requestFocusRefresh(): void {
+        if (Date.now() - this._lastConfigRefreshAt < FOCUS_PROCS_REFRESH_MIN_INTERVAL_MS) return
+        this.requestRefresh()
+    }
+
     private async debouncedRefresh(): Promise<void> {
         if (this._refreshInFlight) {
             this._refreshPendingAgain = true
@@ -282,18 +306,17 @@ export class CronManager {
     }
 
     private async refreshAndRescheduleAll(): Promise<void> {
-        await Promise.all(
-            Array.from(this._repos.values()).map(async (rs) => {
-                await this.refreshRepoConfig(rs)
-                this.rescheduleRepo(rs)
-            })
-        )
+        await runWithConcurrencyLimit(Array.from(this._repos.values()), PROCS_REFRESH_CONCURRENCY, async (rs) => {
+            await this.refreshRepoConfig(rs)
+            this.rescheduleRepo(rs)
+        })
     }
 
     private async refreshRepoConfig(repoState: RepoState): Promise<void> {
         try {
             const result = await readProcs(repoState.repoPath)
             this.applyProcsResult(repoState, result)
+            this._lastConfigRefreshAt = Date.now()
         } catch (err) {
             console.error(`[CronManager] Failed to refresh config for ${repoState.repoId}:`, err)
         }
@@ -514,18 +537,27 @@ export class CronManager {
         }
 
         try {
-            const args: RunCmdArgs = {
+            const isolationStrategy: OpenADETurnStartRequest["isolationStrategy"] =
+                def.isolation === "worktree" ? { type: "worktree", sourceBranch: "HEAD" } : { type: "head" }
+            const args: OpenADETurnStartRequest = {
                 repoId: repoState.repoId,
                 type: def.type,
                 input: def.prompt,
                 appendSystemPrompt: def.appendSystemPrompt,
                 inTaskId: def.inTaskId || (def.reuseTask && state?.lastTaskId) || undefined,
-                isolationStrategy: def.isolation === "worktree" ? { type: "worktree", sourceBranch: "HEAD" } : { type: "head" },
+                isolationStrategy,
                 harnessId: (def.harness as HarnessId) || undefined,
                 title: `[Cron] ${def.name}`,
+                hyperplanStrategy: def.type === "hyperplan" ? this.store.getActiveHyperPlanStrategy() : undefined,
             }
 
-            const result = await this.store.runCmd.run(args)
+            const result = await localOpenADEClient.startTurn(args)
+            if (args.inTaskId) {
+                await this.store.refreshTaskStoreFromStorage(result.taskId)
+            } else {
+                await this.store.refreshRepoStoreFromStorage()
+                await this.store.getTaskStore(repoState.repoId, result.taskId)
+            }
 
             if (state) {
                 state.lastTaskId = result.taskId

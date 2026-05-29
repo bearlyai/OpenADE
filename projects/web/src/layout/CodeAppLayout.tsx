@@ -1,7 +1,7 @@
 import NiceModal from "@ebay/nice-modal-react"
 import { EyeOff } from "lucide-react"
 import { observer } from "mobx-react"
-import { type ReactNode, useCallback, useEffect, useState } from "react"
+import { type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useState } from "react"
 import { twMerge } from "tailwind-merge"
 import { DiffsWorkerProvider } from "../components/DiffsWorkerProvider"
 import { UpdateBanner, UpdateErrorBanner } from "../components/UpdateBanner"
@@ -12,11 +12,13 @@ import SidebarIcon from "../components/sidebar/static/sidebar.svg?react"
 import { onUpdateAvailable, onUpdateError } from "../electronAPI/app"
 import { hasElectronIpc } from "../electronAPI/capabilities"
 import { type PlatformInfo, fetchPlatformInfo } from "../electronAPI/platform"
+import { openUrlInNativeBrowser } from "../electronAPI/shell"
 import { type FrameColors, windowFrameEnabled, windowFrameSetColors } from "../electronAPI/windowFrame"
 import { useMetaKeyPressed } from "../hooks/useMetaKeyPressed"
 import { PortalContainerProvider } from "../hooks/usePortalContainer"
 import { useResolvedTheme } from "../hooks/useResolvedTheme"
 import { useCodeStore } from "../store/context"
+import { getExternalUrlToOpen } from "../utils/externalLinks"
 import "../tw.css"
 
 const ELECTRON_DRAG_REGION_CLASS = "electron-drag-region"
@@ -221,9 +223,21 @@ export const CodeAppLayout = observer((props: CodeAppLayoutProps) => {
     const themeSetting = codeStore.personalSettingsStore?.settings.current.theme ?? "system"
     const themeClass = useResolvedTheme(themeSetting)
     const isDark = themeClass.includes("dark") || themeClass.includes("black") || themeClass.includes("synthwave") || themeClass.includes("dracula")
+    const handleExternalLinkClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+        const target = event.target instanceof Element ? event.target : null
+        const anchor = target?.closest<HTMLAnchorElement>("a[href]")
+        if (!anchor || !event.currentTarget.contains(anchor)) return
+
+        const url = getExternalUrlToOpen(anchor.getAttribute("href"))
+        if (!url) return
+
+        event.preventDefault()
+        event.stopPropagation()
+        openUrlInNativeBrowser(url)
+    }, [])
 
     return (
-        <div className={`code-theme ${themeClass} w-full h-full overflow-hidden relative flex flex-col`}>
+        <div className={`code-theme ${themeClass} w-full h-full overflow-hidden relative flex flex-col`} onClickCapture={handleExternalLinkClick}>
             <FramedApp resolvedTheme={isDark ? "dark" : "light"} center={frameCenter}>
                 <DiffsWorkerProvider>
                     <NiceModal.Provider>

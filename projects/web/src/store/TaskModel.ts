@@ -2,7 +2,7 @@
  * TaskModel - Observable wrapper for Task
  *
  * Provides derived state and actions for tasks.
- * Models compute from store's tasksById - no caching needed.
+ * Models compute from loaded task stores - no task data is cached here.
  */
 
 import { makeAutoObservable, runInAction } from "mobx"
@@ -11,7 +11,8 @@ import type { GitSummaryResponse } from "../electronAPI/git"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { computeTaskUsage } from "../persistence/taskStatsUtils"
 import { type TaskThreadFormat, type TaskThreadJson, buildTaskThreadJson, buildTaskThreadXml } from "../prompts/taskThreadSerializer"
-import type { ActionEvent, CodeEvent, IsolationStrategy, Task, TaskDeviceEnvironment } from "../types"
+import { localOpenADEClient } from "../runtime/localOpenADEClient"
+import type { ActionEvent, CodeEvent, IsolationStrategy, QueuedTurn, SetupEnvironmentEvent, SnapshotEvent, Task, TaskDeviceEnvironment } from "../types"
 import { getDeviceId } from "../utils/deviceId"
 import { ActionEventModel, type EventModel, SetupEnvironmentEventModel, SnapshotEventModel } from "./EventModel"
 import { TaskEnvironment } from "./TaskEnvironment"
@@ -24,6 +25,16 @@ import { TrayManager } from "./managers/TrayManager"
 import type { CodeStore } from "./store"
 
 export type ThinkingLevel = "low" | "med" | "high" | "max"
+
+function legacyWorktreeDirFromSetupEvent(event: SetupEnvironmentEvent): string | null {
+    const setupOutput = event.setupOutput ?? ""
+    const worktreeLine = setupOutput
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find((line) => line.startsWith("Worktree:"))
+    const worktreeDir = worktreeLine?.slice("Worktree:".length).trim()
+    return worktreeDir || event.workingDir || null
+}
 
 export class TaskModel {
     gitStatus: GitSummaryResponse | null = null
@@ -248,6 +259,20 @@ export class TaskModel {
         return this.task?.enabledMcpServerIds ?? []
     }
 
+    get queuedTurns(): QueuedTurn[] {
+        return this.task?.queuedTurns ?? []
+    }
+
+    async cancelQueuedTurn(queuedTurnId: string): Promise<void> {
+        if (!this.repoId) return
+        await localOpenADEClient.cancelQueuedTurn({
+            repoId: this.repoId,
+            taskId: this.taskId,
+            queuedTurnId,
+        })
+        await this.store.refreshTaskStoreFromStorage(this.taskId)
+    }
+
     setEnabledMcpServerIds(serverIds: string[]): void {
         this.store.tasks.setEnabledMcpServerIds(this.taskId, serverIds)
     }
@@ -258,13 +283,69 @@ export class TaskModel {
 
     get currentDeviceEnvironment(): TaskDeviceEnvironment | null {
         const deviceId = getDeviceId()
-        return this.deviceEnvironments.find((e) => e.deviceId === deviceId) ?? null
+        return this.deviceEnvironments.find((e) => e.deviceId === deviceId) ?? this.legacyDeviceEnvironment
     }
 
     get needsEnvironmentSetup(): boolean {
         const deviceEnv = this.currentDeviceEnvironment
         if (!deviceEnv) return true
         return !deviceEnv.setupComplete
+    }
+
+    private get legacyDeviceEnvironment(): TaskDeviceEnvironment | null {
+        const task = this.task
+        if (!task) return null
+
+        const deviceId = getDeviceId()
+        const timestamp = task.updatedAt || task.createdAt || new Date().toISOString()
+        if (task.isolationStrategy.type === "head") {
+            return {
+                id: deviceId,
+                deviceId,
+                setupComplete: true,
+                createdAt: timestamp,
+                lastUsedAt: timestamp,
+            }
+        }
+
+        const setupEvent = this.findLegacySetupEnvironment(task, deviceId)
+        if (!setupEvent) return null
+
+        const worktreeDir = legacyWorktreeDirFromSetupEvent(setupEvent)
+        if (!worktreeDir) return null
+
+        return {
+            id: deviceId,
+            deviceId,
+            worktreeDir,
+            setupComplete: true,
+            mergeBaseCommit: this.latestSnapshotMergeBase(task),
+            createdAt: setupEvent.completedAt ?? setupEvent.createdAt ?? timestamp,
+            lastUsedAt: timestamp,
+        }
+    }
+
+    private findLegacySetupEnvironment(task: Task, deviceId: string): SetupEnvironmentEvent | null {
+        for (let index = task.events.length - 1; index >= 0; index--) {
+            const event = task.events[index]
+            if (event.type !== "setup_environment" || event.status !== "completed") continue
+            if (event.deviceId === deviceId) return event
+        }
+
+        if (task.deviceEnvironments.length > 0) return null
+        for (let index = task.events.length - 1; index >= 0; index--) {
+            const event = task.events[index]
+            if (event.type === "setup_environment" && event.status === "completed") return event
+        }
+        return null
+    }
+
+    private latestSnapshotMergeBase(task: Task): string | undefined {
+        for (let index = task.events.length - 1; index >= 0; index--) {
+            const event = task.events[index]
+            if (event.type === "snapshot") return (event as SnapshotEvent).mergeBaseCommit
+        }
+        return undefined
     }
 
     /**
@@ -435,7 +516,7 @@ export class TaskModel {
     }
 
     get isWorking(): boolean {
-        return this.store.isTaskWorking(this.taskId)
+        return this.store.isTaskRunning(this.taskId)
     }
 
     get stats(): { totalCostUsd: number; durationMs: number; inputTokens: number; outputTokens: number } {

@@ -5,7 +5,7 @@ import { join } from "node:path"
 
 import { parseCodexSessionLine, readCodexSession, writeCodexSession, deleteCodexSession, isCodexSessionActive, listCodexSessions } from "./sessions.js"
 import type { HarnessEvent } from "../../types.js"
-import type { CodexEvent, CodexItemCompletedEvent, CodexThreadStartedEvent, CodexTurnStartedEvent, CodexTurnCompletedEvent } from "./types.js"
+import type { CodexEvent, CodexItemCompletedEvent, CodexRawJsonEvent, CodexThreadStartedEvent, CodexTurnStartedEvent, CodexTurnCompletedEvent } from "./types.js"
 
 // ── Fixtures ──
 
@@ -153,12 +153,20 @@ describe("parseCodexSessionLine", () => {
         }
     })
 
-    it("skips function_call_output", () => {
-        expect(parseCodexSessionLine(FUNCTION_CALL_OUTPUT_LINE)).toBeNull()
+    it("preserves function_call_output as raw_json", () => {
+        const event = parseCodexSessionLine(FUNCTION_CALL_OUTPUT_LINE)
+        expect(event?.type).toBe("message")
+        if (event?.type === "message") {
+            expect(event.message).toMatchObject({ type: "raw_json", original_type: "function_call_output" })
+        }
     })
 
-    it("skips user messages", () => {
-        expect(parseCodexSessionLine(USER_MESSAGE_LINE)).toBeNull()
+    it("preserves user messages as raw_json", () => {
+        const event = parseCodexSessionLine(USER_MESSAGE_LINE)
+        expect(event?.type).toBe("message")
+        if (event?.type === "message") {
+            expect(event.message).toMatchObject({ type: "raw_json", original_type: "message" })
+        }
     })
 
     it("parses session_meta as thread.started", () => {
@@ -202,18 +210,46 @@ describe("parseCodexSessionLine", () => {
         }
     })
 
-    it("skips event_msg token_count", () => {
-        expect(parseCodexSessionLine(EVENT_MSG_LINE)).toBeNull()
+    it("preserves event_msg token_count as raw_json", () => {
+        const event = parseCodexSessionLine(EVENT_MSG_LINE)
+        expect(event?.type).toBe("message")
+        if (event?.type === "message") {
+            expect(event.message).toMatchObject({
+                type: "raw_json",
+                original_type: "token_count",
+                raw: EVENT_MSG_LINE,
+            })
+        }
     })
 
-    it("skips lines without payload type", () => {
-        expect(
-            parseCodexSessionLine({
+    it("preserves lines without payload type as raw_json", () => {
+        const event = parseCodexSessionLine({
                 timestamp: "2026-01-01T00:00:00Z",
                 type: "response_item",
                 payload: {},
+        })
+        expect(event?.type).toBe("message")
+        if (event?.type === "message") {
+            expect((event.message as CodexRawJsonEvent).type).toBe("raw_json")
+            expect((event.message as CodexRawJsonEvent).original_type).toBe("response_item")
+        }
+    })
+
+    it("preserves unknown rollout line types as raw_json", () => {
+        const raw = {
+            timestamp: "2026-01-01T00:00:00Z",
+            type: "future_rollout",
+            payload: { value: true },
+        }
+        const event = parseCodexSessionLine(raw)
+        expect(event?.type).toBe("message")
+        if (event?.type === "message") {
+            expect(event.message).toMatchObject({
+                type: "raw_json",
+                original_type: "future_rollout",
+                raw,
             })
-        ).toBeNull()
+        }
     })
 })
 
@@ -255,14 +291,15 @@ describe("session file operations", () => {
             }
         })
 
-        it("skips non-emittable lines but keeps session_meta", async () => {
+        it("preserves non-emittable lines as raw_json and keeps session_meta", async () => {
             await createSessionFile([SESSION_META_LINE, EVENT_MSG_LINE, FUNCTION_CALL_OUTPUT_LINE, ASSISTANT_MESSAGE_LINE])
 
             const events = await readCodexSession(sessionId)
             expect(events).not.toBeNull()
-            // session_started + thread.started (from session_meta) + 1 assistant
-            // EVENT_MSG (token_count) → skipped, FUNCTION_CALL_OUTPUT → consumed in pass 1
-            expect(events!.length).toBe(3)
+            // session_started + thread.started + token_count raw_json + function_call_output raw_json + 1 assistant
+            expect(events!.length).toBe(5)
+            expect(events![2]).toMatchObject({ type: "message", message: { type: "raw_json", original_type: "token_count" } })
+            expect(events![3]).toMatchObject({ type: "message", message: { type: "raw_json", original_type: "function_call_output" } })
         })
 
         it("correlates function_call with function_call_output", async () => {
@@ -270,8 +307,8 @@ describe("session file operations", () => {
 
             const events = await readCodexSession(sessionId)
             expect(events).not.toBeNull()
-            // session_started + thread.started + function_call (correlated)
-            expect(events!.length).toBe(3)
+            // session_started + thread.started + function_call (correlated) + function_call_output raw_json
+            expect(events!.length).toBe(4)
 
             const fnEvent = events![2]
             if (fnEvent.type === "message") {

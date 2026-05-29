@@ -31,11 +31,11 @@ interface OpenPathParams {
     path: string
 }
 
-interface CreateDirectoryParams {
+export interface CreateDirectoryParams {
     path: string
 }
 
-interface CreateDirectoryResponse {
+export interface CreateDirectoryResponse {
     success: boolean
     error?: string
 }
@@ -116,7 +116,7 @@ async function handleOpenPath(params: OpenPathParams): Promise<void> {
 /**
  * Create a directory (with recursive parent creation)
  */
-async function handleCreateDirectory(params: CreateDirectoryParams): Promise<CreateDirectoryResponse> {
+export async function createRuntimeDirectory(params: CreateDirectoryParams): Promise<CreateDirectoryResponse> {
     const startTime = Date.now()
     logger.info("[Shell:createDirectory] Creating directory", JSON.stringify({ path: params.path }))
 
@@ -163,11 +163,6 @@ export const load = () => {
     ipcMain.handle("code:shell:openPath", async (event, params: OpenPathParams) => {
         if (!checkAllowed(event)) throw new Error("not allowed")
         return handleOpenPath(params)
-    })
-
-    ipcMain.handle("code:shell:createDirectory", async (event, params: CreateDirectoryParams) => {
-        if (!checkAllowed(event)) throw new Error("not allowed")
-        return handleCreateDirectory(params)
     })
 
     logger.info("[Shell] IPC handlers registered successfully")

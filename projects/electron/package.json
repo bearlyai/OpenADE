@@ -32,6 +32,7 @@
     "lodash": "^4.17.21",
     "node-pty": "^1.1.0",
     "smol-toml": "^1.6.0",
+    "ws": "^8.21.0",
     "yjs": "^13.6.29",
     "zod": "^4.3.6"
   },
@@ -39,6 +40,7 @@
     "@electron/notarize": "^3.1.1",
     "@playwright/test": "^1.60.0",
     "@types/lodash": "^4.14.186",
+    "@types/ws": "^8.18.1",
     "@typescript/native-preview": "^7.0.0-dev.20260107.1",
     "@vitest/ui": "^4.0.16",
     "electron": "^39.2.7",
