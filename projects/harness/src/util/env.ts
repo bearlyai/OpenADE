@@ -45,6 +45,7 @@ export async function detectShellEnvironment(shell?: string): Promise<Record<str
                 fallback[key] = value
             }
         }
+        cachedEnv = fallback
         return fallback
     }
 }
