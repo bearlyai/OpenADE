@@ -1291,9 +1291,27 @@ describe("runtime-node WebSocket server", () => {
             ],
         })
 
-        socket.send(JSON.stringify({ id: 5, method: "openade/task/read", params: { repoId: "repo-turn", taskId: startResponse.result.taskId } }))
-        await expect(readResponse(inbox, 5)).resolves.toMatchObject({
-            id: 5,
+        let taskResponse:
+            | {
+                  result?: {
+                      id?: string
+                      events?: Array<{
+                          id?: string
+                          status?: string
+                          execution?: { sessionId?: string; events?: Array<{ id?: string; type?: string }> }
+                      }>
+                  }
+              }
+            | undefined
+        for (let attempt = 0; attempt < 20; attempt++) {
+            socket.send(JSON.stringify({ id: 50 + attempt, method: "openade/task/read", params: { repoId: "repo-turn", taskId: startResponse.result.taskId } }))
+            taskResponse = (await readResponse(inbox, 50 + attempt)) as typeof taskResponse
+            const action = taskResponse?.result?.events?.find((event) => event.id === startResponse.result.eventId)
+            if (action?.status === "completed" && action.execution?.events?.some((event) => event.id === "event-complete")) break
+            await delay(25)
+        }
+
+        expect(taskResponse).toMatchObject({
             result: {
                 id: expectedTurnTaskId,
                 events: [
