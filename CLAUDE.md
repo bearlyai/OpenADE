@@ -12,7 +12,7 @@
 | Path | What it is | Local guidance |
 | --- | --- | --- |
 | `projects/web` | Desktop renderer/code module for task planning, execution, settings, remote UI sources, and shared web components. | [projects/web/src/CLAUDE.md](projects/web/src/CLAUDE.md), [projects/web/src/remote/CLAUDE.md](projects/web/src/remote/CLAUDE.md) |
-| `projects/electron` | Electron desktop shell and main-process host integrations. The companion module exposes the authenticated private-network remote-control API. | [projects/electron/src/modules/companion/CLAUDE.md](projects/electron/src/modules/companion/CLAUDE.md) |
+| `projects/electron` | Electron desktop shell and main-process host integrations. The companion module exposes the authenticated private-network remote-control API. | [projects/electron/CLAUDE.md](projects/electron/CLAUDE.md), [projects/electron/src/modules/companion/CLAUDE.md](projects/electron/src/modules/companion/CLAUDE.md) |
 | `projects/mobile` | iOS-first Capacitor shell for the OpenADE remote-control surface, pairing, secure token storage, and OTA web bundle updates. | [projects/mobile/CLAUDE.md](projects/mobile/CLAUDE.md) |
 | `projects/landing` | Static marketing site for openade.ai, built with Vite and deployed to Cloudflare Pages. | [projects/landing/CLAUDE.md](projects/landing/CLAUDE.md) |
 | `projects/harness` | Unified TypeScript harness for driving AI coding CLIs such as Claude Code and Codex. | [projects/harness/CLAUDE.md](projects/harness/CLAUDE.md) |

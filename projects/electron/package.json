@@ -62,6 +62,7 @@
       "dist/pages/**",
       "dist/web/**"
     ],
+    "afterPack": "build/afterPack.js",
     "afterSign": "build/notarize.js",
     "appId": "com.openade.app",
     "directories": {

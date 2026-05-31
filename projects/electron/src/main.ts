@@ -1,10 +1,13 @@
 import "./runtimeProfile"
 
+import { app, dialog, ipcMain, shell } from "electron"
+import { configureLinuxDisplayBackend } from "./modules/linuxDisplayBackend"
+configureLinuxDisplayBackend(app.commandLine)
+
 // Initialize Sentry before the rest of the app loads.
 import { initSentry, load as loadSentry, cleanup as cleanupSentry } from "./modules/sentry"
 initSentry()
 
-import { app, dialog, ipcMain, shell } from "electron"
 import logger from "electron-log"
 import { load as loadExecutorWindow } from "./executor"
 import { load as loadAutoUpdater } from "./modules/autoUpdate"

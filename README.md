@@ -155,6 +155,8 @@ Let them cook. 🧑‍🍳
 
 > **Note:** The Windows build is experimental and largely untested — expect rough edges. For a smoother experience, try running the Linux build via [WSL](https://learn.microsoft.com/en-us/windows/wsl/).
 
+> **Linux Wayland:** OpenADE defaults Linux Wayland sessions to X11/XWayland for AppImage startup stability. To test native Wayland, launch with `OPENADE_LINUX_OZONE_PLATFORM=wayland`.
+
 [View all releases →](https://github.com/bearlyai/OpenADE/releases)
 
 ---

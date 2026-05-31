@@ -8,6 +8,7 @@
 import * as Sentry from "@sentry/electron/main"
 import { app, ipcMain } from "electron"
 import { getDeviceConfig, setDeviceId, setTelemetryDisabled, type DeviceConfigResult } from "./deviceConfig"
+import { filterMainProcessSentryIntegrations, shouldDisableNativeCrashReporter } from "./sentryConfig"
 
 // Sentry DSN - safe to expose (only allows sending events, not reading)
 const SENTRY_DSN = "https://b4bc0904eefb535e3f528d7722b3e7f8@o4510828830720000.ingest.us.sentry.io/4510828832227328"
@@ -42,6 +43,8 @@ export function initSentry(): void {
 		// Don't send PII
 		sendDefaultPii: false,
 
+		integrations: (integrations) => filterMainProcessSentryIntegrations(integrations, process.platform),
+
 		beforeSend(event) {
 			// Attach device ID for correlation with Amplitude
 			event.user = { id: activeConfig?.deviceId ?? config.deviceId }
@@ -51,6 +54,9 @@ export function initSentry(): void {
 
 	initialized = true
 	console.debug("[Sentry] Initialized for main process, enabled:", !config.telemetryDisabled)
+	if (shouldDisableNativeCrashReporter(process.platform)) {
+		console.debug("[Sentry] Native crash reporter disabled on Linux")
+	}
 }
 
 /**
