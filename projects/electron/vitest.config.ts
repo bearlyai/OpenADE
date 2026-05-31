@@ -6,6 +6,7 @@ export default defineConfig({
         globals: true,
         environment: "node",
         watch: false,
+        fileParallelism: false,
         setupFiles: [],
         include: ["src/**/*.test.ts"],
         coverage: {
