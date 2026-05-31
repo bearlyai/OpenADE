@@ -2,14 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { OpenADEClientOptions } from "../../../openade-client/src"
 import type { RuntimeClientOptions } from "../../../runtime-client/src"
 import type { RemoteSnapshot, RemoteTask, RemoteTurnStartResult } from "../../../shared/companion/src"
-import {
-    __setRemoteClientConstructorsForTest,
-    getSnapshot,
-    getTask,
-    startRemoteTurn,
-    subscribeRemoteChanges,
-    type RemoteConfig,
-} from "./client"
+import { __setRemoteClientConstructorsForTest, getSnapshot, getTask, startRemoteTurn, subscribeRemoteChanges, type RemoteConfig } from "./client"
 
 const runtimeClients: RuntimeClient[] = []
 const openadeClients: OpenADEClient[] = []
@@ -28,11 +21,13 @@ class RuntimeClient {
 }
 
 class OpenADEClient {
-    getSnapshot = vi.fn(async (): Promise<RemoteSnapshot> => ({
-        repos: [],
-        workingTaskIds: [],
-        server: { version: "test", hostName: "test", theme: { setting: "system", className: "code-theme-light" } },
-    }))
+    getSnapshot = vi.fn(
+        async (): Promise<RemoteSnapshot> => ({
+            repos: [],
+            workingTaskIds: [],
+            server: { version: "test", hostName: "test", theme: { setting: "system", className: "code-theme-light" } },
+        })
+    )
     getTask = vi.fn(async (): Promise<RemoteTask> => {
         if (getTaskFailures > 0) {
             getTaskFailures -= 1

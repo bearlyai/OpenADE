@@ -300,7 +300,16 @@ export class InputManager {
         try {
             const interrupted = await this.store.queries.interruptTask(this.taskId)
             if (interrupted) await this.waitForTaskIdle()
-            await this.executeRuntimeTurn("do", input, {}, { onAccepted: () => (accepted = true) })
+            await this.executeRuntimeTurn(
+                "do",
+                input,
+                {},
+                {
+                    onAccepted: () => {
+                        accepted = true
+                    },
+                }
+            )
         } catch (error) {
             if (!accepted) this.editorManager.restoreSnapshot(snapshot)
             throw error
