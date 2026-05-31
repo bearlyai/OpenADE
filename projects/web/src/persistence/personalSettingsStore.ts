@@ -91,6 +91,10 @@ export interface PersonalSettings {
     renderMarkdownMessages?: boolean
     /** Version string of the latest release notes the user has seen */
     lastSeenReleaseVersion?: string
+    /** Last harness selected on the new task page; validated before use. */
+    newTaskHarnessId?: string
+    /** Last model selected on the new task page; validated against newTaskHarnessId before use. */
+    newTaskModelId?: string
 
     // === HyperPlan settings ===
 

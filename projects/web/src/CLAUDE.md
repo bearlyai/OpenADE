@@ -231,6 +231,7 @@ The `UserInputContext` type bundles `userInput` + `images` and threads from UI t
 ## Settings & Environment Variables
 
 User settings managed via Settings modal (accessed from sidebar). Uses YJS persistence (`PersonalSettingsStore`).
+The new task page's last selected harness/model also lives in personal settings so it survives renderer refreshes.
 
 ### Environment Variables
 

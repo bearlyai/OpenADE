@@ -1,6 +1,6 @@
 import { makeAutoObservable, reaction, runInAction } from "mobx"
 import { analytics, track } from "../analytics"
-import { DEFAULT_MODEL, getDefaultModelForHarness } from "../constants"
+import { DEFAULT_HARNESS_ID, DEFAULT_MODEL, MODEL_REGISTRY, getDefaultModelForHarness } from "../constants"
 import { getDeviceConfig, setDeviceId as setDeviceConfigDeviceId, setTelemetryDisabled } from "../electronAPI/deviceConfig"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { setGlobalEnv } from "../electronAPI/subprocess"
@@ -8,7 +8,7 @@ import { crossReviewStrategy, ensembleStrategy, peerReviewStrategy, standardStra
 import type { AgentCouplet, HyperPlanStrategy } from "../hyperplan/types"
 import type { McpServerStore } from "../persistence/mcpServerStore"
 import { type McpServerStoreConnection, connectMcpServerStore } from "../persistence/mcpServerStoreBootstrap"
-import type { PersonalSettingsStore } from "../persistence/personalSettingsStore"
+import type { PersonalSettings, PersonalSettingsStore } from "../persistence/personalSettingsStore"
 import { type PersonalSettingsStoreConnection, connectPersonalSettingsStore } from "../persistence/personalSettingsStoreBootstrap"
 import { type RepoStore, getTaskPreview } from "../persistence/repoStore"
 import { type RepoStoreConnection, connectRepoStore } from "../persistence/repoStoreBootstrap"
@@ -57,6 +57,27 @@ type AnalyticsDeviceIdSource =
     | "local_storage"
     | "generated"
 
+interface NewTaskAgentDefaults {
+    harnessId: HarnessId
+    modelId: string
+}
+
+function isHarnessId(value: string | undefined): value is HarnessId {
+    return value === "claude-code" || value === "codex"
+}
+
+function isModelForHarness(harnessId: HarnessId, modelId: string | undefined): modelId is string {
+    if (!modelId) return false
+    return MODEL_REGISTRY[harnessId].models.some((model) => model.id === modelId)
+}
+
+function getNewTaskAgentDefaults(settings: PersonalSettings | undefined): NewTaskAgentDefaults {
+    const harnessId = isHarnessId(settings?.newTaskHarnessId) ? settings.newTaskHarnessId : DEFAULT_HARNESS_ID
+    const modelId = isModelForHarness(harnessId, settings?.newTaskModelId) ? settings.newTaskModelId : getDefaultModelForHarness(harnessId)
+
+    return { harnessId, modelId }
+}
+
 function getLocalAnalyticsDeviceIdBackup(): string | null {
     if (typeof window === "undefined") return null
 
@@ -88,7 +109,7 @@ export class CodeStore {
     defaultModel: string = DEFAULT_MODEL
     defaultThinking: ThinkingLevel = "max"
     defaultFastMode = false
-    defaultHarnessId: HarnessId = "claude-code"
+    defaultHarnessId: HarnessId = DEFAULT_HARNESS_ID
 
     repoStore: RepoStore | null = null
     mcpServerStore: McpServerStore | null = null
@@ -197,6 +218,8 @@ export class CodeStore {
 
             await Promise.all([repoConnection.sync(), mcpConnection.sync(), personalSettingsConnection.sync()])
 
+            const newTaskDefaults = getNewTaskAgentDefaults(personalSettingsConnection.store.settings.get())
+
             runInAction(() => {
                 this.repoStoreConnection = repoConnection
                 this.repoStore = repoConnection.store
@@ -204,6 +227,8 @@ export class CodeStore {
                 this.mcpServerStore = mcpConnection.store
                 this.personalSettingsStoreConnection = personalSettingsConnection
                 this.personalSettingsStore = personalSettingsConnection.store
+                this.defaultHarnessId = newTaskDefaults.harnessId
+                this.defaultModel = newTaskDefaults.modelId
                 this.storeInitialized = true
                 this.storeInitializing = false
             })
@@ -587,8 +612,16 @@ export class CodeStore {
         return this.runtimes.isTaskRunning(taskId)
     }
 
+    private persistNewTaskAgentDefaults(): void {
+        this.personalSettingsStore?.settings.set({
+            newTaskHarnessId: this.defaultHarnessId,
+            newTaskModelId: this.defaultModel,
+        })
+    }
+
     setDefaultModel(modelId: string): void {
         this.defaultModel = modelId
+        this.persistNewTaskAgentDefaults()
     }
 
     setDefaultThinking(level: ThinkingLevel): void {
@@ -603,6 +636,7 @@ export class CodeStore {
         this.defaultHarnessId = harnessId
         // Reset default model to match the new harness
         this.defaultModel = getDefaultModelForHarness(harnessId)
+        this.persistNewTaskAgentDefaults()
     }
 
     // === HyperPlan Strategy Resolution ===
