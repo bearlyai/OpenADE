@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build:harness": "cd ../harness && yarn install && yarn build",
-    "build": "npm run build:harness && yarn install && npm run typecheck && npm run clean && vite build",
+    "build": "npm run build:harness && yarn install && npm run typecheck && npm run clean && node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build",
     "clean": "rm -rf ./dist/*",
     "start": "npm run build:harness && yarn install && vite dev",
     "test": "vitest --run",
