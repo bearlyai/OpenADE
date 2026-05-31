@@ -8,6 +8,18 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.79.0",
+        title: "Runtime Core, Queued Turns & Markdown",
+        date: "2026-05-31",
+        highlights: [
+            "Task execution, reviews, HyperPlan, files, git, processes, PTYs, MCP, and storage now share a runtime core for more reliable desktop and remote workflows",
+            "You can queue Do and Ask follow-ups while a task is running, see queued turns in the input bar, cancel them, or interrupt the active turn to send a replacement immediately",
+            "Agent messages now render richer Markdown with syntax-highlighted code, task lists, math, diagrams, safer external links, and copy controls",
+            "Local file links in agent output and Markdown now resolve fuzzy, mentioned, and line-numbered paths directly into the file viewer",
+            "Linux AppImage startup is more stable under Wayland, and running tasks can recover after desktop runtime restarts",
+        ],
+    },
+    {
         version: "0.78.0",
         title: "Claude Opus 4.8",
         date: "2026-05-28",
