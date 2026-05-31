@@ -52,6 +52,23 @@ function waitForRejected(socket: WebSocket): Promise<void> {
     })
 }
 
+function closeSocket(socket: WebSocket): Promise<void> {
+    if (socket.readyState === WebSocket.CLOSED) return Promise.resolve()
+    return new Promise((resolve) => {
+        const timeout = setTimeout(() => onDone(), 1000)
+        timeout.unref?.()
+        const onDone = () => {
+            clearTimeout(timeout)
+            socket.off("close", onDone)
+            socket.off("error", onDone)
+            resolve()
+        }
+        socket.once("close", onDone)
+        socket.once("error", onDone)
+        socket.terminate()
+    })
+}
+
 function nextJson(socket: WebSocket): Promise<unknown> {
     return new Promise((resolve, reject) => {
         const cleanup = () => {
@@ -258,9 +275,7 @@ function fakeAgentExecutor(options: { stopWhenExecutionIdIncludes?: string; hold
 
 describe("runtime-node WebSocket server", () => {
     afterEach(async () => {
-        for (const socket of sockets.splice(0)) {
-            if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) socket.terminate()
-        }
+        await Promise.all(sockets.splice(0).map((socket) => closeSocket(socket)))
         await Promise.all(servers.splice(0).map((server) => server.close()))
         await Promise.all(tmpDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })))
     })

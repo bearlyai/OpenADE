@@ -180,6 +180,7 @@ export async function serveRuntimeNodeHttp(options: RuntimeNodeHttpServerOptions
         url: `ws://${host}:${actualPort}${path}`,
         close: () =>
             new Promise<void>((resolve, reject) => {
+                for (const client of socketServer.clients) client.terminate()
                 socketServer.close()
                 httpServer.close((error) => {
                     if (error) reject(error)
