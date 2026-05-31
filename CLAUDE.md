@@ -24,6 +24,10 @@
 | `projects/openade-client` | Typed OpenADE project/task/turn client APIs layered on top of runtime-client transports. | [projects/openade-client/CLAUDE.md](projects/openade-client/CLAUDE.md) |
 | `projects/shared/companion` | Browser-safe shared DTOs for desktop companion service, web remote UI, and mobile shell. | [projects/shared/companion/CLAUDE.md](projects/shared/companion/CLAUDE.md) |
 
+## Durable Migration Plans
+
+- [plan.md](plan.md) covers the shared shell and remote-kernel migration for bringing companion, web, and desktop onto one runtime-attached product shell. Future agents must consult it before changing runtime composition, OpenADE client/store boundaries, companion permissions, mobile companion behavior, or desktop renderer paths that move away from direct Yjs/local Electron assumptions.
+
 ## Engineering Commandments
 
 1. Type strictly. Do not use loose typing, `any`, forced casts, or type-system escape hatches unless a boundary contract makes them unavoidable and the reason is documented in code.
