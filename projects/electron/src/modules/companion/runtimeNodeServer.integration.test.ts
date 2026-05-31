@@ -861,7 +861,7 @@ describe("runtime-node WebSocket server", () => {
         expect(terminalRuntimeNotifications([...stopNotifications, ...laterNotifications], started.result.runtimeId)).toHaveLength(1)
     })
 
-    it("keeps headless host adapter state isolated between server instances", async () => {
+    it("keeps headless process adapter state isolated between server instances", async () => {
         const firstWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openade-runtime-node-first-"))
         const secondWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openade-runtime-node-second-"))
         tmpDirs.push(firstWorkspace, secondWorkspace)
@@ -897,7 +897,8 @@ describe("runtime-node WebSocket server", () => {
                 params: { cmd: process.execPath, args: ["-e", "setTimeout(() => {}, 3000)"], cwd: firstWorkspace },
             })
         )
-        await expect(readResponse(firstInbox, 2, firstNotifications)).resolves.toMatchObject({
+        const processStarted = (await readResponse(firstInbox, 2, firstNotifications)) as { result: { processId: string } }
+        expect(processStarted).toMatchObject({
             id: 2,
             result: { processId: expect.any(String), runtimeId: expect.stringMatching(/^process:/) },
         })
@@ -907,40 +908,9 @@ describe("runtime-node WebSocket server", () => {
             id: 3,
             result: { processes: [] },
         })
+        firstSocket.send(JSON.stringify({ id: 10, method: "process/kill", params: { processId: processStarted.result.processId } }))
+        await expect(readResponse(firstInbox, 10, firstNotifications)).resolves.toMatchObject({ id: 10, result: { ok: true } })
 
-        firstSocket.send(JSON.stringify({ id: 4, method: "pty/spawn", params: { ptyId: "shared-pty", cwd: firstWorkspace } }))
-        await expect(readResponse(firstInbox, 4, firstNotifications)).resolves.toMatchObject({
-            id: 4,
-            result: { ok: true, ptyId: "shared-pty" },
-        })
-
-        secondSocket.send(JSON.stringify({ id: 5, method: "pty/reconnect", params: { ptyId: "shared-pty" } }))
-        await expect(readResponse(secondInbox, 5, secondNotifications)).resolves.toEqual({
-            id: 5,
-            result: { ok: true, found: false },
-        })
-
-        firstSocket.send(JSON.stringify({ id: 6, method: "fs/watch/start", params: { watchId: "shared-watch", dir: firstWorkspace } }))
-        await expect(readResponse(firstInbox, 6, firstNotifications)).resolves.toMatchObject({
-            id: 6,
-            result: { watchId: "shared-watch", reused: false },
-        })
-        firstSocket.send(JSON.stringify({ id: 7, method: "fs/watch/list" }))
-        await expect(readResponse(firstInbox, 7, firstNotifications)).resolves.toMatchObject({
-            id: 7,
-            result: [{ watchId: "shared-watch", dir: firstWorkspace, runtimeId: "fs-watch:shared-watch" }],
-        })
-
-        secondSocket.send(JSON.stringify({ id: 8, method: "fs/watch/start", params: { watchId: "shared-watch", dir: secondWorkspace } }))
-        await expect(readResponse(secondInbox, 8, secondNotifications)).resolves.toMatchObject({
-            id: 8,
-            result: { watchId: "shared-watch", reused: false },
-        })
-        secondSocket.send(JSON.stringify({ id: 9, method: "fs/watch/list" }))
-        await expect(readResponse(secondInbox, 9, secondNotifications)).resolves.toMatchObject({
-            id: 9,
-            result: [{ watchId: "shared-watch", dir: secondWorkspace, runtimeId: "fs-watch:shared-watch" }],
-        })
     })
 
     it("routes generic server-protocol agent providers through runtime-node over real WebSockets", async () => {

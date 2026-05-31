@@ -1,6 +1,6 @@
 import http from "node:http"
 import { createHash, randomUUID } from "node:crypto"
-import { isIP } from "node:net"
+import { isIP, type Socket } from "node:net"
 import { URL } from "node:url"
 import { WebSocket, WebSocketServer, type RawData } from "ws"
 import { RuntimeServer, type RuntimeConnection, type RuntimeServerOptions } from "../../runtime/src"
@@ -148,10 +148,19 @@ export async function serveRuntimeNodeHttp(options: RuntimeNodeHttpServerOptions
         response.end("not found")
     })
     const socketServer = new WebSocketServer({ noServer: true })
+    const httpSockets = new Set<Socket>()
+
+    httpServer.on("connection", (socket) => {
+        httpSockets.add(socket)
+        socket.once("close", () => httpSockets.delete(socket))
+    })
 
     httpServer.on("upgrade", (request, socket, head) => {
         const url = new URL(request.url ?? "/", `http://${host}`)
-        if (url.pathname !== path) return
+        if (url.pathname !== path) {
+            socket.destroy()
+            return
+        }
 
         if (!isAuthorized(request, { host, token: options.token, allowUnauthenticatedLoopback: options.allowUnauthenticatedLoopback ?? true })) {
             socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n")
@@ -178,14 +187,16 @@ export async function serveRuntimeNodeHttp(options: RuntimeNodeHttpServerOptions
         runtime,
         httpServer,
         url: `ws://${host}:${actualPort}${path}`,
-        close: () =>
-            new Promise<void>((resolve, reject) => {
-                for (const client of socketServer.clients) client.terminate()
-                socketServer.close()
+        async close() {
+            for (const client of socketServer.clients) client.terminate()
+            for (const socket of httpSockets) socket.destroy()
+            await new Promise<void>((resolve) => socketServer.close(() => resolve()))
+            await new Promise<void>((resolve, reject) => {
                 httpServer.close((error) => {
                     if (error) reject(error)
                     else resolve()
                 })
-            }),
+            })
+        },
     }
 }
