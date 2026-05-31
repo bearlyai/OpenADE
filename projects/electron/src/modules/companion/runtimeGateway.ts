@@ -1049,22 +1049,23 @@ async function drainNextQueuedTurn(params: {
     repoId: string
     taskId: string
 }): Promise<void> {
-    if (activeTaskExecutions.has(params.taskId)) return
-    const task = await params.projection.readTask(params.repoId, params.taskId)
-    const next = (task.queuedTurns ?? []).find((turn) => turn.status === "queued")
-    if (!next) return
-
-    await updateQueuedTurn({
-        writer: params.writer,
-        projection: params.projection,
-        server: params.server,
-        repoId: params.repoId,
-        taskId: params.taskId,
-        queuedTurnId: next.id,
-        patch: { status: "running" },
-    })
-
+    let next: OpenADEQueuedTurn | undefined
     try {
+        if (activeTaskExecutions.has(params.taskId)) return
+        const task = await params.projection.readTask(params.repoId, params.taskId)
+        next = (task.queuedTurns ?? []).find((turn) => turn.status === "queued")
+        if (!next) return
+
+        await updateQueuedTurn({
+            writer: params.writer,
+            projection: params.projection,
+            server: params.server,
+            repoId: params.repoId,
+            taskId: params.taskId,
+            queuedTurnId: next.id,
+            patch: { status: "running" },
+        })
+
         const started = await startHeadModeTurn({
             server: params.server,
             writer: params.writer,
@@ -1084,15 +1085,19 @@ async function drainNextQueuedTurn(params: {
             patch: { status: "running", eventId: started.eventId },
         })
     } catch (error) {
-        await updateQueuedTurn({
-            writer: params.writer,
-            projection: params.projection,
-            server: params.server,
-            repoId: params.repoId,
-            taskId: params.taskId,
-            queuedTurnId: next.id,
-            patch: { status: "error" },
-        })
+        if (next) {
+            await updateQueuedTurn({
+                writer: params.writer,
+                projection: params.projection,
+                server: params.server,
+                repoId: params.repoId,
+                taskId: params.taskId,
+                queuedTurnId: next.id,
+                patch: { status: "error" },
+            }).catch((updateError) => {
+                console.warn("[RuntimeGateway] Failed to mark queued turn as errored", updateError)
+            })
+        }
         console.warn("[RuntimeGateway] Failed to drain queued turn", error)
     }
 }
