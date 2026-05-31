@@ -23,8 +23,8 @@ import {
 import { ScrollArea, ShortcutBadge } from "../ui"
 import { TaskDeleteConfirm } from "./TaskDeleteConfirm"
 import { resolveTaskCopyPath } from "./sidebarPathUtils"
-import { sortTaskPreviewsLikeSidebar } from "./taskSorting"
 import { runtimeFirstTaskDisplayEvent } from "./taskRuntimeDisplay"
+import { sortTaskPreviewsLikeSidebar } from "./taskSorting"
 
 const NEW_TASK_SHORTCUT = "mod+n"
 const PREVIOUS_TASK_SHORTCUT_LABEL = "↑"
@@ -211,10 +211,9 @@ const TaskItem = ({
     )
 
     const rowClassName = cx(
-        "group btn flex items-center gap-2 font-normal py-1.5 pl-3 pr-2 hover:bg-base-200 w-full cursor-pointer text-sm",
+        "group btn flex items-center gap-2 font-normal py-1.5 pl-3 pr-2 w-full cursor-pointer text-sm transition-colors",
         isClosed ? "text-muted" : "text-base-content",
-        isActive && !selectionMode && "bg-base-300",
-        selectionMode && isSelected && "bg-primary/10",
+        isActive && !selectionMode ? "bg-base-300 hover:bg-base-300" : selectionMode && isSelected ? "bg-primary/10 hover:bg-primary/20" : "hover:bg-base-300",
         !isClosed && isUnread && !selectionMode && "border-l-2 border-l-primary"
     )
 
@@ -303,8 +302,8 @@ const CreatingTaskItem = ({
             role="button"
             tabIndex={0}
             className={cx(
-                "group btn flex items-center font-normal gap-2 p-1 px-3 hover:bg-base-200 w-full cursor-pointer",
-                isActive && "bg-base-300",
+                "group btn flex items-center font-normal gap-2 p-1 px-3 w-full cursor-pointer transition-colors",
+                isActive ? "bg-base-300 hover:bg-base-300" : "hover:bg-base-300",
                 hasError ? "text-error" : "text-muted"
             )}
             onClick={onSelect}

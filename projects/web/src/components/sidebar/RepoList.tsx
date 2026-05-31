@@ -16,7 +16,7 @@ import {
     onEmptyEditorGlobalShortcut,
     suppressEditorAutoFocusForKeyboardNavigation,
 } from "../../utils/keyboardShortcuts"
-import { Menu, ShortcutBadge, type MenuItem } from "../ui"
+import { Menu, type MenuItem, ShortcutBadge } from "../ui"
 
 const PREVIOUS_PROJECT_SHORTCUT_LABEL = "←"
 const NEXT_PROJECT_SHORTCUT_LABEL = "→"
@@ -164,8 +164,8 @@ const RepoItemRow = ({
             role="button"
             tabIndex={0}
             className={cx(
-                "group btn relative flex items-center font-normal gap-2 p-1 px-3 hover:bg-base-200 w-full cursor-pointer text-muted",
-                isActive && "font-medium bg-base-300 text-base-content",
+                "group btn relative flex items-center font-normal gap-2 p-1 px-3 w-full cursor-pointer text-muted transition-colors",
+                isActive ? "font-medium bg-base-300 text-base-content hover:bg-base-300" : "hover:bg-base-300 hover:text-base-content",
                 unreadCount > 0 && "border-l-2 border-l-primary",
                 isArchived && "opacity-60"
             )}
