@@ -14,6 +14,7 @@ import {
 import { type RuntimeMessage, validateRuntimeRequest } from "../../runtime-protocol/src"
 import { type RuntimeConnection, RuntimeServer } from "../../runtime/src"
 import { CodeBaseRoute, CodeWorkspaceRoute, CodeWorkspaceTaskRoute } from "./Routes"
+import { analytics } from "./analytics"
 import { getDefaultModelForHarness } from "./constants"
 import { resetCodeModuleCapabilitiesForTests } from "./electronAPI/capabilities"
 import { resetPlatformInfoForTests } from "./electronAPI/platform"
@@ -606,6 +607,7 @@ describe("Code routes with runtime product reads", () => {
     })
 
     it("renders the shared desktop workspace route by default from runtime project DTOs and scoped host methods", async () => {
+        const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
         cleanupOpenADEApi = installOpenADEApiRuntimeBridge(createRouteRuntimeServer())
         const codeStore = new CodeStore({
             getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
@@ -637,7 +639,10 @@ describe("Code routes with runtime product reads", () => {
 
             clickElement(findButtonContainingText(container, "Runtime route task"))
             await waitForPath(paths, "/dashboard/code/workspace/repo-1/task/task-1")
+            expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
+            expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_error", expect.anything())
         } finally {
+            trackSpy.mockRestore()
             codeStore.disconnectAllStores()
         }
     })
@@ -763,6 +768,7 @@ describe("Code routes with runtime product reads", () => {
     })
 
     it("runs the shared desktop workflow through runtime commands and reloads the runtime-backed state", async () => {
+        const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
         const startedTurns: OpenADETurnStartRequest[] = []
         const server = createRouteRuntimeServer({ onStartTurn: (params) => startedTurns.push(params) })
         cleanupOpenADEApi = installOpenADEApiRuntimeBridge(server)
@@ -850,7 +856,10 @@ describe("Code routes with runtime product reads", () => {
             await waitForText(container, "Shared workflow revision")
             await waitForText(container, "Shared workflow question")
             expect(reloadedStore.tasks.getTask("task-1")?.closed).toBe(false)
+            expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
+            expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_error", expect.anything())
         } finally {
+            trackSpy.mockRestore()
             for (const store of stores) store.disconnectAllStores()
         }
     })
