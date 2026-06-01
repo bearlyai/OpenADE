@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto"
+import { sha256Hex } from "./sha256"
 
 function scopedHash(scope: string, clientRequestId: string): string {
-    return createHash("sha256").update(scope).update("\0").update(clientRequestId).digest("hex").slice(0, 26)
+    return sha256Hex(`${scope}\0${clientRequestId}`).slice(0, 26)
 }
 
 export function openADETaskIdForClientRequest(repoId: string, clientRequestId: string | undefined): string | undefined {

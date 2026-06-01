@@ -132,6 +132,13 @@ interface RuntimeBridgeState {
     project: OpenADEProject | null
     task: OpenADETask | null
     taskUsage?: OpenADETaskPreviewUsage
+    terminal?: {
+        terminalId: string
+        output: string[]
+        writes: string[]
+        resizedTo?: { cols: number; rows: number }
+        exited: boolean
+    }
 }
 
 function cloneProject(value: OpenADEProject): OpenADEProject {
@@ -502,11 +509,57 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
             startProjectProcess: unsupportedMutation("startProjectProcess"),
             reconnectProjectProcess: unsupportedMutation("reconnectProjectProcess"),
             stopProjectProcess: unsupportedMutation("stopProjectProcess"),
-            startTaskTerminal: unsupportedMutation("startTaskTerminal"),
-            reconnectTaskTerminal: unsupportedMutation("reconnectTaskTerminal"),
-            writeTaskTerminal: unsupportedMutation("writeTaskTerminal"),
-            resizeTaskTerminal: unsupportedMutation("resizeTaskTerminal"),
-            stopTaskTerminal: unsupportedMutation("stopTaskTerminal"),
+            startTaskTerminal: async (params) => {
+                requireStateTask(state, params.taskId)
+                state.terminal = {
+                    terminalId: "openade-task-terminal-runtime-test",
+                    output: [],
+                    writes: [],
+                    exited: false,
+                }
+                return {
+                    repoId: params.repoId,
+                    taskId: params.taskId,
+                    terminalId: state.terminal.terminalId,
+                    runtimeId: `pty:${state.terminal.terminalId}`,
+                    ok: true,
+                }
+            },
+            reconnectTaskTerminal: async (params) => {
+                requireStateTask(state, params.taskId)
+                const terminalId = params.terminalId ?? state.terminal?.terminalId ?? "openade-task-terminal-runtime-test"
+                if (!state.terminal || terminalId !== state.terminal.terminalId) {
+                    return { repoId: params.repoId, taskId: params.taskId, terminalId, found: false, output: [] }
+                }
+                return {
+                    repoId: params.repoId,
+                    taskId: params.taskId,
+                    terminalId,
+                    found: true,
+                    exited: state.terminal.exited,
+                    outputCount: state.terminal.output.length,
+                    output: state.terminal.output.map((data, index) => ({ data, timestamp: index + 1 })),
+                }
+            },
+            writeTaskTerminal: async (params) => {
+                requireStateTask(state, params.taskId)
+                if (!state.terminal || params.terminalId !== state.terminal.terminalId) return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: false }
+                state.terminal.writes.push(params.data)
+                state.terminal.output.push(`runtime terminal wrote: ${params.data}`)
+                return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: true }
+            },
+            resizeTaskTerminal: async (params) => {
+                requireStateTask(state, params.taskId)
+                if (!state.terminal || params.terminalId !== state.terminal.terminalId) return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: false }
+                state.terminal.resizedTo = { cols: params.cols, rows: params.rows }
+                return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: true }
+            },
+            stopTaskTerminal: async (params) => {
+                requireStateTask(state, params.taskId)
+                if (!state.terminal || params.terminalId !== state.terminal.terminalId) return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: false }
+                state.terminal.exited = true
+                return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: true }
+            },
             readTaskImage: unsupportedMutation("readTaskImage"),
             readTaskChanges: unsupportedMutation("readTaskChanges"),
             readTaskDiff: unsupportedMutation("readTaskDiff"),
@@ -1159,6 +1212,54 @@ describe("CodeStore runtime product store bridge", () => {
             legacyLogRead.mockRestore()
             legacyCommitFilesRead.mockRestore()
             legacyCommitPatchRead.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("routes classic task terminal operations through the runtime product store", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+
+            const started = await codeStore.startProductTaskTerminal({ repoId: "repo-1", taskId: "task-1", cols: 80, rows: 24 })
+            expect(started).toMatchObject({ repoId: "repo-1", taskId: "task-1", terminalId: "openade-task-terminal-runtime-test", ok: true })
+            await expect(codeStore.reconnectProductTaskTerminal({ repoId: "repo-1", taskId: "task-1" })).resolves.toMatchObject({
+                repoId: "repo-1",
+                taskId: "task-1",
+                terminalId: started.terminalId,
+                found: true,
+            })
+
+            await expect(
+                codeStore.writeProductTaskTerminal({ repoId: "repo-1", taskId: "task-1", terminalId: started.terminalId, data: "pwd\n" })
+            ).resolves.toMatchObject({ ok: true })
+            await expect(
+                codeStore.reconnectProductTaskTerminal({ repoId: "repo-1", taskId: "task-1", terminalId: started.terminalId })
+            ).resolves.toMatchObject({
+                output: [expect.objectContaining({ data: "runtime terminal wrote: pwd\n" })],
+                outputCount: 1,
+            })
+            await expect(
+                codeStore.resizeProductTaskTerminal({ repoId: "repo-1", taskId: "task-1", terminalId: started.terminalId, cols: 100, rows: 30 })
+            ).resolves.toMatchObject({ ok: true })
+            await expect(codeStore.stopProductTaskTerminal({ repoId: "repo-1", taskId: "task-1", terminalId: started.terminalId })).resolves.toMatchObject({
+                ok: true,
+            })
+
+            expect(state.terminal?.writes).toEqual(["pwd\n"])
+            expect(state.terminal?.resizedTo).toEqual({ cols: 100, rows: 30 })
+            expect(state.terminal?.exited).toBe(true)
+        } finally {
             codeStore.disconnectAllStores()
             await runtime.close()
         }

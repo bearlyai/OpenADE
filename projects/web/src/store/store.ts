@@ -58,6 +58,14 @@ import type {
     OpenADETaskSnapshotPatchReadResult,
     OpenADETaskSnapshotPatchSliceReadRequest,
     OpenADETaskSnapshotPatchSliceReadResult,
+    OpenADETaskTerminalMutationResult,
+    OpenADETaskTerminalReconnectRequest,
+    OpenADETaskTerminalReconnectResult,
+    OpenADETaskTerminalResizeRequest,
+    OpenADETaskTerminalStartRequest,
+    OpenADETaskTerminalStartResult,
+    OpenADETaskTerminalStopRequest,
+    OpenADETaskTerminalWriteRequest,
     OpenADETurnStartRequest,
     OpenADETurnStartResult,
 } from "../../../openade-module/src"
@@ -1266,6 +1274,46 @@ export class CodeStore {
         }
 
         return localOpenADEClient.readTaskGitCommitFilePatch(params)
+    }
+
+    async startProductTaskTerminal(params: OpenADETaskTerminalStartRequest): Promise<OpenADETaskTerminalStartResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.startTaskTerminal(params)
+        }
+
+        return localOpenADEClient.startTaskTerminal(params)
+    }
+
+    async reconnectProductTaskTerminal(params: OpenADETaskTerminalReconnectRequest): Promise<OpenADETaskTerminalReconnectResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.reconnectTaskTerminal(params)
+        }
+
+        return localOpenADEClient.reconnectTaskTerminal(params)
+    }
+
+    async writeProductTaskTerminal(params: OpenADETaskTerminalWriteRequest): Promise<OpenADETaskTerminalMutationResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.writeTaskTerminal(params)
+        }
+
+        return localOpenADEClient.writeTaskTerminal(params)
+    }
+
+    async resizeProductTaskTerminal(params: OpenADETaskTerminalResizeRequest): Promise<OpenADETaskTerminalMutationResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.resizeTaskTerminal(params)
+        }
+
+        return localOpenADEClient.resizeTaskTerminal(params)
+    }
+
+    async stopProductTaskTerminal(params: OpenADETaskTerminalStopRequest): Promise<OpenADETaskTerminalMutationResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.stopTaskTerminal(params)
+        }
+
+        return localOpenADEClient.stopTaskTerminal(params)
     }
 
     async readProductTaskSnapshotPatch(params: OpenADETaskSnapshotPatchReadRequest): Promise<OpenADETaskSnapshotPatchReadResult> {

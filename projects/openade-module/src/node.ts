@@ -961,16 +961,17 @@ async function startNodeTaskTerminal(
 async function reconnectNodeTaskTerminal(
     params: OpenADETaskTerminalReconnectRequest & { repo: OpenADEProject; task: OpenADETask; server?: RuntimeServer }
 ): Promise<OpenADETaskTerminalReconnectResult> {
-    assertOpenADETaskTerminalId(params)
-    const result = eventRecord(await nodeRuntimeRequest(params.server, "pty/reconnect", { ptyId: params.terminalId }))
-    if (!result || result.found !== true) return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, found: false, output: [] }
+    const terminalId = params.terminalId ?? openADETaskTerminalId(params.repoId, params.taskId)
+    assertOpenADETaskTerminalId({ ...params, terminalId })
+    const result = eventRecord(await nodeRuntimeRequest(params.server, "pty/reconnect", { ptyId: terminalId }))
+    if (!result || result.found !== true) return { repoId: params.repoId, taskId: params.taskId, terminalId, found: false, output: [] }
     const output = Array.isArray(result.output)
         ? result.output.map(openADETaskTerminalOutputChunkFromUnknown).filter((chunk): chunk is OpenADETaskTerminalOutputChunk => chunk !== null)
         : []
     return {
         repoId: params.repoId,
         taskId: params.taskId,
-        terminalId: params.terminalId,
+        terminalId,
         found: true,
         exited: typeof result.exited === "boolean" ? result.exited : typeof result.completed === "boolean" ? result.completed : undefined,
         exitCode: typeof result.exitCode === "number" || result.exitCode === null ? result.exitCode : undefined,

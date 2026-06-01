@@ -403,6 +403,12 @@ describe("OpenADE kernel composition", () => {
                 { clientRequestId: "terminal-start" }
             )
             expect(terminal).toMatchObject({ repoId: repo.repoId, taskId: started.taskId, ok: true, runtimeId: `pty:${terminal.terminalId}` })
+            await expect(client.reconnectTaskTerminal({ repoId: repo.repoId, taskId: started.taskId })).resolves.toMatchObject({
+                repoId: repo.repoId,
+                taskId: started.taskId,
+                terminalId: terminal.terminalId,
+                found: true,
+            })
             await expect(
                 client.writeTaskTerminal({
                     repoId: repo.repoId,

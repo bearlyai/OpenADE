@@ -421,7 +421,7 @@ function taskTerminalReconnectParams(params: unknown): OpenADETaskTerminalReconn
     return {
         repoId: stringParam(record, "repoId"),
         taskId: stringParam(record, "taskId"),
-        terminalId: stringParam(record, "terminalId"),
+        terminalId: optionalStringParam(record, "terminalId"),
     }
 }
 

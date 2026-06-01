@@ -1246,6 +1246,14 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - Legacy `filesApi` fuzzy/describe calls remain contained as the unscoped trusted-local fallback inside `SmartEditorManager`; once a product context exists, the editor does not fall back to raw `fs/*`.
 - Focused verification passed: OpenADE module typecheck, web typecheck, Electron typecheck, scoped project host real-filesystem tests for fuzzy `treeMatch`, OpenADE kernel integration, web `SmartEditorManager` tests, web `storeRuntimeProductStore` through a real `RuntimeServer`/`RuntimeLocalClient`/`OpenADEClient` with legacy file APIs forced to fail, and React Doctor diff scan with no blocking errors.
 
+### 2026-06-01: Classic Terminal Tray Runtime Product Path Added
+
+- Classic desktop `Terminal` tray rendering stays in the existing desktop UI, but runtime-backed task contexts now create a product `TerminalRuntimeSession` through `CodeStore.startProductTaskTerminal()`, `reconnectProductTaskTerminal()`, `writeProductTaskTerminal()`, `resizeProductTaskTerminal()`, and `stopProductTaskTerminal()`.
+- `openade/task/terminal/reconnect` now accepts `repoId` and `taskId` without a client-provided `terminalId`; the OpenADE host derives and validates the terminal id server-side. This removes client-side PTY-id derivation from the desktop tray path and keeps terminal identity in the product boundary.
+- `projects/web/src/components/terminalSession.ts` is the only bridge from the classic xterm component to terminal transport. Product sessions use plain-text OpenADE task-terminal DTOs; raw `PtyHandle` stays contained as the trusted-local fallback for legacy/unscoped terminal contexts.
+- `projects/openade-module/src/sha256.ts` now provides browser-safe synchronous SHA-256 for product-barrel helpers. Stable client-request ids and scoped task terminal ids keep their existing values without importing `node:crypto` into browser or renderer test imports.
+- Focused verification passed: OpenADE kernel terminal start/reconnect/write/resize/stop, stable client-request and task-terminal id helper tests, web `terminalSession` behavior tests, web runtime product store through a real `RuntimeServer`/`RuntimeLocalClient`/`OpenADEClient`, browser product/remote/classic-route integration tests, Electron companion runtime API integration, OpenADE module/Electron/web typechecks, Biome lint for touched files, React Doctor diff scan with no blocking errors, and `git diff --check`.
+
 ### 2026-06-01: Classic Search Tray Runtime Project Path Added
 
 - `CodeStore` now exposes project file/search/process wrappers alongside the existing task/git/snapshot product helpers, so renderer callers do not need to choose between `OpenADEProductStore` and `runtime/localOpenADEClient.ts` directly.

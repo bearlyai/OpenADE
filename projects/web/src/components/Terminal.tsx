@@ -1,61 +1,82 @@
 import { FitAddon } from "@xterm/addon-fit"
 import { Terminal as XTerm } from "@xterm/xterm"
-import { Base64 } from "js-base64"
 import { RotateCcw } from "lucide-react"
 import { useCallback, useEffect, useRef } from "react"
 import { twMerge } from "tailwind-merge"
 import "@xterm/xterm/css/xterm.css"
 import { setTerminalKeyboardCapture } from "../electronAPI/app"
-import { PtyHandle, type PtyOutputEvent } from "../electronAPI/pty"
 import { useTerminalTheme } from "../hooks/useTerminalTheme"
 import { DEFAULT_TERMINAL_THEME } from "../themes/terminalThemes"
+import { createTerminalSession, type TaskTerminalProductAccess, type TerminalRuntimeSession } from "./terminalSession"
 
 interface TerminalInstance {
     terminal: XTerm
     fitAddon: FitAddon
-    ptyHandle: PtyHandle | null
+    terminalSession: TerminalRuntimeSession | null
     containerEl: HTMLDivElement | null
     lastEscapeTime: number
 }
 
 const DOUBLE_ESCAPE_THRESHOLD_MS = 300
 
-// Global map of terminal instances keyed by ptyId
+// Global map of terminal instances keyed by task terminal scope.
 const terminalInstances = new Map<string, TerminalInstance>()
 
 interface TerminalProps {
     ptyId: string
     cwd: string
+    productAccess?: TaskTerminalProductAccess | null
     className?: string
     onClose?: () => void
 }
 
-export function Terminal({ ptyId, cwd, className, onClose }: TerminalProps) {
+function attachSession(instance: TerminalInstance, session: TerminalRuntimeSession): void {
+    instance.terminalSession = session
+    session.on("output", (data) => {
+        instance.terminal.write(data)
+    })
+    session.on("exit", () => {
+        instance.terminal.write("\r\n[Process exited]\r\n")
+    })
+}
+
+async function stopSession(session: TerminalRuntimeSession): Promise<void> {
+    if (session.exited) {
+        session.cleanup()
+        return
+    }
+
+    await new Promise<void>((resolve) => {
+        let resolved = false
+        const done = () => {
+            if (resolved) return
+            resolved = true
+            resolve()
+        }
+        session.on("exit", done)
+        session.kill().finally(done)
+    })
+}
+
+export function Terminal({ ptyId, cwd, productAccess, className, onClose }: TerminalProps) {
     const containerRef = useRef<HTMLDivElement>(null)
     const onCloseRef = useRef(onClose)
     onCloseRef.current = onClose
+    const productAccessRef = useRef(productAccess)
+    productAccessRef.current = productAccess
 
     // Get terminal theme from CSS variable (updates when UI theme changes)
     const terminalTheme = useTerminalTheme(containerRef)
+    const terminalKey = productAccess ? `product:${productAccess.repoId}:${productAccess.taskId}` : `raw:${ptyId}`
 
     const handleRestart = useCallback(async () => {
-        const instance = terminalInstances.get(ptyId)
+        const instance = terminalInstances.get(terminalKey)
         if (!instance) return
 
-        // Kill existing PTY and wait for exit event to avoid race condition
-        // where the old PTY's exit event marks the new handle as exited
-        if (instance.ptyHandle) {
-            const oldHandle = instance.ptyHandle
-            instance.ptyHandle = null
-
-            if (!oldHandle.exited) {
-                await new Promise<void>((resolve) => {
-                    oldHandle.on("exit", () => resolve())
-                    oldHandle.kill()
-                })
-            } else {
-                oldHandle.cleanup()
-            }
+        if (instance.terminalSession) {
+            const oldSession = instance.terminalSession
+            instance.terminalSession = null
+            await stopSession(oldSession)
         }
 
         // Clear terminal
@@ -65,22 +86,10 @@ export function Terminal({ ptyId, cwd, className, onClose }: TerminalProps) {
         const cols = instance.terminal.cols
         const rows = instance.terminal.rows
 
-        // Spawn new PTY
-        const handle = await PtyHandle.spawn({ ptyId, cwd, cols, rows })
-        if (handle) {
-            instance.ptyHandle = handle
-
-            handle.on("output", (chunk: unknown) => {
-                const { data } = chunk as PtyOutputEvent
-                const decoded = Base64.decode(data)
-                instance.terminal.write(decoded)
-            })
-
-            handle.on("exit", () => {
-                instance.terminal.write("\r\n[Process exited]\r\n")
-            })
-        }
-    }, [ptyId, cwd])
+        // Create the replacement terminal session.
+        const session = await createTerminalSession({ ptyId, cwd, cols, rows, productAccess: productAccessRef.current })
+        if (session) attachSession(instance, session)
+    }, [terminalKey, ptyId, cwd])
 
     useEffect(() => {
         let mounted = true
@@ -104,7 +113,7 @@ export function Terminal({ ptyId, cwd, className, onClose }: TerminalProps) {
             if (!mounted || !container) return
 
             // Check if we already have an instance
-            let instance = terminalInstances.get(ptyId)
+            let instance = terminalInstances.get(terminalKey)
 
             if (instance) {
                 // Re-mount existing terminal to this container
@@ -145,19 +154,20 @@ export function Terminal({ ptyId, cwd, className, onClose }: TerminalProps) {
             terminal.open(container)
             fitAddon.fit()
 
-            instance = {
+            const newInstance: TerminalInstance = {
                 terminal,
                 fitAddon,
-                ptyHandle: null,
+                terminalSession: null,
                 containerEl: container,
                 lastEscapeTime: 0,
             }
-            terminalInstances.set(ptyId, instance)
+            instance = newInstance
+            terminalInstances.set(terminalKey, instance)
 
             // Send user input to PTY
             terminal.onData((data) => {
-                const inst = terminalInstances.get(ptyId)
-                inst?.ptyHandle?.write(data)
+                const inst = terminalInstances.get(terminalKey)
+                inst?.terminalSession?.write(data)
             })
 
             // Double-Escape to unfocus terminal and close tray
@@ -170,7 +180,7 @@ export function Terminal({ ptyId, cwd, className, onClose }: TerminalProps) {
 
                 if (event.key === "Escape" && event.type === "keydown") {
                     const now = Date.now()
-                    const inst = terminalInstances.get(ptyId)
+                    const inst = terminalInstances.get(terminalKey)
                     if (inst && now - inst.lastEscapeTime < DOUBLE_ESCAPE_THRESHOLD_MS) {
                         terminal.blur()
                         onCloseRef.current?.()
@@ -184,43 +194,19 @@ export function Terminal({ ptyId, cwd, className, onClose }: TerminalProps) {
                 return true // Allow all other keys to be processed normally
             })
 
-            // Try to reconnect to existing PTY
-            const { handle, found } = await PtyHandle.reconnect(ptyId)
-
-            if (found && handle) {
-                instance.ptyHandle = handle
-
-                handle.on("output", (chunk: unknown) => {
-                    const { data } = chunk as PtyOutputEvent
-                    const decoded = Base64.decode(data)
-                    terminal.write(decoded)
-                })
-
-                handle.on("exit", () => {
-                    terminal.write("\r\n[Process exited]\r\n")
-                })
-            } else {
-                // Spawn new PTY with fitted dimensions
-                const newHandle = await PtyHandle.spawn({ ptyId, cwd, cols: terminal.cols, rows: terminal.rows })
-                if (newHandle) {
-                    instance.ptyHandle = newHandle
-
-                    newHandle.on("output", (chunk: unknown) => {
-                        const { data } = chunk as PtyOutputEvent
-                        const decoded = Base64.decode(data)
-                        terminal.write(decoded)
-                    })
-
-                    newHandle.on("exit", () => {
-                        terminal.write("\r\n[Process exited]\r\n")
-                    })
-                }
-            }
+            const session = await createTerminalSession({
+                ptyId,
+                cwd,
+                cols: terminal.cols,
+                rows: terminal.rows,
+                productAccess: productAccessRef.current,
+            })
+            if (session) attachSession(newInstance, session)
 
             // Sync PTY dimensions when terminal resizes
             terminal.onResize(({ cols, rows }) => {
-                const inst = terminalInstances.get(ptyId)
-                inst?.ptyHandle?.resize(cols, rows)
+                const inst = terminalInstances.get(terminalKey)
+                inst?.terminalSession?.resize(cols, rows)
             })
 
             // Set up resize observer for fit addon
@@ -242,15 +228,15 @@ export function Terminal({ ptyId, cwd, className, onClose }: TerminalProps) {
             container.removeEventListener("focusout", handleFocusOut)
             setTerminalKeyboardCapture(false).catch(() => {})
         }
-    }, [ptyId, cwd])
+    }, [terminalKey, ptyId, cwd])
 
     // Update terminal theme when UI theme changes
     useEffect(() => {
-        const instance = terminalInstances.get(ptyId)
+        const instance = terminalInstances.get(terminalKey)
         if (instance) {
             instance.terminal.options.theme = terminalTheme
         }
-    }, [ptyId, terminalTheme])
+    }, [terminalKey, terminalTheme])
 
     return (
         <div className={twMerge("flex flex-col h-full bg-base-100", className)}>

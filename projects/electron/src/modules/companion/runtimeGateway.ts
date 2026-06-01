@@ -1290,12 +1290,13 @@ async function startScopedTaskTerminal(
 async function reconnectScopedTaskTerminal(
     params: OpenADETaskTerminalReconnectRequest & { repo: OpenADEProject; task: OpenADETask }
 ): Promise<OpenADETaskTerminalReconnectResult> {
-    assertOpenADETaskTerminalId(params)
-    const result = await reconnectRuntimePty({ ptyId: params.terminalId })
+    const terminalId = params.terminalId ?? openADETaskTerminalId(params.repoId, params.taskId)
+    assertOpenADETaskTerminalId({ ...params, terminalId })
+    const result = await reconnectRuntimePty({ ptyId: terminalId })
     return {
         repoId: params.repoId,
         taskId: params.taskId,
-        terminalId: params.terminalId,
+        terminalId,
         found: result.found,
         exited: result.exited,
         exitCode: result.exitCode ?? null,

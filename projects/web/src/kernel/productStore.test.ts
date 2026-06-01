@@ -1,17 +1,15 @@
 import { describe, expect, it } from "vitest"
 import { OpenADEClient } from "../../../openade-client/src"
+import { createOpenADEModule, publishOpenADECompanionEvent, type OpenADEModuleAdapters } from "../../../openade-module/src/module"
 import {
-    createOpenADEModule,
-    publishOpenADECompanionEvent,
     type OpenADECommentCreateRequest,
-    type OpenADEModuleAdapters,
     type OpenADEProject,
     type OpenADESnapshot,
     type OpenADETask,
     type OpenADETaskMetadataUpdateRequest,
     type OpenADETaskPreview,
     type OpenADETurnStartRequest,
-} from "../../../openade-module/src"
+} from "../../../openade-module/src/types"
 import type { RuntimeConnection } from "../../../runtime/src"
 import { RuntimeServer } from "../../../runtime/src"
 import type { RuntimeMessage, RuntimeRequest } from "../../../runtime-protocol/src"
@@ -244,7 +242,7 @@ function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: Runt
             reconnectTaskTerminal: async (params) => ({
                 repoId: params.repoId,
                 taskId: params.taskId,
-                terminalId: params.terminalId,
+                terminalId: params.terminalId ?? "openade-task-terminal-test",
                 found: true,
                 exited: false,
                 exitCode: null,

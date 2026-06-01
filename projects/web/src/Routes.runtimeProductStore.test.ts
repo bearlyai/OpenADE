@@ -2,16 +2,15 @@ import { createElement, useEffect } from "react"
 import { type Root, createRoot } from "react-dom/client"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { createOpenADEModule, type OpenADEModuleAdapters } from "../../openade-module/src/module"
 import {
-    type OpenADEModuleAdapters,
     type OpenADEProject,
     type OpenADESnapshot,
     type OpenADETask,
     type OpenADETaskMetadataUpdateRequest,
     type OpenADETaskPreview,
     type OpenADETurnStartRequest,
-    createOpenADEModule,
-} from "../../openade-module/src"
+} from "../../openade-module/src/types"
 import { type RuntimeMessage, validateRuntimeRequest } from "../../runtime-protocol/src"
 import { type RuntimeConnection, RuntimeServer } from "../../runtime/src"
 import { CodeBaseRoute, CodeWorkspaceRoute, CodeWorkspaceTaskRoute } from "./Routes"

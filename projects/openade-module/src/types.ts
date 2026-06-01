@@ -702,7 +702,7 @@ export interface OpenADETaskTerminalOutputChunk {
 export interface OpenADETaskTerminalReconnectRequest {
     repoId: string
     taskId: string
-    terminalId: string
+    terminalId?: string
 }
 
 export interface OpenADETaskTerminalReconnectResult {

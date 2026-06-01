@@ -9,13 +9,13 @@ import type { LucideIcon } from "lucide-react"
 import { FolderOpen, GitCommitHorizontal, GitCompare, NotebookPen, Play, Search, TerminalSquare } from "lucide-react"
 import type { ReactNode } from "react"
 import type { RunContext } from "../../electronAPI/procs"
-import { getTaskPtyId } from "../../electronAPI/pty"
 import type { TrayManager, TrayType } from "../../store/managers/TrayManager"
 import { ChangesViewer } from "../ChangesViewer"
 import { GitLogTray } from "../GitLogTray"
 import { ProcessesTray } from "../ProcessesTray"
 import { SearchTray } from "../SearchTray"
 import { Terminal } from "../Terminal"
+import type { TaskTerminalProductAccess } from "../terminalSession"
 import { FilesTrayContent } from "./FilesTrayContent"
 import { ScratchpadTrayContent } from "./ScratchpadTrayContent"
 
@@ -52,6 +52,21 @@ function isGitBackedTrayVisible(tray: TrayManager): boolean {
     const env = tray.taskModel.environment
     if (env) return env.hasGit
     return !tray.taskModel.needsEnvironmentSetup
+}
+
+function getTaskTerminalProductAccess(tray: TrayManager): TaskTerminalProductAccess | null {
+    if (!tray.taskModel.usesRuntimeProductReads || !tray.taskModel.repoId) return null
+    const repoId = tray.taskModel.repoId
+    const taskId = tray.taskId
+    return {
+        repoId,
+        taskId,
+        startTaskTerminal: (args) => tray.store.startProductTaskTerminal({ repoId, taskId, ...args }),
+        reconnectTaskTerminal: (args) => tray.store.reconnectProductTaskTerminal({ repoId, taskId, ...args }),
+        writeTaskTerminal: (args) => tray.store.writeProductTaskTerminal({ repoId, taskId, ...args }),
+        resizeTaskTerminal: (args) => tray.store.resizeProductTaskTerminal({ repoId, taskId, ...args }),
+        stopTaskTerminal: (args) => tray.store.stopProductTaskTerminal({ repoId, taskId, ...args }),
+    }
 }
 
 export const TRAY_CONFIGS: TrayConfig[] = [
@@ -121,7 +136,7 @@ export const TRAY_CONFIGS: TrayConfig[] = [
             if (!env?.taskWorkingDir) {
                 return <NoEnvironment />
             }
-            return <Terminal ptyId={getTaskPtyId(tray.taskId)} cwd={env.taskWorkingDir} className="h-full" onClose={() => tray.close()} />
+            return <Terminal ptyId={tray.taskId} cwd={env.taskWorkingDir} productAccess={getTaskTerminalProductAccess(tray)} className="h-full" onClose={() => tray.close()} />
         },
     },
     {

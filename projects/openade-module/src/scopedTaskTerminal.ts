@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto"
 import type { OpenADETaskTerminalOutputChunk } from "./types"
+import { sha256Hex } from "./sha256"
 
 export function openADETaskTerminalId(repoId: string, taskId: string): string {
-    const hash = createHash("sha256").update(repoId).update("\0").update(taskId).digest("hex").slice(0, 24)
+    const hash = sha256Hex(`${repoId}\0${taskId}`).slice(0, 24)
     return `openade-task-terminal-${hash}`
 }
 

@@ -3,22 +3,24 @@ import { type Root, createRoot } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { OpenADEClient } from "../../../openade-client/src"
 import {
+    createOpenADEModule,
+    publishOpenADECompanionEvent,
+    type OpenADEModuleAdapters,
+    type OpenADEScopedHostAdapter,
+} from "../../../openade-module/src/module"
+import {
     type OpenADECommentCreateRequest,
     type OpenADECommentDeleteRequest,
     type OpenADECommentEditRequest,
-    type OpenADEModuleAdapters,
     type OpenADEProject,
     type OpenADEProjectProcessInstance,
     type OpenADEQueuedTurn,
-    type OpenADEScopedHostAdapter,
     type OpenADESnapshot,
     type OpenADETask,
     type OpenADETaskDeleteRequest,
     type OpenADETaskMetadataUpdateRequest,
     type OpenADETaskPreview,
-    createOpenADEModule,
-    publishOpenADECompanionEvent,
-} from "../../../openade-module/src"
+} from "../../../openade-module/src/types"
 import { type RuntimeClientOptions, RuntimeLocalClient, type RuntimeLocalTransport } from "../../../runtime-client/src"
 import type { RuntimeMessage, RuntimeRequest } from "../../../runtime-protocol/src"
 import type { RuntimeConnection } from "../../../runtime/src"
@@ -224,7 +226,7 @@ function createRuntimeBackedConstructors(state: {
             return { repoId: params.repoId, taskId: params.taskId, processId: params.processId, ok: true }
         },
         startTaskTerminal: async (params) => ({ repoId: params.repoId, taskId: params.taskId, terminalId: "terminal-test", ok: true }),
-        reconnectTaskTerminal: async (params) => ({ repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, found: false, output: [] }),
+        reconnectTaskTerminal: async (params) => ({ repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId ?? "terminal-test", found: false, output: [] }),
         writeTaskTerminal: async (params) => ({ repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: true }),
         resizeTaskTerminal: async (params) => ({ repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: true }),
         stopTaskTerminal: async (params) => ({ repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: true }),
