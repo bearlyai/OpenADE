@@ -520,8 +520,7 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
         if (!repo) return
 
         try {
-            await codeStore.getTaskStore(workspaceId, selectedTaskId)
-            const task = codeStore.tasks.getTask(selectedTaskId)
+            const task = await codeStore.loadProductTaskForRead(workspaceId, selectedTaskId)
             const taskModel = codeStore.tasks.getTaskModel(selectedTaskId)
             const environment = taskModel?.environment ?? (await taskModel?.loadEnvironment())
             const copyPath = resolveTaskCopyPath({

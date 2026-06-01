@@ -19,7 +19,7 @@ import { type RepoStore, type TaskPreview, getTaskPreview } from "../persistence
 import { type RepoStoreConnection, connectRepoStore } from "../persistence/repoStoreBootstrap"
 import { type TaskStoreConnection, loadTaskStore } from "../persistence/taskLoader"
 import { computeTaskUsage, needsTaskUsageBackfill, normalizeTaskPreviewUsage } from "../persistence/taskStatsUtils"
-import type { TaskStore } from "../persistence/taskStore"
+import { type TaskStore, taskFromStore } from "../persistence/taskStore"
 import { localOpenADEClient } from "../runtime/localOpenADEClient"
 import { localRuntimeClient } from "../runtime/localRuntimeClient"
 import type { Task, User } from "../types"
@@ -891,6 +891,18 @@ export class CodeStore {
         }
 
         await this.refreshRepoStoreFromStorage()
+    }
+
+    async loadProductTaskForRead(repoId: string, taskId: string): Promise<Task | null> {
+        const cached = this.tasks.getTask(taskId)
+        if (cached) return cached
+
+        if (this.shouldUseRuntimeProductReads()) {
+            return this.loadRuntimeProductTask(repoId, taskId)
+        }
+
+        const taskStore = await this.getTaskStore(repoId, taskId)
+        return taskFromStore(taskStore)
     }
 
     async reloadRepoStoreFromStorage(): Promise<void> {

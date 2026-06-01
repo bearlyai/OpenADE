@@ -59,19 +59,12 @@ export class TaskManager {
     }
 
     getTasksForRepo(repoId: string): Task[] {
-        // Return previews from RepoStore for sidebar
-        if (!this.store.repoStore) return []
-
-        const repo = this.store.repoStore.repos.get(repoId)
-        if (!repo) return []
+        const previews = this.store.getTaskPreviewsForRepo(repoId)
 
         // Convert previews to minimal Task objects for sidebar
-        return repo.tasks.map((preview) => {
-            // If TaskStore is loaded, use that for full data
-            const taskStore = this.store.getCachedTaskStore(preview.id)
-            if (taskStore) {
-                return taskFromStore(taskStore)
-            }
+        return previews.map((preview) => {
+            const cachedTask = this.getTask(preview.id)
+            if (cachedTask) return cachedTask
 
             // Otherwise, return minimal data from preview
             return {
@@ -146,6 +139,9 @@ export class TaskManager {
         const task = this.getTask(taskId)
         if (task?.repoId) return task.repoId
 
+        const runtimeRepoId = this.store.findRuntimeProductRepoIdForTask(taskId)
+        if (runtimeRepoId) return runtimeRepoId
+
         if (this.store.repoStore) {
             for (const repo of this.store.repoStore.repos.all()) {
                 if (repo.tasks.find((t) => t.id === taskId)) {
@@ -153,13 +149,7 @@ export class TaskManager {
                 }
             }
         }
-        return this.store.findRuntimeProductRepoIdForTask(taskId)
-    }
-
-    private async ensureTaskStore(taskId: string, repoId: string) {
-        const cached = this.store.getCachedTaskStore(taskId)
-        if (cached) return cached
-        return this.store.getTaskStore(repoId, taskId)
+        return null
     }
 
     async getResourceInventory(ids: string[]): Promise<TaskResourceInventory[]> {
@@ -169,9 +159,9 @@ export class TaskManager {
             const repoId = this.resolveRepoId(id)
             if (!repoId) continue
 
-            const taskStore = await this.ensureTaskStore(id, repoId)
-            const meta = taskStore.meta.current
-            const events = taskStore.events.all()
+            const task = await this.store.loadProductTaskForRead(repoId, id)
+            if (!task) continue
+            const events = task.events
 
             const snapshotIds: string[] = []
             const images: Array<{ id: string; ext: string }> = []
@@ -192,15 +182,15 @@ export class TaskManager {
                     }
                 }
             }
-            for (const sessionId of Object.values(meta.sessionIds)) {
+            for (const sessionId of Object.values(task.sessionIds)) {
                 if (!sessions.has(sessionId)) {
                     sessions.set(sessionId, "claude-code")
                 }
             }
 
             let worktree: TaskResourceInventory["worktree"] = null
-            if (meta.isolationStrategy.type === "worktree") {
-                const branchName = `openade/${meta.slug}`
+            if (task.isolationStrategy.type === "worktree") {
+                const branchName = `openade/${task.slug}`
                 let branchMerged: boolean | null = null
                 const gitInfo = await this.store.repos.getGitInfo(repoId)
                 if (gitInfo) {
@@ -208,23 +198,23 @@ export class TaskManager {
                         branchMerged = await gitApi.isBranchMerged({
                             repoDir: gitInfo.repoRoot,
                             branchName,
-                            targetBranch: meta.isolationStrategy.sourceBranch,
+                            targetBranch: task.isolationStrategy.sourceBranch,
                         })
                     } catch {
                         branchMerged = null
                     }
                 }
                 worktree = {
-                    slug: meta.slug,
+                    slug: task.slug,
                     branchName,
-                    sourceBranch: meta.isolationStrategy.sourceBranch,
+                    sourceBranch: task.isolationStrategy.sourceBranch,
                     branchMerged,
                 }
             }
 
             results.push({
                 taskId: id,
-                taskTitle: meta.title || meta.description || "Untitled",
+                taskTitle: task.title || task.description || "Untitled",
                 isRunning: this.store.isTaskRunning(id),
                 snapshotIds,
                 images,
@@ -353,11 +343,12 @@ export class TaskManager {
     }
 
     async regenerateTitle(taskId: string): Promise<void> {
-        const task = this.getTask(taskId)
+        let task = this.getTask(taskId)
+        if (!task) {
+            const repoId = this.resolveRepoId(taskId)
+            if (repoId) task = await this.store.loadProductTaskForRead(repoId, taskId)
+        }
         if (!task) return
-
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) return
 
         const description = task.description
         if (!description) return
@@ -371,8 +362,7 @@ export class TaskManager {
         runInAction(() => this.regeneratingTitleTaskIds.add(taskId))
         try {
             const abortController = new AbortController()
-            const events = taskStore.events.all()
-            const generatedTitle = await generateTitle(description, abortController, { harnessId, cwd: repo.path, events })
+            const generatedTitle = await generateTitle(description, abortController, { harnessId, cwd: repo.path, events: task.events })
             this.setTaskTitle(taskId, generatedTitle ?? fallbackTitle(description))
         } catch (err) {
             console.error("[TaskManager] Title regeneration failed:", err)

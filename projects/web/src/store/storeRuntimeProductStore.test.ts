@@ -321,6 +321,85 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
+    it("builds desktop task resource inventory from runtime DTOs without opening a legacy task store", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient()
+        if (!state.task) throw new Error("Expected runtime task fixture")
+        const firstEvent = state.task.events[0]
+        if (!firstEvent) throw new Error("Expected runtime task event fixture")
+        state.task = {
+            ...state.task,
+            sessionIds: { last: "session-from-metadata" },
+            events: [
+                {
+                    ...firstEvent,
+                    execution: {
+                        harnessId: "codex",
+                        executionId: "exec-1",
+                        modelId: "gpt-test",
+                        events: [],
+                        sessionId: "session-from-event",
+                    },
+                    images: [
+                        {
+                            id: "image-1",
+                            mediaType: "image/png",
+                            ext: "png",
+                            originalWidth: 320,
+                            originalHeight: 200,
+                            resizedWidth: 320,
+                            resizedHeight: 200,
+                        },
+                    ],
+                },
+                {
+                    id: "snapshot-1",
+                    type: "snapshot",
+                    status: "completed",
+                    createdAt: now,
+                    completedAt: now,
+                    userInput: "",
+                    actionEventId: "event-1",
+                    referenceBranch: "main",
+                    mergeBaseCommit: "merge-base",
+                    fullPatch: "",
+                    patchFileId: "patch-1",
+                    stats: { filesChanged: 1, insertions: 2, deletions: 1 },
+                    files: [],
+                },
+            ],
+        }
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            const legacyTaskStoreRead = vi.spyOn(codeStore, "getTaskStore")
+
+            await expect(codeStore.tasks.getResourceInventory(["task-1"])).resolves.toEqual([
+                expect.objectContaining({
+                    taskId: "task-1",
+                    taskTitle: "Runtime task",
+                    snapshotIds: ["patch-1"],
+                    images: [{ id: "image-1", ext: "png" }],
+                    sessions: expect.arrayContaining([
+                        { sessionId: "session-from-event", harnessId: "codex" },
+                        { sessionId: "session-from-metadata", harnessId: "claude-code" },
+                    ]),
+                    worktree: null,
+                }),
+            ])
+            expect(legacyTaskStoreRead).not.toHaveBeenCalled()
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
     it("keeps a cached runtime snapshot as the read source during transient bridge errors", async () => {
         const { client, runtime } = createRuntimeBackedClient()
         const codeStore = new CodeStore({

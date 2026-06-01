@@ -32,6 +32,7 @@ describe("TaskManager setTaskClosed", () => {
             },
             getCachedRuntimeProductTask: vi.fn(() => null),
             getCachedTaskStore: vi.fn(() => null),
+            findRuntimeProductRepoIdForTask: vi.fn(() => null),
             repoStore,
             refreshProductStateAfterTaskMutation: vi.fn(async () => undefined),
         } as unknown as CodeStore
