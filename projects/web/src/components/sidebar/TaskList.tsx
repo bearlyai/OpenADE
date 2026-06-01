@@ -362,8 +362,7 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     }, [])
 
     // ── Task previews + sorting ──
-    const repo = codeStore.repoStore?.repos.get(workspaceId)
-    const previews = repo?.tasks ?? []
+    const previews = codeStore.getTaskPreviewsForRepo(workspaceId)
     const pinnedSet = new Set(codeStore.personalSettingsStore?.settings.current.pinnedTaskIds ?? [])
     const sortedPreviews = sortTaskPreviewsLikeSidebar(previews, {
         pinnedTaskIds: pinnedSet,

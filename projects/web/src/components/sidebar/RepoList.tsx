@@ -1,7 +1,7 @@
 import cx from "classnames"
 import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Copy, FolderOpen, FolderPlus, Loader2, MoreHorizontal, Settings, Trash2 } from "lucide-react"
 import { observer } from "mobx-react"
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { getWorkspaceLastViewed } from "../../constants"
 import { getFileManagerName } from "../../electronAPI/platform"
 import { openPathInFileManager } from "../../electronAPI/shell"
@@ -197,14 +197,12 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
     const showKeyboardHints = useShortcutHintsVisible()
 
     const allRepos = codeStore.repos.repos
-    const activeRepos = allRepos.filter((r) => !r.archived)
-    const archivedRepos = allRepos.filter((r) => r.archived)
-    const visibleRepos = showArchived ? [...activeRepos, ...archivedRepos] : activeRepos
+    const activeRepos = useMemo(() => allRepos.filter((r) => !r.archived), [allRepos])
+    const archivedRepos = useMemo(() => allRepos.filter((r) => r.archived), [allRepos])
+    const visibleRepos = useMemo(() => (showArchived ? [...activeRepos, ...archivedRepos] : activeRepos), [activeRepos, archivedRepos, showArchived])
 
     const getUnreadCount = (repoId: string): number => {
-        const repo = codeStore.repoStore?.repos.get(repoId)
-        if (!repo) return 0
-        return repo.tasks.filter((t) => {
+        return codeStore.getTaskPreviewsForRepo(repoId).filter((t) => {
             if (t.closed) return false
             if (!t.lastEventAt) return false
             if (!t.lastViewedAt) return true
@@ -213,27 +211,27 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
     }
 
     const getIsRunning = (repoId: string): boolean => {
-        const repo = codeStore.repoStore?.repos.get(repoId)
-        if (!repo) return false
-        return repo.tasks.some((t) => codeStore.isTaskRunning(t.id))
+        return codeStore.getTaskPreviewsForRepo(repoId).some((t) => codeStore.isTaskRunning(t.id))
     }
 
     const handleAddRepo = () => {
         navigate.go("CodeWorkspaceCreate")
     }
 
-    const handleSelectRepo = (repoId: string) => {
-        const lastViewed = getWorkspaceLastViewed(repoId)
-        if (lastViewed?.taskId) {
-            const repo = codeStore.repoStore?.repos.get(repoId)
-            const taskExists = repo?.tasks.some((t) => t.id === lastViewed.taskId)
-            if (taskExists) {
-                navigate.go("CodeWorkspaceTask", { workspaceId: repoId, taskId: lastViewed.taskId })
-                return
+    const handleSelectRepo = useCallback(
+        (repoId: string) => {
+            const lastViewed = getWorkspaceLastViewed(repoId)
+            if (lastViewed?.taskId) {
+                const taskExists = codeStore.getTaskPreviewsForRepo(repoId).some((t) => t.id === lastViewed.taskId)
+                if (taskExists) {
+                    navigate.go("CodeWorkspaceTask", { workspaceId: repoId, taskId: lastViewed.taskId })
+                    return
+                }
             }
-        }
-        navigate.go("CodeWorkspaceTaskCreate", { workspaceId: repoId })
-    }
+            navigate.go("CodeWorkspaceTaskCreate", { workspaceId: repoId })
+        },
+        [codeStore, navigate]
+    )
 
     useEffect(() => {
         const navigateFromShortcut = (shortcut: KeyboardShortcutLike, preventDefault?: () => void) => {

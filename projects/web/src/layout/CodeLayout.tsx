@@ -64,14 +64,18 @@ export const CodeLayout = observer(({ children, isCodeModuleAvailable, workspace
 
         const loadTask = async () => {
             try {
+                if (codeStore.shouldUseRuntimeProductReads()) {
+                    await codeStore.loadRuntimeProductTask(workspaceId, taskId)
+                    return
+                }
                 await codeStore.getTaskStore(workspaceId, taskId)
             } catch (err) {
-                console.error("[CodeLayout] Failed to load TaskStore:", err)
+                console.error("[CodeLayout] Failed to load task:", err)
             }
         }
 
         loadTask()
-    }, [workspaceId, taskId, hasInitialized])
+    }, [workspaceId, taskId, hasInitialized, codeStore.runtimeProductStoreStatus])
 
     // Check if tasks are loaded for the current workspace
     const tasksLoaded = !workspaceId || codeStore.tasks.loadedRepoIds.has(workspaceId)
@@ -96,6 +100,8 @@ export const CodeLayout = observer(({ children, isCodeModuleAvailable, workspace
 
     // Prevent accidental page reload while runtime-owned work is active.
     useEffect(() => {
+        if (window.openadeAPI?.app.activeWorkUnloadBlockerDisabled) return
+
         const handleBeforeUnload = (event: BeforeUnloadEvent) => {
             if (codeStore.isWorking) {
                 event.preventDefault()

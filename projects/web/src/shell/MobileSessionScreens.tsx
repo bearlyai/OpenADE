@@ -1,0 +1,166 @@
+import { CheckCircle2, CircleAlert, Plus, Server, Trash2 } from "lucide-react"
+import type { OpenADESnapshot } from "../../../openade-module/src"
+import { mobileStatusToneClass, type MobileChromeStatus } from "./MobileChrome"
+
+export const mobileThemeClasses = {
+    "code-theme-light": { label: "Light" },
+    "code-theme-bright": { label: "Bright" },
+    "code-theme-clean": { label: "Clean" },
+    "code-theme-black": { label: "Black" },
+    "code-theme-synthwave": { label: "Synthwave" },
+    "code-theme-dracula": { label: "Dracula" },
+} as const
+
+export type MobileThemeClass = keyof typeof mobileThemeClasses
+export type MobileThemeSetting = "desktop" | MobileThemeClass
+
+export interface MobileSessionConfig {
+    id: string
+    host: string
+    baseUrl: string
+}
+
+export function isMobileThemeSetting(value: string | null): value is MobileThemeSetting {
+    return value === "desktop" || (value !== null && value in mobileThemeClasses)
+}
+
+export function MobileSessionsScreen({
+    configs,
+    activeConfigId,
+    onSelect,
+    onRemove,
+    onAdd,
+}: {
+    configs: MobileSessionConfig[]
+    activeConfigId: string
+    onSelect: (configId: string) => void
+    onRemove: (configId: string) => void
+    onAdd: () => void
+}) {
+    return (
+        <div className="h-full w-full max-w-full overflow-y-auto overflow-x-hidden p-3">
+            <div className="flex w-full max-w-full flex-col gap-2 overflow-hidden">
+                {configs.map((config) => (
+                    <div
+                        key={config.id}
+                        className={`flex min-w-0 items-center gap-2 overflow-hidden border p-2 ${config.id === activeConfigId ? "border-primary bg-primary/10" : "border-border bg-base-200/40"}`}
+                    >
+                        <button
+                            type="button"
+                            onClick={() => onSelect(config.id)}
+                            className="btn flex min-w-0 flex-1 items-center gap-3 bg-transparent p-1 text-left"
+                        >
+                            <Server size={16} className={config.id === activeConfigId ? "shrink-0 text-primary" : "shrink-0 text-muted"} />
+                            <span className="min-w-0 flex-1">
+                                <span className="block truncate text-sm font-medium text-base-content">{config.host}</span>
+                                <span className="block truncate text-xs text-muted">{config.baseUrl}</span>
+                            </span>
+                        </button>
+                        <button
+                            type="button"
+                            aria-label={`Remove ${config.host}`}
+                            title={`Remove ${config.host}`}
+                            onClick={() => onRemove(config.id)}
+                            className="btn flex h-8 w-8 shrink-0 items-center justify-center bg-transparent text-muted"
+                        >
+                            <Trash2 size={15} />
+                        </button>
+                    </div>
+                ))}
+                <button type="button" onClick={onAdd} className="btn mt-2 flex h-11 items-center justify-center gap-2 bg-base-200 px-3 text-sm">
+                    <Plus size={15} />
+                    Add OpenADE Session
+                </button>
+            </div>
+        </div>
+    )
+}
+
+export function MobileSettingsScreen({
+    config,
+    snapshot,
+    status,
+    mobileTheme,
+    onRefresh,
+    onForget,
+    onSelfRevoke,
+    onSessions,
+    onAdd,
+    onThemeChange,
+}: {
+    config: MobileSessionConfig
+    snapshot: OpenADESnapshot | null
+    status: MobileChromeStatus
+    mobileTheme: MobileThemeSetting
+    onRefresh: () => void
+    onForget: () => void
+    onSelfRevoke: () => void
+    onSessions: () => void
+    onAdd: () => void
+    onThemeChange: (value: MobileThemeSetting) => void
+}) {
+    return (
+        <div className="h-full w-full max-w-full overflow-y-auto overflow-x-hidden p-3">
+            <div className="flex w-full max-w-full flex-col gap-3 overflow-hidden">
+                <div className="border border-border bg-base-200/40 p-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm font-medium">{config.host}</div>
+                            <div className="truncate text-xs text-muted">{config.baseUrl}</div>
+                        </div>
+                        <span className={`flex shrink-0 items-center gap-1 text-xs ${mobileStatusToneClass(status.tone)}`}>
+                            {status.tone === "ok" ? <CheckCircle2 size={13} /> : <CircleAlert size={13} />}
+                            {status.label}
+                        </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                        <button type="button" onClick={onRefresh} className="btn h-10 bg-base-300 px-3 text-sm">
+                            Test
+                        </button>
+                        <button type="button" onClick={onForget} className="btn h-10 bg-error/10 px-3 text-sm text-error">
+                            Forget
+                        </button>
+                    </div>
+                    <button type="button" onClick={onSelfRevoke} className="btn mt-2 h-10 w-full bg-error/10 px-3 text-sm text-error">
+                        Revoke This Device
+                    </button>
+                </div>
+                <div className="border border-border bg-base-200/40 p-3">
+                    <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+                        <div className="min-w-0">
+                            <div className="text-xs font-medium uppercase tracking-wide text-muted">Mobile theme</div>
+                            <div className="mt-1 truncate text-sm">
+                                {mobileTheme === "desktop"
+                                    ? `Matching desktop: ${snapshot?.server.theme?.label ?? "Desktop"}`
+                                    : mobileThemeClasses[mobileTheme].label}
+                            </div>
+                        </div>
+                    </div>
+                    <select
+                        value={mobileTheme}
+                        onChange={(event) => {
+                            if (isMobileThemeSetting(event.target.value)) onThemeChange(event.target.value)
+                        }}
+                        className="input h-11 w-full border border-border bg-base-100 px-3 text-sm"
+                    >
+                        <option value="desktop">Match desktop</option>
+                        {(Object.keys(mobileThemeClasses) as MobileThemeClass[]).map((key) => (
+                            <option key={key} value={key}>
+                                {mobileThemeClasses[key].label}
+                            </option>
+                        ))}
+                    </select>
+                    <div className="mt-2 text-xs text-muted">Stored on this device. Switch back to Match desktop any time.</div>
+                </div>
+                <button type="button" onClick={onSessions} className="btn flex h-11 items-center justify-center gap-2 bg-base-200 px-3 text-sm">
+                    <Server size={15} />
+                    Manage Sessions
+                </button>
+                <button type="button" onClick={onAdd} className="btn flex h-11 items-center justify-center gap-2 bg-base-200 px-3 text-sm">
+                    <Plus size={15} />
+                    Add Session
+                </button>
+            </div>
+        </div>
+    )
+}

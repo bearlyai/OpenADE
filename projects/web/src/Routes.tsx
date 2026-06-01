@@ -8,6 +8,7 @@ import { getLastViewed } from "./constants"
 import { isCodeModuleAvailable } from "./electronAPI/capabilities"
 import { isCompanionFeatureEnabled } from "./featureFlags"
 import { CodeLayout, type CodeLayoutProps } from "./layout/CodeLayout"
+import { DesktopSharedTaskPage } from "./pages/DesktopSharedTaskPage"
 import { OnboardingPage } from "./pages/OnboardingPage"
 import { TaskCreateDraftsMenu, TaskCreatePage } from "./pages/TaskCreatePage"
 import { TaskCreationPage } from "./pages/TaskCreationPage"
@@ -73,15 +74,13 @@ export const CodeBaseRoute = observer(() => {
         if (workspace) {
             // Validate task exists if specified
             if (lastViewed.taskId) {
-                const repo = codeStore.repoStore?.repos.get(workspace.id)
-                const taskExists = repo?.tasks.some((t) => t.id === lastViewed.taskId)
+                const taskExists = codeStore.getTaskPreviewsForRepo(workspace.id).some((t) => t.id === lastViewed.taskId)
                 if (taskExists) {
                     return <Navigate to={navigate.path("CodeWorkspaceTask", { workspaceId: workspace.id, taskId: lastViewed.taskId })} replace />
                 }
             }
             // Workspace exists but task doesn't - find most recent task
-            const repo = codeStore.repoStore?.repos.get(workspace.id)
-            const mostRecentTaskId = repo ? getMostRecentTaskId(repo.tasks) : undefined
+            const mostRecentTaskId = getMostRecentTaskId(codeStore.getTaskPreviewsForRepo(workspace.id))
             if (mostRecentTaskId) {
                 return <Navigate to={navigate.path("CodeWorkspaceTask", { workspaceId: workspace.id, taskId: mostRecentTaskId })} replace />
             }
@@ -92,8 +91,7 @@ export const CodeBaseRoute = observer(() => {
 
     // Fallback: first workspace + most recent task
     const firstWorkspace = codeStore.repos.repos[0]
-    const firstRepo = codeStore.repoStore?.repos.get(firstWorkspace.id)
-    const mostRecentTaskId = firstRepo ? getMostRecentTaskId(firstRepo.tasks) : undefined
+    const mostRecentTaskId = getMostRecentTaskId(codeStore.getTaskPreviewsForRepo(firstWorkspace.id))
     if (mostRecentTaskId) {
         return <Navigate to={navigate.path("CodeWorkspaceTask", { workspaceId: firstWorkspace.id, taskId: mostRecentTaskId })} replace />
     }
@@ -298,6 +296,7 @@ export const CodeWorkspaceTaskRoute = observer(() => {
     )
     const navbarIcon = <ListTodo size="1.25rem" className="text-muted" />
     const navbarRight = taskModel ? <TaskStatsBar taskModel={taskModel} /> : undefined
+    const useSharedTaskScreen = codeStore.shouldUseDesktopSharedTaskScreen()
 
     // Workspace not found
     if (!repo) {
@@ -326,7 +325,11 @@ export const CodeWorkspaceTaskRoute = observer(() => {
 
     return (
         <Layout workspaceId={workspaceId} taskId={taskId} title={navbarTitle} icon={navbarIcon} navbarRight={navbarRight}>
-            <TaskPage workspaceId={workspaceId} taskId={taskId} taskModel={taskModel} />
+            {useSharedTaskScreen ? (
+                <DesktopSharedTaskPage workspaceId={workspaceId} taskId={taskId} />
+            ) : (
+                <TaskPage workspaceId={workspaceId} taskId={taskId} taskModel={taskModel} />
+            )}
         </Layout>
     )
 })

@@ -14,7 +14,8 @@ export function CommentForm({ startLine, endLine, initialContent = "", onSubmit,
     const isEdit = initialContent !== ""
 
     useEffect(() => {
-        setTimeout(() => textareaRef.current?.focus(), 0)
+        const timeoutId = window.setTimeout(() => textareaRef.current?.focus(), 0)
+        return () => window.clearTimeout(timeoutId)
     }, [])
 
     const handleSubmit = useCallback(() => {
@@ -44,6 +45,7 @@ export function CommentForm({ startLine, endLine, initialContent = "", onSubmit,
                         <div className="text-xs text-muted mb-2">{lineLabel}</div>
                         <textarea
                             ref={textareaRef}
+                            aria-label={isEdit ? "Edit comment" : "Leave a comment"}
                             placeholder="Leave a comment..."
                             className="w-full min-h-[60px] resize-none border border-border bg-input p-2 text-sm text-base-content focus:outline-none focus:ring-2 focus:ring-primary"
                             value={content}
@@ -53,12 +55,12 @@ export function CommentForm({ startLine, endLine, initialContent = "", onSubmit,
                         <div className="mt-3 flex items-center gap-2">
                             <button
                                 type="button"
-                                className="px-3 py-1.5 bg-primary text-primary-content text-sm font-medium hover:bg-primary/90 cursor-pointer"
+                                className="btn px-3 py-1.5 bg-primary text-primary-content text-sm font-medium hover:bg-primary/90 cursor-pointer"
                                 onClick={handleSubmit}
                             >
                                 {isEdit ? "Save" : "Comment"}
                             </button>
-                            <button type="button" className="px-3 py-1.5 text-muted text-sm hover:text-base-content cursor-pointer" onClick={onCancel}>
+                            <button type="button" className="btn px-3 py-1.5 text-muted text-sm hover:text-base-content cursor-pointer" onClick={onCancel}>
                                 Cancel
                             </button>
                         </div>

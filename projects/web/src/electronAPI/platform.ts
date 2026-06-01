@@ -28,6 +28,10 @@ export interface PlatformInfo {
 
 let cachedPlatformInfo: PlatformInfo | null = null
 
+export function resetPlatformInfoForTests(): void {
+    cachedPlatformInfo = null
+}
+
 /**
  * Default platform info for non-Electron environments (browser)
  * Assumes Unix-like environment for web fallback

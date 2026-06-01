@@ -4,19 +4,23 @@ import { DEFAULT_HARNESS_ID, DEFAULT_MODEL, MODEL_REGISTRY, getDefaultModelForHa
 import { getDeviceConfig, setDeviceId as setDeviceConfigDeviceId, setTelemetryDisabled } from "../electronAPI/deviceConfig"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { setGlobalEnv } from "../electronAPI/subprocess"
+import { isDesktopSharedTaskScreenEnabled, isRuntimeBackedProductStoreEnabled } from "../featureFlags"
 import { crossReviewStrategy, ensembleStrategy, peerReviewStrategy, standardStrategy } from "../hyperplan/strategies"
 import type { AgentCouplet, HyperPlanStrategy } from "../hyperplan/types"
+import { OpenADEProductStore } from "../kernel/productStore"
+import { taskFromRuntimeProduct } from "../kernel/taskAdapter"
 import type { McpServerStore } from "../persistence/mcpServerStore"
 import { type McpServerStoreConnection, connectMcpServerStore } from "../persistence/mcpServerStoreBootstrap"
 import type { PersonalSettings, PersonalSettingsStore } from "../persistence/personalSettingsStore"
 import { type PersonalSettingsStoreConnection, connectPersonalSettingsStore } from "../persistence/personalSettingsStoreBootstrap"
-import { type RepoStore, getTaskPreview } from "../persistence/repoStore"
+import { type RepoStore, type TaskPreview, getTaskPreview } from "../persistence/repoStore"
 import { type RepoStoreConnection, connectRepoStore } from "../persistence/repoStoreBootstrap"
 import { type TaskStoreConnection, loadTaskStore } from "../persistence/taskLoader"
 import { computeTaskUsage, needsTaskUsageBackfill, normalizeTaskPreviewUsage } from "../persistence/taskStatsUtils"
 import type { TaskStore } from "../persistence/taskStore"
+import type { OpenADEProject, OpenADESnapshot, OpenADETask, OpenADETaskPreview, OpenADETaskReadOptions } from "../../../openade-module/src"
 import type { RuntimeNotification } from "../../../runtime-protocol/src"
-import type { User } from "../types"
+import type { Task, User } from "../types"
 import { localRuntimeClient } from "../runtime/localRuntimeClient"
 import { localOpenADEClient } from "../runtime/localOpenADEClient"
 import type { ThinkingLevel } from "./TaskModel"
@@ -44,9 +48,39 @@ export type { CreationPhase, TaskCreationOptions, TaskCreation, ViewMode }
 export interface CodeStoreConfig {
     getCurrentUser: () => User
     navigateToTask: (workspaceId: string, taskId: string) => void
+    enableRuntimeProductStore?: boolean
+    enableDesktopSharedTaskScreen?: boolean
+    runtimeProductStoreFactory?: () => OpenADEProductStore
+    runtimeNotificationSource?: RuntimeNotificationSource
 }
 
 const ANALYTICS_DEVICE_ID_BACKUP_KEY = "openade-analytics-device-id"
+
+export type RuntimeProductStoreStatus = "disabled" | "loading" | "ready" | "error"
+
+export interface RuntimeNotificationSource {
+    subscribe(listener: (notification: RuntimeNotification) => void): () => void
+}
+
+function toRuntimeTaskPreview(preview: OpenADETaskPreview): TaskPreview {
+    return {
+        id: preview.id,
+        slug: preview.slug,
+        title: preview.title,
+        closed: preview.closed,
+        createdAt: preview.createdAt,
+        lastEvent: preview.lastEvent,
+        usage: preview.usage,
+        lastViewedAt: preview.lastViewedAt,
+        lastEventAt: preview.lastEventAt,
+    }
+}
+
+function notificationRecord(notification: RuntimeNotification): Record<string, unknown> {
+    return typeof notification.params === "object" && notification.params !== null && !Array.isArray(notification.params)
+        ? (notification.params as Record<string, unknown>)
+        : {}
+}
 
 type AnalyticsDeviceIdSource =
     | "device_config_existing"
@@ -121,12 +155,18 @@ export class CodeStore {
     private envVarsReactionDisposer: (() => void) | null = null
     private runtimeNotificationDisposer: (() => void) | null = null
     private runtimeRefreshQueue: Promise<void> = Promise.resolve()
+    private runtimeProductStore: OpenADEProductStore | null = null
     private telemetryReactionDisposer: (() => void) | null = null
     private pingIntervalId: ReturnType<typeof setInterval> | null = null
     private focusHandler: (() => void) | null = null
     private blurHandler: (() => void) | null = null
+    private trackedRuntimeProductFallbackKeys: Set<string> = new Set()
     storeInitialized = false
     storeInitializing = false
+    runtimeProductSnapshot: OpenADESnapshot | null = null
+    runtimeProductTasks: Map<string, Task> = new Map()
+    runtimeProductStoreStatus: RuntimeProductStoreStatus = "disabled"
+    runtimeProductStoreError: string | null = null
     private storeInitPromise: Promise<void> | null = null
 
     readonly ui: UIStateManager
@@ -173,6 +213,10 @@ export class CodeStore {
             personalSettingsStore: true,
             storeInitialized: true,
             storeInitializing: true,
+            runtimeProductSnapshot: true,
+            runtimeProductTasks: true,
+            runtimeProductStoreStatus: true,
+            runtimeProductStoreError: true,
             ui: false,
             queries: false,
             repos: false,
@@ -233,8 +277,8 @@ export class CodeStore {
                 this.storeInitializing = false
             })
 
-            this.runtimeNotificationDisposer?.()
-            this.runtimeNotificationDisposer = this.subscribeToRuntimeNotifications()
+            this.resetRuntimeNotificationSubscription()
+            await this.initializeRuntimeProductStore()
             await this.runtimes.hydrateOpenADETasks().catch((err) => {
                 console.warn("[CodeStore] Failed to hydrate runtime state:", err)
             })
@@ -272,10 +316,17 @@ export class CodeStore {
         }
     }
 
-    private subscribeToRuntimeNotifications(): (() => void) | null {
+    private runtimeNotificationSource(): RuntimeNotificationSource | null {
+        if (this.config.runtimeNotificationSource) return this.config.runtimeNotificationSource
         if (typeof window === "undefined" || !window.openadeAPI?.runtime) return null
+        return localRuntimeClient
+    }
 
-        return localRuntimeClient.subscribe((notification) => {
+    private subscribeToRuntimeNotifications(): (() => void) | null {
+        const source = this.runtimeNotificationSource()
+        if (!source) return null
+
+        return source.subscribe((notification) => {
             this.runtimeRefreshQueue = this.runtimeRefreshQueue
                 .then(() => this.handleRuntimeNotification(notification))
                 .catch((err) => {
@@ -284,10 +335,21 @@ export class CodeStore {
         })
     }
 
+    private resetRuntimeNotificationSubscription(): void {
+        this.runtimeNotificationDisposer?.()
+        this.runtimeNotificationDisposer = this.subscribeToRuntimeNotifications()
+    }
+
+    private ensureRuntimeNotificationSubscription(): void {
+        if (this.runtimeNotificationDisposer) return
+        this.runtimeNotificationDisposer = this.subscribeToRuntimeNotifications()
+    }
+
     private async handleRuntimeNotification(notification: RuntimeNotification): Promise<void> {
         const params = typeof notification.params === "object" && notification.params !== null ? (notification.params as Record<string, unknown>) : {}
 
         const settledTaskIds = this.runtimes.applyNotification(notification)
+        await this.handleRuntimeProductStoreNotification(notification)
         for (const taskId of settledTaskIds) {
             await this.notifyRuntimeTaskSettled(taskId)
         }
@@ -325,9 +387,268 @@ export class CodeStore {
         }
     }
 
+    private shouldEnableRuntimeProductStore(): boolean {
+        return this.config.enableRuntimeProductStore ?? isRuntimeBackedProductStoreEnabled
+    }
+
+    private createRuntimeProductStore(): OpenADEProductStore {
+        return this.config.runtimeProductStoreFactory?.() ?? new OpenADEProductStore(localOpenADEClient)
+    }
+
+    private runtimeProductErrorMessage(err: unknown): string {
+        return err instanceof Error ? err.message : String(err)
+    }
+
+    private runtimeProductTelemetryProperties(source: string): Record<string, unknown> {
+        const snapshot = this.runtimeProductSnapshot
+        return {
+            source,
+            enabled: this.shouldEnableRuntimeProductStore(),
+            desktopSharedTaskScreenEnabled: this.config.enableDesktopSharedTaskScreen ?? isDesktopSharedTaskScreenEnabled,
+            status: this.runtimeProductStoreStatus,
+            hasSnapshot: snapshot !== null,
+            repoCount: snapshot?.repos.length ?? 0,
+            taskPreviewCount: snapshot?.repos.reduce((count, repo) => count + repo.tasks.length, 0) ?? 0,
+            cachedTaskCount: this.runtimeProductTasks.size,
+        }
+    }
+
+    private runtimeProductErrorKind(err: unknown): string {
+        if (err instanceof Error) return err.name || "Error"
+        return typeof err
+    }
+
+    private trackRuntimeProductStoreError(source: string, err: unknown): void {
+        track("runtime_product_store_error", {
+            ...this.runtimeProductTelemetryProperties(source),
+            errorKind: this.runtimeProductErrorKind(err),
+        })
+    }
+
+    trackRuntimeProductFallback(source: string, reason: string): void {
+        if (!this.shouldEnableRuntimeProductStore()) return
+
+        const key = `${source}:${reason}:${this.runtimeProductStoreStatus}:${this.runtimeProductSnapshot === null ? "no-snapshot" : "snapshot"}`
+        if (this.trackedRuntimeProductFallbackKeys.has(key)) return
+        this.trackedRuntimeProductFallbackKeys.add(key)
+
+        const properties = {
+            ...this.runtimeProductTelemetryProperties(source),
+            reason,
+        }
+        track("runtime_product_store_fallback", properties)
+        console.warn("[CodeStore] Runtime product store fallback:", properties)
+    }
+
+    async initializeRuntimeProductStore(): Promise<void> {
+        if (!this.shouldEnableRuntimeProductStore()) {
+            this.runtimeProductStore?.destroy()
+            this.runtimeProductStore = null
+            this.trackedRuntimeProductFallbackKeys.clear()
+            runInAction(() => {
+                this.runtimeProductSnapshot = null
+                this.runtimeProductTasks.clear()
+                this.runtimeProductStoreStatus = "disabled"
+                this.runtimeProductStoreError = null
+            })
+            return
+        }
+
+        const productStore = this.runtimeProductStore ?? this.createRuntimeProductStore()
+        this.runtimeProductStore = productStore
+        this.ensureRuntimeNotificationSubscription()
+        runInAction(() => {
+            this.runtimeProductStoreStatus = "loading"
+            this.runtimeProductStoreError = null
+        })
+
+        try {
+            const snapshot = await productStore.refreshSnapshot()
+            runInAction(() => {
+                this.runtimeProductSnapshot = snapshot
+                this.pruneRuntimeProductTasks(snapshot)
+                this.runtimeProductStoreStatus = "ready"
+                this.runtimeProductStoreError = null
+            })
+        } catch (err) {
+            const message = this.runtimeProductErrorMessage(err)
+            runInAction(() => {
+                this.runtimeProductSnapshot = null
+                this.runtimeProductTasks.clear()
+                this.runtimeProductStoreStatus = "error"
+                this.runtimeProductStoreError = message
+            })
+            this.trackRuntimeProductStoreError("initialize", err)
+            console.warn("[CodeStore] Failed to initialize runtime product store:", err)
+        }
+    }
+
+    async refreshRuntimeProductSnapshot(): Promise<OpenADESnapshot | null> {
+        if (!this.runtimeProductStore) return null
+        try {
+            const snapshot = await this.runtimeProductStore.refreshSnapshot()
+            runInAction(() => {
+                this.runtimeProductSnapshot = snapshot
+                this.pruneRuntimeProductTasks(snapshot)
+                this.runtimeProductStoreStatus = "ready"
+                this.runtimeProductStoreError = null
+            })
+            return snapshot
+        } catch (err) {
+            const message = this.runtimeProductErrorMessage(err)
+            runInAction(() => {
+                this.runtimeProductStoreStatus = "error"
+                this.runtimeProductStoreError = message
+            })
+            this.trackRuntimeProductStoreError("snapshot_refresh", err)
+            throw err
+        }
+    }
+
+    private runtimeProductTaskPreview(repoId: string, taskId: string): OpenADETaskPreview | undefined {
+        return this.runtimeProductSnapshot?.repos.find((repo) => repo.id === repoId)?.tasks.find((task) => task.id === taskId)
+    }
+
+    private cacheRuntimeProductTask(task: OpenADETask): Task {
+        const adapted = taskFromRuntimeProduct({
+            task,
+            preview: this.runtimeProductTaskPreview(task.repoId, task.id),
+            currentUser: this.currentUser,
+        })
+        this.runtimeProductTasks.set(task.id, adapted)
+        return adapted
+    }
+
+    private pruneRuntimeProductTasks(snapshot: OpenADESnapshot): void {
+        const taskIds = new Set(snapshot.repos.flatMap((repo) => repo.tasks.map((task) => task.id)))
+        for (const taskId of this.runtimeProductTasks.keys()) {
+            if (!taskIds.has(taskId)) this.runtimeProductTasks.delete(taskId)
+        }
+    }
+
+    async getRuntimeProductTask(repoId: string, taskId: string, options: OpenADETaskReadOptions = {}): Promise<OpenADETask | null> {
+        if (!this.runtimeProductStore) return null
+        const task = await this.runtimeProductStore.getTask(repoId, taskId, options)
+        runInAction(() => {
+            this.cacheRuntimeProductTask(task)
+        })
+        return task
+    }
+
+    async loadRuntimeProductTask(repoId: string, taskId: string, options: OpenADETaskReadOptions = {}): Promise<Task | null> {
+        const task = await this.getRuntimeProductTask(repoId, taskId, options)
+        const adapted = task ? (this.runtimeProductTasks.get(task.id) ?? null) : null
+        if (adapted) this.tasks.getTaskModel(taskId)?.syncHarnessFromHistory()
+        return adapted
+    }
+
+    async refreshRuntimeProductTaskForTaskId(taskId: string, options: OpenADETaskReadOptions = {}): Promise<OpenADETask | null> {
+        if (!this.runtimeProductStore || !this.shouldUseRuntimeProductReads()) return null
+
+        let repoId = this.runtimeProductTasks.get(taskId)?.repoId ?? this.findRuntimeProductRepoIdForTask(taskId)
+        if (!repoId) {
+            await this.refreshRuntimeProductSnapshot()
+            repoId = this.findRuntimeProductRepoIdForTask(taskId)
+        }
+        if (!repoId) return null
+
+        const task = await this.getRuntimeProductTask(repoId, taskId, options)
+        if (task) this.tasks.getTaskModel(taskId)?.syncHarnessFromHistory()
+        return task
+    }
+
+    private async refreshRuntimeProductTaskById(taskId: string): Promise<void> {
+        await this.refreshRuntimeProductTaskForTaskId(taskId)
+    }
+
+    getCachedRuntimeProductTask(taskId: string): Task | null {
+        return this.runtimeProductTasks.get(taskId) ?? null
+    }
+
+    getCachedRuntimeProductOpenADETask(taskId: string): OpenADETask | null {
+        const repoId = this.runtimeProductTasks.get(taskId)?.repoId ?? this.findRuntimeProductRepoIdForTask(taskId)
+        if (!repoId) return null
+        return this.runtimeProductStore?.getCachedTask(repoId, taskId) ?? null
+    }
+
+    findRuntimeProductRepoIdForTask(taskId: string): string | null {
+        for (const repo of this.runtimeProductSnapshot?.repos ?? []) {
+            if (repo.tasks.some((task) => task.id === taskId)) return repo.id
+        }
+        return null
+    }
+
+    hasRuntimeProductTaskReference(taskId: string): boolean {
+        return this.runtimeProductSnapshot !== null && this.findRuntimeProductRepoIdForTask(taskId) !== null
+    }
+
+    shouldUseRuntimeProductReads(): boolean {
+        return this.runtimeProductSnapshot !== null
+    }
+
+    shouldUseDesktopSharedTaskScreen(): boolean {
+        const enabled = this.config.enableDesktopSharedTaskScreen ?? isDesktopSharedTaskScreenEnabled
+        return enabled && this.shouldUseRuntimeProductReads()
+    }
+
+    getRuntimeProductProject(repoId: string): OpenADEProject | null {
+        return this.runtimeProductSnapshot?.repos.find((repo) => repo.id === repoId) ?? null
+    }
+
+    getRuntimeProductTaskPreviewDto(repoId: string, taskId: string): OpenADETaskPreview | null {
+        return this.runtimeProductTaskPreview(repoId, taskId) ?? null
+    }
+
+    getRuntimeProductTaskPreviews(repoId: string): TaskPreview[] | null {
+        const project = this.getRuntimeProductProject(repoId)
+        return project ? project.tasks.map(toRuntimeTaskPreview) : null
+    }
+
+    getTaskPreviewsForRepo(repoId: string): TaskPreview[] {
+        const runtimePreviews = this.getRuntimeProductTaskPreviews(repoId)
+        if (runtimePreviews) return runtimePreviews
+
+        const legacyPreviews = this.repoStore?.repos.get(repoId)?.tasks ?? []
+        if (legacyPreviews.length > 0) {
+            this.trackRuntimeProductFallback("task_previews", this.runtimeProductSnapshot ? "runtime_repo_missing" : "snapshot_unavailable")
+        }
+        return legacyPreviews
+    }
+
+    private async handleRuntimeProductStoreNotification(notification: RuntimeNotification): Promise<void> {
+        if (!this.runtimeProductStore) return
+
+        try {
+            await this.runtimeProductStore.handleNotification(notification)
+            runInAction(() => {
+                this.runtimeProductSnapshot = this.runtimeProductStore?.snapshot ?? null
+                if (this.runtimeProductSnapshot) this.pruneRuntimeProductTasks(this.runtimeProductSnapshot)
+                const params = notificationRecord(notification)
+                const repoId = typeof params.repoId === "string" ? params.repoId : null
+                const taskId = typeof params.taskId === "string" ? params.taskId : null
+                if (notification.method === "openade/task/deleted" && taskId) {
+                    this.runtimeProductTasks.delete(taskId)
+                } else if (repoId && taskId) {
+                    const task = this.runtimeProductStore?.getCachedTask(repoId, taskId)
+                    if (task) this.cacheRuntimeProductTask(task)
+                }
+                if (this.runtimeProductStoreStatus !== "loading") this.runtimeProductStoreStatus = "ready"
+                this.runtimeProductStoreError = null
+            })
+        } catch (err) {
+            const message = this.runtimeProductErrorMessage(err)
+            runInAction(() => {
+                this.runtimeProductStoreStatus = "error"
+                this.runtimeProductStoreError = message
+            })
+            this.trackRuntimeProductStoreError("notification", err)
+            console.warn("[CodeStore] Failed to refresh runtime product store from notification:", err)
+        }
+    }
+
     private async notifyRuntimeTaskSettled(taskId: string): Promise<void> {
         await this.refreshTaskStoreFromStorage(taskId)
-        const events = this.getCachedTaskStore(taskId)?.events.all() ?? []
+        const events = this.tasks.getTask(taskId)?.events ?? []
         for (let index = events.length - 1; index >= 0; index--) {
             const event = events[index]
             if (event.type !== "action") continue
@@ -386,6 +707,10 @@ export class CodeStore {
             deviceIdSource,
             deviceConfigWasGenerated: deviceConfig?.wasGenerated ?? false,
             deviceConfigReadFailed: deviceConfig?.readFailed ?? false,
+            runtimeProductStoreEnabled: this.shouldEnableRuntimeProductStore(),
+            runtimeProductStoreStatus: this.runtimeProductStoreStatus,
+            runtimeProductStoreHasSnapshot: this.runtimeProductSnapshot !== null,
+            desktopSharedTaskScreenEnabled: this.config.enableDesktopSharedTaskScreen ?? isDesktopSharedTaskScreenEnabled,
         })
 
         this.telemetryReactionDisposer = reaction(
@@ -419,6 +744,10 @@ export class CodeStore {
     }
 
     async getTaskStore(repoId: string, taskId: string, options?: { allowUninitialized?: boolean }): Promise<TaskStore> {
+        if (this.shouldEnableRuntimeProductStore()) {
+            this.trackRuntimeProductFallback("task_store", this.runtimeProductSnapshot ? "direct_task_store_read" : "snapshot_unavailable")
+        }
+
         const cached = this.taskStoreConnections.get(taskId)
         if (cached) {
             const meta = cached.store.meta.current
@@ -509,18 +838,24 @@ export class CodeStore {
 
     async refreshRepoStoreFromStorage(): Promise<void> {
         await this.repoStoreConnection?.refresh()
+        if (this.shouldUseRuntimeProductReads()) {
+            await this.refreshRuntimeProductSnapshot()
+        }
     }
 
     async refreshTaskStoreFromStorage(taskId: string): Promise<void> {
         const connection = this.taskStoreConnections.get(taskId)
-        if (!connection) return
-        const refreshed = await connection.refresh()
-        if (!refreshed) {
-            this.disconnectTaskStore(taskId)
-            return
+        if (connection) {
+            const refreshed = await connection.refresh()
+            if (!refreshed) {
+                this.disconnectTaskStore(taskId)
+                await this.refreshRuntimeProductTaskById(taskId)
+                return
+            }
+            const model = this.tasks.getTaskModel(taskId)
+            model?.syncHarnessFromHistory()
         }
-        const model = this.tasks.getTaskModel(taskId)
-        model?.syncHarnessFromHistory()
+        await this.refreshRuntimeProductTaskById(taskId)
     }
 
     async reloadRepoStoreFromStorage(): Promise<void> {
@@ -570,6 +905,13 @@ export class CodeStore {
         this.scratchpads.disconnectAll()
         this.runtimes.clear()
         this.queuedTurns.clear()
+        this.runtimeProductStore?.destroy()
+        this.runtimeProductStore = null
+        this.runtimeProductSnapshot = null
+        this.runtimeProductTasks.clear()
+        this.trackedRuntimeProductFallbackKeys.clear()
+        this.runtimeProductStoreStatus = "disabled"
+        this.runtimeProductStoreError = null
 
         if (this.envVarsReactionDisposer) {
             this.envVarsReactionDisposer()

@@ -47,6 +47,8 @@ function envFlag(value: string | undefined, fallback = false): boolean {
 
 const main = () => {
     const companionEnabled = envFlag(process.env.OPENADE_ENABLE_COMPANION ?? process.env.VITE_OPENADE_ENABLE_COMPANION, isDev)
+    const activeWorkQuitPromptDisabled =
+        envFlag(process.env.OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER) || envFlag(process.env.OPENADE_SMOKE_TEST)
 
     // OPENADE_SMOKE_TEST runs packaged smoke tests alongside any local production instance.
     if (!process.env.OPENADE_SMOKE_TEST) {
@@ -86,7 +88,7 @@ const main = () => {
 
     // Graceful shutdown - show confirmation dialog if runtime-owned work is active.
     app.on("before-quit", (event) => {
-        if (hasActiveRuntimeWork()) {
+        if (!activeWorkQuitPromptDisabled && hasActiveRuntimeWork()) {
             const response = dialog.showMessageBoxSync({
                 type: "warning",
                 buttons: ["Cancel", "Quit Anyway"],

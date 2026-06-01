@@ -35,6 +35,18 @@ export class RepoManager {
     // ==================== Computed from RepoStore ====================
 
     get repos(): Repo[] {
+        if (this.store.runtimeProductSnapshot) {
+            return this.store.runtimeProductSnapshot.repos.map((item) => ({
+                id: item.id,
+                name: item.name,
+                path: item.path,
+                createdBy: this.store.currentUser,
+                createdAt: "",
+                updatedAt: "",
+                archived: item.archived,
+            }))
+        }
+
         if (!this.store.repoStore) return []
         return this.store.repoStore.repos.all().map((item) => ({
             id: item.id,
@@ -256,6 +268,9 @@ export class RepoManager {
         try {
             // Initialize stores if not done
             await this.store.initializeStores()
+            if (!this.store.runtimeProductSnapshot && this.store.repoStore?.repos.all().length) {
+                this.store.trackRuntimeProductFallback("repo_list", "snapshot_unavailable")
+            }
         } finally {
             this.reposLoading = false
         }

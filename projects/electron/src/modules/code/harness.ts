@@ -221,6 +221,47 @@ function deleteExecutionRecord(executionId: string, reason: "clear_buffer" | "cl
     return true
 }
 
+function deterministicSmokeHarnessEnabled(): boolean {
+    return process.env.OPENADE_SMOKE_TEST === "1" && process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS === "1"
+}
+
+function deterministicSmokeMessage(harnessId: HarnessId): unknown {
+    const text = [
+        "Deterministic packaged smoke response.",
+        "",
+        "1. The packaged runtime accepted the task command.",
+        "2. The harness bridge streamed a completion event.",
+        "3. The task event can be reloaded from persisted OpenADE storage.",
+    ].join("\n")
+
+    if (harnessId === "codex") {
+        return {
+            type: "item.completed",
+            item: { type: "agent_message", text },
+        }
+    }
+
+    return {
+        type: "assistant",
+        message: {
+            content: [{ type: "text", text }],
+        },
+    }
+}
+
+async function* deterministicSmokeHarnessEvents(harnessId: HarnessId): AsyncGenerator<HarnessEvent<unknown>> {
+    yield { type: "session_started", sessionId: `smoke-${crypto.randomUUID()}` }
+    yield { type: "message", message: deterministicSmokeMessage(harnessId) }
+    yield {
+        type: "complete",
+        usage: {
+            inputTokens: 1,
+            outputTokens: 1,
+            durationMs: 1,
+        },
+    }
+}
+
 /** Emit an execution event to the buffer and renderer */
 function emitExecutionEvent(executionId: string, event: HarnessExecutionEventBase): void {
     const execution = activeExecutions.get(executionId)
@@ -453,10 +494,9 @@ async function handleStartQuery(
         cwd: options.cwd,
     })
 
-    const harness = registry.get(harnessId)
-    if (!harness) {
-        return { ok: false, error: `Unknown harness: ${harnessId}` }
-    }
+    const useDeterministicSmokeHarness = deterministicSmokeHarnessEnabled()
+    const harness = useDeterministicSmokeHarness ? null : registry.get(harnessId)
+    if (!useDeterministicSmokeHarness && !harness) return { ok: false, error: `Unknown harness: ${harnessId}` }
 
     const abortController = new AbortController()
 
@@ -481,6 +521,22 @@ async function handleStartQuery(
 
     // Set initial cleanup timer
     resetCleanupTimer(executionId)
+
+    if (useDeterministicSmokeHarness) {
+        console.warn("[Harness] Using deterministic smoke harness for packaged verification", { executionId, harnessId })
+        void streamToRenderer(executionId, harnessId, deterministicSmokeHarnessEvents(harnessId)).finally(() => {
+            const settled = activeExecutions.get(executionId)
+            if (!settled) return
+            settledSink?.({
+                executionId,
+                status: settled.status,
+                sessionId: settled.sessionId,
+                events: [...settled.events],
+            })
+        })
+        return { ok: true }
+    }
+    if (!harness) return { ok: false, error: `Unknown harness: ${harnessId}` }
 
     // Build client tool definitions with IPC-proxied handlers
     let clientTools: ClientToolDefinition[] | undefined

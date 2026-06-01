@@ -31,34 +31,29 @@ import { track } from "../../analytics"
 import { ReviewPickerModal } from "../../components/ReviewPickerModal"
 import { ACTION_PROMPTS } from "../../prompts/prompts"
 import { localOpenADEClient } from "../../runtime/localOpenADEClient"
+import {
+    COMMIT_AND_PUSH_COMMAND_LABEL,
+    TRACKABLE_TASK_COMMAND_IDS,
+    buildTaskShellCommandDescriptors,
+    type TaskShellCommandDescriptor,
+    type TaskShellCommandId,
+    type TaskShellCommandStyle,
+} from "../../shell/task/taskCommandModel"
+import { taskCommandLabel } from "../../shell/task/taskCommands"
 import type { ActionEvent, QueuedTurn, UserInputContext } from "../../types"
 import type { OpenADETurnStartRequest, OpenADETurnStartResult } from "../../../../openade-module/src"
 import type { EditorSnapshot } from "./SmartEditorManager"
 import type { CodeStore } from "../store"
 import type { SmartEditorManager } from "./SmartEditorManager"
 
-const COMMIT_AND_PUSH_LABEL = "Commit & Push"
 const INTERRUPT_IDLE_TIMEOUT_MS = 30_000
 const INTERRUPT_IDLE_POLL_MS = 100
 
-// Command style customization
-export interface CommandStyle {
-    variant?: "primary" | "success" | "danger" | "neutral" | "ghost"
-}
+export type CommandStyle = TaskShellCommandStyle
 
-export interface Command {
-    id: string
-    label: string
-    icon: LucideIcon
-    order: number
-    style?: CommandStyle
+export interface Command extends TaskShellCommandDescriptor {
     action: () => Promise<void> | void
-    show: boolean
-    enabled: boolean
-    /** If true, renders with ml-auto before it (pushes to the right) */
-    spacer?: boolean
-    /** Row grouping: "primary" for direct AI actions, "secondary" for utilities/lifecycle */
-    group?: "primary" | "secondary"
+    icon: LucideIcon
 }
 
 export class InputManager {
@@ -140,21 +135,12 @@ export class InputManager {
     private get isCommitAndPushInProgress(): boolean {
         const last = this.lastActionEvent
         if (!last || last.status !== "in_progress") return false
-        return last.source.userLabel === COMMIT_AND_PUSH_LABEL
+        return last.source.userLabel === COMMIT_AND_PUSH_COMMAND_LABEL
     }
 
     /** Whether the input area should be disabled (task is closed) */
     get isDisabled(): boolean {
         return this.isClosed
-    }
-
-    private get retryLabel(): string {
-        return "Retry"
-    }
-
-    /** Label for the plan button — always "Plan"; HyperPlan is a separate button */
-    private get planButtonLabel(): string {
-        return "Plan"
     }
 
     /** Stop all processes associated with this task (used before closing).
@@ -262,7 +248,7 @@ export class InputManager {
             enabledMcpServerIds: taskModel.enabledMcpServerIds,
             harnessId: taskModel.harnessId,
             modelId: taskModel.model,
-            label: options.label ?? (type === "ask" ? "Ask Next" : "Do Next"),
+            label: options.label ?? taskCommandLabel(type, { queued: true }),
             includeComments: options.includeComments,
             thinking: taskModel.thinking,
             fastMode: taskModel.fastMode,
@@ -333,121 +319,41 @@ export class InputManager {
     // === Commands ===
 
     get commands(): Command[] {
-        // Repeat mode: show only repeat-specific controls + close/reopen
-        if (this.store.repeat.activeTaskId === this.taskId && this.store.repeat.isActive) {
-            return [
-                {
-                    id: "repeatStop",
-                    label: "Stop",
-                    icon: Square,
-                    order: 0,
-                    style: { variant: "danger" as const },
-                    show: true,
-                    enabled: true,
-                    action: () => {
-                        this.store.repeat.stop()
-                    },
-                },
-                // Close
-                {
-                    id: "close",
-                    label: "Close",
-                    icon: CheckCircle,
-                    order: 200,
-                    style: { variant: "neutral" as const },
-                    show: !this.isClosed,
-                    enabled: true,
-                    spacer: true,
-                    action: async () => {
-                        this.store.repeat.stop()
-                        await this.stopTaskProcesses()
-                        await this.store.tasks.setTaskClosed(this.taskId, true)
-                    },
-                },
-            ]
-                .filter((cmd) => cmd.show)
-                .sort((a, b) => a.order - b.order)
-        }
-
-        const allCommands: Command[] = [
-            // Stop - abort current execution
-            {
-                id: "stop",
-                label: "Stop",
+        const commandActions: Record<TaskShellCommandId, Pick<Command, "icon" | "action">> = {
+            stop: {
                 icon: Square,
-                order: 0,
-                group: "primary" as const,
-                style: { variant: "danger" },
-                show: this.isWorking,
-                enabled: true,
                 action: async () => {
                     await this.store.queries.abortTask(this.taskId)
                 },
             },
-
-            // Interrupt - gracefully stop the current turn, then send this message immediately.
-            {
-                id: "interrupt",
-                label: "Interrupt",
+            interrupt: {
                 icon: Send,
-                order: 2,
-                group: "primary" as const,
-                style: { variant: "primary" },
-                show: this.isWorking && !this.hasActivePlan,
-                enabled: this.hasFeedback,
                 action: async () => {
                     await this.interruptAndRunDo()
                 },
             },
-
-            // Retry - retry the last failed action by prompting the LLM
-            {
-                id: "retry",
-                label: this.retryLabel,
+            retry: {
                 icon: RefreshCcw,
-                order: 1,
-                group: "primary" as const,
-                style: { variant: "danger" },
-                show: this.canRetry,
-                enabled: true,
                 action: async () => {
                     await this.executeRuntimeTurn(
                         "do",
                         { userInput: ACTION_PROMPTS.retry, images: [] },
                         {
-                            label: this.retryLabel,
+                            label: "Retry",
                             includeComments: false,
                         }
                     )
                 },
             },
-
-            // Run Plan - execute the current plan (consumes comments)
-            {
-                id: "runPlan",
-                label: "Run Plan",
+            runPlan: {
                 icon: Play,
-                order: 4,
-                group: "primary" as const,
-                style: { variant: "success" },
-                show: this.hasActivePlan && !this.isWorking,
-                enabled: true,
                 action: async () => {
                     const input = this.captureAndClear()
                     await this.executeRuntimeTurn("run_plan", input)
                 },
             },
-
-            // Review Plan - one-off external review of the active plan
-            {
-                id: "reviewPlan",
-                label: "Review Plan",
+            reviewPlan: {
                 icon: ClipboardCheck,
-                order: 8,
-                group: "secondary" as const,
-                style: { variant: "neutral" },
-                show: this.hasActivePlan && !this.isWorking,
-                enabled: true,
                 action: async () => {
                     await NiceModal.show(ReviewPickerModal, {
                         taskId: this.taskId,
@@ -457,33 +363,15 @@ export class InputManager {
                     })
                 },
             },
-
-            // Revise Plan - update plan with feedback (consumes comments)
-            {
-                id: "revise",
-                label: "Revise Plan",
+            revise: {
                 icon: RefreshCw,
-                order: 6,
-                group: "primary" as const,
-                style: { variant: "primary" },
-                show: this.hasActivePlan && !this.isWorking,
-                enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()
                     await this.executeRuntimeTurn("revise", input)
                 },
             },
-
-            // Cancel Plan - exit plan mode without executing
-            {
-                id: "cancelPlan",
-                label: "Cancel Plan",
+            cancelPlan: {
                 icon: X,
-                order: 7,
-                group: "secondary" as const,
-                style: { variant: "danger" },
-                show: this.hasActivePlan && !this.isWorking,
-                enabled: true,
                 action: async () => {
                     const latestPlan = this.taskModel?.getLatestPlanEvent()
                     if (latestPlan) {
@@ -491,64 +379,29 @@ export class InputManager {
                     }
                 },
             },
-            // Do - direct action without planning (consumes comments)
-            {
-                id: "do",
-                label: this.isWorking ? "Do Next" : "Do",
+            do: {
                 icon: Play,
-                order: 10,
-                group: "primary" as const,
-                style: { variant: "success" },
-                show: !this.hasActivePlan,
-                enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()
                     await this.executeRuntimeTurn("do", input)
                 },
             },
-
-            // Plan - create a new plan (consumes comments).
-            {
-                id: "plan",
-                label: this.planButtonLabel,
+            plan: {
                 icon: FileText,
-                order: 15,
-                group: "primary" as const,
-                style: { variant: "primary" },
-                show: !this.hasActivePlan && !this.isWorking,
-                enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()
                     await this.executeRuntimeTurn("plan", input)
                 },
             },
-
-            // Ask - read-only exploration (consumes comments)
-            {
-                id: "ask",
-                label: this.isWorking ? "Ask Next" : "Ask",
+            ask: {
                 icon: MessageCircleQuestion,
-                order: 20,
-                group: "primary" as const,
-                style: { variant: "neutral" },
-                show: true,
-                enabled: this.hasFeedback,
                 action: async () => {
                     const input = this.captureAndClear()
                     await this.executeRuntimeTurn("ask", input)
                 },
             },
-
-            // Review - one-off external review of recent work when no active plan exists
-            {
-                id: "review",
-                label: "Review",
+            review: {
                 icon: ClipboardCheck,
-                order: 21,
-                group: "secondary" as const,
-                style: { variant: "neutral" },
-                show: !this.hasActivePlan && !this.isWorking && this.hasAnyActionHistory,
-                enabled: true,
                 action: async () => {
                     await NiceModal.show(ReviewPickerModal, {
                         taskId: this.taskId,
@@ -558,36 +411,17 @@ export class InputManager {
                     })
                 },
             },
-
-            // Repeat - repeatedly send the same prompt
-            {
-                id: "repeat",
-                label: "Repeat",
+            repeat: {
                 icon: Repeat,
-                order: 22,
-                group: "secondary" as const,
-                style: { variant: "neutral" },
-                show: !this.hasActivePlan && !this.isWorking,
-                enabled: this.hasInput,
                 action: () => {
                     this.store.repeat.start(this.taskId)
                 },
             },
-
-            // Commit & Push - commit working changes (if any), then push (does NOT consume comments)
-            {
-                id: "commitAndPush",
-                label: COMMIT_AND_PUSH_LABEL,
+            commitAndPush: {
                 icon: ArrowUpFromLine,
-                order: 100,
-                group: "secondary" as const,
-                style: { variant: "neutral" },
-                show: (this.hasGitWorkingChanges || this.hasUnpushedCommits) && !this.isWorking,
-                enabled: true,
                 action: async () => {
                     const input = this.captureAndClear()
 
-                    // Re-check gh CLI status before push to avoid stale cached value
                     const repoId = this.taskModel?.repoId
                     let hasGhCli = this.taskModel?.hasGhCli ?? false
                     if (repoId && !hasGhCli) {
@@ -602,49 +436,48 @@ export class InputManager {
                         "do",
                         { userInput: ACTION_PROMPTS.commitAndPush(input.userInput, hasGhCli, branch), images: input.images },
                         {
-                            label: COMMIT_AND_PUSH_LABEL,
+                            label: COMMIT_AND_PUSH_COMMAND_LABEL,
                             includeComments: false,
                         }
                     )
                 },
             },
-
-            // Close - mark task as closed (stops all processes first)
-            {
-                id: "close",
-                label: "Close",
+            close: {
                 icon: CheckCircle,
-                order: 200,
-                group: "primary" as const,
-                style: { variant: "neutral" },
-                show: !this.isClosed && (!this.isWorking || this.isCommitAndPushInProgress),
-                enabled: true,
-                spacer: true,
                 action: async () => {
+                    if (this.store.repeat.activeTaskId === this.taskId && this.store.repeat.isActive) this.store.repeat.stop()
                     await this.stopTaskProcesses()
                     await this.store.tasks.setTaskClosed(this.taskId, true)
                 },
             },
-
-            // Reopen - reopen a closed task
-            {
-                id: "reopen",
-                label: "Reopen",
+            reopen: {
                 icon: RotateCcw,
-                order: 201,
-                group: "primary" as const,
-                style: { variant: "neutral" },
-                show: this.isClosed,
-                enabled: true,
-                spacer: true,
                 action: async () => {
                     await this.store.tasks.setTaskClosed(this.taskId, false)
                 },
             },
-        ]
+            repeatStop: {
+                icon: Square,
+                action: () => {
+                    this.store.repeat.stop()
+                },
+            },
+        }
 
-        const forceAll = this.store.personalSettingsStore?.settings.current.devForceAllCommands ?? false
-        return allCommands.filter((cmd) => forceAll || cmd.show).sort((a, b) => a.order - b.order)
+        return buildTaskShellCommandDescriptors({
+            repeatActive: this.store.repeat.activeTaskId === this.taskId && this.store.repeat.isActive,
+            closed: this.isClosed,
+            working: this.isWorking,
+            activePlan: this.hasActivePlan,
+            feedback: this.hasFeedback,
+            input: this.hasInput,
+            retryable: this.canRetry,
+            actionHistory: this.hasAnyActionHistory,
+            gitWorkingChanges: this.hasGitWorkingChanges,
+            unpushedCommits: this.hasUnpushedCommits,
+            commitAndPushInProgress: this.isCommitAndPushInProgress,
+            forceAllCommands: this.store.personalSettingsStore?.settings.current.devForceAllCommands ?? false,
+        }).map((descriptor) => ({ ...descriptor, ...commandActions[descriptor.id] }))
     }
 
     async runCommand(id: string): Promise<void> {
@@ -652,9 +485,7 @@ export class InputManager {
         console.debug("[InputManager] runCommand", { id, found: !!cmd, enabled: cmd?.enabled })
         if (!cmd || !cmd.enabled) return
 
-        // Track command execution for execution-related commands
-        const trackableCommands = ["plan", "do", "ask", "revise", "runPlan", "retry", "review", "reviewPlan", "interrupt"]
-        if (trackableCommands.includes(id)) {
+        if (TRACKABLE_TASK_COMMAND_IDS.has(cmd.id)) {
             track("command_run", { commandType: id })
         }
 

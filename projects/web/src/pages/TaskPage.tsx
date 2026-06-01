@@ -1,6 +1,6 @@
 import cx from "classnames"
 import { observer } from "mobx-react"
-import { type ReactNode, useCallback, useEffect, useRef } from "react"
+import { type ReactNode, useCallback, useEffect } from "react"
 import { useHotkeys } from "react-hotkeys-hook"
 import { EnvironmentSetupView } from "../components/EnvironmentSetupView"
 import { EventLog } from "../components/EventLog"
@@ -12,6 +12,7 @@ import { ScrollArea } from "../components/ui/ScrollArea"
 import { Z_INDEX } from "../constants"
 import { useImageDropZone } from "../hooks/useImageDropZone"
 import { useShortcutHintsVisible } from "../hooks/useShortcutHintsVisible"
+import { useTaskThreadScroll } from "../shell/task/useTaskThreadScroll"
 import type { TaskModel } from "../store/TaskModel"
 import { useCodeStore } from "../store/context"
 import { isEventFromTerminal } from "../utils/keyboardShortcuts"
@@ -33,17 +34,15 @@ interface TaskPageProps {
 
 export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPageProps) => {
     const codeStore = useCodeStore()
-    const scrollViewportRef = useRef<HTMLDivElement>(null)
     const showKeyboardHints = useShortcutHintsVisible()
     const { input, tray } = taskModel
-
-    const scrollToBottom = useCallback(() => {
-        requestAnimationFrame(() => {
-            if (scrollViewportRef.current) {
-                scrollViewportRef.current.scrollTop = scrollViewportRef.current.scrollHeight
-            }
-        })
-    }, [])
+    const rawTask = codeStore.tasks.getTask(taskId)
+    const events = rawTask?.events ?? []
+    const { viewportRef: scrollViewportRef } = useTaskThreadScroll({
+        changeKey: `${taskId}:${events.length}`,
+        resetKey: taskId,
+        mode: "always",
+    })
 
     const scrollByPage = useCallback((direction: 1 | -1) => {
         const viewport = scrollViewportRef.current
@@ -92,9 +91,6 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
         ignoreEventWhen: isEventFromTerminal,
     })
 
-    const rawTask = codeStore.tasks.getTask(taskId)
-    const events = rawTask?.events ?? []
-
     // Get SmartEditorManager for this task
     const editorManager = codeStore.smartEditors.getManager(`task-${taskId}`, workspaceId)
 
@@ -102,18 +98,6 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
     useEffect(() => {
         codeStore.tasks.markTaskViewed(taskId)
     }, [taskId])
-
-    // Scroll to bottom on initial load
-    useEffect(() => {
-        scrollToBottom()
-    }, [taskId, scrollToBottom])
-
-    // Scroll to bottom when new events are added
-    useEffect(() => {
-        if (events.length > 0) {
-            scrollToBottom()
-        }
-    }, [events.length, scrollToBottom])
 
     // Initial load of git state
     useEffect(() => {

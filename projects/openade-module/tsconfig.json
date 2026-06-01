@@ -7,6 +7,7 @@
     "skipLibCheck": true,
     "noEmit": true,
     "paths": {
+      "vitest": ["../electron/node_modules/vitest/dist/index.d.ts"],
       "ws": ["../electron/node_modules/@types/ws"],
       "yjs": ["../web/node_modules/yjs/dist/src/index.d.ts"]
     },

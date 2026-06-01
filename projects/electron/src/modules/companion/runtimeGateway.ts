@@ -23,12 +23,61 @@ import {
     type OpenADEActionEventSource,
     type OpenADEHyperPlanStep,
     type OpenADEHyperPlanStrategy,
+    type OpenADEProject,
+    type OpenADEProjectFileReadRequest,
+    type OpenADEProjectFileReadResult,
+    type OpenADEProjectFilesTreeEntry,
+    type OpenADEProjectFilesTreeRequest,
+    type OpenADEProjectFilesTreeResult,
+    type OpenADEProjectFileWriteRequest,
+    type OpenADEProjectFileWriteResult,
+    type OpenADEProjectProcessConfigError,
+    type OpenADEProjectProcessDefinition,
+    type OpenADEProjectProcessInstance,
+    type OpenADEProjectProcessListRequest,
+    type OpenADEProjectProcessListResult,
+    type OpenADEProjectProcessOutputChunk,
+    type OpenADEProjectProcessReconnectRequest,
+    type OpenADEProjectProcessReconnectResult,
+    type OpenADEProjectProcessStartRequest,
+    type OpenADEProjectProcessStartResult,
+    type OpenADEProjectProcessStopRequest,
+    type OpenADEProjectProcessStopResult,
+    type OpenADEProjectSearchRequest,
+    type OpenADEProjectSearchResult,
     type OpenADEQueuedTurn,
+    type OpenADESnapshotEventRecord,
     type OpenADESnapshotChangedFile,
     type OpenADESetupEnvironmentEventCreateRequest,
     type OpenADETask,
+    type OpenADETaskChangesReadRequest,
+    type OpenADETaskChangesReadResult,
     type OpenADETaskDeleteRequest,
     type OpenADETaskDeviceEnvironment,
+    type OpenADETaskDiffReadRequest,
+    type OpenADETaskDiffReadResult,
+    type OpenADETaskGitCommitRequest,
+    type OpenADETaskGitCommitResult,
+    type OpenADETaskGitLogRequest,
+    type OpenADETaskGitLogResult,
+    type OpenADETaskImageReadRequest,
+    type OpenADETaskImageReadResult,
+    type OpenADETaskImageReference,
+    type OpenADETaskTerminalMutationResult,
+    type OpenADETaskTerminalOutputChunk,
+    type OpenADETaskTerminalReconnectRequest,
+    type OpenADETaskTerminalReconnectResult,
+    type OpenADETaskTerminalResizeRequest,
+    type OpenADETaskTerminalStartRequest,
+    type OpenADETaskTerminalStartResult,
+    type OpenADETaskTerminalStopRequest,
+    type OpenADETaskTerminalWriteRequest,
+    type OpenADETaskSnapshotIndexReadRequest,
+    type OpenADETaskSnapshotIndexReadResult,
+    type OpenADETaskSnapshotPatchReadRequest,
+    type OpenADETaskSnapshotPatchReadResult,
+    type OpenADETaskSnapshotPatchSliceReadRequest,
+    type OpenADETaskSnapshotPatchSliceReadResult,
     type OpenADETurnStartContext,
     type OpenADETurnStartRequest,
     type OpenADEReviewStartRequest,
@@ -50,12 +99,14 @@ import {
     deleteRuntimeBranch,
     deleteRuntimeWorkTree,
     getRuntimeChangedFiles,
+    getRuntimeGitLog,
     getOrCreateRuntimeWorkTree,
     getRuntimeGitSummary,
     getRuntimeMergeBase,
     getRuntimeWorktreeFilePatch,
     isRuntimeGitDirectory,
     type ChangedFileInfo,
+    commitRuntimeWorkingTree,
 } from "../code/git"
 import {
     deleteRuntimeSnapshotBundle,
@@ -64,8 +115,8 @@ import {
     loadRuntimeSnapshotPatchSlice,
     saveRuntimeSnapshotBundle,
 } from "../code/snapshots"
-import type { SnapshotPatchFile, SnapshotPatchIndex } from "../code/snapshotsIndex"
-import { killRuntimePty } from "../code/pty"
+import { buildSnapshotPatchIndex, type SnapshotPatchFile, type SnapshotPatchIndex } from "../code/snapshotsIndex"
+import { killRuntimePty, reconnectRuntimePty, resizeRuntimePty, spawnRuntimePty, writeRuntimePty } from "../code/pty"
 import { getDeviceConfig } from "../deviceConfig"
 import { getRuntimeCodeCapabilities, getRuntimeSdkCapabilities, invalidateRuntimeSdkCapabilities } from "../code/capabilities"
 import {
@@ -85,8 +136,12 @@ import {
     serializeRuntimeEditableProcs,
     writeRuntimeProcsFile,
     type CronInput,
+    type ProcessDef,
     type ProcessInput,
+    type ProcsConfig,
+    type ReadProcsResult,
 } from "../code/procs"
+import { killRuntimeProcess, listRuntimeProcesses, reconnectRuntimeProcess, startRuntimeScript } from "../code/process"
 import {
     cancelRuntimeMcpOAuth,
     initiateRuntimeMcpOAuth,
@@ -97,6 +152,7 @@ import {
 import { createRuntimeDirectory } from "../code/shell"
 import { registerRuntimeAgentModule, registerServerProtocolAgentBridge } from "./runtimeAgents"
 import { createRuntimeCheckpointStore } from "./runtimeCheckpoint"
+import { registerRemoteDeviceRuntimeMethods } from "./deviceRuntime"
 import { cleanupRuntimeHostModule, registerRuntimeHostModule } from "./runtimeHost"
 import { createOpenADEYjsStorageAdapter } from "./runtimeYjsAdapter"
 import { configurePowerKeeper } from "./powerKeeper"
@@ -157,6 +213,13 @@ let runtimeServer: RuntimeServer | null = null
 const runtimeBridgeUnregisters: (() => void)[] = []
 type ActiveTaskExecution = { executionId: string; runtimeId: string; repoId: string; eventId: string; childExecutionIds?: Set<string>; stopping?: boolean }
 const activeTaskExecutions = new Map<string, ActiveTaskExecution>()
+type ScopedProjectProcessRegistration = {
+    repoId: string
+    taskId?: string
+    definitionId: string
+    cwd: string
+}
+const scopedProjectProcesses = new Map<string, ScopedProjectProcessRegistration>()
 const quitBlockingRuntimeKinds = new Set(["agent", "process", "pty", "composite"])
 
 export function hasActiveRuntimeWork(): boolean {
@@ -527,6 +590,32 @@ async function getGitRefs(cwd: string): Promise<{ sha: string; branch?: string }
     }
 }
 
+function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function isTaskNotFoundError(error: unknown, taskId: string): boolean {
+    return error instanceof Error && error.message === `Task ${taskId} not found`
+}
+
+async function readTaskForMutation(
+    projection: ReturnType<typeof createOpenADEYjsProjection>,
+    repoId: string,
+    taskId: string
+): Promise<OpenADETask> {
+    let lastError: unknown
+    for (let attempt = 0; attempt < 6; attempt++) {
+        try {
+            return await projection.readTask(repoId, taskId)
+        } catch (error) {
+            if (!isTaskNotFoundError(error, taskId)) throw error
+            lastError = error
+            await delay(50 * (attempt + 1))
+        }
+    }
+    throw lastError instanceof Error ? lastError : new Error(`Task ${taskId} not found`)
+}
+
 function mergeAppendSystemPrompt(base?: string, extra?: string): string | undefined {
     if (base && extra) return `${base}\n\n${extra}`
     return base ?? extra
@@ -869,6 +958,587 @@ async function cleanupTaskResources(task: OpenADETask, repoPath: string, options
             await deleteRuntimeBranch({ repoDir: gitInfo.repoRoot, branchName: `openade/${task.slug}` }).catch(() => undefined)
         }
     }
+}
+
+const DEFAULT_SCOPED_FILE_MAX_BYTES = 256 * 1024
+const DEFAULT_SCOPED_TREE_MAX_DEPTH = 4
+const DEFAULT_SCOPED_TREE_MAX_ENTRIES = 1000
+const DEFAULT_SCOPED_SEARCH_LIMIT = 100
+const MAX_SCOPED_SEARCH_FILE_BYTES = 1024 * 1024
+const SCOPED_SEARCH_SKIP_DIRS = new Set([".git", "node_modules", "dist", "build", ".next"])
+
+function resolveProjectRelativePath(repo: OpenADEProject, relativePath: string): string {
+    const root = path.resolve(repo.path)
+    const target = path.resolve(root, relativePath)
+    if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
+        throw new Error("path is outside the repository")
+    }
+    return target
+}
+
+function scopedRelativePath(root: string, fullPath: string): string {
+    return path.relative(root, fullPath).split(path.sep).join("/")
+}
+
+function shouldSkipScopedEntry(name: string, includeHidden: boolean): boolean {
+    if (!includeHidden && name.startsWith(".")) return true
+    return SCOPED_SEARCH_SKIP_DIRS.has(name)
+}
+
+async function listScopedProjectFiles(params: OpenADEProjectFilesTreeRequest & { repo: OpenADEProject }): Promise<OpenADEProjectFilesTreeResult> {
+    const root = path.resolve(params.repo.path)
+    const start = resolveProjectRelativePath(params.repo, params.path ?? "")
+    const maxDepth = params.maxDepth ?? DEFAULT_SCOPED_TREE_MAX_DEPTH
+    const maxEntries = params.maxEntries ?? DEFAULT_SCOPED_TREE_MAX_ENTRIES
+    const includeHidden = params.includeHidden === true
+    const entries: OpenADEProjectFilesTreeEntry[] = []
+    const queue: Array<{ dir: string; depth: number }> = [{ dir: start, depth: 0 }]
+
+    while (queue.length > 0 && entries.length < maxEntries) {
+        const current = queue.shift()
+        if (!current) break
+        const dirEntries = await fs.readdir(current.dir, { withFileTypes: true }).catch(() => [])
+        for (const entry of dirEntries) {
+            if (entries.length >= maxEntries) break
+            if (shouldSkipScopedEntry(entry.name, includeHidden)) continue
+            const fullPath = path.join(current.dir, entry.name)
+            const relativePath = scopedRelativePath(root, fullPath)
+            if (entry.isDirectory()) {
+                entries.push({ path: relativePath, name: entry.name, type: "directory" })
+                if (current.depth < maxDepth) queue.push({ dir: fullPath, depth: current.depth + 1 })
+            } else if (entry.isFile()) {
+                const stat = await fs.stat(fullPath).catch(() => null)
+                entries.push({
+                    path: relativePath,
+                    name: entry.name,
+                    type: "file",
+                    size: stat?.size,
+                    mtimeMs: stat?.mtimeMs,
+                })
+            }
+        }
+    }
+
+    return { repoId: params.repoId, path: params.path ?? "", entries, truncated: entries.length >= maxEntries || queue.length > 0 }
+}
+
+async function readScopedProjectFile(params: OpenADEProjectFileReadRequest & { repo: OpenADEProject }): Promise<OpenADEProjectFileReadResult> {
+    const target = resolveProjectRelativePath(params.repo, params.path)
+    const encoding = params.encoding ?? "utf8"
+    const maxBytes = params.maxBytes ?? DEFAULT_SCOPED_FILE_MAX_BYTES
+    const stat = await fs.stat(target)
+    if (!stat.isFile()) throw new Error("path is not a file")
+    if (stat.size > maxBytes) {
+        return { repoId: params.repoId, path: params.path, encoding, size: stat.size, tooLarge: true, content: null }
+    }
+    return {
+        repoId: params.repoId,
+        path: params.path,
+        encoding,
+        size: stat.size,
+        tooLarge: false,
+        content: await fs.readFile(target, encoding),
+    }
+}
+
+async function writeScopedProjectFile(params: OpenADEProjectFileWriteRequest & { repo: OpenADEProject }): Promise<OpenADEProjectFileWriteResult> {
+    const target = resolveProjectRelativePath(params.repo, params.path)
+    if (target === path.resolve(params.repo.path)) throw new Error("path is not a file")
+    if (params.createDirs) await fs.mkdir(path.dirname(target), { recursive: true })
+    const data = params.encoding === "base64" ? Buffer.from(params.content, "base64") : Buffer.from(params.content, "utf8")
+    await fs.writeFile(target, data)
+    return { repoId: params.repoId, path: params.path, size: data.byteLength }
+}
+
+async function walkScopedProjectFiles(root: string): Promise<Array<{ fullPath: string; relativePath: string }>> {
+    const files: Array<{ fullPath: string; relativePath: string }> = []
+    const queue = [root]
+    while (queue.length > 0 && files.length < 10_000) {
+        const dir = queue.shift()
+        if (!dir) break
+        const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
+        for (const entry of entries) {
+            if (entry.name.startsWith(".") || SCOPED_SEARCH_SKIP_DIRS.has(entry.name)) continue
+            const fullPath = path.join(dir, entry.name)
+            if (entry.isDirectory()) {
+                queue.push(fullPath)
+            } else if (entry.isFile()) {
+                files.push({ fullPath, relativePath: path.relative(root, fullPath) })
+            }
+        }
+    }
+    return files
+}
+
+async function searchScopedProject(params: OpenADEProjectSearchRequest & { repo: OpenADEProject }): Promise<OpenADEProjectSearchResult> {
+    const root = path.resolve(params.repo.path)
+    const limit = params.limit ?? DEFAULT_SCOPED_SEARCH_LIMIT
+    const needle = params.caseSensitive ? params.query : params.query.toLowerCase()
+    const matches: OpenADEProjectSearchResult["matches"] = []
+    const files = await walkScopedProjectFiles(root)
+
+    for (const file of files) {
+        if (matches.length >= limit) break
+        const stat = await fs.stat(file.fullPath).catch(() => null)
+        if (!stat || stat.size > MAX_SCOPED_SEARCH_FILE_BYTES) continue
+        const content = await fs.readFile(file.fullPath, "utf8").catch(() => null)
+        if (content === null) continue
+        const lines = content.split(/\r?\n/)
+        for (let index = 0; index < lines.length && matches.length < limit; index++) {
+            const line = lines[index]
+            const haystack = params.caseSensitive ? line : line.toLowerCase()
+            const matchStart = haystack.indexOf(needle)
+            if (matchStart < 0) continue
+            matches.push({
+                path: file.relativePath,
+                line: index + 1,
+                content: line,
+                matchStart,
+                matchEnd: matchStart + params.query.length,
+            })
+        }
+    }
+
+    return { repoId: params.repoId, matches, truncated: matches.length >= limit }
+}
+
+function latestScopedTaskEnvironment(task: OpenADETask): OpenADETaskDeviceEnvironment | undefined {
+    for (let index = task.deviceEnvironments.length - 1; index >= 0; index--) {
+        const environment = task.deviceEnvironments[index]
+        if (environment.setupComplete && environment.worktreeDir) return environment
+    }
+    return undefined
+}
+
+async function scopedTaskWorkDir(repo: OpenADEProject, task: OpenADETask): Promise<string> {
+    const isolationStrategy = task.isolationStrategy ?? { type: "head" }
+    if (isolationStrategy.type === "head") return path.resolve(repo.path)
+
+    const environment = latestScopedTaskEnvironment(task)
+    if (!environment?.worktreeDir) throw new Error("task worktree is not available")
+
+    const gitInfo = await isRuntimeGitDirectory({ directory: repo.path }).catch(() => null)
+    const relativePath = gitInfo?.isGitDirectory ? gitInfo.relativePath : ""
+    const root = path.resolve(environment.worktreeDir)
+    const workDir = path.resolve(root, relativePath)
+    if (workDir !== root && !workDir.startsWith(`${root}${path.sep}`)) {
+        throw new Error("task worktree path is invalid")
+    }
+    return workDir
+}
+
+function scopedTaskFromTreeish(task: OpenADETask, fromTreeish?: string): string {
+    if (fromTreeish) return fromTreeish
+    return snapshotBaseForTask(task, latestScopedTaskEnvironment(task))?.fromTreeish ?? "HEAD"
+}
+
+async function readScopedTaskChanges(
+    params: OpenADETaskChangesReadRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskChangesReadResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const fromTreeish = scopedTaskFromTreeish(params.task, params.fromTreeish)
+    const result = await getRuntimeChangedFiles({ workDir, fromTreeish, toTreeish: "" })
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        files: result.files.map((file) => ({
+            path: file.path,
+            status: file.status,
+            oldPath: file.oldPath,
+        })),
+        fromTreeish: result.fromTreeish,
+        toTreeish: result.toTreeish,
+    }
+}
+
+async function readScopedTaskDiff(params: OpenADETaskDiffReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskDiffReadResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const fromTreeish = scopedTaskFromTreeish(params.task, params.fromTreeish)
+    const contextLines = params.contextLines ?? 3
+    const result = await getRuntimeWorktreeFilePatch({
+        workDir,
+        fromTreeish,
+        filePath: params.filePath,
+        oldPath: params.oldPath,
+        contextLines,
+        allowTruncation: params.allowTruncation,
+    })
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        filePath: params.filePath,
+        oldPath: params.oldPath,
+        fromTreeish,
+        toTreeish: "",
+        patch: result.patch,
+        truncated: result.truncated,
+        heavy: result.heavy,
+        stats: result.stats,
+    }
+}
+
+async function readScopedTaskGitLog(params: OpenADETaskGitLogRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitLogResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const result = await getRuntimeGitLog({
+        workDir,
+        ref: params.ref,
+        limit: params.limit,
+        skip: params.skip,
+    })
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        commits: result.commits,
+        hasMore: result.hasMore,
+    }
+}
+
+async function commitScopedTaskGit(params: OpenADETaskGitCommitRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitCommitResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const result = await commitRuntimeWorkingTree({ workDir, message: params.message })
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        committed: result.committed,
+        status: result.status,
+        sha: result.sha,
+        error: result.error,
+    }
+}
+
+function scopedSnapshotPatchFileId(snapshotEvent: OpenADESnapshotEventRecord): string | undefined {
+    const value = snapshotEvent.patchFileId
+    if (typeof value !== "string" || value.length < 1) return undefined
+    if (!/^[a-zA-Z0-9_-]+$/.test(value)) throw new Error("snapshot patch file id is invalid")
+    return value
+}
+
+function scopedSnapshotInlinePatch(snapshotEvent: OpenADESnapshotEventRecord): string | null {
+    return typeof snapshotEvent.fullPatch === "string" && snapshotEvent.fullPatch.length > 0 ? snapshotEvent.fullPatch : null
+}
+
+function sliceInlineSnapshotPatch(patch: string, start: number, end: number): string {
+    const buffer = Buffer.from(patch, "utf8")
+    if (end > buffer.byteLength) throw new Error("Patch slice exceeds patch size")
+    return buffer.subarray(start, end).toString("utf8")
+}
+
+async function readScopedTaskSnapshotPatch(
+    params: OpenADETaskSnapshotPatchReadRequest & { repo: OpenADEProject; task: OpenADETask; snapshotEvent: OpenADESnapshotEventRecord }
+): Promise<OpenADETaskSnapshotPatchReadResult> {
+    const patchFileId = scopedSnapshotPatchFileId(params.snapshotEvent)
+    const inlinePatch = scopedSnapshotInlinePatch(params.snapshotEvent)
+    const patch = inlinePatch ?? (patchFileId ? await loadRuntimeSnapshotPatch({ id: patchFileId }) : null)
+    return { repoId: params.repoId, taskId: params.taskId, eventId: params.eventId, patchFileId, patch }
+}
+
+async function readScopedTaskSnapshotIndex(
+    params: OpenADETaskSnapshotIndexReadRequest & { repo: OpenADEProject; task: OpenADETask; snapshotEvent: OpenADESnapshotEventRecord }
+): Promise<OpenADETaskSnapshotIndexReadResult> {
+    const patchFileId = scopedSnapshotPatchFileId(params.snapshotEvent)
+    const inlinePatch = scopedSnapshotInlinePatch(params.snapshotEvent)
+    const index = inlinePatch !== null ? buildSnapshotPatchIndex(inlinePatch) : patchFileId ? await loadRuntimeSnapshotIndex({ id: patchFileId }) : null
+    return { repoId: params.repoId, taskId: params.taskId, eventId: params.eventId, patchFileId, index }
+}
+
+async function readScopedTaskSnapshotPatchSlice(
+    params: OpenADETaskSnapshotPatchSliceReadRequest & { repo: OpenADEProject; task: OpenADETask; snapshotEvent: OpenADESnapshotEventRecord }
+): Promise<OpenADETaskSnapshotPatchSliceReadResult> {
+    const patchFileId = scopedSnapshotPatchFileId(params.snapshotEvent)
+    const inlinePatch = scopedSnapshotInlinePatch(params.snapshotEvent)
+    const patch =
+        inlinePatch !== null
+            ? sliceInlineSnapshotPatch(inlinePatch, params.start, params.end)
+            : patchFileId
+              ? await loadRuntimeSnapshotPatchSlice({ id: patchFileId, start: params.start, end: params.end })
+              : null
+    return { repoId: params.repoId, taskId: params.taskId, eventId: params.eventId, patchFileId, patch }
+}
+
+async function readScopedTaskImage(
+    params: OpenADETaskImageReadRequest & { repo: OpenADEProject; task: OpenADETask; image: OpenADETaskImageReference }
+): Promise<OpenADETaskImageReadResult> {
+    const data = await loadRuntimeDataFile({ folder: "images", id: params.imageId, ext: params.ext })
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        imageId: params.imageId,
+        ext: params.ext,
+        mediaType: params.image.mediaType,
+        data: data === null ? null : (Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8")).toString("base64"),
+    }
+}
+
+const DEFAULT_SCOPED_PROJECT_PROCESS_TIMEOUT_MS = 10 * 60 * 1000
+const DAEMON_SCOPED_PROJECT_PROCESS_TIMEOUT_MS = 24 * 60 * 60 * 1000
+const MAX_SCOPED_PROJECT_PROCESS_TIMEOUT_MS = 24 * 60 * 60 * 1000
+
+async function scopedProjectProcessSearchRoot(params: { repo: OpenADEProject; task?: OpenADETask }): Promise<string> {
+    return params.task ? scopedTaskWorkDir(params.repo, params.task) : path.resolve(params.repo.path)
+}
+
+function scopedProjectProcessCwd(root: string, config: ProcsConfig, processDef: ProcessDef): string {
+    const resolvedRoot = path.resolve(root)
+    const configPath = path.resolve(resolvedRoot, config.relativePath)
+    if (configPath !== resolvedRoot && !configPath.startsWith(`${resolvedRoot}${path.sep}`)) {
+        throw new Error("process config path is outside the repository")
+    }
+    const cwd = path.resolve(path.dirname(configPath), processDef.workDir ?? "")
+    if (cwd !== resolvedRoot && !cwd.startsWith(`${resolvedRoot}${path.sep}`)) {
+        throw new Error("process cwd is outside the repository")
+    }
+    return cwd
+}
+
+function processDefinitionFromConfig(root: string, config: ProcsConfig, processDef: ProcessDef): OpenADEProjectProcessDefinition {
+    return {
+        id: processDef.id,
+        name: processDef.name,
+        command: processDef.command,
+        workDir: processDef.workDir,
+        url: processDef.url,
+        type: processDef.type,
+        configPath: config.relativePath,
+        cwd: scopedProjectProcessCwd(root, config, processDef),
+    }
+}
+
+function projectProcessDefinitionsFromProcs(result: ReadProcsResult): {
+    processes: OpenADEProjectProcessDefinition[]
+    errors: OpenADEProjectProcessConfigError[]
+} {
+    const root = result.isWorktree && result.worktreeRoot ? result.worktreeRoot : result.repoRoot
+    const processes: OpenADEProjectProcessDefinition[] = []
+    const errors: OpenADEProjectProcessConfigError[] = []
+    for (const config of result.configs) {
+        for (const processDef of config.processes) {
+            try {
+                processes.push(processDefinitionFromConfig(root, config, processDef))
+            } catch (error) {
+                errors.push({
+                    relativePath: config.relativePath,
+                    error: error instanceof Error ? error.message : "Process cwd is invalid",
+                })
+            }
+        }
+    }
+    return { processes, errors }
+}
+
+function scopedProjectProcessScopeMatches(registration: ScopedProjectProcessRegistration, params: { repoId: string; taskId?: string }): boolean {
+    return registration.repoId === params.repoId && (registration.taskId ?? "") === (params.taskId ?? "")
+}
+
+function scopedProjectProcessInstance(
+    processInfo: {
+        processId: string
+        completed: boolean
+        exitCode: number | null
+        signal: string | null
+        error?: string
+        pid?: number
+    },
+    registration: ScopedProjectProcessRegistration
+): OpenADEProjectProcessInstance {
+    return {
+        processId: processInfo.processId,
+        definitionId: registration.definitionId,
+        repoId: registration.repoId,
+        taskId: registration.taskId,
+        cwd: registration.cwd,
+        completed: processInfo.completed,
+        exitCode: processInfo.exitCode,
+        signal: processInfo.signal,
+        error: processInfo.error,
+        pid: processInfo.pid,
+    }
+}
+
+async function listScopedProjectProcesses(
+    params: OpenADEProjectProcessListRequest & { repo: OpenADEProject; task?: OpenADETask }
+): Promise<OpenADEProjectProcessListResult> {
+    const searchRoot = await scopedProjectProcessSearchRoot(params)
+    const procs = await readRuntimeProcs({ path: searchRoot })
+    const definitions = projectProcessDefinitionsFromProcs(procs)
+    const runtimeProcesses = await listRuntimeProcesses()
+    const instances = runtimeProcesses.processes
+        .map((processInfo) => {
+            const registration = scopedProjectProcesses.get(processInfo.processId)
+            return registration && scopedProjectProcessScopeMatches(registration, params) ? scopedProjectProcessInstance(processInfo, registration) : null
+        })
+        .filter((instance): instance is OpenADEProjectProcessInstance => instance !== null)
+
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        searchRoot: procs.searchRoot,
+        repoRoot: procs.repoRoot,
+        isWorktree: procs.isWorktree,
+        worktreeRoot: procs.worktreeRoot,
+        processes: definitions.processes,
+        errors: [...procs.errors, ...definitions.errors],
+        instances,
+    }
+}
+
+function scopedProjectProcessTimeout(processDef: OpenADEProjectProcessDefinition, timeoutMs?: number): number {
+    const fallback = processDef.type === "daemon" ? DAEMON_SCOPED_PROJECT_PROCESS_TIMEOUT_MS : DEFAULT_SCOPED_PROJECT_PROCESS_TIMEOUT_MS
+    return Math.min(timeoutMs ?? fallback, MAX_SCOPED_PROJECT_PROCESS_TIMEOUT_MS)
+}
+
+async function startScopedProjectProcess(
+    params: OpenADEProjectProcessStartRequest & { repo: OpenADEProject; task?: OpenADETask }
+): Promise<OpenADEProjectProcessStartResult> {
+    const listed = await listScopedProjectProcesses(params)
+    const processDef = listed.processes.find((candidate) => candidate.id === params.definitionId)
+    if (!processDef) throw new Error(`Process definition ${params.definitionId} not found`)
+    const stat = await fs.stat(processDef.cwd)
+    if (!stat.isDirectory()) throw new Error("process cwd is not a directory")
+
+    const started = await startRuntimeScript({
+        script: processDef.command,
+        cwd: processDef.cwd,
+        timeoutMs: scopedProjectProcessTimeout(processDef, params.timeoutMs),
+    })
+    scopedProjectProcesses.set(started.processId, {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        definitionId: params.definitionId,
+        cwd: processDef.cwd,
+    })
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        definitionId: params.definitionId,
+        processId: started.processId,
+        runtimeId: `process:${started.processId}`,
+    }
+}
+
+function scopedProcessOutputChunk(chunk: { type: "stdout" | "stderr"; data: string; timestamp: number }): OpenADEProjectProcessOutputChunk {
+    return {
+        type: chunk.type,
+        data: chunk.data,
+        timestamp: chunk.timestamp,
+    }
+}
+
+async function reconnectScopedProjectProcess(
+    params: OpenADEProjectProcessReconnectRequest & { repo: OpenADEProject; task?: OpenADETask }
+): Promise<OpenADEProjectProcessReconnectResult> {
+    const registration = scopedProjectProcesses.get(params.processId)
+    if (!registration || !scopedProjectProcessScopeMatches(registration, params)) {
+        return { repoId: params.repoId, taskId: params.taskId, processId: params.processId, found: false, output: [] }
+    }
+    const result = await reconnectRuntimeProcess(params.processId)
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        processId: params.processId,
+        found: result.found,
+        completed: result.completed,
+        exitCode: result.exitCode,
+        signal: result.signal,
+        error: result.error,
+        outputCount: result.outputCount,
+        output: result.output.map(scopedProcessOutputChunk),
+    }
+}
+
+async function stopScopedProjectProcess(
+    params: OpenADEProjectProcessStopRequest & { repo: OpenADEProject; task?: OpenADETask }
+): Promise<OpenADEProjectProcessStopResult> {
+    const registration = scopedProjectProcesses.get(params.processId)
+    if (!registration || !scopedProjectProcessScopeMatches(registration, params)) {
+        return { repoId: params.repoId, taskId: params.taskId, processId: params.processId, ok: false, error: "Process not found" }
+    }
+    const result = await killRuntimeProcess(params.processId)
+    if (result.ok) scopedProjectProcesses.delete(params.processId)
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        processId: params.processId,
+        ok: result.ok,
+        error: result.error,
+    }
+}
+
+function scopedTaskTerminalId(repoId: string, taskId: string): string {
+    const hash = createHash("sha256").update(repoId).update("\0").update(taskId).digest("hex").slice(0, 24)
+    return `openade-task-terminal-${hash}`
+}
+
+function assertScopedTaskTerminal(params: { repoId: string; taskId: string; terminalId: string }): void {
+    if (params.terminalId !== scopedTaskTerminalId(params.repoId, params.taskId)) throw new Error("terminalId is invalid")
+}
+
+function terminalOutputChunk(chunk: { data: string; timestamp: number }): OpenADETaskTerminalOutputChunk {
+    return {
+        data: Buffer.from(chunk.data, "base64").toString("utf8"),
+        timestamp: chunk.timestamp,
+    }
+}
+
+async function startScopedTaskTerminal(
+    params: OpenADETaskTerminalStartRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskTerminalStartResult> {
+    const cwd = await scopedTaskWorkDir(params.repo, params.task)
+    const terminalId = scopedTaskTerminalId(params.repoId, params.taskId)
+    const result = await spawnRuntimePty({
+        ptyId: terminalId,
+        cwd,
+        cols: params.cols ?? 100,
+        rows: params.rows ?? 30,
+    })
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        terminalId,
+        runtimeId: `pty:${terminalId}`,
+        ok: result.ok,
+        error: result.error,
+    }
+}
+
+async function reconnectScopedTaskTerminal(
+    params: OpenADETaskTerminalReconnectRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskTerminalReconnectResult> {
+    assertScopedTaskTerminal(params)
+    const result = await reconnectRuntimePty({ ptyId: params.terminalId })
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        terminalId: params.terminalId,
+        found: result.found,
+        exited: result.exited,
+        exitCode: result.exitCode ?? null,
+        outputCount: result.output.length,
+        output: result.output.map(terminalOutputChunk),
+    }
+}
+
+async function writeScopedTaskTerminal(
+    params: OpenADETaskTerminalWriteRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskTerminalMutationResult> {
+    assertScopedTaskTerminal(params)
+    const result = await writeRuntimePty({ ptyId: params.terminalId, data: Buffer.from(params.data, "utf8").toString("base64") })
+    return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: result.ok }
+}
+
+async function resizeScopedTaskTerminal(
+    params: OpenADETaskTerminalResizeRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskTerminalMutationResult> {
+    assertScopedTaskTerminal(params)
+    const result = await resizeRuntimePty({ ptyId: params.terminalId, cols: params.cols, rows: params.rows })
+    return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: result.ok }
+}
+
+async function stopScopedTaskTerminal(
+    params: OpenADETaskTerminalStopRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskTerminalMutationResult> {
+    assertScopedTaskTerminal(params)
+    const result = await killRuntimePty({ ptyId: params.terminalId })
+    return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: result.ok }
 }
 
 function isMcpServerItem(value: Record<string, unknown>): boolean {
@@ -1640,6 +2310,29 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                 return hydrateOpenADETaskSessionEvents({ server, task, repoPath })
             },
             version: () => process.env.RELEASE ?? "local",
+            scopedHost: {
+                listProjectFiles: listScopedProjectFiles,
+                readProjectFile: readScopedProjectFile,
+                writeProjectFile: writeScopedProjectFile,
+                searchProject: searchScopedProject,
+                readTaskChanges: readScopedTaskChanges,
+                readTaskDiff: readScopedTaskDiff,
+                readTaskGitLog: readScopedTaskGitLog,
+                commitTaskGit: commitScopedTaskGit,
+                listProjectProcesses: listScopedProjectProcesses,
+                startProjectProcess: startScopedProjectProcess,
+                reconnectProjectProcess: reconnectScopedProjectProcess,
+                stopProjectProcess: stopScopedProjectProcess,
+                startTaskTerminal: startScopedTaskTerminal,
+                reconnectTaskTerminal: reconnectScopedTaskTerminal,
+                writeTaskTerminal: writeScopedTaskTerminal,
+                resizeTaskTerminal: resizeScopedTaskTerminal,
+                stopTaskTerminal: stopScopedTaskTerminal,
+                readTaskImage: readScopedTaskImage,
+                readTaskSnapshotPatch: readScopedTaskSnapshotPatch,
+                readTaskSnapshotIndex: readScopedTaskSnapshotIndex,
+                readTaskSnapshotPatchSlice: readScopedTaskSnapshotPatchSlice,
+            },
             saveDataDocumentBase64: (id, data) => yjsStorage.saveDocumentUpdate(id, Buffer.from(data, "base64")),
             deleteDataDocument: (id) => yjsStorage.deleteDocument(id),
             createRepo: async (params) => {
@@ -1660,7 +2353,7 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
             startTurn: async (params, context) => {
                 if (!canCreateTaskInRuntime(params)) {
                     if (!params.inTaskId) throw new Error("Task id is required for existing task execution")
-                    const existingTask = await projection.readTask(params.repoId, params.inTaskId)
+                    const existingTask = await readTaskForMutation(projection, params.repoId, params.inTaskId)
                     if (!canExecuteTaskInRuntime(existingTask)) {
                         throw new Error("Server-owned execution supports head and worktree tasks only")
                     }
@@ -1874,7 +2567,7 @@ async function startHeadModeTurn({
     context?: OpenADETurnStartContext
     queuedTurnId?: string
 }): Promise<{ eventId: string }> {
-    const task = await projection.readTask(params.repoId, taskId)
+    const task = await readTaskForMutation(projection, params.repoId, taskId)
     if (params.type === "hyperplan") {
         const fallbackHarnessId = harnessIdForTurn(params, task)
         const fallbackModelId = modelIdForTurn(params, task, fallbackHarnessId) ?? getDefaultModelForHarness(fallbackHarnessId)
@@ -2050,7 +2743,7 @@ async function startReviewTurn({
     params: OpenADEReviewStartRequest
     context?: OpenADETurnStartContext
 }): Promise<{ taskId: string; eventId: string }> {
-    const task = await projection.readTask(params.repoId, params.taskId)
+    const task = await readTaskForMutation(projection, params.repoId, params.taskId)
     if (!canExecuteTaskInRuntime(task)) throw new Error("Server-owned review supports head and worktree tasks only")
     const repo = (await projection.readProjects()).find((project) => project.id === params.repoId)
     if (!repo) throw new Error(`Repository ${params.repoId} not found`)
@@ -2154,7 +2847,7 @@ async function startReviewTurn({
         onCompleted: async ({ events }) => {
             const reviewText = extractOpenADEPlanText(events, params.harnessId)
             if (!reviewText) return
-            const currentTask = await projection.readTask(params.repoId, params.taskId)
+            const currentTask = await readTaskForMutation(projection, params.repoId, params.taskId)
             const followUpLabel = `${userLabel} Follow-up`
             const handoffMessage = buildOpenADEReviewHandoffPrompt({ reviewType: params.reviewType, reviewText })
             const followUpPrompt = buildOpenADEPrompt({
@@ -2896,6 +3589,7 @@ export function getRuntimeServer(): RuntimeServer {
         })
         registerTrustedHostMethods(runtimeServer)
         registerOpenADEProductModule(runtimeServer)
+        registerRemoteDeviceRuntimeMethods(runtimeServer)
         registerRuntimeAgentModule(runtimeServer)
         registerRuntimeHostModule(runtimeServer)
         registerConfiguredServerProtocolBridges(runtimeServer)

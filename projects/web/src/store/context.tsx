@@ -3,7 +3,7 @@ import type { CodeStore } from "./store"
 
 const CodeStoreContext = createContext<CodeStore | null>(null)
 
-export const CodeStoreProvider = ({ store, children }: { store: CodeStore; children: ReactNode }) => (
+export const CodeStoreProvider = ({ store, children }: { store: CodeStore; children?: ReactNode }) => (
     <CodeStoreContext.Provider value={store}>{children}</CodeStoreContext.Provider>
 )
 

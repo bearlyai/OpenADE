@@ -1,80 +1,104 @@
 import type { RuntimeNotification } from "../../../runtime-protocol/src"
-import type { PairRequest, RemoteSnapshot, RemoteTask, RemoteTurnStartRequest, RemoteTurnStartResult } from "../../../shared/companion/src"
-import type { OpenADETaskReadOptions } from "../../../openade-module/src"
-import { OpenADEClient, type OpenADEClientOptions } from "../../../openade-client/src"
-import { RuntimeClient, RuntimeClientError, type RuntimeClientOptions, type RuntimeClientStatus } from "../../../runtime-client/src"
+import type {
+    PairRequest,
+    RemoteDeviceSelfRevokeResult,
+    RemoteSnapshot,
+    RemoteTask,
+    RemoteTurnStartRequest,
+    RemoteTurnStartResult,
+} from "../../../shared/companion/src"
+import type {
+    OpenADECommentCreateRequest,
+    OpenADECommentCreateResult,
+    OpenADECommentDeleteRequest,
+    OpenADECommentEditRequest,
+    OpenADEProjectFileReadRequest,
+    OpenADEProjectFileReadResult,
+    OpenADEProjectFilesTreeRequest,
+    OpenADEProjectFilesTreeResult,
+    OpenADEProjectProcessListRequest,
+    OpenADEProjectProcessListResult,
+    OpenADEProjectProcessReconnectRequest,
+    OpenADEProjectProcessReconnectResult,
+    OpenADEProjectProcessStartRequest,
+    OpenADEProjectProcessStartResult,
+    OpenADEProjectProcessStopRequest,
+    OpenADEProjectProcessStopResult,
+    OpenADEProjectSearchRequest,
+    OpenADEProjectSearchResult,
+    OpenADEQueuedTurnCancelRequest,
+    OpenADEQueuedTurnCancelResult,
+    OpenADEReviewStartRequest,
+    OpenADETaskDeleteRequest,
+    OpenADETaskDeleteResult,
+    OpenADETaskChangesReadRequest,
+    OpenADETaskChangesReadResult,
+    OpenADETaskDiffReadRequest,
+    OpenADETaskDiffReadResult,
+    OpenADETaskGitLogRequest,
+    OpenADETaskGitLogResult,
+    OpenADETaskImageReadRequest,
+    OpenADETaskImageReadResult,
+    OpenADETaskMetadataUpdateRequest,
+    OpenADETaskReadOptions,
+} from "../../../openade-module/src"
+import { RuntimeClientError } from "../../../runtime-client/src"
+import {
+    buildPairingTarget,
+    defaultKernelSessionConstructors,
+    KernelSessionManager,
+    type KernelRealtimeConnectionStatus,
+    type KernelRuntimeClientLike,
+    type KernelSessionConfig,
+    type KernelSessionConstructors,
+    type KernelSessionEntry,
+} from "../kernel/session"
+import { KernelSessionConfigStore, type KernelSessionConfigInput } from "../kernel/sessionStore"
+import { OpenADEProductStore, type OpenADEProductClient } from "../kernel/productStore"
 
-export interface RemoteConfig {
-    id: string
-    baseUrl: string
-    token: string
-    host: string
-    hostId?: string
-    savedAt: string
-    lastUsedAt: string
-}
+export type { PairingTarget } from "../kernel/session"
+export { buildPairingTarget, parsePairingCode } from "../kernel/session"
+
+export interface RemoteConfig extends KernelSessionConfig {}
 
 export const REMOTE_CONFIG_STORAGE_KEY = "openade-companion-config"
-export type RemoteRealtimeConnectionStatus = RuntimeClientStatus | "lagged"
+export type RemoteRealtimeConnectionStatus = KernelRealtimeConnectionStatus
 
-export interface PairingTarget {
-    baseUrl: string
-    token: string
-    host: string
-    hostId?: string
-}
+interface RemoteRuntimeClient extends KernelRuntimeClientLike {}
 
-interface RemoteConfigStore {
-    version: 2
-    activeId?: string
-    configs: RemoteConfig[]
-}
-
-type RemoteConfigInput = Pick<RemoteConfig, "baseUrl" | "token"> & Partial<Omit<RemoteConfig, "baseUrl" | "token">>
-
-interface RuntimeClientEntry {
-    client: RemoteRuntimeClient
-    openade: RemoteOpenADEClient
-    statusListeners: Set<(status: RemoteRealtimeConnectionStatus) => void>
-    status?: RemoteRealtimeConnectionStatus
-    url: string
-    token: string
-}
-
-interface RemoteRuntimeClient {
-    close(): void | Promise<void>
-}
-
-interface RemoteOpenADEClient {
+interface RemoteOpenADEClient extends OpenADEProductClient {
     getSnapshot(): Promise<RemoteSnapshot>
     getTask(repoId: string, taskId: string, options?: OpenADETaskReadOptions): Promise<RemoteTask>
     startTurn(args: RemoteTurnStartRequest): Promise<RemoteTurnStartResult>
     interruptTurn(taskId: string): Promise<void>
-    subscribeToChanges(onEvent: (notification: RuntimeNotification) => void): () => void
 }
 
-interface RemoteClientConstructors {
-    RuntimeClient: new (options: RuntimeClientOptions) => RemoteRuntimeClient
-    OpenADEClient: new (options: OpenADEClientOptions) => RemoteOpenADEClient
-}
+type RemoteClientConstructors = KernelSessionConstructors<RemoteRuntimeClient, RemoteOpenADEClient>
 
-const runtimeClients = new Map<string, RuntimeClientEntry>()
-let remoteClientConstructors: RemoteClientConstructors = { RuntimeClient, OpenADEClient }
+const remoteSessionDefaults = {
+    clientName: "OpenADE Companion",
+    clientPlatform: "mobile" as const,
+    protocolVersion: 1,
+    reconnect: true,
+}
+let remoteSessionManager = new KernelSessionManager<RemoteRuntimeClient, RemoteOpenADEClient>(defaultKernelSessionConstructors, remoteSessionDefaults)
+const remoteProductStores = new Map<string, { openade: RemoteOpenADEClient; store: OpenADEProductStore }>()
 
 function clearRuntimeClientCache(): void {
-    for (const entry of runtimeClients.values()) {
-        entry.client.close()
+    for (const entry of remoteProductStores.values()) {
+        entry.store.destroy()
     }
-    runtimeClients.clear()
+    remoteProductStores.clear()
+    remoteSessionManager.clear()
 }
 
 export function __setRemoteClientConstructorsForTest(constructors: RemoteClientConstructors): () => void {
-    const previous = remoteClientConstructors
+    const previous = remoteSessionManager
     clearRuntimeClientCache()
-    remoteClientConstructors = constructors
+    remoteSessionManager = new KernelSessionManager<RemoteRuntimeClient, RemoteOpenADEClient>(constructors, remoteSessionDefaults)
     return () => {
         clearRuntimeClientCache()
-        remoteClientConstructors = previous
+        remoteSessionManager = previous
     }
 }
 
@@ -89,171 +113,32 @@ function notifyConfigSaved(value: string | null): void {
     window.dispatchEvent(new CustomEvent("openade-companion-config", { detail: value }))
 }
 
-function remoteConfigId(baseUrl: string, hostId?: string): string {
-    if (hostId) return hostId
-    return buildPairingTarget(baseUrl, "token").baseUrl
-}
-
-function normalizeRemoteConfig(config: RemoteConfigInput): RemoteConfig {
-    const target = buildPairingTarget(config.baseUrl, config.token)
-    const now = new Date().toISOString()
-    return {
-        id: config.id ?? remoteConfigId(target.baseUrl, config.hostId),
-        baseUrl: target.baseUrl,
-        token: target.token,
-        host: config.host ?? target.host,
-        hostId: config.hostId,
-        savedAt: config.savedAt ?? now,
-        lastUsedAt: config.lastUsedAt ?? now,
-    }
-}
-
-function parseRemoteConfigStore(raw: string | null): RemoteConfigStore {
-    if (!raw) return { version: 2, configs: [] }
-
-    try {
-        const parsed = JSON.parse(raw) as Partial<RemoteConfigStore> | RemoteConfigInput
-        if ("configs" in parsed && Array.isArray(parsed.configs)) {
-            const configs = parsed.configs
-                .map((config) => {
-                    try {
-                        return normalizeRemoteConfig(config)
-                    } catch {
-                        return null
-                    }
-                })
-                .filter((config): config is RemoteConfig => config !== null && Boolean(config.token))
-            const activeId = configs.some((config) => config.id === parsed.activeId) ? parsed.activeId : configs[0]?.id
-            return { version: 2, activeId, configs }
-        }
-        if ("baseUrl" in parsed && "token" in parsed && parsed.baseUrl && parsed.token) {
-            try {
-                const config = normalizeRemoteConfig(parsed)
-                return { version: 2, activeId: config.id, configs: [config] }
-            } catch {
-                return { version: 2, configs: [] }
-            }
-        }
-    } catch {
-        return { version: 2, configs: [] }
-    }
-    return { version: 2, configs: [] }
-}
-
-function loadRemoteConfigStore(): RemoteConfigStore {
-    return parseRemoteConfigStore(localStorage.getItem(REMOTE_CONFIG_STORAGE_KEY))
-}
-
-function persistRemoteConfigStore(store: RemoteConfigStore): void {
-    const value = JSON.stringify(store)
-    localStorage.setItem(REMOTE_CONFIG_STORAGE_KEY, value)
-    notifyConfigSaved(value)
+function remoteConfigStore(): KernelSessionConfigStore {
+    return new KernelSessionConfigStore({ storage: window.localStorage, storageKey: REMOTE_CONFIG_STORAGE_KEY, onChange: notifyConfigSaved })
 }
 
 export function loadRemoteConfigs(): RemoteConfig[] {
-    return loadRemoteConfigStore().configs
+    return remoteConfigStore().loadConfigs()
 }
 
 export function loadRemoteConfig(): RemoteConfig | null {
-    const store = loadRemoteConfigStore()
-    return store.configs.find((config) => config.id === store.activeId) ?? store.configs[0] ?? null
+    return remoteConfigStore().loadActive()
 }
 
-export function saveRemoteConfig(config: RemoteConfigInput): RemoteConfig {
-    const store = loadRemoteConfigStore()
-    const nextConfig = normalizeRemoteConfig({ ...config, lastUsedAt: new Date().toISOString() })
-    const configs = [nextConfig, ...store.configs.filter((existing) => existing.id !== nextConfig.id)]
-    persistRemoteConfigStore({ version: 2, activeId: nextConfig.id, configs })
-    return nextConfig
+export function saveRemoteConfig(config: KernelSessionConfigInput): RemoteConfig {
+    return remoteConfigStore().save(config)
 }
 
 export function activateRemoteConfig(configId: string): RemoteConfig | null {
-    const store = loadRemoteConfigStore()
-    const config = store.configs.find((entry) => entry.id === configId)
-    if (!config) return null
-    const nextConfig = { ...config, lastUsedAt: new Date().toISOString() }
-    const configs = [nextConfig, ...store.configs.filter((entry) => entry.id !== configId)]
-    persistRemoteConfigStore({ version: 2, activeId: nextConfig.id, configs })
-    return nextConfig
+    return remoteConfigStore().activate(configId)
 }
 
 export function removeRemoteConfig(configId: string): RemoteConfig | null {
-    const store = loadRemoteConfigStore()
-    const configs = store.configs.filter((config) => config.id !== configId)
-    const preferredActiveId = store.activeId === configId ? configs[0]?.id : store.activeId
-    const activeId = configs.some((config) => config.id === preferredActiveId) ? preferredActiveId : configs[0]?.id
-    persistRemoteConfigStore({ version: 2, activeId, configs })
-    return configs.find((config) => config.id === activeId) ?? configs[0] ?? null
+    return remoteConfigStore().remove(configId)
 }
 
 export function clearRemoteConfig(): void {
-    localStorage.removeItem(REMOTE_CONFIG_STORAGE_KEY)
-    notifyConfigSaved(null)
-}
-
-function isPrivateIpv4(hostname: string): boolean {
-    const parts = hostname.split(".").map((part) => Number(part))
-    if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false
-    const [a, b] = parts
-    return (
-        a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254)
-    )
-}
-
-function isPrivateIpv6(hostname: string): boolean {
-    const host = hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "")
-    return host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:")
-}
-
-function isAllowedCompanionHost(hostname: string): boolean {
-    const host = hostname.toLowerCase()
-    if (host.includes(":")) return isPrivateIpv6(host)
-    return (
-        host === "localhost" || isPrivateIpv4(host) || host.endsWith(".local") || host.endsWith(".ts.net") || (!host.includes(".") && /^[a-z0-9-]+$/.test(host))
-    )
-}
-
-export function buildPairingTarget(baseUrl: string, token: string, hostId?: string): PairingTarget {
-    let url: URL
-    try {
-        url = new URL(baseUrl)
-    } catch {
-        throw new Error("Pairing URL is invalid")
-    }
-
-    if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Pairing URL must use HTTP or HTTPS")
-    if (!isAllowedCompanionHost(url.hostname)) throw new Error(`Refusing to connect to public host ${url.hostname}`)
-    if (!token.trim()) throw new Error("Pairing token is required")
-
-    return {
-        baseUrl: `${url.protocol}//${url.host}`,
-        token: token.trim(),
-        host: url.host,
-        ...(hostId ? { hostId } : {}),
-    }
-}
-
-export function parsePairingCode(value: string): PairingTarget {
-    const raw = value.trim()
-    if (!raw) throw new Error("Pairing QR is empty")
-
-    if (raw.startsWith("{")) {
-        const parsed = JSON.parse(raw) as { baseUrl?: string; url?: string; token?: string; hostId?: string }
-        return buildPairingTarget(parsed.baseUrl ?? parsed.url ?? "", parsed.token ?? "", parsed.hostId)
-    }
-
-    const url = new URL(raw)
-    if (url.protocol === "openade:") throw new Error("Deep-link pairing is no longer supported. Scan the HTTP pairing QR.")
-    const token = url.searchParams.get("token") ?? ""
-    return buildPairingTarget(url.searchParams.get("baseUrl") ?? url.origin, token, url.searchParams.get("hostId") ?? undefined)
-}
-
-function runtimeSocketUrl(config: RemoteConfig): string {
-    const url = new URL(config.baseUrl)
-    url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
-    url.pathname = "/v1/runtime"
-    url.search = ""
-    return url.toString()
+    remoteConfigStore().clear()
 }
 
 function isTransientRuntimeReadError(error: unknown): boolean {
@@ -271,67 +156,22 @@ async function retryTransientRead<T>(read: () => Promise<T>): Promise<T> {
     }
 }
 
-function notifyRuntimeEntryStatus(entry: RuntimeClientEntry, status: RemoteRealtimeConnectionStatus): void {
-    entry.status = status
-    for (const listener of entry.statusListeners) listener(status)
-}
-
 function runtimeEntry(
     config: RemoteConfig,
     onStatus?: (status: RemoteRealtimeConnectionStatus) => void
-): { entry: RuntimeClientEntry; removeStatus: () => void } {
-    const key = config.id
-    const url = runtimeSocketUrl(config)
-    let entry = runtimeClients.get(key)
-    if (entry && (entry.url !== url || entry.token !== config.token)) {
-        entry.client.close()
-        runtimeClients.delete(key)
-        entry = undefined
-    }
-    if (!entry) {
-        const statusListeners = new Set<(status: RemoteRealtimeConnectionStatus) => void>()
-        let createdEntry: RuntimeClientEntry | null = null
-        const runtime = new remoteClientConstructors.RuntimeClient({
-            url,
-            token: config.token,
-            clientName: "OpenADE Companion",
-            clientPlatform: "mobile",
-            protocolVersion: 1,
-            reconnect: true,
-            onStatus(status) {
-                if (createdEntry) notifyRuntimeEntryStatus(createdEntry, status)
-            },
-        })
-        entry = {
-            url,
-            token: config.token,
-            statusListeners,
-            client: runtime,
-            openade: new remoteClientConstructors.OpenADEClient({
-                runtime: runtime as OpenADEClientOptions["runtime"],
-                clientName: "OpenADE Companion",
-                clientPlatform: "mobile",
-                protocolVersion: 1,
-            }),
-        }
-        createdEntry = entry
-        runtimeClients.set(key, entry)
-    }
+): { entry: KernelSessionEntry<RemoteRuntimeClient, RemoteOpenADEClient>; removeStatus: () => void } {
+    return remoteSessionManager.session(config, onStatus)
+}
 
-    if (!onStatus) return { entry, removeStatus: () => {} }
-    entry.statusListeners.add(onStatus)
-    if (entry.status) {
-        const currentStatus = entry.status
-        queueMicrotask(() => {
-            if (entry?.statusListeners.has(onStatus)) onStatus(currentStatus)
-        })
-    }
-    return {
-        entry,
-        removeStatus: () => {
-            entry?.statusListeners.delete(onStatus)
-        },
-    }
+function productStore(config: RemoteConfig): OpenADEProductStore {
+    const { entry } = runtimeEntry(config)
+    const cached = remoteProductStores.get(config.id)
+    if (cached?.openade === entry.openade) return cached.store
+    cached?.store.destroy()
+
+    const store = new OpenADEProductStore(entry.openade)
+    remoteProductStores.set(config.id, { openade: entry.openade, store })
+    return store
 }
 
 export async function pairRemote(baseUrl: string, token: string): Promise<RemoteConfig> {
@@ -352,19 +192,98 @@ export async function pairRemote(baseUrl: string, token: string): Promise<Remote
 }
 
 export function getSnapshot(config: RemoteConfig): Promise<RemoteSnapshot> {
-    return retryTransientRead(() => runtimeEntry(config).entry.openade.getSnapshot())
+    return retryTransientRead(() => productStore(config).refreshSnapshot())
 }
 
 export function getTask(config: RemoteConfig, repoId: string, taskId: string, options: OpenADETaskReadOptions = {}): Promise<RemoteTask> {
-    return retryTransientRead(() => runtimeEntry(config).entry.openade.getTask(repoId, taskId, options))
+    return retryTransientRead(() => productStore(config).getTask(repoId, taskId, options))
+}
+
+export function readRemoteTaskImage(config: RemoteConfig, args: OpenADETaskImageReadRequest): Promise<OpenADETaskImageReadResult> {
+    return retryTransientRead(() => productStore(config).readTaskImage(args))
+}
+
+export function readRemoteTaskChanges(config: RemoteConfig, args: OpenADETaskChangesReadRequest): Promise<OpenADETaskChangesReadResult> {
+    return retryTransientRead(() => productStore(config).readTaskChanges(args))
+}
+
+export function readRemoteTaskDiff(config: RemoteConfig, args: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult> {
+    return retryTransientRead(() => productStore(config).readTaskDiff(args))
+}
+
+export function readRemoteTaskGitLog(config: RemoteConfig, args: OpenADETaskGitLogRequest): Promise<OpenADETaskGitLogResult> {
+    return retryTransientRead(() => productStore(config).readTaskGitLog(args))
+}
+
+export function listRemoteProjectFiles(config: RemoteConfig, args: OpenADEProjectFilesTreeRequest): Promise<OpenADEProjectFilesTreeResult> {
+    return retryTransientRead(() => productStore(config).listProjectFiles(args))
+}
+
+export function readRemoteProjectFile(config: RemoteConfig, args: OpenADEProjectFileReadRequest): Promise<OpenADEProjectFileReadResult> {
+    return retryTransientRead(() => productStore(config).readProjectFile(args))
+}
+
+export function searchRemoteProject(config: RemoteConfig, args: OpenADEProjectSearchRequest): Promise<OpenADEProjectSearchResult> {
+    return retryTransientRead(() => productStore(config).searchProject(args))
+}
+
+export function listRemoteProjectProcesses(config: RemoteConfig, args: OpenADEProjectProcessListRequest): Promise<OpenADEProjectProcessListResult> {
+    return retryTransientRead(() => productStore(config).listProjectProcesses(args))
+}
+
+export function startRemoteProjectProcess(config: RemoteConfig, args: OpenADEProjectProcessStartRequest): Promise<OpenADEProjectProcessStartResult> {
+    return productStore(config).startProjectProcess(args)
+}
+
+export function reconnectRemoteProjectProcess(
+    config: RemoteConfig,
+    args: OpenADEProjectProcessReconnectRequest
+): Promise<OpenADEProjectProcessReconnectResult> {
+    return retryTransientRead(() => productStore(config).reconnectProjectProcess(args))
+}
+
+export function stopRemoteProjectProcess(config: RemoteConfig, args: OpenADEProjectProcessStopRequest): Promise<OpenADEProjectProcessStopResult> {
+    return productStore(config).stopProjectProcess(args)
 }
 
 export function startRemoteTurn(config: RemoteConfig, args: RemoteTurnStartRequest): Promise<RemoteTurnStartResult> {
-    return runtimeEntry(config).entry.openade.startTurn(args)
+    return productStore(config).startTurn(args)
 }
 
 export function abortRemote(config: RemoteConfig, taskId: string): Promise<void> {
-    return runtimeEntry(config).entry.openade.interruptTurn(taskId)
+    return productStore(config).interruptTurn(taskId)
+}
+
+export function startRemoteReview(config: RemoteConfig, args: OpenADEReviewStartRequest): Promise<{ taskId: string }> {
+    return productStore(config).startReview(args)
+}
+
+export function cancelRemoteQueuedTurn(config: RemoteConfig, args: OpenADEQueuedTurnCancelRequest): Promise<OpenADEQueuedTurnCancelResult> {
+    return productStore(config).cancelQueuedTurn(args)
+}
+
+export function updateRemoteTaskMetadata(config: RemoteConfig, args: OpenADETaskMetadataUpdateRequest): Promise<void> {
+    return productStore(config).updateTaskMetadata(args)
+}
+
+export function createRemoteComment(config: RemoteConfig, args: OpenADECommentCreateRequest): Promise<OpenADECommentCreateResult> {
+    return productStore(config).createComment(args)
+}
+
+export function editRemoteComment(config: RemoteConfig, args: OpenADECommentEditRequest): Promise<void> {
+    return productStore(config).editComment(args)
+}
+
+export function deleteRemoteComment(config: RemoteConfig, args: OpenADECommentDeleteRequest): Promise<void> {
+    return productStore(config).deleteComment(args)
+}
+
+export function deleteRemoteTask(config: RemoteConfig, args: OpenADETaskDeleteRequest): Promise<OpenADETaskDeleteResult> {
+    return productStore(config).deleteTask(args)
+}
+
+export function selfRevokeRemoteDevice(config: RemoteConfig): Promise<RemoteDeviceSelfRevokeResult> {
+    return runtimeEntry(config).entry.runtime.request("remote/device/selfRevoke")
 }
 
 export function subscribeRemoteChanges(

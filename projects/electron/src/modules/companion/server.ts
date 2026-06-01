@@ -224,14 +224,6 @@ export function getBoundUrls(): string[] {
     return runningServers.map((entry) => entry.url)
 }
 
-export function closeCompanionStreams(deviceId?: string): void {
-    if (deviceId) {
-        for (const entry of runningServers) entry.runtimeSocket.closeDevice(deviceId)
-        return
-    }
-    for (const entry of runningServers) entry.runtimeSocket.closeAll()
-}
-
 async function stopServers(servers: RunningServer[]): Promise<void> {
     await Promise.all(
         servers.map(

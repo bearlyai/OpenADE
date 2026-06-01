@@ -4,6 +4,7 @@
 // OpenADE Electron API exposed via preload contextBridge
 interface OpenADEAPI {
     app: {
+        activeWorkUnloadBlockerDisabled?: boolean
         quit: () => Promise<void>
         openUrl: (url: string) => Promise<void>
         applyUpdate: () => Promise<void>
@@ -46,8 +47,6 @@ interface OpenADEAPI {
         setEnabled: (enabled: boolean) => Promise<unknown>
         setKeepAwakeMode: (mode: string) => Promise<unknown>
         startPairing: () => Promise<unknown>
-        revokeDevice: (deviceId: string) => Promise<unknown>
-        dropAllDevices: () => Promise<unknown>
     }
     runtime: {
         connect: () => Promise<unknown>

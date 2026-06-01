@@ -1,19 +1,17 @@
 import { app, ipcMain } from "electron"
 import type { KeepAwakeMode } from "../../../../shared/companion/src"
 import {
-    dropAllDevices,
     flushLastSeen,
     getPairingPayload,
     listDevices,
     loadSettings,
-    revokeDevice,
     saveSettings,
     startPairing,
     updateSettings,
 } from "./auth"
 import { getPublicBaseUrl } from "./network"
 import { cleanupPowerKeeper, configurePowerKeeper } from "./powerKeeper"
-import { closeCompanionStreams, getBoundUrls, startCompanionServer, stopCompanionServer } from "./server"
+import { getBoundUrls, startCompanionServer, stopCompanionServer } from "./server"
 
 async function ensureServer(): Promise<string[]> {
     const settings = loadSettings()
@@ -63,17 +61,6 @@ export function load(): void {
         const payload = startPairing(getPublicBaseUrl(settings.port, boundUrls))
         return payload
     })
-    ipcMain.handle("companion:revokeDevice", async (_event, deviceId: string) => {
-        revokeDevice(deviceId)
-        closeCompanionStreams(deviceId)
-        return currentState()
-    })
-    ipcMain.handle("companion:dropAllDevices", async () => {
-        dropAllDevices()
-        closeCompanionStreams()
-        return currentState()
-    })
-
     app.whenReady().then(async () => {
         const settings = loadSettings()
         saveSettings(settings)
@@ -91,8 +78,6 @@ export async function cleanup(): Promise<void> {
     ipcMain.removeHandler("companion:setEnabled")
     ipcMain.removeHandler("companion:setKeepAwakeMode")
     ipcMain.removeHandler("companion:startPairing")
-    ipcMain.removeHandler("companion:revokeDevice")
-    ipcMain.removeHandler("companion:dropAllDevices")
     flushLastSeen()
     cleanupPowerKeeper()
     await stopCompanionServer()

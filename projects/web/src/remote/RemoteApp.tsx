@@ -1,81 +1,81 @@
-import {
-    Archive,
-    ArrowDown,
-    ArrowLeft,
-    CheckCircle2,
-    ChevronRight,
-    CircleAlert,
-    CircleDot,
-    FolderOpen,
-    Loader2,
-    MessageSquarePlus,
-    Plus,
-    RefreshCw,
-    ScanLine,
-    Send,
-    Server,
-    Settings,
-    Square,
-    Trash2,
-    Wifi,
-    WifiOff,
-} from "lucide-react"
-import { useEffect, useMemo, useRef, useState } from "react"
-import type { RemoteRepo, RemoteSnapshot, RemoteTask, RemoteTaskPreview, RemoteTurnStartRequest } from "../../../shared/companion/src"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { RemoteSnapshot, RemoteTask, RemoteTurnStartRequest } from "../../../shared/companion/src"
+import type {
+    OpenADEProjectFileReadResult,
+    OpenADEProjectFilesTreeResult,
+    OpenADEProjectProcessListResult,
+    OpenADEProjectProcessReconnectResult,
+    OpenADEProjectSearchResult,
+    OpenADETaskChangesReadResult,
+    OpenADETaskDiffReadResult,
+    OpenADETaskGitChangedFile,
+    OpenADETaskGitLogResult,
+} from "../../../openade-module/src"
+import { DEFAULT_HARNESS_ID, getDefaultModelForHarness } from "../constants"
 import {
     abortRemote,
     activateRemoteConfig,
     buildPairingTarget,
+    cancelRemoteQueuedTurn,
     clearRemoteConfig,
+    createRemoteComment,
+    deleteRemoteComment,
+    deleteRemoteTask,
+    editRemoteComment,
     getSnapshot,
     getTask,
+    listRemoteProjectFiles,
+    listRemoteProjectProcesses,
     loadRemoteConfig,
     loadRemoteConfigs,
     parsePairingCode,
     pairRemote,
+    readRemoteProjectFile,
+    readRemoteTaskChanges,
+    readRemoteTaskDiff,
+    readRemoteTaskGitLog,
+    readRemoteTaskImage,
+    reconnectRemoteProjectProcess,
     removeRemoteConfig,
     remoteErrorMessage,
+    searchRemoteProject,
+    selfRevokeRemoteDevice,
+    startRemoteReview,
+    startRemoteProjectProcess,
     startRemoteTurn,
     saveRemoteConfig,
+    stopRemoteProjectProcess,
     subscribeRemoteChanges,
     type PairingTarget,
     type RemoteConfig,
     type RemoteRealtimeConnectionStatus,
+    updateRemoteTaskMetadata,
 } from "./client"
-import { taskEventBlocks, type RemoteEventBlock } from "./messagePresentation"
-import { RemoteEventThread } from "./RemoteEventThread"
+import type { TaskImageLoader } from "../shell/task/TaskEventThread"
+import type { TaskImageAttachment } from "../shell/task/taskEventPresentation"
 import { remoteRefreshPlan } from "./refreshPolicy"
 import { nextRemoteRefreshDelay } from "./refreshQueue"
-import { REMOTE_STATUS_GRACE_MS, isRemoteRealtimeOnline, shouldDelayRemoteStatusDisplay, statusCopy, type RemoteStatusTone } from "./status"
+import { REMOTE_STATUS_GRACE_MS, isRemoteRealtimeOnline, shouldDelayRemoteStatusDisplay, statusCopy } from "./status"
 import { beginRemoteSubmission, finishRemoteSubmission } from "./submission"
-import { shouldFollowRemoteThread } from "./threadScroll"
+import { MobileOpenADEShell, type MobileOpenADEShellScreen } from "../shell/MobileOpenADEShell"
+import { MobilePairingScreen } from "../shell/MobilePairingScreen"
+import { isMobileThemeSetting, type MobileThemeSetting } from "../shell/MobileSessionScreens"
+import type { OpenADETaskCommentView, TaskReviewType } from "../shell/task/TaskProductPanel"
 
 type CommandType = RemoteTurnStartRequest["type"]
 type PendingConnection = PairingTarget & { mode: "pair" | "manual" }
-type RemoteScreen = "projects" | "project" | "task" | "new_task" | "sessions" | "settings"
+type RemoteScreen = MobileOpenADEShellScreen
 type SnapshotRefreshOptions = { repairNavigation?: boolean }
-const themeClasses = {
-    "code-theme-light": { label: "Light" },
-    "code-theme-bright": { label: "Bright" },
-    "code-theme-clean": { label: "Clean" },
-    "code-theme-black": { label: "Black" },
-    "code-theme-synthwave": { label: "Synthwave" },
-    "code-theme-dracula": { label: "Dracula" },
-} as const
-type ThemeClass = keyof typeof themeClasses
-type MobileThemeSetting = "desktop" | ThemeClass
 
-const mobileThemeStorageKey = "openade-companion-theme"
+export const MOBILE_THEME_STORAGE_KEY = "openade-companion-theme"
 
 function loadMobileThemeSetting(): MobileThemeSetting {
-    const value = window.localStorage.getItem(mobileThemeStorageKey)
-    if (value === "desktop") return value
-    if (value && value in themeClasses) return value as ThemeClass
-    return "desktop"
+    const value = window.localStorage.getItem(MOBILE_THEME_STORAGE_KEY)
+    return isMobileThemeSetting(value) ? value : "desktop"
 }
 
 function saveMobileThemeSetting(value: MobileThemeSetting): void {
-    window.localStorage.setItem(mobileThemeStorageKey, value)
+    window.localStorage.setItem(MOBILE_THEME_STORAGE_KEY, value)
 }
 
 interface RemoteAppProps {
@@ -102,13 +102,6 @@ function looksLikePairingCode(value: string): boolean {
     }
 }
 
-function toneClass(tone: RemoteStatusTone): string {
-    if (tone === "ok") return "text-success"
-    if (tone === "warn") return "text-warning"
-    if (tone === "bad") return "text-error"
-    return "text-muted"
-}
-
 function formatHost(config: RemoteConfig | null): string {
     return config?.host ?? "OpenADE"
 }
@@ -116,6 +109,17 @@ function formatHost(config: RemoteConfig | null): string {
 function isTransientRemoteRefreshError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error)
     return /Runtime socket (closed|disconnected|failed|is not connected)|WebSocket/i.test(message)
+}
+
+function newClientRequestId(prefix: string): string {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) return `${prefix}-${crypto.randomUUID()}`
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+function remoteImageMediaType(image: TaskImageAttachment, value?: string): string {
+    if (value?.startsWith("image/")) return value
+    if (image.mediaType?.startsWith("image/")) return image.mediaType
+    return image.ext === "jpg" ? "image/jpeg" : `image/${image.ext}`
 }
 
 function useSmoothedRemoteStatus(rawStatus: RemoteRealtimeConnectionStatus): RemoteRealtimeConnectionStatus {
@@ -146,6 +150,22 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const [pendingConnection, setPendingConnection] = useState<PendingConnection | null>(null)
     const [snapshot, setSnapshot] = useState<RemoteSnapshot | null>(null)
     const [sessionSnapshots, setSessionSnapshots] = useState<Record<string, RemoteSnapshot>>({})
+    const [projectFiles, setProjectFiles] = useState<OpenADEProjectFilesTreeResult | null>(null)
+    const [projectFilesLoading, setProjectFilesLoading] = useState(false)
+    const [projectFileRead, setProjectFileRead] = useState<OpenADEProjectFileReadResult | null>(null)
+    const [projectFileActionPath, setProjectFileActionPath] = useState<string | null>(null)
+    const [projectSearchQuery, setProjectSearchQuery] = useState("")
+    const [projectSearchResult, setProjectSearchResult] = useState<OpenADEProjectSearchResult | null>(null)
+    const [projectSearchLoading, setProjectSearchLoading] = useState(false)
+    const [projectProcesses, setProjectProcesses] = useState<OpenADEProjectProcessListResult | null>(null)
+    const [projectProcessesLoading, setProjectProcessesLoading] = useState(false)
+    const [projectProcessActionId, setProjectProcessActionId] = useState<string | null>(null)
+    const [projectProcessOutput, setProjectProcessOutput] = useState<OpenADEProjectProcessReconnectResult | null>(null)
+    const [taskChanges, setTaskChanges] = useState<OpenADETaskChangesReadResult | null>(null)
+    const [taskGitLog, setTaskGitLog] = useState<OpenADETaskGitLogResult | null>(null)
+    const [taskChangesLoading, setTaskChangesLoading] = useState(false)
+    const [taskDiff, setTaskDiff] = useState<OpenADETaskDiffReadResult | null>(null)
+    const [taskDiffActionPath, setTaskDiffActionPath] = useState<string | null>(null)
     const [showArchivedProjects, setShowArchivedProjects] = useState(false)
     const [mobileTheme, setMobileTheme] = useState<MobileThemeSetting>(() => loadMobileThemeSetting())
     const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null)
@@ -153,6 +173,11 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const [task, setTask] = useState<RemoteTask | null>(null)
     const [input, setInput] = useState("")
     const [commandType, setCommandType] = useState<CommandType>("do")
+    const [taskTitleDraft, setTaskTitleDraft] = useState("")
+    const [commentDraft, setCommentDraft] = useState("")
+    const [editingCommentId, setEditingCommentId] = useState<string | null>(null)
+    const [editingCommentDraft, setEditingCommentDraft] = useState("")
+    const [reviewInstructions, setReviewInstructions] = useState("")
     const [newTaskRepoId, setNewTaskRepoId] = useState<string | null>(null)
     const [newTaskMode, setNewTaskMode] = useState<CommandType>("do")
     const [newTaskTitle, setNewTaskTitle] = useState("")
@@ -201,6 +226,17 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const connectionStatus = useSmoothedRemoteStatus(rawConnectionStatus)
     const status = statusCopy(connectionStatus)
     const isOnline = isRemoteRealtimeOnline(connectionStatus)
+    const loadTaskImage = useCallback<TaskImageLoader>(
+        async (image) => {
+            const currentConfig = configRef.current
+            const currentTask = task
+            if (!currentConfig || !currentTask) return null
+            const result = await readRemoteTaskImage(currentConfig, { repoId: currentTask.repoId, taskId: currentTask.id, imageId: image.id, ext: image.ext })
+            if (!result.data) return null
+            return `data:${remoteImageMediaType(image, result.mediaType)};base64,${result.data}`
+        },
+        [task]
+    )
 
     useEffect(() => {
         selectedRepoIdRef.current = selectedRepoId
@@ -305,6 +341,63 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         const nextTask = await getTask(nextConfig, repoId, taskId, options)
         if (selectedTaskIdRef.current === taskId) setTask(nextTask)
         return nextTask
+    }
+
+    const refreshProjectProcesses = async (nextConfig = config, repoId: string | null | undefined = selectedRepoIdRef.current) => {
+        if (!nextConfig || !repoId) {
+            setProjectProcesses(null)
+            setProjectProcessOutput(null)
+            return null
+        }
+        setProjectProcessesLoading(true)
+        try {
+            const result = await listRemoteProjectProcesses(nextConfig, { repoId })
+            if (selectedRepoIdRef.current === repoId) setProjectProcesses(result)
+            return result
+        } finally {
+            setProjectProcessesLoading(false)
+        }
+    }
+
+    const refreshProjectFiles = async (nextConfig = config, repoId: string | null | undefined = selectedRepoIdRef.current) => {
+        if (!nextConfig || !repoId) {
+            setProjectFiles(null)
+            return null
+        }
+        setProjectFilesLoading(true)
+        try {
+            const result = await listRemoteProjectFiles(nextConfig, { repoId, maxDepth: 2, maxEntries: 40 })
+            if (selectedRepoIdRef.current === repoId) setProjectFiles(result)
+            return result
+        } finally {
+            setProjectFilesLoading(false)
+        }
+    }
+
+    const refreshTaskGit = async (
+        nextConfig = config,
+        repoId: string | null | undefined = selectedRepoIdRef.current,
+        taskId: string | null | undefined = selectedTaskIdRef.current
+    ) => {
+        if (!nextConfig || !repoId || !taskId) {
+            setTaskChanges(null)
+            setTaskGitLog(null)
+            return null
+        }
+        setTaskChangesLoading(true)
+        try {
+            const [changes, gitLog] = await Promise.all([
+                readRemoteTaskChanges(nextConfig, { repoId, taskId }),
+                readRemoteTaskGitLog(nextConfig, { repoId, taskId, limit: 5 }),
+            ])
+            if (selectedRepoIdRef.current === repoId && selectedTaskIdRef.current === taskId) {
+                setTaskChanges(changes)
+                setTaskGitLog(gitLog)
+            }
+            return { changes, gitLog }
+        } finally {
+            setTaskChangesLoading(false)
+        }
     }
 
     const runBackgroundRefresh = async (work: () => Promise<void>, fallback: string) => {
@@ -436,9 +529,50 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     }, [config, screen, selectedRepoId, selectedTaskId])
 
     useEffect(() => {
+        if (!config || screen !== "task" || !selectedRepoId || !selectedTaskId) {
+            setTaskChanges(null)
+            setTaskGitLog(null)
+            setTaskChangesLoading(false)
+            setTaskDiff(null)
+            setTaskDiffActionPath(null)
+            return
+        }
+        void runBackgroundRefresh(async () => {
+            await refreshTaskGit(config, selectedRepoId, selectedTaskId)
+        }, "Unable to load task changes")
+    }, [config, screen, selectedRepoId, selectedTaskId])
+
+    useEffect(() => {
+        if (!config || screen !== "project" || !selectedRepoId) {
+            setProjectProcesses(null)
+            setProjectProcessesLoading(false)
+            setProjectProcessOutput(null)
+            setProjectFiles(null)
+            setProjectFilesLoading(false)
+            setProjectFileRead(null)
+            setProjectSearchResult(null)
+            setProjectSearchLoading(false)
+            return
+        }
+        setProjectProcessOutput(null)
+        void runBackgroundRefresh(async () => {
+            await Promise.all([refreshProjectProcesses(config, selectedRepoId), refreshProjectFiles(config, selectedRepoId)])
+        }, "Unable to load project details")
+    }, [config, screen, selectedRepoId])
+
+    useEffect(() => {
         if (configs.length === 0) return
         void refreshSessionSnapshots()
     }, [configsKey])
+
+    useEffect(() => {
+        const nextTitle = task?.title ?? selectedTask?.title ?? ""
+        setTaskTitleDraft(nextTitle)
+        setCommentDraft("")
+        setEditingCommentId(null)
+        setEditingCommentDraft("")
+        setReviewInstructions("")
+    }, [task?.id, selectedTask?.id])
 
     const handleSelectProject = async (configId: string, repoId: string) => {
         const nextConfig = config?.id === configId ? config : activateRemoteConfig(configId)
@@ -450,6 +584,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         setSelectedTaskState(null)
         setTask(null)
         setNewTaskRepoId(repoId)
+        setProjectProcessOutput(null)
         setScreenState("project")
         const nextSnapshot = sessionSnapshots[configId] ?? (await refreshSnapshot(nextConfig))
         if (nextSnapshot) setSnapshot(nextSnapshot)
@@ -622,6 +757,274 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         await refreshAll()
     }
 
+    const handleRefreshTaskGit = async () => {
+        setError(null)
+        try {
+            await refreshTaskGit()
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to refresh task changes"))
+        }
+    }
+
+    const handleReadTaskDiff = async (file: OpenADETaskGitChangedFile) => {
+        if (!config || !selectedRepoId || !selectedTaskId) return
+        setError(null)
+        setTaskDiffActionPath(file.path)
+        try {
+            const result = await readRemoteTaskDiff(config, {
+                repoId: selectedRepoId,
+                taskId: selectedTaskId,
+                filePath: file.path,
+                oldPath: file.oldPath,
+                contextLines: 3,
+                allowTruncation: true,
+            })
+            setTaskDiff(result)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to read task diff"))
+        } finally {
+            setTaskDiffActionPath(null)
+        }
+    }
+
+    const handleRefreshProjectProcesses = async () => {
+        setError(null)
+        try {
+            await refreshProjectProcesses()
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to refresh processes"))
+        }
+    }
+
+    const handleRefreshProjectFiles = async () => {
+        setError(null)
+        try {
+            await refreshProjectFiles()
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to refresh files"))
+        }
+    }
+
+    const handleReadProjectFile = async (filePath: string) => {
+        if (!config || !selectedRepoId) return
+        setError(null)
+        setProjectFileActionPath(filePath)
+        try {
+            const result = await readRemoteProjectFile(config, { repoId: selectedRepoId, path: filePath, maxBytes: 64 * 1024 })
+            setProjectFileRead(result)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to read file"))
+        } finally {
+            setProjectFileActionPath(null)
+        }
+    }
+
+    const handleSearchProject = async () => {
+        if (!config || !selectedRepoId || !projectSearchQuery.trim()) return
+        setError(null)
+        setProjectSearchLoading(true)
+        try {
+            const result = await searchRemoteProject(config, { repoId: selectedRepoId, query: projectSearchQuery.trim(), limit: 25 })
+            if (selectedRepoIdRef.current === selectedRepoId) setProjectSearchResult(result)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to search files"))
+        } finally {
+            setProjectSearchLoading(false)
+        }
+    }
+
+    const handleStartProjectProcess = async (definitionId: string) => {
+        if (!config || !selectedRepoId) return
+        setError(null)
+        setProjectProcessActionId(definitionId)
+        try {
+            await startRemoteProjectProcess(config, {
+                repoId: selectedRepoId,
+                definitionId,
+                clientRequestId: newClientRequestId("remote-process-start"),
+            })
+            await refreshProjectProcesses(config, selectedRepoId)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to start process"))
+        } finally {
+            setProjectProcessActionId(null)
+        }
+    }
+
+    const handleReconnectProjectProcess = async (processId: string) => {
+        if (!config || !selectedRepoId) return
+        const repoId = selectedRepoId
+        setError(null)
+        setProjectProcessActionId(processId)
+        try {
+            const result = await reconnectRemoteProjectProcess(config, { repoId, processId })
+            if (selectedRepoIdRef.current === repoId) setProjectProcessOutput(result)
+            await refreshProjectProcesses(config, repoId)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to read process output"))
+        } finally {
+            setProjectProcessActionId(null)
+        }
+    }
+
+    const handleStopProjectProcess = async (processId: string) => {
+        if (!config || !selectedRepoId) return
+        setError(null)
+        setProjectProcessActionId(processId)
+        try {
+            await stopRemoteProjectProcess(config, {
+                repoId: selectedRepoId,
+                processId,
+                clientRequestId: newClientRequestId("remote-process-stop"),
+            })
+            await refreshProjectProcesses(config, selectedRepoId)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to stop process"))
+        } finally {
+            setProjectProcessActionId(null)
+        }
+    }
+
+    const refreshSelectedTaskAfterMutation = async () => {
+        if (!config || !selectedRepoIdRef.current || !selectedTaskIdRef.current) return
+        await Promise.all([
+            refreshSnapshot(config, { repairNavigation: true }),
+            refreshTask(config, selectedRepoIdRef.current, selectedTaskIdRef.current, { hydrateSessionEvents: false }),
+        ])
+    }
+
+    const handleSaveTaskTitle = async () => {
+        if (!config || !selectedTaskId || !taskTitleDraft.trim()) return
+        setError(null)
+        try {
+            await updateRemoteTaskMetadata(config, { taskId: selectedTaskId, title: taskTitleDraft.trim() })
+            await refreshSelectedTaskAfterMutation()
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to update task title"))
+        }
+    }
+
+    const handleToggleTaskClosed = async () => {
+        if (!config || !selectedTaskId) return
+        setError(null)
+        try {
+            await updateRemoteTaskMetadata(config, { taskId: selectedTaskId, closed: !(task?.closed ?? selectedTask?.closed ?? false) })
+            await refreshSelectedTaskAfterMutation()
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to update task"))
+        }
+    }
+
+    const handleDeleteTask = async () => {
+        if (!config || !selectedRepoId || !selectedTaskId) return
+        if (!window.confirm("Delete this task?")) return
+        setError(null)
+        try {
+            await deleteRemoteTask(config, {
+                repoId: selectedRepoId,
+                taskId: selectedTaskId,
+                options: { deleteSnapshots: false, deleteImages: false, deleteSessions: false, deleteWorktrees: false },
+            })
+            setSelectedTaskState(null)
+            setTask(null)
+            setScreenState("project")
+            await refreshSnapshot(config, { repairNavigation: true })
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to delete task"))
+        }
+    }
+
+    const handleCreateComment = async () => {
+        if (!config || !selectedTaskId || !commentDraft.trim()) return
+        setError(null)
+        try {
+            await createRemoteComment(config, {
+                taskId: selectedTaskId,
+                content: commentDraft.trim(),
+                source: { type: "companion" },
+                selectedText: { text: "", linesBefore: "", linesAfter: "" },
+                author: { id: "companion", email: "companion@openade.local" },
+                clientRequestId: newClientRequestId("remote-comment"),
+            })
+            setCommentDraft("")
+            await refreshSelectedTaskAfterMutation()
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to create comment"))
+        }
+    }
+
+    const handleStartEditComment = (comment: OpenADETaskCommentView) => {
+        setEditingCommentId(comment.id)
+        setEditingCommentDraft(comment.content)
+    }
+
+    const handleSaveComment = async (commentId: string) => {
+        if (!config || !selectedTaskId || !editingCommentDraft.trim()) return
+        setError(null)
+        try {
+            await editRemoteComment(config, { taskId: selectedTaskId, commentId, content: editingCommentDraft.trim() })
+            setEditingCommentId(null)
+            setEditingCommentDraft("")
+            await refreshSelectedTaskAfterMutation()
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to edit comment"))
+        }
+    }
+
+    const handleDeleteComment = async (commentId: string) => {
+        if (!config || !selectedTaskId) return
+        setError(null)
+        try {
+            await deleteRemoteComment(config, { taskId: selectedTaskId, commentId })
+            if (editingCommentId === commentId) {
+                setEditingCommentId(null)
+                setEditingCommentDraft("")
+            }
+            await refreshSelectedTaskAfterMutation()
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to delete comment"))
+        }
+    }
+
+    const handleCancelQueuedTurn = async (queuedTurnId: string) => {
+        if (!config || !selectedRepoId || !selectedTaskId) return
+        setError(null)
+        try {
+            await cancelRemoteQueuedTurn(config, { repoId: selectedRepoId, taskId: selectedTaskId, queuedTurnId })
+            await refreshSelectedTaskAfterMutation()
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to cancel queued turn"))
+        }
+    }
+
+    const handleStartReview = async (reviewType: TaskReviewType) => {
+        if (!config || !selectedRepoId || !selectedTaskId) return
+        if (!beginSubmission()) return
+        setError(null)
+        setNotice(null)
+        try {
+            const harnessId = DEFAULT_HARNESS_ID
+            const modelId = getDefaultModelForHarness(harnessId)
+            const result = await startRemoteReview(config, {
+                repoId: selectedRepoId,
+                taskId: selectedTaskId,
+                reviewType,
+                harnessId,
+                modelId,
+                customInstructions: reviewInstructions.trim() || undefined,
+                clientRequestId: newClientRequestId(`remote-review-${reviewType}`),
+            })
+            setReviewInstructions("")
+            setSelectedTaskState(result.taskId)
+            setScreenState("task")
+            await refreshSelectedTaskAfterMutation()
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to start review"))
+        } finally {
+            finishSubmission()
+        }
+    }
+
     const handleForget = () => {
         if (!config) {
             clearRemoteConfig()
@@ -634,6 +1037,21 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         resetRemoteView()
         setConfig(next)
         setIsAddingHost(next === null)
+    }
+
+    const handleSelfRevoke = async () => {
+        if (!config) return
+        if (!window.confirm("Revoke this device?")) return
+        setError(null)
+        setIsLoading(true)
+        try {
+            await selfRevokeRemoteDevice(config)
+            handleForget()
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to revoke this device"))
+        } finally {
+            setIsLoading(false)
+        }
     }
 
     const handleSelectHost = (configId: string) => {
@@ -671,8 +1089,8 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
 
     if (!config || isAddingHost) {
         return (
-            <ConnectScreen
-                scanPairingCode={scanPairingCode}
+            <MobilePairingScreen
+                canScan={Boolean(scanPairingCode)}
                 baseUrl={baseUrl}
                 pendingConnection={pendingConnection}
                 isLoading={isLoading}
@@ -690,1055 +1108,128 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
 
     const snapshotsBySession = snapshot ? { ...sessionSnapshots, [config.id]: snapshot } : sessionSnapshots
 
-    return (
-        <main
-            className={rootClass}
-            style={{
-                width: "100vw",
-                maxWidth: "100vw",
-                height: "100dvh",
-                minHeight: 0,
-                paddingTop: "env(safe-area-inset-top)",
-                paddingBottom: "env(safe-area-inset-bottom)",
-            }}
-        >
-            <AppHeader
-                title={
-                    screen === "task"
-                        ? (selectedTask?.title ?? "Task")
-                        : screen === "project"
-                          ? (selectedRepo?.name ?? "Tasks")
-                          : screen === "new_task"
-                            ? "New Task"
-                            : screen === "sessions"
-                              ? "Sessions"
-                              : screen === "settings"
-                                ? "Settings"
-                                : "Projects"
-                }
-                host={formatHost(config)}
-                status={status}
-                showBack={screen === "project" || screen === "task" || screen === "new_task" || screen === "sessions" || screen === "settings"}
-                isLoading={isLoading}
-                onBack={() => {
-                    if (screen === "task") {
-                        setSelectedTaskState(null)
-                        setTask(null)
-                        setScreenState("project")
-                        return
-                    }
-                    if (screen === "project") {
-                        setSelectedRepoState(null)
-                    }
-                    setScreenState("projects")
-                }}
-                onRefresh={refreshAll}
-            />
-
-            {error && <div className="mx-3 mt-3 max-w-full shrink-0 break-words border border-error/30 bg-error/10 p-2 text-xs text-error">{error}</div>}
-            {notice && <div className="mx-3 mt-3 max-w-full shrink-0 break-words border border-info/30 bg-info/10 p-2 text-xs text-info">{notice}</div>}
-            {connectionStatus !== "connected" && (
-                <div className="mx-3 mt-3 flex max-w-full shrink-0 items-center gap-2 overflow-hidden border border-warning/30 bg-warning/10 p-2 text-xs text-warning">
-                    <WifiOff size={13} />
-                    <span className="truncate">{status.label}</span>
-                </div>
-            )}
-
-            <section className="min-h-0 w-full max-w-full flex-1 overflow-hidden">
-                {screen === "projects" && (
-                    <ProjectsScreen
-                        configs={configs}
-                        snapshots={snapshotsBySession}
-                        activeConfigId={config.id}
-                        showArchived={showArchivedProjects}
-                        onToggleArchived={() => setShowArchivedProjects((value) => !value)}
-                        onSelectProject={handleSelectProject}
-                        onAdd={handleAddHost}
-                    />
-                )}
-                {screen === "project" && (
-                    <ProjectTasksScreen
-                        repo={selectedRepo}
-                        workingTaskIds={snapshot?.workingTaskIds ?? []}
-                        onSelectTask={handleSelectTask}
-                        onNewTask={() => {
-                            setNewTaskRepoId(selectedRepo?.id ?? visibleRepos[0]?.id ?? null)
-                            setScreenState("new_task")
-                        }}
-                    />
-                )}
-                {screen === "task" && (
-                    <TaskScreen
-                        task={task}
-                        preview={selectedTask}
-                        isRunning={Boolean(selectedTaskId && snapshot?.workingTaskIds.includes(selectedTaskId))}
-                        input={input}
-                        commandType={commandType}
-                        isLoading={isLoading}
-                        isSubmitting={isSubmitting}
-                        isOnline={isOnline}
-                        onInputChange={setInput}
-                        onCommandTypeChange={setCommandType}
-                        onSend={handleRunInTask}
-                        onAbort={handleAbort}
-                    />
-                )}
-                {screen === "new_task" && (
-                    <NewTaskScreen
-                        repos={visibleRepos}
-                        repoId={newTaskRepoId ?? selectedRepo?.id ?? null}
-                        mode={newTaskMode}
-                        title={newTaskTitle}
-                        prompt={newTaskPrompt}
-                        isLoading={isLoading}
-                        isSubmitting={isSubmitting}
-                        isOnline={isOnline}
-                        onRepoChange={setNewTaskRepoId}
-                        onModeChange={setNewTaskMode}
-                        onTitleChange={setNewTaskTitle}
-                        onPromptChange={setNewTaskPrompt}
-                        onCreate={handleCreateTask}
-                    />
-                )}
-                {screen === "sessions" && (
-                    <SessionsScreen
-                        configs={configs}
-                        activeConfigId={config.id}
-                        onSelect={handleSelectHost}
-                        onRemove={handleRemoveHost}
-                        onAdd={handleAddHost}
-                    />
-                )}
-                {screen === "settings" && (
-                    <SettingsScreen
-                        config={config}
-                        snapshot={snapshot}
-                        status={status}
-                        mobileTheme={mobileTheme}
-                        onRefresh={refreshAll}
-                        onForget={handleForget}
-                        onSessions={() => setScreenState("sessions")}
-                        onAdd={handleAddHost}
-                        onThemeChange={handleMobileThemeChange}
-                    />
-                )}
-            </section>
-
-            <BottomNav active={screen} onNavigate={setScreenState} />
-        </main>
-    )
-}
-
-function ConnectScreen({
-    scanPairingCode,
-    baseUrl,
-    pendingConnection,
-    isLoading,
-    error,
-    canCancel,
-    onBaseUrlChange,
-    onScan,
-    onSubmitPairingLink,
-    onConfirm,
-    onCancelPending,
-    onCancelAdd,
-}: {
-    scanPairingCode?: () => Promise<string | null>
-    baseUrl: string
-    pendingConnection: PendingConnection | null
-    isLoading: boolean
-    error: string | null
-    canCancel: boolean
-    onBaseUrlChange: (value: string) => void
-    onScan: () => void
-    onSubmitPairingLink: () => void
-    onConfirm: () => void
-    onCancelPending: () => void
-    onCancelAdd: () => void
-}) {
-    return (
-        <main
-            className="code-theme code-theme-black flex min-h-[100dvh] w-screen max-w-full items-center justify-center overflow-x-hidden bg-base-100 px-5 py-8 text-base-content"
-            style={{ paddingTop: "max(2rem, env(safe-area-inset-top))", paddingBottom: "max(2rem, env(safe-area-inset-bottom))" }}
-        >
-            <div className="relative mx-auto flex min-h-[min(680px,calc(100dvh-4rem))] w-full max-w-sm flex-col justify-center">
-                {canCancel && (
-                    <button type="button" onClick={onCancelAdd} className="btn absolute right-0 top-0 h-9 px-2 text-sm text-muted">
-                        Cancel
-                    </button>
-                )}
-
-                <div className="mb-10 flex flex-col items-center text-center">
-                    <div className="flex min-w-0 flex-col items-center">
-                        <div className="mb-4 flex h-12 w-12 items-center justify-center border border-primary/30 bg-primary text-primary-content">
-                            <Wifi size={22} />
-                        </div>
-                        <div className="text-[2.5rem] font-semibold leading-none tracking-normal text-base-content">OpenADE</div>
-                        <div className="mt-2 text-sm font-medium uppercase text-muted">Companion</div>
-                    </div>
-                </div>
-
-                {error && (
-                    <div className="mb-4 flex items-start gap-2 border border-error/30 bg-error/10 p-3 text-sm text-error">
-                        <CircleAlert size={16} className="mt-0.5 shrink-0" />
-                        <span className="min-w-0 break-words">{error}</span>
-                    </div>
-                )}
-
-                {pendingConnection ? (
-                    <div className="flex flex-col gap-4 border border-border bg-base-200/60 p-4">
-                        <div className="flex min-w-0 gap-3">
-                            <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-success/25 bg-success/10 text-success">
-                                <CheckCircle2 size={18} />
-                            </div>
-                            <div className="min-w-0">
-                                <div className="truncate text-sm font-semibold text-base-content">Connect to {pendingConnection.host}</div>
-                                <div className="mt-1 break-all text-xs text-muted">{pendingConnection.baseUrl}</div>
-                            </div>
-                        </div>
-                        <div className="flex gap-2">
-                            <button
-                                type="button"
-                                onClick={onConfirm}
-                                disabled={isLoading}
-                                className="btn h-10 flex-1 bg-primary px-3 text-primary-content disabled:opacity-50"
-                            >
-                                {isLoading ? "Connecting..." : "Connect"}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={onCancelPending}
-                                disabled={isLoading}
-                                className="btn h-10 flex-1 bg-base-300 px-3 text-base-content disabled:opacity-50"
-                            >
-                                Change
-                            </button>
-                        </div>
-                    </div>
-                ) : (
-                    <div className="flex flex-col gap-3">
-                        {scanPairingCode && (
-                            <button
-                                type="button"
-                                onClick={onScan}
-                                disabled={isLoading}
-                                className="btn flex h-14 items-center justify-center gap-2 bg-primary px-4 text-base font-semibold text-primary-content disabled:opacity-50"
-                            >
-                                <ScanLine size={19} />
-                                Scan QR
-                            </button>
-                        )}
-
-                        <div className="flex flex-col gap-2">
-                            <input
-                                className="input h-[52px] w-full max-w-full border border-border bg-base-200 px-3 text-base"
-                                placeholder="Paste pairing link"
-                                value={baseUrl}
-                                onChange={(event) => onBaseUrlChange(event.target.value)}
-                                autoCapitalize="none"
-                                autoCorrect="off"
-                                inputMode="url"
-                            />
-                            <button
-                                type="button"
-                                onClick={onSubmitPairingLink}
-                                disabled={isLoading || !baseUrl.trim()}
-                                className="btn h-12 bg-base-200 px-4 font-medium text-base-content disabled:opacity-50"
-                            >
-                                Connect
-                            </button>
-                        </div>
-                    </div>
-                )}
-            </div>
-        </main>
-    )
-}
-
-function AppHeader({
-    title,
-    host,
-    status,
-    showBack,
-    isLoading,
-    onBack,
-    onRefresh,
-}: {
-    title: string
-    host: string
-    status: { label: string; tone: "ok" | "warn" | "bad" | "muted" }
-    showBack: boolean
-    isLoading: boolean
-    onBack: () => void
-    onRefresh: () => void
-}) {
-    return (
-        <header className="h-14 w-full max-w-full shrink-0 overflow-hidden border-b border-border px-3">
-            <div className="flex h-full min-w-0 items-center justify-between gap-2">
-                <div className="flex min-w-0 flex-1 items-center gap-2">
-                    {showBack && (
-                        <button type="button" onClick={onBack} className="btn flex h-9 w-9 shrink-0 items-center justify-center bg-transparent">
-                            <ArrowLeft size={17} />
-                        </button>
-                    )}
-                    <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-semibold">{title}</div>
-                        <div className="flex min-w-0 items-center gap-1 text-[11px] text-muted">
-                            <span className="min-w-0 truncate">{host}</span>
-                            <CircleDot size={9} className={toneClass(status.tone)} />
-                            <span className={`shrink-0 ${toneClass(status.tone)}`}>{status.label}</span>
-                        </div>
-                    </div>
-                </div>
-                <button type="button" onClick={onRefresh} className="btn flex h-9 w-9 shrink-0 items-center justify-center bg-transparent">
-                    {isLoading ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-                </button>
-            </div>
-        </header>
-    )
-}
-
-function ProjectsScreen({
-    configs,
-    snapshots,
-    activeConfigId,
-    showArchived,
-    onToggleArchived,
-    onSelectProject,
-    onAdd,
-}: {
-    configs: RemoteConfig[]
-    snapshots: Record<string, RemoteSnapshot>
-    activeConfigId: string
-    showArchived: boolean
-    onToggleArchived: () => void
-    onSelectProject: (configId: string, repoId: string) => void
-    onAdd: () => void
-}) {
-    if (configs.length === 0) {
-        return (
-            <div className="w-full max-w-full p-3">
-                <div className="border border-border bg-base-200/40 p-3 text-sm text-muted">No sessions.</div>
-            </div>
-        )
-    }
-
-    return (
-        <div className="h-full w-full max-w-full overflow-y-auto overflow-x-hidden bg-base-100 p-3">
-            <div className="flex w-full max-w-full flex-col gap-3 overflow-hidden">
-                <div className="flex gap-2">
-                    <button
-                        type="button"
-                        onClick={onToggleArchived}
-                        className={`btn flex h-11 flex-1 items-center justify-center gap-2 border px-3 text-sm ${
-                            showArchived ? "border-primary/40 bg-primary/10 text-primary" : "border-border bg-base-200/70 text-base-content"
-                        }`}
-                    >
-                        <Archive size={15} />
-                        {showArchived ? "Hide archived" : "Show archived"}
-                    </button>
-                    <button
-                        type="button"
-                        onClick={onAdd}
-                        className="btn flex h-11 shrink-0 items-center gap-2 border border-border bg-base-200/70 px-3 text-sm text-base-content"
-                    >
-                        <Plus size={15} />
-                        Session
-                    </button>
-                </div>
-                {configs.map((item) => {
-                    const sessionSnapshot = snapshots[item.id]
-                    const repos = sessionSnapshot?.repos.filter((repo) => showArchived || !repo.archived) ?? []
-                    const totalProjects = sessionSnapshot?.repos.length ?? 0
-                    const hiddenProjects = Math.max(totalProjects - repos.length, 0)
-                    const workingTaskIds = new Set(sessionSnapshot?.workingTaskIds ?? [])
-                    const runningProjectCount = repos.filter((repo) => repo.tasks.some((task) => workingTaskIds.has(task.id))).length
-                    return (
-                        <section key={item.id} className="w-full max-w-full overflow-hidden border border-border bg-base-200/25">
-                            <div className="border-b border-border bg-base-200/60 px-3 py-3">
-                                <div className="flex min-w-0 items-center justify-between gap-2">
-                                    <div className="flex min-w-0 items-center gap-3">
-                                        <span className="flex h-9 w-9 shrink-0 items-center justify-center border border-primary/20 bg-primary/10 text-primary">
-                                            <Server size={17} />
-                                        </span>
-                                        <div className="min-w-0">
-                                            <div className="text-[10px] font-medium uppercase tracking-wide text-muted">Session</div>
-                                            <div className="truncate text-sm font-semibold">{item.host}</div>
-                                            <div className="truncate text-xs text-muted">
-                                                {repos.length} project{repos.length === 1 ? "" : "s"}
-                                                {hiddenProjects > 0 ? `, ${hiddenProjects} hidden` : ""}
-                                                {runningProjectCount > 0 ? `, ${runningProjectCount} running` : ""}
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div className="flex shrink-0 items-center gap-1.5">
-                                        {runningProjectCount > 0 && <Loader2 size={13} className="animate-spin text-primary" />}
-                                        {item.id === activeConfigId && (
-                                            <span className="border border-primary/25 bg-primary/10 px-2 py-1 text-[11px] text-primary">Active</span>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="flex flex-col">
-                                {!sessionSnapshot && <div className="px-3 py-3 text-sm text-muted">Loading projects...</div>}
-                                {sessionSnapshot && repos.length === 0 && (
-                                    <div className="px-3 py-3 text-sm text-muted">{showArchived ? "No projects." : "No active projects."}</div>
-                                )}
-                                {repos.map((repo) => (
-                                    <ProjectRow
-                                        key={repo.id}
-                                        repo={repo}
-                                        runningCount={repo.tasks.filter((task) => workingTaskIds.has(task.id)).length}
-                                        onSelect={() => void onSelectProject(item.id, repo.id)}
-                                    />
-                                ))}
-                            </div>
-                        </section>
-                    )
-                })}
-            </div>
-        </div>
-    )
-}
-
-function ProjectRow({ repo, runningCount, onSelect }: { repo: RemoteRepo; runningCount: number; onSelect: () => void }) {
-    return (
-        <button
-            type="button"
-            onClick={onSelect}
-            className="btn group flex w-full min-w-0 items-center gap-3 border-b border-border bg-transparent px-3 py-3 text-left transition-colors last:border-b-0 hover:bg-base-200/70"
-        >
-            <span
-                className={`flex h-9 w-9 shrink-0 items-center justify-center border ${
-                    repo.archived ? "border-warning/20 bg-warning/10 text-warning" : "border-info/20 bg-info/10 text-info"
-                }`}
-            >
-                {repo.archived ? <Archive size={16} /> : <FolderOpen size={16} />}
-            </span>
-            <span className="min-w-0 flex-1">
-                <span className="flex w-full min-w-0 items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-sm font-semibold text-base-content">{repo.name}</span>
-                    {runningCount > 0 && (
-                        <span className="flex shrink-0 items-center gap-1 border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] uppercase text-primary">
-                            <Loader2 size={10} className="animate-spin" />
-                            {runningCount}
-                        </span>
-                    )}
-                    <span className="shrink-0 text-[11px] text-muted">
-                        {repo.tasks.length} task{repo.tasks.length === 1 ? "" : "s"}
-                    </span>
-                </span>
-                <span className="mt-0.5 block max-w-full truncate text-xs text-muted">{repo.path}</span>
-            </span>
-            {repo.archived && <span className="shrink-0 border border-warning/20 bg-warning/10 px-2 py-1 text-[10px] uppercase text-warning">Archived</span>}
-            <ChevronRight size={15} className="shrink-0 text-muted opacity-60 group-hover:text-base-content" />
-        </button>
-    )
-}
-
-function ProjectTasksScreen({
-    repo,
-    workingTaskIds,
-    onSelectTask,
-    onNewTask,
-}: {
-    repo: RemoteRepo | null
-    workingTaskIds: string[]
-    onSelectTask: (taskId: string) => void
-    onNewTask: () => void
-}) {
-    if (!repo) {
-        return (
-            <div className="w-full max-w-full p-3">
-                <div className="border border-border bg-base-200/40 p-3 text-sm text-muted">Choose a project.</div>
-            </div>
-        )
-    }
-
-    const runningCount = repo.tasks.filter((task) => workingTaskIds.includes(task.id)).length
-
-    return (
-        <div className="flex h-full w-full max-w-full flex-col overflow-hidden">
-            <div className="min-h-0 w-full max-w-full flex-1 overflow-y-auto overflow-x-hidden p-3">
-                <div className="mb-3 overflow-hidden border border-border bg-base-200/25">
-                    <div className="flex min-w-0 items-center gap-3 border-b border-border bg-base-200/60 p-3">
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center border border-info/20 bg-info/10 text-info">
-                            <FolderOpen size={18} />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                            <div className="text-[10px] font-medium uppercase tracking-wide text-muted">Project</div>
-                            <div className="truncate text-base font-semibold">{repo.name}</div>
-                            <div className="truncate text-xs text-muted">{repo.path}</div>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={onNewTask}
-                            className="btn flex h-10 shrink-0 items-center gap-1.5 bg-primary px-3 text-sm text-primary-content"
-                        >
-                            <Plus size={15} />
-                            New
-                        </button>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5 px-3 py-2">
-                        <span className="border border-border bg-base-100/60 px-2 py-1 text-[11px] text-muted">
-                            {repo.tasks.length} task{repo.tasks.length === 1 ? "" : "s"}
-                        </span>
-                        {runningCount > 0 && (
-                            <span className="flex items-center gap-1 border border-primary/20 bg-primary/10 px-2 py-1 text-[11px] text-primary">
-                                <Loader2 size={11} className="animate-spin" />
-                                {runningCount} running
-                            </span>
-                        )}
-                    </div>
-                </div>
-
-                <section className="w-full max-w-full overflow-hidden border border-border bg-base-200/20">
-                    <div className="flex items-center justify-between border-b border-border px-3 py-2">
-                        <div className="text-xs font-medium uppercase tracking-wide text-muted">Tasks</div>
-                        {runningCount > 0 && <div className="text-[11px] text-primary">Live</div>}
-                    </div>
-                    <div className="flex w-full max-w-full flex-col overflow-hidden">
-                        {repo.tasks.length === 0 && <div className="p-3 text-sm text-muted">No tasks yet.</div>}
-                        {repo.tasks.map((task) => (
-                            <TaskRow key={task.id} task={task} isRunning={workingTaskIds.includes(task.id)} onSelect={() => onSelectTask(task.id)} />
-                        ))}
-                    </div>
-                </section>
-            </div>
-        </div>
-    )
-}
-
-function TaskRow({ task, isRunning, onSelect }: { task: RemoteTaskPreview; isRunning: boolean; onSelect: () => void }) {
-    const status = task.lastEvent?.status
-    const isError = status === "error"
-    const statusLabel = isRunning ? "Running" : task.closed ? "Closed" : (task.lastEvent?.sourceLabel ?? "No events")
-    const tone = isRunning ? "text-primary" : isError ? "text-error" : task.closed ? "text-muted" : "text-base-content"
-
-    return (
-        <button
-            type="button"
-            onClick={onSelect}
-            className="btn group flex w-full min-w-0 max-w-full items-center gap-3 overflow-hidden border-b border-border bg-transparent px-3 py-3 text-left transition-colors last:border-b-0 hover:bg-base-200/70"
-        >
-            <span
-                className={`flex h-9 w-9 shrink-0 items-center justify-center border ${
-                    isRunning
-                        ? "border-primary/20 bg-primary/10 text-primary"
-                        : isError
-                          ? "border-error/20 bg-error/10 text-error"
-                          : task.closed
-                            ? "border-border bg-base-200/60 text-muted"
-                            : "border-info/20 bg-info/10 text-info"
-                }`}
-            >
-                {isRunning ? (
-                    <Loader2 size={16} className="animate-spin" />
-                ) : isError ? (
-                    <CircleAlert size={16} />
-                ) : task.closed ? (
-                    <CheckCircle2 size={16} />
-                ) : (
-                    <CircleDot size={16} />
-                )}
-            </span>
-            <span className="min-w-0 flex-1">
-                <span className="block min-w-0 overflow-hidden truncate whitespace-nowrap text-sm font-semibold text-base-content">{task.title}</span>
-                <span className={`mt-0.5 block max-w-full truncate text-xs ${tone}`}>{statusLabel}</span>
-            </span>
-            <ChevronRight size={15} className="shrink-0 text-muted opacity-60 group-hover:text-base-content" />
-        </button>
-    )
-}
-
-function TaskScreen({
-    task,
-    preview,
-    isRunning,
-    input,
-    commandType,
-    isLoading,
-    isSubmitting,
-    isOnline,
-    onInputChange,
-    onCommandTypeChange,
-    onSend,
-    onAbort,
-}: {
-    task: RemoteTask | null
-    preview: RemoteTaskPreview | null
-    isRunning: boolean
-    input: string
-    commandType: CommandType
-    isLoading: boolean
-    isSubmitting: boolean
-    isOnline: boolean
-    onInputChange: (value: string) => void
-    onCommandTypeChange: (value: CommandType) => void
-    onSend: () => void
-    onAbort: () => void
-}) {
-    const blocks = useMemo(() => taskEventBlocks(task), [task])
-    return (
-        <div className="flex h-full w-full max-w-full flex-col overflow-hidden">
-            <TaskMessages task={task} preview={preview} blocks={blocks} isRunning={isRunning} />
-            <Composer
-                input={input}
-                commandType={commandType}
-                isLoading={isLoading}
-                isSubmitting={isSubmitting}
-                isOnline={isOnline}
-                isRunning={isRunning}
-                onInputChange={onInputChange}
-                onCommandTypeChange={onCommandTypeChange}
-                onSend={onSend}
-                onAbort={onAbort}
-            />
-        </div>
-    )
-}
-
-function TaskMessages({
-    task,
-    preview,
-    blocks,
-    isRunning,
-}: {
-    task: RemoteTask | null
-    preview: RemoteTaskPreview | null
-    blocks: RemoteEventBlock[]
-    isRunning: boolean
-}) {
-    const scrollRef = useRef<HTMLDivElement | null>(null)
-    const shouldFollowRef = useRef(true)
-    const [showJump, setShowJump] = useState(false)
-
-    const scrollToBottom = () => {
-        const el = scrollRef.current
-        if (!el) return
-        el.scrollTop = el.scrollHeight
-        shouldFollowRef.current = true
-        setShowJump(false)
-    }
-
-    useEffect(() => {
-        const el = scrollRef.current
-        if (!el) return
-        if (shouldFollowRef.current) {
-            window.requestAnimationFrame(scrollToBottom)
-        } else {
-            setShowJump(true)
+    const handleBack = () => {
+        if (screen === "task") {
+            setSelectedTaskState(null)
+            setTask(null)
+            setScreenState("project")
+            return
         }
-    }, [blocks, isRunning])
-
-    const handleScroll = () => {
-        const el = scrollRef.current
-        if (!el) return
-        shouldFollowRef.current = shouldFollowRemoteThread(el.scrollHeight, el.scrollTop, el.clientHeight)
-        if (shouldFollowRef.current) setShowJump(false)
+        if (screen === "project") {
+            setSelectedRepoState(null)
+        }
+        setScreenState("projects")
     }
 
     return (
-        <div className="relative min-h-0 w-full max-w-full flex-1 overflow-hidden">
-            <div ref={scrollRef} onScroll={handleScroll} className="h-full w-full max-w-full overflow-y-auto overflow-x-hidden p-3">
-                {preview && (
-                    <div className="mb-3 border border-border bg-base-200/25 p-3">
-                        <div className="flex min-w-0 items-center gap-2">
-                            <span
-                                className={`flex h-8 w-8 shrink-0 items-center justify-center border ${
-                                    isRunning ? "border-primary/20 bg-primary/10 text-primary" : "border-border bg-base-100/70 text-muted"
-                                }`}
-                            >
-                                {isRunning ? <Loader2 size={15} className="animate-spin" /> : <MessageSquarePlus size={15} />}
-                            </span>
-                            <div className="min-w-0 flex-1">
-                                <div className="truncate text-sm font-semibold">{preview.title}</div>
-                                <div className="truncate text-xs text-muted">{isRunning ? "Running now" : (preview.lastEvent?.sourceLabel ?? "Thread")}</div>
-                            </div>
-                        </div>
-                    </div>
-                )}
-                {!task && <div className="text-sm text-muted">Loading task...</div>}
-                {task?.unavailableReason && (
-                    <div className="mb-3 break-words border border-warning/30 bg-warning/10 p-3 text-sm text-warning">{task.unavailableReason}</div>
-                )}
-                {blocks.length === 0 && (
-                    <div className="break-words border border-border bg-base-200/40 p-3 text-sm text-muted">
-                        {preview?.title ?? "Task"} has no messages yet.
-                    </div>
-                )}
-                <RemoteEventThread blocks={blocks} isRunning={isRunning} />
-            </div>
-            {showJump && (
-                <button
-                    type="button"
-                    onClick={scrollToBottom}
-                    className="btn absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 bg-primary px-3 py-1.5 text-xs text-primary-content shadow-lg"
-                >
-                    <ArrowDown size={13} />
-                    Latest
-                </button>
-            )}
-        </div>
-    )
-}
-
-function Composer({
-    input,
-    commandType,
-    isLoading,
-    isSubmitting,
-    isOnline,
-    isRunning,
-    onInputChange,
-    onCommandTypeChange,
-    onSend,
-    onAbort,
-}: {
-    input: string
-    commandType: CommandType
-    isLoading: boolean
-    isSubmitting: boolean
-    isOnline: boolean
-    isRunning: boolean
-    onInputChange: (value: string) => void
-    onCommandTypeChange: (value: CommandType) => void
-    onSend: () => void
-    onAbort: () => void
-}) {
-    const canQueueCurrentMode = !isRunning || commandType === "do" || commandType === "ask"
-    return (
-        <footer className="w-full max-w-full shrink-0 overflow-hidden border-t border-border bg-base-100 p-3">
-            <div className="mb-2 flex max-w-full gap-1 overflow-x-auto overscroll-x-contain">
-                {(["do", "plan", "ask", "hyperplan"] as CommandType[]).map((type) => (
-                    <button
-                        key={type}
-                        type="button"
-                        onClick={() => onCommandTypeChange(type)}
-                        disabled={isSubmitting || (isRunning && type !== "do" && type !== "ask")}
-                        className={`btn shrink-0 border border-border px-2 py-1 text-xs ${commandType === type ? "bg-primary text-primary-content" : "bg-base-200 text-base-content"}`}
-                    >
-                        {type}
-                    </button>
-                ))}
-                {isRunning && (
-                    <button type="button" onClick={onAbort} className="btn ml-auto flex h-8 w-8 items-center justify-center bg-error/10 text-error">
-                        <Square size={14} />
-                    </button>
-                )}
-            </div>
-            <div className="flex min-w-0 gap-2">
-                <textarea
-                    value={input}
-                    onChange={(event) => onInputChange(event.target.value)}
-                    disabled={isSubmitting}
-                    placeholder={
-                        isSubmitting
-                            ? "Sending..."
-                            : !isOnline
-                              ? "Offline"
-                              : canQueueCurrentMode
-                                ? "Send to OpenADE"
-                                : "Only Do and Ask can be queued while running"
-                    }
-                    className="input min-h-12 max-h-28 min-w-0 flex-1 resize-none border border-border bg-base-200 p-2 text-sm"
-                />
-                <button
-                    type="button"
-                    onClick={onSend}
-                    disabled={!input.trim() || isLoading || isSubmitting || !isOnline || !canQueueCurrentMode}
-                    className={`btn flex shrink-0 items-center justify-center gap-1 bg-primary px-2 text-primary-content disabled:opacity-50 ${
-                        isSubmitting ? "w-24 text-xs" : "w-12"
-                    }`}
-                >
-                    {isSubmitting ? (
-                        <>
-                            <Loader2 size={15} className="animate-spin" />
-                            Sending
-                        </>
-                    ) : (
-                        <Send size={16} />
-                    )}
-                </button>
-            </div>
-        </footer>
-    )
-}
-
-function NewTaskScreen({
-    repos,
-    repoId,
-    mode,
-    title,
-    prompt,
-    isLoading,
-    isSubmitting,
-    isOnline,
-    onRepoChange,
-    onModeChange,
-    onTitleChange,
-    onPromptChange,
-    onCreate,
-}: {
-    repos: RemoteRepo[]
-    repoId: string | null
-    mode: CommandType
-    title: string
-    prompt: string
-    isLoading: boolean
-    isSubmitting: boolean
-    isOnline: boolean
-    onRepoChange: (repoId: string) => void
-    onModeChange: (mode: CommandType) => void
-    onTitleChange: (title: string) => void
-    onPromptChange: (prompt: string) => void
-    onCreate: () => void
-}) {
-    const selectedRepo = repos.find((repo) => repo.id === repoId) ?? null
-
-    return (
-        <div className="h-full w-full max-w-full overflow-y-auto overflow-x-hidden p-3 pb-20">
-            <div className="flex w-full max-w-full flex-col gap-3 overflow-hidden">
-                <div className="overflow-hidden border border-border bg-base-200/25">
-                    <div className="flex min-w-0 items-center gap-3 border-b border-border bg-base-200/60 p-3">
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center border border-primary/20 bg-primary/10 text-primary">
-                            <MessageSquarePlus size={18} />
-                        </span>
-                        <div className="min-w-0">
-                            <div className="text-[10px] font-medium uppercase tracking-wide text-muted">New task</div>
-                            <div className="truncate text-base font-semibold">{selectedRepo?.name ?? "Choose a project"}</div>
-                            <div className="truncate text-xs text-muted">{selectedRepo?.path ?? "Pick where this should run"}</div>
-                        </div>
-                    </div>
-                    <div className="p-3">
-                        <label className="flex flex-col gap-1">
-                            <span className="text-xs font-medium text-muted">Project</span>
-                            <select
-                                value={repoId ?? ""}
-                                onChange={(event) => onRepoChange(event.target.value)}
-                                disabled={isSubmitting}
-                                className="input h-11 w-full max-w-full border border-border bg-base-100 px-3 text-sm"
-                            >
-                                {repos.map((repo) => (
-                                    <option key={repo.id} value={repo.id}>
-                                        {repo.name}
-                                    </option>
-                                ))}
-                            </select>
-                        </label>
-                    </div>
-                </div>
-
-                <section className="border border-border bg-base-200/20 p-3">
-                    <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">Mode</div>
-                    <div className="grid min-w-0 grid-cols-4 gap-1.5">
-                        {(["do", "plan", "ask", "hyperplan"] as CommandType[]).map((type) => (
-                            <button
-                                key={type}
-                                type="button"
-                                onClick={() => onModeChange(type)}
-                                disabled={isSubmitting}
-                                className={`btn min-w-0 overflow-hidden border px-1.5 py-2 text-xs ${
-                                    mode === type ? "border-primary bg-primary text-primary-content" : "border-border bg-base-100 text-base-content"
-                                }`}
-                            >
-                                <span className="truncate">{type}</span>
-                            </button>
-                        ))}
-                    </div>
-                </section>
-
-                <section className="border border-border bg-base-200/20 p-3">
-                    <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">Prompt</div>
-                    <input
-                        value={title}
-                        onChange={(event) => onTitleChange(event.target.value)}
-                        disabled={isSubmitting}
-                        placeholder="Optional title"
-                        className="input mb-2 h-11 w-full max-w-full border border-border bg-base-100 px-3 text-base"
-                    />
-                    <textarea
-                        value={prompt}
-                        onChange={(event) => onPromptChange(event.target.value)}
-                        disabled={isSubmitting}
-                        placeholder={isSubmitting ? "Sending..." : "What should OpenADE do?"}
-                        className="input min-h-[220px] w-full max-w-full resize-none border border-border bg-base-100 p-3 text-base"
-                    />
-                </section>
-                <button
-                    type="button"
-                    onClick={onCreate}
-                    disabled={!prompt.trim() || !repoId || isLoading || isSubmitting || !isOnline}
-                    className="btn flex h-12 items-center justify-center gap-2 bg-primary px-4 font-medium text-primary-content disabled:opacity-50"
-                >
-                    {isSubmitting || isLoading ? <Loader2 size={16} className="animate-spin" /> : <MessageSquarePlus size={16} />}
-                    {isSubmitting ? "Sending..." : "Create Task"}
-                </button>
-            </div>
-        </div>
-    )
-}
-
-function SessionsScreen({
-    configs,
-    activeConfigId,
-    onSelect,
-    onRemove,
-    onAdd,
-}: {
-    configs: RemoteConfig[]
-    activeConfigId: string
-    onSelect: (configId: string) => void
-    onRemove: (configId: string) => void
-    onAdd: () => void
-}) {
-    return (
-        <div className="h-full w-full max-w-full overflow-y-auto overflow-x-hidden p-3">
-            <div className="flex w-full max-w-full flex-col gap-2 overflow-hidden">
-                {configs.map((config) => (
-                    <div
-                        key={config.id}
-                        className={`flex min-w-0 items-center gap-2 overflow-hidden border p-2 ${config.id === activeConfigId ? "border-primary bg-primary/10" : "border-border bg-base-200/40"}`}
-                    >
-                        <button
-                            type="button"
-                            onClick={() => onSelect(config.id)}
-                            className="btn flex min-w-0 flex-1 items-center gap-3 bg-transparent p-1 text-left"
-                        >
-                            <Server size={16} className={config.id === activeConfigId ? "shrink-0 text-primary" : "shrink-0 text-muted"} />
-                            <span className="min-w-0 flex-1">
-                                <span className="block truncate text-sm font-medium text-base-content">{config.host}</span>
-                                <span className="block truncate text-xs text-muted">{config.baseUrl}</span>
-                            </span>
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => onRemove(config.id)}
-                            className="btn flex h-8 w-8 shrink-0 items-center justify-center bg-transparent text-muted"
-                        >
-                            <Trash2 size={15} />
-                        </button>
-                    </div>
-                ))}
-                <button type="button" onClick={onAdd} className="btn mt-2 flex h-11 items-center justify-center gap-2 bg-base-200 px-3 text-sm">
-                    <Plus size={15} />
-                    Add OpenADE Session
-                </button>
-            </div>
-        </div>
-    )
-}
-
-function SettingsScreen({
-    config,
-    snapshot,
-    status,
-    mobileTheme,
-    onRefresh,
-    onForget,
-    onSessions,
-    onAdd,
-    onThemeChange,
-}: {
-    config: RemoteConfig
-    snapshot: RemoteSnapshot | null
-    status: { label: string; tone: "ok" | "warn" | "bad" | "muted" }
-    mobileTheme: MobileThemeSetting
-    onRefresh: () => void
-    onForget: () => void
-    onSessions: () => void
-    onAdd: () => void
-    onThemeChange: (value: MobileThemeSetting) => void
-}) {
-    return (
-        <div className="h-full w-full max-w-full overflow-y-auto overflow-x-hidden p-3">
-            <div className="flex w-full max-w-full flex-col gap-3 overflow-hidden">
-                <div className="border border-border bg-base-200/40 p-3">
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                            <div className="truncate text-sm font-medium">{config.host}</div>
-                            <div className="truncate text-xs text-muted">{config.baseUrl}</div>
-                        </div>
-                        <span className={`flex shrink-0 items-center gap-1 text-xs ${toneClass(status.tone)}`}>
-                            {status.tone === "ok" ? <CheckCircle2 size={13} /> : <CircleAlert size={13} />}
-                            {status.label}
-                        </span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                        <button type="button" onClick={onRefresh} className="btn h-10 bg-base-300 px-3 text-sm">
-                            Test
-                        </button>
-                        <button type="button" onClick={onForget} className="btn h-10 bg-error/10 px-3 text-sm text-error">
-                            Forget
-                        </button>
-                    </div>
-                </div>
-                <div className="border border-border bg-base-200/40 p-3">
-                    <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
-                        <div className="min-w-0">
-                            <div className="text-xs font-medium uppercase tracking-wide text-muted">Mobile theme</div>
-                            <div className="mt-1 truncate text-sm">
-                                {mobileTheme === "desktop"
-                                    ? `Matching desktop: ${snapshot?.server.theme?.label ?? "Desktop"}`
-                                    : themeClasses[mobileTheme].label}
-                            </div>
-                        </div>
-                    </div>
-                    <select
-                        value={mobileTheme}
-                        onChange={(event) => onThemeChange(event.target.value as MobileThemeSetting)}
-                        className="input h-11 w-full border border-border bg-base-100 px-3 text-sm"
-                    >
-                        <option value="desktop">Match desktop</option>
-                        {(Object.keys(themeClasses) as ThemeClass[]).map((key) => (
-                            <option key={key} value={key}>
-                                {themeClasses[key].label}
-                            </option>
-                        ))}
-                    </select>
-                    <div className="mt-2 text-xs text-muted">Stored on this device. Switch back to Match desktop any time.</div>
-                </div>
-                <button type="button" onClick={onSessions} className="btn flex h-11 items-center justify-center gap-2 bg-base-200 px-3 text-sm">
-                    <Server size={15} />
-                    Manage Sessions
-                </button>
-                <button type="button" onClick={onAdd} className="btn flex h-11 items-center justify-center gap-2 bg-base-200 px-3 text-sm">
-                    <Plus size={15} />
-                    Add Session
-                </button>
-            </div>
-        </div>
-    )
-}
-
-function BottomNav({ active, onNavigate }: { active: RemoteScreen; onNavigate: (screen: RemoteScreen) => void }) {
-    const items: Array<{ screen: RemoteScreen; label: string; icon: typeof FolderOpen }> = [
-        { screen: "projects", label: "Projects", icon: FolderOpen },
-        { screen: "new_task", label: "New", icon: MessageSquarePlus },
-        { screen: "sessions", label: "Sessions", icon: Server },
-        { screen: "settings", label: "Settings", icon: Settings },
-    ]
-
-    return (
-        <nav className="grid h-14 w-full max-w-full shrink-0 grid-cols-4 overflow-hidden border-t border-border bg-base-100">
-            {items.map((item) => {
-                const Icon = item.icon
-                const selected = active === item.screen || (active === "project" && item.screen === "projects")
-                return (
-                    <button
-                        key={item.screen}
-                        type="button"
-                        onClick={() => {
-                            if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
-                            onNavigate(item.screen)
-                        }}
-                        className={`btn min-w-0 overflow-hidden flex flex-col items-center justify-center gap-0.5 text-[11px] ${selected ? "text-primary" : "text-muted"}`}
-                    >
-                        <Icon size={17} />
-                        <span className="max-w-full truncate">{item.label}</span>
-                    </button>
-                )
-            })}
-        </nav>
+        <MobileOpenADEShell
+            className={rootClass}
+            screen={screen}
+            host={formatHost(config)}
+            status={status}
+            isLoading={isLoading}
+            isSubmitting={isSubmitting}
+            isOnline={isOnline}
+            error={error}
+            notice={notice}
+            connectionWarning={connectionStatus !== "connected" ? status.label : null}
+            sessions={configs.map((item) => ({
+                id: item.id,
+                host: item.host,
+                snapshot: snapshotsBySession[item.id] ?? null,
+                isActive: item.id === config.id,
+            }))}
+            showArchivedProjects={showArchivedProjects}
+            selectedRepo={selectedRepo}
+            selectedTask={selectedTask}
+            visibleRepos={visibleRepos}
+            workingTaskIds={snapshot?.workingTaskIds ?? []}
+            projectFiles={projectFiles}
+            projectFilesLoading={projectFilesLoading}
+            projectFileRead={projectFileRead}
+            projectFileActionPath={projectFileActionPath}
+            projectSearchQuery={projectSearchQuery}
+            projectSearchResult={projectSearchResult}
+            projectSearchLoading={projectSearchLoading}
+            projectProcesses={projectProcesses}
+            projectProcessesLoading={projectProcessesLoading}
+            projectProcessActionId={projectProcessActionId}
+            projectProcessOutput={projectProcessOutput}
+            task={task}
+            input={input}
+            commandType={commandType}
+            taskTitleDraft={taskTitleDraft}
+            commentDraft={commentDraft}
+            editingCommentId={editingCommentId}
+            editingCommentDraft={editingCommentDraft}
+            reviewInstructions={reviewInstructions}
+            taskChanges={taskChanges}
+            taskGitLog={taskGitLog}
+            taskChangesLoading={taskChangesLoading}
+            taskDiff={taskDiff}
+            taskDiffActionPath={taskDiffActionPath}
+            newTaskRepoId={newTaskRepoId ?? selectedRepo?.id ?? null}
+            newTaskMode={newTaskMode}
+            newTaskTitle={newTaskTitle}
+            newTaskPrompt={newTaskPrompt}
+            configs={configs}
+            activeConfigId={config.id}
+            settingsConfig={config}
+            snapshot={snapshot}
+            mobileTheme={mobileTheme}
+            loadTaskImage={loadTaskImage}
+            onBack={handleBack}
+            onRefresh={refreshAll}
+            onNavigate={setScreenState}
+            onToggleArchivedProjects={() => setShowArchivedProjects((value) => !value)}
+            onSelectProject={handleSelectProject}
+            onAddHost={handleAddHost}
+            onSelectTask={handleSelectTask}
+            onNewTask={() => {
+                setNewTaskRepoId(selectedRepo?.id ?? visibleRepos[0]?.id ?? null)
+                setScreenState("new_task")
+            }}
+            onRefreshProjectProcesses={handleRefreshProjectProcesses}
+            onStartProjectProcess={handleStartProjectProcess}
+            onReconnectProjectProcess={handleReconnectProjectProcess}
+            onStopProjectProcess={handleStopProjectProcess}
+            onRefreshProjectFiles={handleRefreshProjectFiles}
+            onReadProjectFile={handleReadProjectFile}
+            onProjectSearchQueryChange={setProjectSearchQuery}
+            onSearchProject={handleSearchProject}
+            onInputChange={setInput}
+            onCommandTypeChange={setCommandType}
+            onTaskTitleChange={setTaskTitleDraft}
+            onSaveTaskTitle={handleSaveTaskTitle}
+            onToggleTaskClosed={handleToggleTaskClosed}
+            onDeleteTask={handleDeleteTask}
+            onCommentDraftChange={setCommentDraft}
+            onCreateComment={handleCreateComment}
+            onStartEditComment={handleStartEditComment}
+            onEditingCommentDraftChange={setEditingCommentDraft}
+            onSaveComment={handleSaveComment}
+            onCancelEditComment={() => {
+                setEditingCommentId(null)
+                setEditingCommentDraft("")
+            }}
+            onDeleteComment={handleDeleteComment}
+            onCancelQueuedTurn={handleCancelQueuedTurn}
+            onReviewInstructionsChange={setReviewInstructions}
+            onStartReview={handleStartReview}
+            onRefreshTaskGit={handleRefreshTaskGit}
+            onReadTaskDiff={handleReadTaskDiff}
+            onSendTaskInput={handleRunInTask}
+            onAbortTask={handleAbort}
+            onNewTaskRepoChange={setNewTaskRepoId}
+            onNewTaskModeChange={setNewTaskMode}
+            onNewTaskTitleChange={setNewTaskTitle}
+            onNewTaskPromptChange={setNewTaskPrompt}
+            onCreateTask={handleCreateTask}
+            onSelectHost={handleSelectHost}
+            onRemoveHost={handleRemoveHost}
+            onForget={handleForget}
+            onSelfRevoke={handleSelfRevoke}
+            onMobileThemeChange={handleMobileThemeChange}
+        />
     )
 }

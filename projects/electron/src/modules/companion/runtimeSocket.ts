@@ -2,8 +2,9 @@ import type http from "node:http"
 import { randomUUID } from "node:crypto"
 import { URL } from "node:url"
 import { WebSocket, WebSocketServer, type RawData } from "ws"
-import { authenticateDevice, revokeDevice } from "./auth"
+import { authenticateDevice } from "./auth"
 import { getRuntimeServer } from "./runtimeGateway"
+import { registerRemoteDeviceStreamCloser } from "./runtimeDeviceStreams"
 
 export interface RuntimeSocketServer {
     close(): void
@@ -28,7 +29,14 @@ function rawText(data: RawData): string {
 export function attachRuntimeSocketServer(server: http.Server): RuntimeSocketServer {
     const socketServer = new WebSocketServer({ noServer: true })
     const socketsByDeviceId = new Map<string, Set<WebSocket>>()
-    deviceSocketGroups.add(socketsByDeviceId)
+    const closeFromThisServer = (deviceId?: string) => {
+        if (deviceId) {
+            closeDeviceSockets(socketsByDeviceId, deviceId)
+            return
+        }
+        closeAllDeviceSockets(socketsByDeviceId)
+    }
+    const unregisterStreamCloser = registerRemoteDeviceStreamCloser(closeFromThisServer)
 
     const unregister = (deviceId: string, webSocket: WebSocket) => {
         const sockets = socketsByDeviceId.get(deviceId)
@@ -36,15 +44,6 @@ export function attachRuntimeSocketServer(server: http.Server): RuntimeSocketSer
         sockets.delete(webSocket)
         if (sockets.size === 0) socketsByDeviceId.delete(deviceId)
     }
-
-    getRuntimeServer().register("remote/device/selfRevoke", (_params, context) => {
-        const deviceId = typeof context.connection.metadata?.deviceId === "string" ? context.connection.metadata.deviceId : ""
-        if (!deviceId) throw new Error("Self revoke is only available to paired remote devices")
-
-        const revoked = revokeDevice(deviceId)
-        publishAndCloseCurrentDeviceAfterResponse(deviceId)
-        return { ok: true, revoked }
-    })
 
     server.on("upgrade", (request, socket, head) => {
         const url = new URL(request.url ?? "/", "http://127.0.0.1")
@@ -69,15 +68,14 @@ export function attachRuntimeSocketServer(server: http.Server): RuntimeSocketSer
 
     return {
         closeDevice(deviceId: string) {
-            closeDeviceSockets(deviceId)
+            closeFromThisServer(deviceId)
         },
         closeAll() {
-            closeAllDeviceSockets()
+            closeFromThisServer()
         },
         close() {
-            deviceSocketGroups.delete(socketsByDeviceId)
-            for (const sockets of socketsByDeviceId.values()) closeSockets(sockets)
-            socketsByDeviceId.clear()
+            unregisterStreamCloser()
+            closeFromThisServer()
             socketServer.close()
         },
     }
@@ -86,7 +84,47 @@ export function attachRuntimeSocketServer(server: http.Server): RuntimeSocketSer
 const MAX_BUFFERED_BYTES = 16 * 1024 * 1024
 const HEARTBEAT_MS = 30_000
 type DeviceSocketMap = Map<string, Set<WebSocket>>
-const deviceSocketGroups = new Set<DeviceSocketMap>()
+export const COMPANION_RUNTIME_PERMISSIONS = [
+    "initialize",
+    "server/status/read",
+    "subscription/update",
+    "remote/device/selfRevoke",
+    "agent/provider/list",
+    "agent/provider/status",
+    "agent/serverProtocol/list",
+    "agent/approval/*",
+    "openade/snapshot/read",
+    "openade/project/list",
+    "openade/project/files/tree",
+    "openade/project/file/read",
+    "openade/project/search",
+    "openade/project/process/list",
+    "openade/project/process/start",
+    "openade/project/process/reconnect",
+    "openade/project/process/stop",
+    "openade/task/list",
+    "openade/task/read",
+    "openade/task/changes/read",
+    "openade/task/diff/read",
+    "openade/task/git/log",
+    "openade/task/image/read",
+    "openade/task/snapshot/patch/read",
+    "openade/task/snapshot/index/read",
+    "openade/task/snapshot/patch/readSlice",
+    "openade/repo/create",
+    "openade/repo/update",
+    "openade/repo/delete",
+    "openade/turn/start",
+    "openade/review/start",
+    "openade/turn/interrupt",
+    "openade/queued-turn/cancel",
+    "openade/comment/create",
+    "openade/comment/edit",
+    "openade/comment/delete",
+    "openade/task/metadata/update",
+    "openade/task/delete",
+]
+export const COMPANION_RUNTIME_NOTIFICATION_PERMISSIONS = ["connection/lagged", "remote/*", "openade/*", "agent/approval/*"]
 
 function closeSockets(sockets: Iterable<WebSocket>) {
     for (const socket of sockets) {
@@ -96,26 +134,14 @@ function closeSockets(sockets: Iterable<WebSocket>) {
     }
 }
 
-function closeDeviceSockets(deviceId: string): void {
-    for (const group of deviceSocketGroups) {
-        closeSockets(group.get(deviceId) ?? [])
-        group.delete(deviceId)
-    }
+function closeDeviceSockets(group: DeviceSocketMap, deviceId: string): void {
+    closeSockets(group.get(deviceId) ?? [])
+    group.delete(deviceId)
 }
 
-function closeAllDeviceSockets(): void {
-    for (const group of deviceSocketGroups) {
-        for (const sockets of group.values()) closeSockets(sockets)
-        group.clear()
-    }
-}
-
-function publishAndCloseCurrentDeviceAfterResponse(deviceId: string): void {
-    const timer = setTimeout(() => {
-        getRuntimeServer().notify("remote/device/changed", { type: "devices_changed", at: new Date().toISOString() })
-        closeDeviceSockets(deviceId)
-    }, 25)
-    timer.unref?.()
+function closeAllDeviceSockets(group: DeviceSocketMap): void {
+    for (const sockets of group.values()) closeSockets(sockets)
+    group.clear()
 }
 
 function attachRuntimeSocket(webSocket: WebSocket, deviceId: string): void {
@@ -127,25 +153,8 @@ function attachRuntimeSocket(webSocket: WebSocket, deviceId: string): void {
     const connection = {
         id: connectionId,
         metadata: { deviceId },
-        permissions: [
-            "initialize",
-            "server/status/read",
-            "subscription/update",
-            "remote/device/selfRevoke",
-            "agent/provider/list",
-            "agent/provider/status",
-            "agent/serverProtocol/list",
-            "agent/approval/*",
-            "openade/snapshot/read",
-            "openade/project/list",
-            "openade/task/list",
-            "openade/task/read",
-            "openade/turn/start",
-            "openade/review/start",
-            "openade/turn/interrupt",
-            "openade/queued-turn/cancel",
-        ],
-        notificationPermissions: ["connection/lagged", "remote/*", "openade/*", "agent/approval/*"],
+        permissions: COMPANION_RUNTIME_PERMISSIONS,
+        notificationPermissions: COMPANION_RUNTIME_NOTIFICATION_PERMISSIONS,
         send(message: unknown) {
             if (webSocket.readyState === WebSocket.OPEN) {
                 if (webSocket.bufferedAmount > MAX_BUFFERED_BYTES) {

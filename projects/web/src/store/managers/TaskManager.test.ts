@@ -30,6 +30,7 @@ describe("TaskManager setTaskClosed", () => {
             execution: {
                 onAfterEvent: vi.fn(() => () => {}),
             },
+            getCachedRuntimeProductTask: vi.fn(() => null),
             getCachedTaskStore: vi.fn(() => null),
             repoStore,
             refreshTaskStoreFromStorage: vi.fn(async () => undefined),

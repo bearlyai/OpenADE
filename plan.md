@@ -48,7 +48,7 @@ Mobile is already a thin shell:
 - The main mobile UI is imported from `projects/web/src/remote/RemoteApp.tsx`.
 - `projects/web/src/remote/client.ts` owns pairing URL parsing, host validation, config persistence, runtime WebSocket construction, reconnect status, and remote reads/actions.
 
-The current remote UI is intentionally narrower than desktop. It reads snapshots/tasks, starts turns, interrupts turns, and listens to runtime notifications. It does not yet expose desktop parity for comments, title edits, task delete, review flows, model/MCP controls, files, diffs, terminal, process control, or rich settings.
+The current remote UI remains intentionally safer than desktop, but it now covers more product parity than the initial plan state. It reads snapshots/tasks, starts and interrupts turns, listens to runtime notifications, edits task metadata/comments, cancels queued turns, starts reviews, deletes tasks, renders task-owned images, and exposes scoped file/search/process/git-read panels. It still does not expose desktop parity for model/MCP controls, raw terminal access, arbitrary process control, file writes, commit/push, native desktop settings, or broad admin/device-management surfaces.
 
 ### Permission Boundary
 
@@ -517,12 +517,16 @@ Bring desktop-only host surfaces to the shared shell without granting unsafe raw
   - `openade/task/changes/read`
   - `openade/task/diff/read`
   - `openade/task/git/log`
+  - `openade/task/git/commit`
   - `openade/task/terminal/start`
   - `openade/task/terminal/write`
+  - `openade/task/terminal/reconnect`
   - `openade/task/terminal/resize`
   - `openade/task/terminal/stop`
+  - `openade/task/image/read`
   - `openade/project/process/list`
   - `openade/project/process/start`
+  - `openade/project/process/reconnect`
   - `openade/project/process/stop`
 - Scope every request by repo/task id and resolve allowed cwd server-side.
 - Prevent path traversal and arbitrary absolute path access for remote roles.
@@ -718,6 +722,7 @@ Ship incrementally without stranding users or losing production data.
 | Scoped file write | yes | optional | no by default | no |
 | Scoped git diff/log | yes | optional | optional read-only | optional read-only |
 | Scoped git mutation | yes | optional | no by default | no |
+| Task image blob read | yes | yes if task read allowed | optional read-only | optional read-only |
 | Terminal/process | yes | optional explicit grant | no by default | no |
 | MCP config/OAuth | yes | optional admin only | no | no |
 | Raw `fs/*`, `git/*`, `pty/*`, `process/*`, `host/*`, `data/yjs/*` | yes | no | no | no |
@@ -738,6 +743,7 @@ This matrix is a starting point. Every granted cell needs tests proving both all
 | Comments | temp Yjs storage | create/edit/delete, pending/consumed shape preserved |
 | Queued turns | real runtime/store | queue while active, cancel, drain, notify |
 | Git/files | temp git repo | status, patch, file pair, search, path denial |
+| Task image blobs | real image file storage plus task event references | task-owned image reads, missing image null, unattached image denial/null, raw data method denial |
 | Terminal/process | real subprocess/PTY adapter where available | stream, stop, reconnect/lifecycle |
 | Permissions | paired WebSocket connection | capabilities filtered, method denied, notification denied |
 | Desktop UI | real or test kernel | route, task page, command, tray |
@@ -780,14 +786,350 @@ Record major decisions here as the migration proceeds.
 - Verification must use real runtime, storage, transport, permissions, and host paths.
 - Deterministic harness executor is acceptable because live LLM output is nondeterministic.
 
+### 2026-05-31: Kernel Composition Started
+
+- Reusable Node kernel composition lives in `projects/openade-module/src/kernel.ts`.
+- `openade-module` owns OpenADE product semantics plus the reusable OpenADE runtime composition; `runtime-node` remains generic and must not import OpenADE product semantics.
+- The first kernel integration test starts a real `RuntimeServer`, real runtime-node host modules, real OpenADE Yjs storage, and a real HTTP/WebSocket server with a deterministic agent executor.
+- Electron-specific runtime composition remains in `projects/electron/src/modules/companion/runtimeGateway.ts` until desktop-only host behavior is extracted or intentionally kept as an Electron adapter.
+
+### 2026-05-31: Shared Session And Product Store Started
+
+- Shared client session code lives in `projects/web/src/kernel/session.ts`; remote companion pairing and desktop local OpenADE client construction now use that shared layer.
+- Shared saved-session persistence lives in `projects/web/src/kernel/sessionStore.ts`; the companion client delegates its `openade-companion-config` v2 storage, active-session switching, legacy single-session migration, and invalid-session filtering to that shared browser-safe store.
+- Runtime-backed product DTO cache lives in `projects/web/src/kernel/productStore.ts`; it is parallel to the legacy desktop store and is not yet the default desktop read path.
+- Existing remote companion helper APIs now read and mutate through the shared product store, so `RemoteApp` uses the new store without a UI rewrite.
+- Remote helper APIs and UI now expose the shared product-store path for review start, queued-turn cancel, task metadata, comments, task delete, project files/search/processes, task git reads, and task-owned images through scoped product methods.
+- The product store test uses a real `RuntimeServer`, `RuntimeLocalClient`, `OpenADEClient`, runtime notifications, and OpenADE module routing with in-memory adapters for deterministic state.
+
+### 2026-05-31: Companion Product Mutation Parity Started
+
+- Paired-device runtime permissions are centralized in `projects/electron/src/modules/companion/runtimeSocket.ts` and now allow the high-level product methods intentionally surfaced in the companion UI.
+- Companion permissions still deny raw `runtime/*`, `process/*`, `pty/*`, `fs/*`, `git/*`, `host/*`, `snapshot/*`, `data/*`, `openade/action/*`, `openade/snapshot/create`, and `openade/task/environment/setup` methods.
+- `projects/electron/src/modules/companion/runtimeApi.integration.test.ts` now verifies allowed product mutations over an authenticated paired WebSocket with temp Yjs storage, and verifies denied raw host/storage calls on the same socket.
+- `RemoteApp` now exposes runtime-backed product controls for task title, close/reopen, task delete, comments, queued-turn cancellation, review start, and task command modes including Revise and Run Plan.
+- `projects/web/src/remote/RemoteApp.integration.test.ts` renders the companion UI against a real `RuntimeServer`, `RuntimeLocalClient`, and `OpenADEClient` rather than mocked client methods.
+
+### 2026-05-31: Scoped Project Read Methods Started
+
+- `openade/project/file/read` and `openade/project/search` are the first scoped host capability methods for the shared shell.
+- The methods live behind `OpenADEScopedHostAdapter` in `projects/openade-module`, with Node and Electron host implementations resolving repo ids to server-side repo paths.
+- Paired-device permissions allow these read-only OpenADE methods while continuing to deny raw `fs/*`, `git/*`, `host/*`, `snapshot/*`, and `data/yjs/*` methods.
+- Kernel and companion integration tests cover real temp repo reads/searches plus path traversal denial over real runtime clients.
+
+### 2026-05-31: Desktop Runtime Read Bridge Started
+
+- Desktop `CodeStore` now has a disabled-by-default runtime product read bridge behind `VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE` or `CodeStoreConfig.enableRuntimeProductStore`.
+- The bridge hydrates `runtimeProductSnapshot` through `OpenADEProductStore` and `OpenADEClient`; when ready, `RepoManager.repos` and `CodeStore.getTaskPreviewsForRepo()` may serve repo/task preview reads from runtime DTOs.
+- Desktop sidebar/navigation callers now use those accessors, but the flag remains off by default and legacy Yjs renderer stores remain the fallback.
+- `projects/web/src/store/storeRuntimeProductStore.test.ts` verifies the bridge through a real `RuntimeServer`, `RuntimeLocalClient`, and `OpenADEClient`.
+- `projects/electron/src/modules/companion/openadeProjectionFixtures.test.ts` compares committed legacy Yjs fixture reads against runtime projection DTO reads using the production Electron Yjs storage adapter.
+- This is a Phase 4 sidebar/navigation slice. Task route loading, comments, queued turns, runtime working state, metadata, and event detail reads still need to be switched one at a time after each slice has old-vs-new parity coverage.
+
+### 2026-05-31: Desktop Task Detail Runtime Bridge Started
+
+- The runtime product read bridge now caches per-task DTOs and adapts them into the existing desktop `TaskModel`/event/comment shape through `projects/web/src/kernel/taskAdapter.ts`.
+- `CodeLayout` loads task detail from `OpenADEProductStore` when the runtime product bridge is ready, while preserving the legacy Yjs `TaskStore` path when the flag is disabled or unavailable.
+- Task title, comments, queued turns, event log, metadata, and model/harness history can now render from runtime DTOs in the flagged desktop path; tray and host-heavy task views still use existing desktop managers.
+- `projects/web/src/store/storeRuntimeProductStore.test.ts` verifies the bridge with a real `RuntimeServer`, `RuntimeLocalClient`, `OpenADEClient`, action event, comment, task adapter, and `TaskModel`.
+
+### 2026-06-01: Desktop Runtime Notification Bridge Verified
+
+- `CodeStore` can now take a typed `runtimeNotificationSource` for integration tests while production desktop continues to default to `runtime/localRuntimeClient.ts`.
+- `projects/web/src/store/storeRuntimeProductStore.test.ts` now sends real `RuntimeServer.notify(...)` events through a real `RuntimeLocalClient` and verifies desktop runtime DTO caches update from `openade/task/updated`, `openade/task/previewChanged`, and `openade/task/deleted`.
+- The test proves task detail, comments, events, preview lists, snapshot pruning, cached task removal, and `TaskModel` lookup behavior without mocking `OpenADEClient` or runtime transport.
+- Runtime settlement now scans the unified `TaskManager` task view after refresh, so DTO-backed tasks fire the same after-event callbacks as legacy Yjs-backed tasks when a real `runtime/completed` notification removes a running task runtime.
+- The same real-notification suite now covers `openade/repo/deleted` cache repair: project lists, task previews, cached task DTOs, and `TaskModel` lookup all prune after the repo disappears from the runtime snapshot.
+- `projects/web/src/Routes.runtimeProductStore.test.ts` now installs a real `RuntimeServer` behind the production `runtime/localRuntimeClient.ts` path, then smoke-tests the desktop base route redirecting from runtime-backed project/task previews and the desktop task route rendering runtime-loaded task detail through `CodeLayout`/`TaskPage`.
+- Remaining Phase 3/4 work before enabling the runtime product bridge by default: review rollout fallback telemetry from an internal/default-on cohort. Legacy renderer Yjs initialization should remain available as fallback-only for at least one production release after any default-on runtime rollout, and removal should wait for telemetry/log review showing no meaningful fallback use.
+
+### 2026-06-01: Desktop Shared Task Screen Gate Started
+
+- Desktop task routes can now render `projects/web/src/pages/DesktopSharedTaskPage.tsx` behind `VITE_OPENADE_ENABLE_DESKTOP_SHARED_TASK_SCREEN` or `CodeStoreConfig.enableDesktopSharedTaskScreen`.
+- The gated adapter composes the shared `projects/web/src/shell/task/TaskScreen.tsx` from cached OpenADE task/preview DTOs, while leaving the existing rich desktop `TaskPage` and `InputBar` as the default path.
+- Desktop shared task actions use the same `runtime/localOpenADEClient.ts` product methods for turn start, interrupt, review, metadata, comments, queued-turn cancellation, delete, task image read, and scoped task git reads.
+- `projects/web/src/Routes.runtimeProductStore.test.ts` now verifies this route through a real `RuntimeServer` installed behind the production local runtime bridge, including rendering shared task controls, updating metadata/comments, starting a review, and submitting a turn through `openade/turn/start` before waiting for refreshed DTOs to render.
+- Keep the gate off by default until rollout fallback telemetry has been reviewed from an internal/default-on cohort.
+
+### 2026-06-01: Runtime Product Bridge Rollout Decision
+
+- The runtime product bridge can be shipped behind flags, but default-on desktop rollout must keep the renderer Yjs path as a fallback for at least one production release.
+- Do not remove renderer Yjs initialization or fallback reads until telemetry/logs show the runtime-backed path is healthy across normal navigation, task detail, notifications, and reloads.
+- If fallback use is observed after default-on rollout, treat it as a production migration bug and add a regression fixture before removing the fallback.
+- Rollout observability now comes from `CodeStore`: `app_opened` includes runtime-product gate/status fields, `runtime_product_store_error` records sanitized bridge error categories, and `runtime_product_store_fallback` records deduped legacy direct-read fallback sources/reasons without repo paths or task content.
+- Default-on promotion criteria for the runtime product bridge: packaged workflow smoke passes, no fallback events are seen in the internal/default-on cohort for normal navigation/task-detail/reload flows, and any observed fallback has a reproduction plus a regression fixture before removal of the legacy path.
+
+### Runtime Product Rollout Telemetry Review Runbook
+
+Run this review before changing `VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE` or `VITE_OPENADE_ENABLE_DESKTOP_SHARED_TASK_SCREEN` from internal/default-off to default-on.
+
+- Cohort setup: ship an internal desktop build with the runtime product bridge enabled (`VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE=1`) and the shared task screen enabled only for the cohort under review (`VITE_OPENADE_ENABLE_DESKTOP_SHARED_TASK_SCREEN=1` when validating shared shell parity).
+- Required workflow coverage: desktop launch, repo/project list navigation, task preview navigation, task detail load, runtime notification refresh, Plan, Revise, Run Plan, Ask, comments, metadata edits, close/reopen, app close/relaunch reload, and scoped project file tree/read/write/search.
+- Required telemetry checks: `app_opened` must show the gate enabled and a ready runtime product store after normal startup; `runtime_product_store_error` must have no unexplained categories; `runtime_product_store_fallback` must be absent for normal workflows.
+- Data hygiene check: telemetry review must use only the sanitized fields emitted by `CodeStore` (`source`, `reason`, gate/status flags, snapshot presence, repo/task counts, and error kind). Do not add repo paths, task titles/content, prompt text, file contents, or user code to rollout events.
+- Failure handling: every fallback or unexplained bridge error blocks default-on promotion until the team captures a reproduction, adds a real regression fixture/test on the production bridge path, and reruns packaged workflow smoke.
+- Promotion rule: after the internal/default-on cohort has zero normal-flow fallback events and no unexplained bridge errors, the bridge may become default-on while keeping legacy Yjs direct reads as fallback for at least one production release. Removal of the fallback path requires another telemetry/log review for that release.
+
+### 2026-06-01: Runtime Migration Verification Sweep
+
+- Web verification passed: `npm run typecheck`, full `npm test` with 70 files and 441 tests, focused `npm test -- storeRuntimeProductStore` with 6 tests after the final test-noise cleanup, `npm run build`, and `git diff --check`.
+- Electron verification passed: `npm run typecheck`, full `npm test` with 27 files and 252 tests, and packaged-app `npm run test:smoke` after `npm run build`, `npm run build:web`, and `electron-builder --mac --dir`. Coverage includes paired WebSocket permissions, scoped OpenADE host methods, headless runtime-node WebSocket serving, Yjs projection fixtures, bundled web UI boot in the packaged app, real preload IPC initialization of the embedded runtime, `host/platform/info`, `openade/snapshot/read`, `openade/repo/create`, scoped project file tree/read/write/search, and scoped project process list/start/reconnect-output/stop against a temp project with isolated smoke-test `HOME`/`USERPROFILE` plus explicit `OPENADE_YJS_STORAGE_DIR`.
+- OpenADE module/client/runtime verification passed: `projects/openade-module` typecheck/test, `projects/openade-client` typecheck, `projects/runtime` typecheck, and `projects/runtime-client` typecheck.
+- Mobile companion verification passed: `projects/mobile` typecheck and production `npm run build`.
+- Build warnings observed but not introduced by this slice: Vite reports large chunks, `TaskEventThread` dynamically imports `MarkdownMessage` while other paths import it statically, and duplicate `wasm-CG6Dc4jp.js.map` emission.
+
+### 2026-05-31: Scoped Project File Tree And Write Added
+
+- `openade/project/files/tree` and `openade/project/file/write` were added beside `openade/project/file/read` and `openade/project/search`.
+- Node and Electron hosts resolve every scoped file request against the server-side repo path and reject traversal through the OpenADE module validator before the host adapter runs.
+- Paired devices may list/read/search project files, but `openade/project/file/write` is intentionally excluded from paired-device permissions until explicit roles/admin grants exist.
+- Kernel and companion integration tests now cover real scoped file tree/read/write/search paths, traversal denial, and paired-device write denial over real runtime transports.
+
+### 2026-05-31: Scoped Task Git Reads Added
+
+- `openade/task/changes/read`, `openade/task/diff/read`, and `openade/task/git/log` were added to the OpenADE scoped host boundary for read-only task change inspection.
+- Node kernel hosts execute real git commands against server-resolved task work dirs; Electron hosts wrap the existing desktop git helpers from `projects/electron/src/modules/code/git.ts`.
+- Paired devices may call these scoped OpenADE methods, while raw `git/*`, `fs/*`, `host/*`, `snapshot/*`, and `data/yjs/*` methods remain hidden and denied.
+- `OpenADEClient`, `OpenADEProductStore`, and shared companion DTO aliases now expose typed helpers for task changes, file patches, and git log reads.
+- Kernel and companion integration tests cover real temp git repos, modified and untracked files, patch stats/content, git log reads, traversal denial, and authenticated paired WebSocket permission behavior.
+- `projects/web/src/kernel/productStore.test.ts` verifies the shared UI-facing product store reaches the scoped task git helpers through a real `RuntimeServer`, `RuntimeLocalClient`, `OpenADEClient`, and OpenADE module route.
+
+### 2026-05-31: Scoped Task Git Commit Added
+
+- `openade/task/git/commit` now lives on the OpenADE scoped host boundary for trusted/local product clients.
+- Node and Electron hosts resolve the task work dir server-side, stage scoped task changes with `git add -A`, commit with a validated message, and report `committed`, `nothing_to_commit`, or `failed` without granting raw `git/*`.
+- `OpenADEClient`, `OpenADEProductStore`, and shared companion DTO aliases expose typed commit helpers that preserve `clientRequestId` for idempotent retry behavior.
+- Paired devices do not get `openade/task/git/commit` by default; companion capabilities hide it and permission tests deny it over the authenticated WebSocket path.
+- Kernel and companion integration tests cover real temp-repo commits through the Node kernel and Electron host paths, plus paired-device denial.
+
+### 2026-05-31: Scoped Snapshot Patch Reads Added
+
+- `openade/task/snapshot/patch/read`, `openade/task/snapshot/index/read`, and `openade/task/snapshot/patch/readSlice` were added so shared shells can inspect task-owned snapshot patches without raw `snapshot/*` storage access.
+- The OpenADE module validates repo id, task id, and snapshot event id before the host adapter may read inline or external patch data.
+- Node hosts support inline patches and file-backed snapshot bundles under the sibling `snapshots` data dir; Electron hosts wrap existing snapshot bundle readers.
+- Paired-device permissions allow only the scoped OpenADE snapshot reads while raw `snapshot/patch/read`, `snapshot/index/read`, `snapshot/patch/readSlice`, and `snapshot/bundle/save` remain hidden and denied.
+- Kernel tests cover inline snapshot patch/index/slice reads through a real WebSocket client; companion tests cover persisted snapshot bundle reads through an authenticated paired WebSocket and raw snapshot denial.
+
+### 2026-05-31: Scoped Process Surface Design Constraint
+
+- Raw `process/command/start` and `process/script/start` accept arbitrary commands and cwd values, so they remain trusted-local only.
+- The shared-shell process surface should not expose arbitrary script text to paired clients. It should resolve `openade.toml` process ids server-side, compute cwd from the repo/task context, and then call the existing process adapter.
+- Scoped process methods should therefore be shaped around project/task context plus process ids, for example `openade/project/process/list`, `openade/project/process/start`, `openade/project/process/reconnect`, and `openade/project/process/stop`.
+- Permission tests must continue proving raw `process/*` methods are hidden and denied after the scoped process surface is added.
+
+### 2026-05-31: Scoped Project Process Methods Added
+
+- `openade/project/process/list`, `openade/project/process/start`, `openade/project/process/reconnect`, and `openade/project/process/stop` now live on the OpenADE scoped host boundary.
+- Node and Electron hosts read `openade.toml`, resolve process ids and cwd server-side, reject cwd escape attempts, and then use the existing runtime process adapter for real lifecycle execution.
+- Paired devices may call only these scoped process methods; raw `process/command/start`, `process/script/start`, `process/list`, `process/reconnect`, and `process/kill` remain hidden and denied.
+- `OpenADEClient`, `OpenADEProductStore`, and shared companion DTO aliases expose the typed process list/start/reconnect/stop helpers.
+- Kernel tests cover real WebSocket process list/start/reconnect/stop against a temp repo and invalid `work_dir`; companion tests cover authenticated paired WebSocket process lifecycle plus raw process denial.
+
+### 2026-05-31: Scoped Task Terminal Methods Added
+
+- `openade/task/terminal/start`, `openade/task/terminal/write`, `openade/task/terminal/reconnect`, `openade/task/terminal/resize`, and `openade/task/terminal/stop` now live on the OpenADE scoped host boundary.
+- Node and Electron hosts derive PTY ids server-side from repo/task ids, resolve the initial cwd through the task workdir rules, normalize reconnect output, and reject client-supplied terminal ids that do not match the task.
+- The typed terminal helpers are exposed through `OpenADEClient`, `OpenADEProductStore`, and shared companion DTO aliases.
+- Paired-device permissions intentionally do not include scoped terminal methods yet. The companion tests prove both raw `pty/*` and scoped `openade/task/terminal/*` methods are hidden and denied until explicit role/admin grants exist.
+- Kernel tests cover real WebSocket PTY start/write/reconnect/resize/stop against a temp repo task and invalid terminal id denial.
+
+### 2026-05-31: Scoped Task Image Reads Added
+
+- `openade/task/image/read` now lives on the OpenADE scoped host boundary for rendering task-owned image attachments without raw `data/file/*` access.
+- The OpenADE module validates repo id, task id, safe image id/extension, and proves the image is referenced by the task events or queued turns before the host adapter may load bytes.
+- Node hosts read from the sibling `images` data dir; Electron hosts wrap the existing data-folder reader.
+- Paired-device permissions allow this read-only scoped image method while raw `data/file/*` and `data/yjs/*` methods remain hidden and denied.
+- The companion thread now renders prompt image attachments through the shared product store and scoped image read method.
+- Kernel, companion, product-store, and remote UI integration tests cover real stored image reads, missing/unattached image null results, invalid image id denial, paired raw data denial, and image rendering through a real runtime client.
+
+### 2026-05-31: Shared Task Thread Scroll Primitive Added
+
+- Desktop `TaskPage` and companion `RemoteApp` now use `projects/web/src/shell/task/useTaskThreadScroll.ts` for task-thread bottom-follow behavior.
+- The shared primitive preserves remote's "jump to latest only when the user is scrolled away" behavior and desktop's always-follow behavior through explicit modes.
+- This is the first Phase 7 task-thread extraction slice; event rendering and composer controls still need to move to shared feature components before `RemoteApp` can shrink to a session wrapper.
+- Web tests cover the shared threshold logic, the legacy remote alias, and `RemoteApp` rendering through a real in-memory runtime client.
+
+### 2026-05-31: Shared Task Command Model Started
+
+- Desktop `InputManager` and companion `RemoteApp` now use `projects/web/src/shell/task/taskCommands.ts` for OpenADE turn command labels, composer command order, new-task mode order, and "queue while running" rules.
+- This keeps Do/Ask queueability and Plan/Revise/Run Plan/HyperPlan labels consistent across media while preserving each shell's current UI composition.
+- Web tests cover the shared command model, desktop queueable InputManager behavior, and `RemoteApp` rendering through a real in-memory runtime client.
+- Remaining Phase 7 work: extract the actual composer component and desktop/remote command button rendering around this shared model.
+
+### 2026-05-31: Companion Project Process Panel Added
+
+- `RemoteApp` now exposes repo-declared processes on the project screen using `openade/project/process/list`, `openade/project/process/start`, and `openade/project/process/stop` through the shared product store.
+- This gives companion users start/stop parity for reviewed `openade.toml` process definitions without granting raw `process/*` or arbitrary shell commands.
+- The remote client now has typed process list/start/stop helpers, and `RemoteApp.integration.test.ts` covers list/start/stop through a real `RuntimeServer`, `RuntimeLocalClient`, `OpenADEClient`, and OpenADE module route.
+- Remaining process parity work: config editing and explicit role gates if process control becomes non-default for some paired-device roles.
+
+### 2026-06-01: Shared Project Process Output Viewing Added
+
+- `projects/web/src/shell/project/ProjectHostPanels.tsx` now renders process output from the scoped `openade/project/process/reconnect` result next to the shared project process start/stop controls.
+- `RemoteApp` routes the companion Output action through `reconnectRemoteProjectProcess`, so mobile can inspect output for reviewed `openade.toml` processes without raw `process/*`, `pty/*`, or arbitrary host command access.
+- `ProjectTasksScreen`, `MobileOpenADEShell`, and the remote client helper now carry the typed reconnect result through the shared shell boundary.
+- Focused component/client tests and `RemoteApp.integration.test.ts` cover the output action against a real `RuntimeServer`, `RuntimeLocalClient`, `OpenADEClient`, and OpenADE module route.
+- Packaged-app smoke now also writes a real `openade.toml`, calls `openade/project/process/list`, starts the scoped process in the packaged Electron host, reconnects until stdout contains `packaged scoped process ok`, and stops it.
+
+### 2026-05-31: Companion Project File And Search Panel Added
+
+- `RemoteApp` now exposes a project-screen file browser and read-only preview using scoped `openade/project/files/tree` and `openade/project/file/read` methods through the shared product store.
+- The project screen also exposes scoped `openade/project/search` so companion users can find files/content without raw filesystem access.
+- The companion file panel intentionally stays read-only; paired devices still cannot call `openade/project/file/write` or raw `fs/*` methods by default.
+- `RemoteApp.integration.test.ts` covers project file list/read and search through a real `RuntimeServer`, `RuntimeLocalClient`, `OpenADEClient`, and OpenADE module route.
+- Remaining file parity work: shared desktop/mobile file component extraction, write/edit role gates, and richer large/binary file handling.
+
+### 2026-05-31: Companion Task Changes Panel Added
+
+- `RemoteApp` now exposes read-only task changes, file diff preview, and recent git log on the task screen using scoped `openade/task/changes/read`, `openade/task/diff/read`, and `openade/task/git/log` methods through the shared product store.
+- The panel intentionally avoids commit/push controls for paired devices; `openade/task/git/commit` remains trusted/local unless explicit role gates are added later.
+- `RemoteApp.integration.test.ts` covers changed-file listing, diff read, and git log rendering through a real `RuntimeServer`, `RuntimeLocalClient`, `OpenADEClient`, and OpenADE module route.
+- Remaining changes parity work: shared desktop/mobile changes component extraction, richer diff rendering reuse, staged/unstaged grouping, and commit/push role gates.
+
+### 2026-05-31: Companion Self-Revoke UI Added
+
+- The companion Settings screen now exposes `remote/device/selfRevoke` so a paired device can revoke its own runtime token and clear its saved session.
+- This uses the existing runtime-permissioned device method; mobile still cannot list, revoke, or grant permissions for other devices.
+- `RemoteApp.integration.test.ts` covers self-revoke through the same real runtime client path and verifies the local session is removed after the server response.
+- Remaining device/admin parity work: shared desktop/mobile device-management surfaces and role-specific permission UI.
+
+### 2026-06-01: Trusted Device Admin Runtime Methods Added
+
+- `remote/device/list`, `remote/device/revoke`, and `remote/device/dropAll` are now trusted-local runtime methods for kernel-owned device administration; paired devices still only receive `remote/device/selfRevoke`.
+- Device stream shutdown is routed through a runtime socket stream closer registry so trusted-local revoke closes only the target device sockets and drop-all closes every paired-device socket.
+- Shared companion DTOs now include device list/revoke/drop-all/self-revoke result contracts without granting mobile admin rights.
+- `runtimeApi.integration.test.ts` covers paired-device capability hiding and permission denial for admin device methods, trusted-local revoke-one keeping other device sockets alive, trusted-local drop-all closing all device sockets, and self-revoke token invalidation over the real WebSocket path.
+- Latest verification for this device-admin slice passed: focused `runtimeApi.integration.test.ts`, full `projects/electron` `npm test` with 28 files and 256 tests, `projects/electron` typecheck, `projects/web` typecheck, packaged `npm run build`, `npm run build:web`, `electron-builder --mac --dir`, `npm run test:smoke`, and `git diff --check`.
+
+### 2026-06-01: Desktop Device Settings Use Kernel Methods
+
+- Desktop companion settings now read device lists and perform revoke/drop-all through `projects/web/src/electronAPI/companion.ts` using the production `runtime/localRuntimeClient.ts` path and the `remote/device/*` kernel methods.
+- Native companion enablement, pairing, keep-awake, and bound URLs remain on narrow Electron IPC because those settings are shell-adapter state rather than portable kernel device administration.
+- `projects/web/src/electronAPI/companion.test.ts` installs a real `RuntimeServer` behind the production local runtime bridge and makes legacy revoke/drop-all IPC throw, proving desktop device admin wrappers and the rendered `CompanionTab` UI use the runtime protocol.
+- The old `companion:revokeDevice` and `companion:dropAllDevices` Electron IPC handlers and preload methods were removed so device administration has one trusted-local runtime contract.
+- Latest verification for this desktop settings slice passed: focused `companion.test.ts` plus `Routes.runtimeProductStore.test.ts`, full `projects/web` `npm test` with 78 files and 457 tests, `projects/web` typecheck, `projects/electron` typecheck, packaged `npm run build`, `npm run build:web`, `electron-builder --mac --dir`, `npm run test:smoke`, and `git diff --check`.
+
+### 2026-06-01: MCP OAuth Notification Boundary Verified
+
+- `host/mcp/oauthComplete` remains a trusted-local runtime notification; paired companion sockets still cannot see `host/*` notifications in capabilities, live subscriptions, or cursor replay.
+- `runtimeApi.integration.test.ts` now proves paired WebSocket clients are denied `host/mcp/*` calls, trusted local clients can see the OAuth completion notification, and paired sockets only receive allowed `openade/*` notifications when replaying from the runtime notification log.
+- `projects/web/src/electronAPI/mcp.ts` now validates OAuth completion notification payloads before invoking desktop callbacks, and `electronAPI/mcp.test.ts` verifies the production `runtime/localRuntimeClient.ts` bridge against a real `RuntimeServer`.
+- Route integration tests explicitly set `activeWorkUnloadBlockerDisabled` in their fake preload API, matching packaged smoke's `OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER=1` teardown behavior without disabling blockers in normal app launches.
+- Latest verification for this notification-boundary slice passed: focused Electron/Web runtime tests, `projects/electron` and `projects/web` typechecks, full `projects/electron` `npm test` with 28 files and 257 tests, full `projects/web` `npm test` with 79 files and 458 tests, `projects/web` production build, `projects/electron` `npm run build:web`, `electron-builder --mac --dir` with `NONOTARY=1`, packaged `npm run test:smoke`, and `git diff --check`.
+
+### 2026-06-01: Mobile Multi-Session Runtime Verification Added
+
+- `RemoteApp.integration.test.ts` now verifies the mobile shared shell against two separate real `RuntimeServer` instances selected by the production runtime socket URL builder.
+- The test covers saved-session activation, active config persistence, stale host removal, and local mobile theme persistence across unmount/remount without replacing `KernelSessionManager`, `RuntimeLocalClient`, or `OpenADEClient` with mocks.
+- `MobileSessionsScreen` remove controls now have stable labels/titles so integration tests and accessibility tooling can target the actual stale-host action instead of relying on icon-only button text.
+- Latest focused verification for this session-shell slice passed: `npx vitest --run src/shell/MobileSessionScreens.test.ts src/remote/RemoteApp.integration.test.ts`.
+
+### 2026-06-01: Production Verification Sweep Refreshed
+
+- The migration remains production-shippable behind the rollout flags documented above; desktop default-on promotion still requires the telemetry review runbook and keeps legacy Yjs direct reads as fallback for at least one production release.
+- The active-work unload blocker is disabled only for explicit smoke/test surfaces (`OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER=1`, `OPENADE_SMOKE_TEST=1`, or fake preload test APIs), not for normal production launches.
+- Latest verification after the multi-session shell test passed: `projects/web` typecheck, full `npm test` with 79 files and 459 tests, production `npm run build`, and `git diff --check`.
+- Runtime package verification passed: `projects/runtime`, `projects/runtime-client`, `projects/runtime-node`, `projects/openade-module`, and `projects/openade-client` typechecks plus `projects/openade-module` tests with the real WebSocket kernel persistence path.
+- Shell verification passed: `projects/mobile` typecheck and production build; `projects/electron` typecheck, full `npm test` with 28 files and 257 tests, `npm run build:web`, `electron-builder --mac --dir` with `NONOTARY=1 CSC_IDENTITY_AUTO_DISCOVERY=false`, and packaged `npm run test:smoke`.
+- Build warnings observed but not introduced by this slice remain the known Vite chunk-size warning, the `MarkdownMessage` dynamic/static import warning, duplicate `wasm-CG6Dc4jp.js.map` emission, npm/yarn mixed-lockfile warnings, and local macOS ad-hoc signing/notarization skip.
+
+### 2026-05-31: Shared Host Panel Components Started
+
+- Project file/search/process panels now live in `projects/web/src/shell/project/ProjectHostPanels.tsx`.
+- Task changes/diff/git-log rendering now lives in `projects/web/src/shell/task/TaskGitPanel.tsx`.
+- `RemoteApp` wires these shared components to the runtime-backed remote client today; desktop tray reuse can now happen without copying companion JSX.
+- Remaining Phase 7 work: extract the composer, comments/review controls, event-thread presentation, and responsive chrome around the same product DTO/store contracts.
+
+### 2026-05-31: Shared Task Composer And Product Controls Added
+
+- The remote task composer now uses `projects/web/src/shell/task/TaskComposer.tsx`, backed by the shared command model for labels, mode ordering, and queue-while-running rules.
+- Task title/close/delete, review launch controls, queued-turn cancellation, comments, and task git/read panels now live in `projects/web/src/shell/task/TaskProductPanel.tsx`.
+- `TaskProductPanel` accepts OpenADE task DTOs directly and normalizes legacy/current comment shapes through tolerant readers, keeping old Yjs-projected tasks usable while the shell moves to runtime DTOs.
+- `RemoteApp` now wires these shared task controls to the existing runtime-backed remote client path; `RemoteApp.integration.test.ts` still proves metadata/comments/queued/review/delete/git/file/process/self-revoke through a real `RuntimeServer`, `RuntimeLocalClient`, and `OpenADEClient`.
+- Desktop can reuse the composer/product panel through the gated `DesktopSharedTaskPage`; remaining Phase 7 work is to close rich desktop editor/model/MCP/tray parity, extract route/chrome layout, and reduce `RemoteApp` to session/pairing plus shared shell composition.
+
+### 2026-05-31: Shared Task Event Thread Added
+
+- Task event DTO presentation now lives in `projects/web/src/shell/task/taskEventPresentation.ts` and renders through `projects/web/src/shell/task/TaskEventThread.tsx`.
+- The shared event presentation accepts OpenADE task DTO fields directly, including action/setup/snapshot/queued/unknown event blocks and task-owned image attachments.
+- The previous remote-only presentation tests moved with the shared shell files, and `RemoteApp` imports the shared event thread while keeping the scoped task image loader.
+- The old remote-only thread-scroll alias and duplicate test were removed; desktop and remote now depend directly on `shell/task/useTaskThreadScroll.ts`.
+- Remaining event parity work: reuse these thread components in the desktop task page or bridge desktop event models into the same DTO presentation shape, then remove duplicate desktop-only event rendering where parity permits.
+
+### 2026-05-31: Shared Project Task And New-Task Screens Added
+
+- Mobile companion chrome now lives in `projects/web/src/shell/MobileChrome.tsx`, keeping header/status/notices/bottom navigation as a medium adapter instead of embedding it in `RemoteApp`.
+- Mobile pairing/connect UI now lives in `projects/web/src/shell/MobilePairingScreen.tsx`; `RemoteApp` still owns pairing parsing, validation, and token/session persistence.
+- Mobile session management and local companion settings now live in `projects/web/src/shell/MobileSessionScreens.tsx`, including saved-session selection/removal, self-revoke, and mobile theme selection.
+- The project task list, scoped file/search/process panels, and task-row rendering now live in `projects/web/src/shell/project/ProjectTasksScreen.tsx`.
+- The project/session list now lives in `projects/web/src/shell/project/ProjectsScreen.tsx`, rendering OpenADE snapshots directly so mobile companion and future desktop/web shells do not need another project-list implementation.
+- The new-task form now lives in `projects/web/src/shell/task/NewTaskScreen.tsx` and uses the shared task command model for create-mode labels/order.
+- `RemoteApp` imports these shared shell screens and keeps only pairing orchestration, session state, runtime refresh, and action handlers locally.
+- Web component tests render these screens with real OpenADE snapshot/project/process/task DTOs and session/settings actions, and `RemoteApp.integration.test.ts` still verifies the project/task runtime path through a real runtime client.
+
+### 2026-05-31: Shared Task Screen Wrapper Added
+
+- `projects/web/src/shell/task/TaskScreen.tsx` now composes the shared task event thread, task product panel, and task composer around OpenADE task and preview DTOs.
+- `RemoteApp` delegates the task route to this shared task screen while continuing to own remote refresh, image loading, and product mutation handlers.
+- The desktop route can also delegate to this shared task screen through the default-off shared-screen gate while keeping desktop-specific task code at the adapter/action boundary instead of in task layout/presentation code.
+
+### 2026-06-01: Mobile Shared Shell Wrapper Added
+
+- `projects/web/src/shell/MobileOpenADEShell.tsx` now owns mobile companion chrome plus project, task, new-task, session, and settings route composition.
+- `RemoteApp` now delegates those route screens to the shared mobile shell wrapper and keeps pairing, saved-session state, runtime refresh, realtime subscriptions, and action handlers at the remote adapter boundary.
+- `MobileOpenADEShell.test.ts` renders the wrapper with real OpenADE snapshot/project/task DTOs and verifies route-level actions flow through callbacks, while `RemoteApp.integration.test.ts` still covers the runtime-backed companion path through a real `RuntimeServer`, `RuntimeLocalClient`, and `OpenADEClient`.
+- Latest verification for this shell/session slice passed: focused `MobileOpenADEShell`, `RemoteApp.integration`, `sessionStore`, and `client` tests; `projects/web` `tsgo --noEmit`, full `npm test` with 76 files and 454 tests, and `npm run build`; `projects/mobile` typecheck and production build; and `git diff --check`.
+
+### 2026-06-01: Desktop Shared Task Shell Frame Added
+
+- `projects/web/src/shell/DesktopTaskShell.tsx` now owns the desktop shared-task frame around `TaskScreen`, including desktop notices, drag image overlay, viewport containment, and the medium-supplied composer slot.
+- `DesktopSharedTaskPage` keeps desktop-specific runtime action wiring, rich `InputBar`, hotkeys, image-drop state, and `TaskModel` integration, then delegates the shared route frame to `DesktopTaskShell`.
+- `DesktopTaskShell.test.ts` renders the frame with a real OpenADE task DTO and medium-supplied composer, while `Routes.runtimeProductStore.test.ts` still verifies the gated desktop shared route through a real local-runtime bridge and now opens the Files tray through the rich desktop composer frame.
+- Latest verification for this desktop frame slice passed: focused `DesktopTaskShell` and `Routes.runtimeProductStore` tests, full `projects/web` `npm test` with 77 files and 455 tests, `projects/web` production `npm run build`, `projects/mobile` typecheck and production build, and `git diff --check`.
+
+### 2026-05-31: Shared Task Command State Model Added
+
+- `projects/web/src/shell/task/taskCommandModel.ts` now owns command ids, labels, order, grouping, style variants, visibility, enablement, repeat-mode behavior, and telemetry-trackable command ids.
+- Desktop `InputManager` now builds its commands from the shared descriptor model and only attaches desktop-specific icons and side effects.
+- This moves Plan/Do/Ask/Revise/Run Plan/Review/Repeat/Stop/Close/Reopen/Commit command state toward the shared shell without weakening the existing desktop editor, review modal, repeat, git, or runtime-turn behavior.
+- Web tests cover the descriptor model directly plus existing `InputManager` command execution behavior.
+
+### 2026-06-01: Shared Task Composer Agent Controls Added
+
+- `projects/web/src/shell/task/TaskComposer.tsx` now owns optional shared controls for harness, model, thinking level, and fast mode, plus an MCP-control slot supplied by the medium adapter so the mobile shell does not import desktop store/settings code.
+- The gated desktop shared task route wires those controls to the same `TaskModel` state used by the legacy desktop `InputBar`, then sends the selected values through `runtime/localOpenADEClient.ts` on `openade/turn/start` and `openade/review/start`.
+- `projects/web/src/Routes.runtimeProductStore.test.ts` verifies this through a real `RuntimeServer` installed behind the production local runtime bridge: the shared desktop composer renders the agent/MCP controls, toggles fast mode, submits a turn, and asserts the actual runtime request includes harness id, model id, thinking, fast mode, and enabled MCP server ids.
+- Remaining default-on shared task blockers are now review of rollout fallback telemetry from an internal/default-on cohort.
+
+### 2026-06-01: Desktop Shared Rich Composer Slot Added
+
+- `projects/web/src/shell/task/TaskScreen.tsx` now accepts a medium-supplied composer slot plus viewport padding so desktop can reuse the same DTO-backed task thread/product panel while supplying desktop-only input chrome.
+- The gated desktop shared route supplies the existing rich `InputBar`, preserving SmartEditor, image attach, file mentions, slash commands, desktop tray buttons, tray shortcuts, model/thinking/fast-mode controls, and MCP selection without importing those desktop-only affordances into mobile.
+- `InputBar` now has an optional command override. `DesktopSharedTaskPage` uses it so rich composer command buttons and shortcuts call `runtime/localOpenADEClient.ts` product methods directly instead of falling back to renderer `RepoStore`/Yjs command execution in the runtime-backed route.
+- `projects/web/src/Routes.runtimeProductStore.test.ts` verifies this through a real `RuntimeServer` installed behind the production local runtime bridge: the route renders the rich attach/tray/MCP controls, toggles fast mode, submits via the rich Do command, and asserts the actual `openade/turn/start` request includes harness id, model id, thinking, fast mode, and enabled MCP server ids.
+- `projects/web/src/Routes.runtimeProductStore.test.ts` also runs an automated desktop workflow smoke against the same real local-runtime route: Plan, Revise, Run Plan, Ask, Close/Reopen, and recreate the store to prove reload reads the runtime-backed state.
+- `CodeStore` and `RepoManager` now keep serving an existing runtime snapshot while bridge status is transiently non-ready, preventing route fallback to legacy `RepoStore` during runtime refresh/error windows. `projects/web/src/store/storeRuntimeProductStore.test.ts` covers this with a real `RuntimeServer`, `RuntimeLocalClient`, and `OpenADEClient`.
+- `CodeStore` now emits rollout observability for the bridge: app-open runtime status, sanitized runtime bridge errors, and deduped legacy fallback events. `projects/web/src/store/storeRuntimeProductStore.test.ts` verifies the fallback signal after initializing a real runtime-backed bridge, then forcing a direct legacy task-store read.
+- Packaged-app smoke passed after `npm run build`, `npm run build:web`, and `electron-builder --mac --dir`, proving the bundled web UI, preload IPC runtime initialization, repo creation, Plan, Revise, Run Plan, Ask, close/reopen, app relaunch reload, scoped project file tree/read/write/search, and scoped project process list/start/reconnect-output/stop still work in the packaged desktop binary. The smoke harness isolates `HOME`/`USERPROFILE` and explicitly sets `OPENADE_YJS_STORAGE_DIR` so it does not read or mutate the developer's normal `~/.openade` data.
+- Remaining default-on blockers are review of rollout fallback telemetry from an internal/default-on cohort and later route/chrome cleanup before removing legacy desktop paths.
+
+### 2026-06-01: Packaged Workflow Smoke And Storage Race Fixes
+
+- `projects/openade-module/src/yjsMutation.ts` now saves Yjs mutation deltas relative to the state vector loaded by that writer. This prevents stale concurrent action-stream saves from resurrecting older task status fields after a later terminal update. `projects/openade-module/src/yjsMutation.test.ts` proves the regression through real node Yjs storage and projection reads.
+- `projects/electron/src/modules/code/yjsStorage.ts` now makes loads, deletes, and document listing wait for in-flight per-document saves. This gives the runtime read-after-write consistency when the packaged app starts the next turn immediately after a task event completes. `projects/electron/src/modules/code/yjsStorage.test.ts` covers the behavior with real filesystem-backed Yjs storage.
+- `projects/electron/src/modules/companion/runtimeGateway.ts` retries mutation-start task reads on transient `Task not found` errors, so existing-task turns tolerate short projection/storage timing windows without hiding non-task-not-found failures.
+- The packaged smoke disables active-work unload prompts with `OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER=1` while also using `OPENADE_SMOKE_TEST=1` and the deterministic smoke harness. The production blocker remains active outside those explicit smoke/test env flags.
+- The packaged smoke also sets `OPENADE_YJS_STORAGE_DIR` under its temp user-data directory. This avoids false `Task <id> not found` read-after-write failures caused by the packaged app reading the developer's normal `~/.openade/data/yjs/code_repos` during workflow verification.
+- `projects/electron/tests/smoke.spec.ts` now waits for both task-event completion and `runtime/list` idle state before issuing the next turn. Its task-read polling retries only the exact transient `Task <id> not found` window after turn start, which verifies the real runtime lifecycle instead of racing active-execution cleanup.
+
 ## Open Questions
 
-- Should the first-class kernel live in a new `projects/openade-kernel` package or be an option in `runtime-node`?
+- Should the first-class kernel live in a new `projects/openade-kernel` package or be an option in `runtime-node`? Resolved for this migration slice: keep it in `projects/openade-module/src/kernel.ts` so runtime-node stays product-agnostic.
 - Should browser web support direct private-network pairing, or should it start desktop/local only until browser Private Network Access constraints are fully handled?
 - Which mobile roles should be exposed in product UI first: admin, operator, viewer, or only the current paired-device role?
 - Which desktop settings should become kernel-owned versus remain local client preferences?
 - Should terminal/process access ever be enabled on mobile by default, or always require explicit per-device grants?
-- How long should the old desktop Yjs direct-read path remain behind a fallback flag?
+- How long should the old desktop Yjs direct-read path remain behind a fallback flag? Resolved for this branch: at least one production release after default-on runtime rollout, followed by telemetry/log review and regression fixtures for any fallback-triggering cases.
 
 ## Suggested First Pull Requests
 

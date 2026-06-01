@@ -83,6 +83,14 @@ async function ensureStorageDir(): Promise<void> {
     await fs.mkdir(getYjsStorageDir(), { recursive: true })
 }
 
+async function awaitPendingSave(id: string): Promise<void> {
+    await (saveQueues.get(id) ?? Promise.resolve())
+}
+
+async function awaitPendingSaves(): Promise<void> {
+    await Promise.all(Array.from(saveQueues.values()))
+}
+
 function expectedTaskMetaId(id: string): string | null {
     return id.startsWith("code:task:") ? id.slice("code:task:".length) : null
 }
@@ -216,6 +224,8 @@ export async function saveYjsDocument(id: string, data: Uint8Array): Promise<voi
  * Returns null if the document doesn't exist.
  */
 async function handleLoad(id: string): Promise<Uint8Array | null> {
+    await awaitPendingSave(id)
+
     const filePath = getDocPath(id)
     const legacyNestedPath = getLegacyNestedDocPath(id)
 
@@ -269,6 +279,8 @@ export async function loadYjsDocument(id: string): Promise<Uint8Array | null> {
  * Delete a YJS document from disk.
  */
 async function handleDelete(id: string): Promise<void> {
+    await awaitPendingSave(id)
+
     const filePath = getDocPath(id)
 
     try {
@@ -291,6 +303,8 @@ export async function deleteYjsDocument(id: string): Promise<void> {
  * List all document IDs in storage.
  */
 async function handleList(): Promise<string[]> {
+    await awaitPendingSaves()
+
     try {
         const files = await fs.readdir(getYjsStorageDir())
 

@@ -48,6 +48,9 @@ export class TaskManager {
     }
 
     getTask(taskId: string): Task | null {
+        const runtimeTask = this.store.getCachedRuntimeProductTask(taskId)
+        if (runtimeTask) return runtimeTask
+
         const taskStore = this.store.getCachedTaskStore(taskId)
         if (taskStore) {
             return taskFromStore(taskStore)
@@ -91,7 +94,7 @@ export class TaskManager {
     }
 
     getTaskModel(taskId: string): TaskModel | null {
-        if (!this.store.getCachedTaskStore(taskId)) return null
+        if (!this.store.getCachedTaskStore(taskId) && !this.store.hasRuntimeProductTaskReference(taskId)) return null
 
         const cached = this.taskModels.get(taskId)
         if (cached) {
@@ -150,7 +153,7 @@ export class TaskManager {
                 }
             }
         }
-        return null
+        return this.store.findRuntimeProductRepoIdForTask(taskId)
     }
 
     private async ensureTaskStore(taskId: string, repoId: string) {
@@ -305,8 +308,7 @@ export class TaskManager {
     }
 
     async markTaskViewed(taskId: string): Promise<void> {
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) return
+        if (!this.getTask(taskId)) return
 
         await localOpenADEClient.updateTaskMetadata({ taskId, lastViewedAt: new Date().toISOString() })
         await this.store.refreshTaskStoreFromStorage(taskId)

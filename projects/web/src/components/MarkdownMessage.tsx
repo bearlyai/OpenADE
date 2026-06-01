@@ -16,9 +16,9 @@ import { openUrlInNativeBrowser } from "../electronAPI/shell"
 import { useOptionalCodeStore } from "../store/context"
 import type { CommentSelectedText } from "../types"
 import { getExternalUrlToOpen } from "../utils/externalLinks"
+import type { CommentHandlers } from "./FilesAndDiffs"
 import { useCommentAnnotations } from "./comments/hooks/useCommentAnnotations"
 import { extractSelectedText } from "./comments/utils"
-import type { CommentHandlers } from "./FilesAndDiffs"
 import { splitPath } from "./utils/paths"
 
 type HighlightedCodeLine = {

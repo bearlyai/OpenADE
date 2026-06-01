@@ -933,6 +933,7 @@ describe("OpenADE runtime turn start integration", () => {
                     }),
                     expect.objectContaining({
                         userInput: "Review Plan Follow-up",
+                        status: "completed",
                         source: { type: "ask", userLabel: "Review Plan Follow-up", origin: "review_follow_up" },
                     }),
                 ],
@@ -1004,6 +1005,72 @@ describe("OpenADE runtime turn start integration", () => {
         })
         expect(harnessMock.clearRuntimeHarnessBuffer).toHaveBeenCalledWith({
             executionId: expect.stringContaining(taskId),
+        })
+    })
+
+    it("starts an existing-task revise turn immediately after a server-owned plan completes", async () => {
+        harnessMock.startRuntimeHarnessQuery.mockImplementation(
+            async (request: {
+                executionId: string
+                onEvent?: (event: Record<string, unknown>) => void
+                onSettled?: (result: Record<string, unknown>) => void
+            }) => {
+                request.onEvent?.({
+                    id: `session-${request.executionId}`,
+                    direction: "execution",
+                    type: "session_started",
+                    executionId: request.executionId,
+                    harnessId: "codex",
+                    sessionId: `session-${request.executionId}`,
+                })
+                request.onEvent?.({
+                    id: `message-${request.executionId}`,
+                    direction: "execution",
+                    type: "raw_message",
+                    executionId: request.executionId,
+                    harnessId: "codex",
+                    message: { type: "item.completed", item: { type: "agent_message", text: "done" } },
+                })
+                request.onEvent?.({
+                    id: `complete-${request.executionId}`,
+                    direction: "execution",
+                    type: "complete",
+                    executionId: request.executionId,
+                    harnessId: "codex",
+                })
+                request.onSettled?.({
+                    executionId: request.executionId,
+                    status: "completed",
+                    sessionId: `session-${request.executionId}`,
+                    events: [],
+                })
+                return { ok: true }
+            }
+        )
+
+        const runtime = getRuntimeServer()
+        const plan = await runtime.handleRequest(
+            { id: 1, method: "openade/turn/start", params: { repoId: "repo-1", type: "plan", input: "Plan then revise" } },
+            connection()
+        )
+        const taskId = (plan.result as { taskId: string }).taskId
+
+        await vi.waitFor(async () => {
+            const read = await runtime.handleRequest({ id: 2, method: "openade/task/read", params: { repoId: "repo-1", taskId } }, connection())
+            const task = read.result as { events: Array<{ status?: string; source?: { type?: string } }> }
+            expect(task.events.find((event) => event.source?.type === "plan")?.status).toBe("completed")
+        })
+
+        const revise = await runtime.handleRequest(
+            { id: 3, method: "openade/turn/start", params: { repoId: "repo-1", inTaskId: taskId, type: "revise", input: "Revise now" } },
+            connection()
+        )
+
+        expect(revise.error).toBeUndefined()
+        await vi.waitFor(async () => {
+            const read = await runtime.handleRequest({ id: 4, method: "openade/task/read", params: { repoId: "repo-1", taskId } }, connection())
+            const task = read.result as { events: Array<{ status?: string; source?: { type?: string } }> }
+            expect(task.events.find((event) => event.source?.type === "revise")?.status).toBe("completed")
         })
     })
 

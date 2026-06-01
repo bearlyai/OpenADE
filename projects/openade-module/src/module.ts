@@ -18,17 +18,60 @@ import type {
     OpenADEHyperPlanSubExecutionAddRequest,
     OpenADEHyperPlanSubExecutionStreamAppendRequest,
     OpenADEHyperPlanSubExecutionUpdateRequest,
+    OpenADEProjectFileReadRequest,
+    OpenADEProjectFileReadResult,
+    OpenADEProjectFilesTreeRequest,
+    OpenADEProjectFilesTreeResult,
+    OpenADEProjectFileWriteRequest,
+    OpenADEProjectFileWriteResult,
+    OpenADEProjectProcessListRequest,
+    OpenADEProjectProcessListResult,
+    OpenADEProjectProcessReconnectRequest,
+    OpenADEProjectProcessReconnectResult,
+    OpenADEProjectProcessStartRequest,
+    OpenADEProjectProcessStartResult,
+    OpenADEProjectProcessStopRequest,
+    OpenADEProjectProcessStopResult,
     OpenADERepoCreateRequest,
     OpenADERepoCreateResult,
     OpenADERepoDeleteRequest,
     OpenADERepoUpdateRequest,
+    OpenADEProjectSearchRequest,
+    OpenADEProjectSearchResult,
     OpenADEProject,
     OpenADEQueuedTurnCancelRequest,
     OpenADEQueuedTurnCancelResult,
     OpenADESnapshotEventCreateRequest,
     OpenADESnapshot,
     OpenADESnapshotEventCreateResult,
+    OpenADESnapshotEventRecord,
     OpenADETask,
+    OpenADETaskChangesReadRequest,
+    OpenADETaskChangesReadResult,
+    OpenADETaskDiffContextLines,
+    OpenADETaskDiffReadRequest,
+    OpenADETaskDiffReadResult,
+    OpenADETaskGitCommitRequest,
+    OpenADETaskGitCommitResult,
+    OpenADETaskGitLogRequest,
+    OpenADETaskGitLogResult,
+    OpenADETaskImageReadRequest,
+    OpenADETaskImageReadResult,
+    OpenADETaskImageReference,
+    OpenADETaskTerminalMutationResult,
+    OpenADETaskTerminalReconnectRequest,
+    OpenADETaskTerminalReconnectResult,
+    OpenADETaskTerminalResizeRequest,
+    OpenADETaskTerminalStartRequest,
+    OpenADETaskTerminalStartResult,
+    OpenADETaskTerminalStopRequest,
+    OpenADETaskTerminalWriteRequest,
+    OpenADETaskSnapshotIndexReadRequest,
+    OpenADETaskSnapshotIndexReadResult,
+    OpenADETaskSnapshotPatchReadRequest,
+    OpenADETaskSnapshotPatchReadResult,
+    OpenADETaskSnapshotPatchSliceReadRequest,
+    OpenADETaskSnapshotPatchSliceReadResult,
     OpenADETaskReadOptions,
     OpenADETaskReadRequest,
     OpenADETaskDeleteRequest,
@@ -88,6 +131,40 @@ export interface OpenADEWriteAdapter {
     updateTaskMetadata(params: OpenADETaskMetadataUpdateRequest): Promise<unknown>
 }
 
+export interface OpenADEScopedHostAdapter {
+    listProjectFiles(params: OpenADEProjectFilesTreeRequest & { repo: OpenADEProject }): Promise<OpenADEProjectFilesTreeResult>
+    readProjectFile(params: OpenADEProjectFileReadRequest & { repo: OpenADEProject }): Promise<OpenADEProjectFileReadResult>
+    writeProjectFile(params: OpenADEProjectFileWriteRequest & { repo: OpenADEProject }): Promise<OpenADEProjectFileWriteResult>
+    searchProject(params: OpenADEProjectSearchRequest & { repo: OpenADEProject }): Promise<OpenADEProjectSearchResult>
+    listProjectProcesses(params: OpenADEProjectProcessListRequest & { repo: OpenADEProject; task?: OpenADETask }): Promise<OpenADEProjectProcessListResult>
+    startProjectProcess(params: OpenADEProjectProcessStartRequest & { repo: OpenADEProject; task?: OpenADETask }): Promise<OpenADEProjectProcessStartResult>
+    reconnectProjectProcess(
+        params: OpenADEProjectProcessReconnectRequest & { repo: OpenADEProject; task?: OpenADETask }
+    ): Promise<OpenADEProjectProcessReconnectResult>
+    stopProjectProcess(params: OpenADEProjectProcessStopRequest & { repo: OpenADEProject; task?: OpenADETask }): Promise<OpenADEProjectProcessStopResult>
+    startTaskTerminal(params: OpenADETaskTerminalStartRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskTerminalStartResult>
+    reconnectTaskTerminal(
+        params: OpenADETaskTerminalReconnectRequest & { repo: OpenADEProject; task: OpenADETask }
+    ): Promise<OpenADETaskTerminalReconnectResult>
+    writeTaskTerminal(params: OpenADETaskTerminalWriteRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskTerminalMutationResult>
+    resizeTaskTerminal(params: OpenADETaskTerminalResizeRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskTerminalMutationResult>
+    stopTaskTerminal(params: OpenADETaskTerminalStopRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskTerminalMutationResult>
+    readTaskImage(params: OpenADETaskImageReadRequest & { repo: OpenADEProject; task: OpenADETask; image: OpenADETaskImageReference }): Promise<OpenADETaskImageReadResult>
+    readTaskChanges(params: OpenADETaskChangesReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskChangesReadResult>
+    readTaskDiff(params: OpenADETaskDiffReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskDiffReadResult>
+    readTaskGitLog(params: OpenADETaskGitLogRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitLogResult>
+    commitTaskGit(params: OpenADETaskGitCommitRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitCommitResult>
+    readTaskSnapshotPatch(
+        params: OpenADETaskSnapshotPatchReadRequest & { repo: OpenADEProject; task: OpenADETask; snapshotEvent: OpenADESnapshotEventRecord }
+    ): Promise<OpenADETaskSnapshotPatchReadResult>
+    readTaskSnapshotIndex(
+        params: OpenADETaskSnapshotIndexReadRequest & { repo: OpenADEProject; task: OpenADETask; snapshotEvent: OpenADESnapshotEventRecord }
+    ): Promise<OpenADETaskSnapshotIndexReadResult>
+    readTaskSnapshotPatchSlice(
+        params: OpenADETaskSnapshotPatchSliceReadRequest & { repo: OpenADEProject; task: OpenADETask; snapshotEvent: OpenADESnapshotEventRecord }
+    ): Promise<OpenADETaskSnapshotPatchSliceReadResult>
+}
+
 export interface OpenADETurnStartContext {
     runtimeId: string
     requestKey: string
@@ -97,6 +174,7 @@ export interface OpenADEModuleAdapters extends OpenADEReadAdapter, OpenADEWriteA
     version?: () => string | undefined
     createId?: () => string
     clientRequestRetentionMs?: number
+    scopedHost?: OpenADEScopedHostAdapter
 }
 
 interface ClientRequestEntry {
@@ -149,6 +227,12 @@ function stringParam(record: Record<string, unknown>, key: string): string {
     return value
 }
 
+function stringParamAllowEmpty(record: Record<string, unknown>, key: string): string {
+    const value = record[key]
+    if (typeof value !== "string") throw new Error(`${key} is invalid`)
+    return value
+}
+
 function optionalStringParam(record: Record<string, unknown>, key: string): string | undefined {
     const value = record[key]
     return typeof value === "string" && value.length > 0 ? value : undefined
@@ -159,9 +243,298 @@ function booleanParam(record: Record<string, unknown>, key: string): boolean | u
     return typeof value === "boolean" ? value : undefined
 }
 
+function optionalPositiveIntegerParam(record: Record<string, unknown>, key: string, fallback?: number): number | undefined {
+    const value = record[key]
+    if (value === undefined) return fallback
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) throw new Error(`${key} is invalid`)
+    return Math.floor(value)
+}
+
+function positiveIntegerParam(record: Record<string, unknown>, key: string): number {
+    const value = optionalPositiveIntegerParam(record, key)
+    if (value === undefined) throw new Error(`${key} is invalid`)
+    return value
+}
+
+function optionalNonNegativeIntegerParam(record: Record<string, unknown>, key: string, fallback?: number): number | undefined {
+    const value = record[key]
+    if (value === undefined) return fallback
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error(`${key} is invalid`)
+    return Math.floor(value)
+}
+
 function stringArrayParam(record: Record<string, unknown>, key: string): string[] | undefined {
     const value = record[key]
     return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined
+}
+
+function scopedRelativePathParam(record: Record<string, unknown>, key: string): string {
+    const value = stringParam(record, key).replace(/\\/g, "/")
+    if (value.startsWith("/") || value.split("/").some((segment) => segment === "..")) throw new Error(`${key} is invalid`)
+    return value
+}
+
+function optionalScopedRelativePathParam(record: Record<string, unknown>, key: string): string {
+    const value = record[key]
+    if (value === undefined || value === "") return ""
+    if (typeof value !== "string") throw new Error(`${key} is invalid`)
+    const normalized = value.replace(/\\/g, "/")
+    if (normalized.startsWith("/") || normalized.split("/").some((segment) => segment === "..")) throw new Error(`${key} is invalid`)
+    return normalized
+}
+
+function projectFilesTreeParams(params: unknown): OpenADEProjectFilesTreeRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        path: optionalScopedRelativePathParam(record, "path"),
+        maxDepth: optionalPositiveIntegerParam(record, "maxDepth"),
+        maxEntries: optionalPositiveIntegerParam(record, "maxEntries"),
+        includeHidden: booleanParam(record, "includeHidden"),
+    }
+}
+
+function projectFileReadParams(params: unknown): OpenADEProjectFileReadRequest {
+    const record = asRecord(params)
+    const encoding = record.encoding === "base64" ? "base64" : "utf8"
+    return {
+        repoId: stringParam(record, "repoId"),
+        path: scopedRelativePathParam(record, "path"),
+        encoding,
+        maxBytes: optionalPositiveIntegerParam(record, "maxBytes"),
+    }
+}
+
+function projectFileWriteParams(params: unknown): OpenADEProjectFileWriteRequest {
+    const record = asRecord(params)
+    const encoding = record.encoding === "base64" ? "base64" : "utf8"
+    return {
+        repoId: stringParam(record, "repoId"),
+        path: scopedRelativePathParam(record, "path"),
+        encoding,
+        content: stringParamAllowEmpty(record, "content"),
+        createDirs: booleanParam(record, "createDirs"),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+}
+
+function projectSearchParams(params: unknown): OpenADEProjectSearchRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        query: stringParam(record, "query"),
+        limit: optionalPositiveIntegerParam(record, "limit", 100),
+        caseSensitive: booleanParam(record, "caseSensitive"),
+    }
+}
+
+function projectProcessListParams(params: unknown): OpenADEProjectProcessListRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: optionalStringParam(record, "taskId"),
+    }
+}
+
+function projectProcessStartParams(params: unknown): OpenADEProjectProcessStartRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: optionalStringParam(record, "taskId"),
+        definitionId: stringParam(record, "definitionId"),
+        timeoutMs: optionalPositiveIntegerParam(record, "timeoutMs"),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+}
+
+function projectProcessReconnectParams(params: unknown): OpenADEProjectProcessReconnectRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: optionalStringParam(record, "taskId"),
+        processId: stringParam(record, "processId"),
+    }
+}
+
+function projectProcessStopParams(params: unknown): OpenADEProjectProcessStopRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: optionalStringParam(record, "taskId"),
+        processId: stringParam(record, "processId"),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+}
+
+function taskTerminalStartParams(params: unknown): OpenADETaskTerminalStartRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        cols: optionalPositiveIntegerParam(record, "cols"),
+        rows: optionalPositiveIntegerParam(record, "rows"),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+}
+
+function taskTerminalReconnectParams(params: unknown): OpenADETaskTerminalReconnectRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        terminalId: stringParam(record, "terminalId"),
+    }
+}
+
+function taskTerminalWriteParams(params: unknown): OpenADETaskTerminalWriteRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        terminalId: stringParam(record, "terminalId"),
+        data: stringParamAllowEmpty(record, "data"),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+}
+
+function taskTerminalResizeParams(params: unknown): OpenADETaskTerminalResizeRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        terminalId: stringParam(record, "terminalId"),
+        cols: positiveIntegerParam(record, "cols"),
+        rows: positiveIntegerParam(record, "rows"),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+}
+
+function taskTerminalStopParams(params: unknown): OpenADETaskTerminalStopRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        terminalId: stringParam(record, "terminalId"),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+}
+
+const ALLOWED_TASK_IMAGE_EXTENSIONS = new Set(["gif", "jpeg", "jpg", "png", "webp"])
+
+function taskImageIdParam(record: Record<string, unknown>, key: string): string {
+    const value = stringParam(record, key)
+    if (!/^[a-zA-Z0-9_-]+$/.test(value)) throw new Error(`${key} is invalid`)
+    return value
+}
+
+function taskImageExtParam(record: Record<string, unknown>, key: string): string {
+    const value = stringParam(record, key).toLowerCase()
+    if (!ALLOWED_TASK_IMAGE_EXTENSIONS.has(value)) throw new Error(`${key} is invalid`)
+    return value
+}
+
+function taskImageReadParams(params: unknown): OpenADETaskImageReadRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        imageId: taskImageIdParam(record, "imageId"),
+        ext: taskImageExtParam(record, "ext"),
+    }
+}
+
+function taskChangesReadParams(params: unknown): OpenADETaskChangesReadRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        fromTreeish: optionalStringParam(record, "fromTreeish"),
+    }
+}
+
+function taskDiffContextLinesParam(value: unknown): OpenADETaskDiffContextLines {
+    if (value === undefined) return 3
+    switch (value) {
+        case 1:
+            return 1
+        case 3:
+            return 3
+        case 10:
+            return 10
+        case 25:
+            return 25
+        case 100:
+            return 100
+        default:
+            throw new Error("contextLines is invalid")
+    }
+}
+
+function taskDiffReadParams(params: unknown): OpenADETaskDiffReadRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        filePath: scopedRelativePathParam(record, "filePath"),
+        oldPath: optionalScopedRelativePathParam(record, "oldPath") || undefined,
+        fromTreeish: optionalStringParam(record, "fromTreeish"),
+        contextLines: taskDiffContextLinesParam(record.contextLines),
+        allowTruncation: booleanParam(record, "allowTruncation"),
+    }
+}
+
+function taskGitLogParams(params: unknown): OpenADETaskGitLogRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        ref: optionalStringParam(record, "ref"),
+        limit: optionalPositiveIntegerParam(record, "limit"),
+        skip: optionalNonNegativeIntegerParam(record, "skip", 0),
+    }
+}
+
+function gitCommitMessageParam(record: Record<string, unknown>): string {
+    const message = stringParam(record, "message").trim()
+    if (!message || message.length > 10_000 || message.includes("\0")) throw new Error("message is invalid")
+    return message
+}
+
+function taskGitCommitParams(params: unknown): OpenADETaskGitCommitRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        message: gitCommitMessageParam(record),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+}
+
+function taskSnapshotPatchReadParams(params: unknown): OpenADETaskSnapshotPatchReadRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        eventId: stringParam(record, "eventId"),
+    }
+}
+
+function taskSnapshotIndexReadParams(params: unknown): OpenADETaskSnapshotIndexReadRequest {
+    return taskSnapshotPatchReadParams(params)
+}
+
+function taskSnapshotPatchSliceReadParams(params: unknown): OpenADETaskSnapshotPatchSliceReadRequest {
+    const record = asRecord(params)
+    const start = optionalNonNegativeIntegerParam(record, "start")
+    const end = optionalNonNegativeIntegerParam(record, "end")
+    if (start === undefined || end === undefined || end < start) throw new Error("end is invalid")
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        eventId: stringParam(record, "eventId"),
+        start,
+        end,
+    }
 }
 
 function hyperplanStrategyParam(value: unknown): OpenADEHyperPlanStrategy | undefined {
@@ -216,6 +589,52 @@ function activeOpenADETaskIds(server: RuntimeServer): string[] {
         .list({ ownerType: "openade-task" })
         .filter((runtime) => runtime.scope.ownerId && (runtime.status === "starting" || runtime.status === "running"))
         .map((runtime) => runtime.scope.ownerId as string)
+}
+
+function eventRecord(value: unknown): Record<string, unknown> | null {
+    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+}
+
+function taskImageReference(value: unknown): OpenADETaskImageReference | null {
+    const record = eventRecord(value)
+    if (!record) return null
+    if (typeof record.id !== "string" || typeof record.ext !== "string") return null
+    if (!/^[a-zA-Z0-9_-]+$/.test(record.id)) return null
+    const ext = record.ext.toLowerCase()
+    if (!ALLOWED_TASK_IMAGE_EXTENSIONS.has(ext)) return null
+    const mediaType = typeof record.mediaType === "string" && record.mediaType.startsWith("image/") ? record.mediaType : undefined
+    return { id: record.id, ext, mediaType }
+}
+
+function taskImageReferences(value: unknown): OpenADETaskImageReference[] {
+    if (!Array.isArray(value)) return []
+    return value.map(taskImageReference).filter((image): image is OpenADETaskImageReference => image !== null)
+}
+
+function taskImageReferenceForTask(task: OpenADETask, imageId: string, ext: string): OpenADETaskImageReference | null {
+    for (const event of task.events) {
+        const record = eventRecord(event)
+        if (!record || record.type !== "action") continue
+        for (const image of taskImageReferences(record.images)) {
+            if (image.id === imageId && image.ext === ext) return image
+        }
+    }
+
+    for (const turn of task.queuedTurns ?? []) {
+        for (const image of taskImageReferences(turn.images)) {
+            if (image.id === imageId && image.ext === ext) return image
+        }
+    }
+
+    return null
+}
+
+function snapshotEventForTask(task: OpenADETask, eventId: string): OpenADESnapshotEventRecord {
+    for (const event of task.events) {
+        const record = eventRecord(event)
+        if (record?.type === "snapshot" && record.id === eventId) return record as OpenADESnapshotEventRecord
+    }
+    throw new Error(`Snapshot event ${eventId} not found`)
 }
 
 function repoUserParam(value: unknown): OpenADERepoCreateRequest["createdBy"] {
@@ -814,6 +1233,140 @@ export function createOpenADEModule(adapters: OpenADEModuleAdapters): RuntimeMod
                 const { repoId, taskId, hydrateSessionEvents } = taskReadParams(params)
                 return adapters.readTask(repoId, taskId, { hydrateSessionEvents })
             }, { validateParams: validateWith(taskReadParams) })
+            const scopedHost = adapters.scopedHost
+            if (scopedHost) {
+                const readScopedProject = async (repoId: string): Promise<OpenADEProject> => {
+                    const repo = (await adapters.readProjects()).find((project) => project.id === repoId)
+                    if (!repo) throw new Error(`Repository ${repoId} not found`)
+                    return repo
+                }
+                const readScopedProjectTask = async (repoId: string, taskId: string): Promise<{ repo: OpenADEProject; task: OpenADETask }> => {
+                    const repo = await readScopedProject(repoId)
+                    const task = await adapters.readTask(repo.id, taskId, { hydrateSessionEvents: false })
+                    return { repo, task }
+                }
+                const readScopedProjectOptionalTask = async (
+                    repoId: string,
+                    taskId?: string
+                ): Promise<{ repo: OpenADEProject; task?: OpenADETask }> => {
+                    const repo = await readScopedProject(repoId)
+                    if (!taskId) return { repo }
+                    const task = await adapters.readTask(repo.id, taskId, { hydrateSessionEvents: false })
+                    return { repo, task }
+                }
+                server.register("openade/project/files/tree", async (params) => {
+                    const request = projectFilesTreeParams(params)
+                    const repo = await readScopedProject(request.repoId)
+                    return scopedHost.listProjectFiles({ ...request, repo })
+                }, { validateParams: validateWith(projectFilesTreeParams) })
+                server.register("openade/project/file/read", async (params) => {
+                    const request = projectFileReadParams(params)
+                    const repo = await readScopedProject(request.repoId)
+                    return scopedHost.readProjectFile({ ...request, repo })
+                }, { validateParams: validateWith(projectFileReadParams) })
+                server.register("openade/project/file/write", async (params) => {
+                    const request = projectFileWriteParams(params)
+                    const repo = await readScopedProject(request.repoId)
+                    return runIdempotentMutation("openade/project/file/write", params, () => scopedHost.writeProjectFile({ ...request, repo }))
+                }, { validateParams: validateWith(projectFileWriteParams) })
+                server.register("openade/project/search", async (params) => {
+                    const request = projectSearchParams(params)
+                    const repo = await readScopedProject(request.repoId)
+                    return scopedHost.searchProject({ ...request, repo })
+                }, { validateParams: validateWith(projectSearchParams) })
+                server.register("openade/project/process/list", async (params) => {
+                    const request = projectProcessListParams(params)
+                    const { repo, task } = await readScopedProjectOptionalTask(request.repoId, request.taskId)
+                    return scopedHost.listProjectProcesses({ ...request, repo, task })
+                }, { validateParams: validateWith(projectProcessListParams) })
+                server.register("openade/project/process/start", async (params) => {
+                    const request = projectProcessStartParams(params)
+                    const { repo, task } = await readScopedProjectOptionalTask(request.repoId, request.taskId)
+                    return runIdempotentMutation("openade/project/process/start", params, () =>
+                        scopedHost.startProjectProcess({ ...request, repo, task })
+                    )
+                }, { validateParams: validateWith(projectProcessStartParams) })
+                server.register("openade/project/process/reconnect", async (params) => {
+                    const request = projectProcessReconnectParams(params)
+                    const { repo, task } = await readScopedProjectOptionalTask(request.repoId, request.taskId)
+                    return scopedHost.reconnectProjectProcess({ ...request, repo, task })
+                }, { validateParams: validateWith(projectProcessReconnectParams) })
+                server.register("openade/project/process/stop", async (params) => {
+                    const request = projectProcessStopParams(params)
+                    const { repo, task } = await readScopedProjectOptionalTask(request.repoId, request.taskId)
+                    return runIdempotentMutation("openade/project/process/stop", params, () => scopedHost.stopProjectProcess({ ...request, repo, task }))
+                }, { validateParams: validateWith(projectProcessStopParams) })
+                server.register("openade/task/terminal/start", async (params) => {
+                    const request = taskTerminalStartParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return runIdempotentMutation("openade/task/terminal/start", params, () => scopedHost.startTaskTerminal({ ...request, repo, task }))
+                }, { validateParams: validateWith(taskTerminalStartParams) })
+                server.register("openade/task/terminal/reconnect", async (params) => {
+                    const request = taskTerminalReconnectParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return scopedHost.reconnectTaskTerminal({ ...request, repo, task })
+                }, { validateParams: validateWith(taskTerminalReconnectParams) })
+                server.register("openade/task/terminal/write", async (params) => {
+                    const request = taskTerminalWriteParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return runIdempotentMutation("openade/task/terminal/write", params, () => scopedHost.writeTaskTerminal({ ...request, repo, task }))
+                }, { validateParams: validateWith(taskTerminalWriteParams) })
+                server.register("openade/task/terminal/resize", async (params) => {
+                    const request = taskTerminalResizeParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return runIdempotentMutation("openade/task/terminal/resize", params, () => scopedHost.resizeTaskTerminal({ ...request, repo, task }))
+                }, { validateParams: validateWith(taskTerminalResizeParams) })
+                server.register("openade/task/terminal/stop", async (params) => {
+                    const request = taskTerminalStopParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return runIdempotentMutation("openade/task/terminal/stop", params, () => scopedHost.stopTaskTerminal({ ...request, repo, task }))
+                }, { validateParams: validateWith(taskTerminalStopParams) })
+                server.register("openade/task/image/read", async (params) => {
+                    const request = taskImageReadParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    const image = taskImageReferenceForTask(task, request.imageId, request.ext)
+                    if (!image) return { ...request, data: null }
+                    return scopedHost.readTaskImage({ ...request, repo, task, image })
+                }, { validateParams: validateWith(taskImageReadParams) })
+                server.register("openade/task/changes/read", async (params) => {
+                    const request = taskChangesReadParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return scopedHost.readTaskChanges({ ...request, repo, task })
+                }, { validateParams: validateWith(taskChangesReadParams) })
+                server.register("openade/task/diff/read", async (params) => {
+                    const request = taskDiffReadParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return scopedHost.readTaskDiff({ ...request, repo, task })
+                }, { validateParams: validateWith(taskDiffReadParams) })
+                server.register("openade/task/git/log", async (params) => {
+                    const request = taskGitLogParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return scopedHost.readTaskGitLog({ ...request, repo, task })
+                }, { validateParams: validateWith(taskGitLogParams) })
+                server.register("openade/task/git/commit", async (params) => {
+                    const request = taskGitCommitParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return runIdempotentMutation("openade/task/git/commit", params, () => scopedHost.commitTaskGit({ ...request, repo, task }))
+                }, { validateParams: validateWith(taskGitCommitParams) })
+                server.register("openade/task/snapshot/patch/read", async (params) => {
+                    const request = taskSnapshotPatchReadParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    const snapshotEvent = snapshotEventForTask(task, request.eventId)
+                    return scopedHost.readTaskSnapshotPatch({ ...request, repo, task, snapshotEvent })
+                }, { validateParams: validateWith(taskSnapshotPatchReadParams) })
+                server.register("openade/task/snapshot/index/read", async (params) => {
+                    const request = taskSnapshotIndexReadParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    const snapshotEvent = snapshotEventForTask(task, request.eventId)
+                    return scopedHost.readTaskSnapshotIndex({ ...request, repo, task, snapshotEvent })
+                }, { validateParams: validateWith(taskSnapshotIndexReadParams) })
+                server.register("openade/task/snapshot/patch/readSlice", async (params) => {
+                    const request = taskSnapshotPatchSliceReadParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    const snapshotEvent = snapshotEventForTask(task, request.eventId)
+                    return scopedHost.readTaskSnapshotPatchSlice({ ...request, repo, task, snapshotEvent })
+                }, { validateParams: validateWith(taskSnapshotPatchSliceReadParams) })
+            }
             server.register("openade/repo/create", (params) => runIdempotentMutation("openade/repo/create", params, () => adapters.createRepo(repoCreateParams(params))), {
                 validateParams: validateWith(repoCreateParams),
             })

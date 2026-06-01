@@ -399,6 +399,433 @@ export interface OpenADECommentDeleteRequest extends OpenADEClientRequest {
     updatedAt?: string
 }
 
+export interface OpenADEProjectFileReadRequest {
+    repoId: string
+    path: string
+    encoding?: "utf8" | "base64"
+    maxBytes?: number
+}
+
+export interface OpenADEProjectFileReadResult {
+    repoId: string
+    path: string
+    encoding: "utf8" | "base64"
+    size: number
+    tooLarge: boolean
+    content: string | null
+}
+
+export interface OpenADEProjectFileWriteRequest extends OpenADEClientRequest {
+    repoId: string
+    path: string
+    encoding?: "utf8" | "base64"
+    content: string
+    createDirs?: boolean
+}
+
+export interface OpenADEProjectFileWriteResult {
+    repoId: string
+    path: string
+    size: number
+}
+
+export interface OpenADEProjectFilesTreeRequest {
+    repoId: string
+    path?: string
+    maxDepth?: number
+    maxEntries?: number
+    includeHidden?: boolean
+}
+
+export interface OpenADEProjectFilesTreeEntry {
+    path: string
+    name: string
+    type: "file" | "directory"
+    size?: number
+    mtimeMs?: number
+}
+
+export interface OpenADEProjectFilesTreeResult {
+    repoId: string
+    path: string
+    entries: OpenADEProjectFilesTreeEntry[]
+    truncated: boolean
+}
+
+export interface OpenADEProjectSearchRequest {
+    repoId: string
+    query: string
+    limit?: number
+    caseSensitive?: boolean
+}
+
+export interface OpenADEProjectSearchMatch {
+    path: string
+    line: number
+    content: string
+    matchStart: number
+    matchEnd: number
+}
+
+export interface OpenADEProjectSearchResult {
+    repoId: string
+    matches: OpenADEProjectSearchMatch[]
+    truncated: boolean
+}
+
+export type OpenADEProjectProcessType = "setup" | "daemon" | "task" | "check"
+
+export interface OpenADEProjectProcessDefinition {
+    id: string
+    name: string
+    command: string
+    workDir?: string
+    url?: string
+    type: OpenADEProjectProcessType
+    configPath: string
+    cwd: string
+}
+
+export interface OpenADEProjectProcessConfigError {
+    relativePath: string
+    error: string
+    line?: number
+}
+
+export interface OpenADEProjectProcessOutputChunk {
+    type: "stdout" | "stderr"
+    data: string
+    timestamp: number
+}
+
+export interface OpenADEProjectProcessInstance {
+    processId: string
+    definitionId: string
+    repoId: string
+    taskId?: string
+    cwd: string
+    completed: boolean
+    exitCode: number | null
+    signal: string | null
+    error?: string
+    pid?: number
+}
+
+export interface OpenADEProjectProcessListRequest {
+    repoId: string
+    taskId?: string
+}
+
+export interface OpenADEProjectProcessListResult {
+    repoId: string
+    taskId?: string
+    searchRoot: string
+    repoRoot: string
+    isWorktree: boolean
+    worktreeRoot?: string
+    processes: OpenADEProjectProcessDefinition[]
+    errors: OpenADEProjectProcessConfigError[]
+    instances: OpenADEProjectProcessInstance[]
+}
+
+export interface OpenADEProjectProcessStartRequest extends OpenADEClientRequest {
+    repoId: string
+    taskId?: string
+    definitionId: string
+    timeoutMs?: number
+}
+
+export interface OpenADEProjectProcessStartResult {
+    repoId: string
+    taskId?: string
+    definitionId: string
+    processId: string
+    runtimeId?: string
+}
+
+export interface OpenADEProjectProcessReconnectRequest {
+    repoId: string
+    taskId?: string
+    processId: string
+}
+
+export interface OpenADEProjectProcessReconnectResult {
+    repoId: string
+    taskId?: string
+    processId: string
+    found: boolean
+    completed?: boolean
+    exitCode?: number | null
+    signal?: string | null
+    error?: string
+    outputCount?: number
+    output?: OpenADEProjectProcessOutputChunk[]
+}
+
+export interface OpenADEProjectProcessStopRequest extends OpenADEClientRequest {
+    repoId: string
+    taskId?: string
+    processId: string
+}
+
+export interface OpenADEProjectProcessStopResult {
+    repoId: string
+    taskId?: string
+    processId: string
+    ok: boolean
+    error?: string
+}
+
+export interface OpenADETaskTerminalStartRequest extends OpenADEClientRequest {
+    repoId: string
+    taskId: string
+    cols?: number
+    rows?: number
+}
+
+export interface OpenADETaskTerminalStartResult {
+    repoId: string
+    taskId: string
+    terminalId: string
+    runtimeId?: string
+    ok: boolean
+    error?: string
+}
+
+export interface OpenADETaskTerminalOutputChunk {
+    data: string
+    timestamp?: number
+}
+
+export interface OpenADETaskTerminalReconnectRequest {
+    repoId: string
+    taskId: string
+    terminalId: string
+}
+
+export interface OpenADETaskTerminalReconnectResult {
+    repoId: string
+    taskId: string
+    terminalId: string
+    found: boolean
+    exited?: boolean
+    exitCode?: number | null
+    outputCount?: number
+    output?: OpenADETaskTerminalOutputChunk[]
+}
+
+export interface OpenADETaskTerminalWriteRequest extends OpenADEClientRequest {
+    repoId: string
+    taskId: string
+    terminalId: string
+    data: string
+}
+
+export interface OpenADETaskTerminalResizeRequest extends OpenADEClientRequest {
+    repoId: string
+    taskId: string
+    terminalId: string
+    cols: number
+    rows: number
+}
+
+export interface OpenADETaskTerminalStopRequest extends OpenADEClientRequest {
+    repoId: string
+    taskId: string
+    terminalId: string
+}
+
+export interface OpenADETaskTerminalMutationResult {
+    repoId: string
+    taskId: string
+    terminalId: string
+    ok: boolean
+}
+
+export interface OpenADETaskImageReference {
+    id: string
+    ext: string
+    mediaType?: string
+}
+
+export interface OpenADETaskImageReadRequest {
+    repoId: string
+    taskId: string
+    imageId: string
+    ext: string
+}
+
+export interface OpenADETaskImageReadResult {
+    repoId: string
+    taskId: string
+    imageId: string
+    ext: string
+    mediaType?: string
+    data: string | null
+}
+
+export type OpenADETaskDiffContextLines = 1 | 3 | 10 | 25 | 100
+
+export interface OpenADETaskGitChangedFile {
+    path: string
+    status: "added" | "deleted" | "modified" | "renamed"
+    oldPath?: string
+    binary?: boolean
+}
+
+export interface OpenADETaskChangesReadRequest {
+    repoId: string
+    taskId: string
+    fromTreeish?: string
+}
+
+export interface OpenADETaskChangesReadResult {
+    repoId: string
+    taskId: string
+    files: OpenADETaskGitChangedFile[]
+    fromTreeish: string
+    toTreeish: string
+}
+
+export interface OpenADETaskDiffStats {
+    insertions: number
+    deletions: number
+    changedLines: number
+    hunkCount: number
+}
+
+export interface OpenADETaskDiffReadRequest {
+    repoId: string
+    taskId: string
+    filePath: string
+    oldPath?: string
+    fromTreeish?: string
+    contextLines?: OpenADETaskDiffContextLines
+    allowTruncation?: boolean
+}
+
+export interface OpenADETaskDiffReadResult {
+    repoId: string
+    taskId: string
+    filePath: string
+    oldPath?: string
+    fromTreeish: string
+    toTreeish: string
+    patch: string
+    truncated: boolean
+    heavy: boolean
+    stats: OpenADETaskDiffStats
+}
+
+export interface OpenADETaskGitLogRequest {
+    repoId: string
+    taskId: string
+    ref?: string
+    limit?: number
+    skip?: number
+}
+
+export interface OpenADETaskGitLogEntry {
+    sha: string
+    shortSha: string
+    message: string
+    author: string
+    date: string
+    relativeDate: string
+    parentCount: number
+}
+
+export interface OpenADETaskGitLogResult {
+    repoId: string
+    taskId: string
+    commits: OpenADETaskGitLogEntry[]
+    hasMore: boolean
+}
+
+export type OpenADETaskGitCommitStatus = "committed" | "nothing_to_commit" | "failed"
+
+export interface OpenADETaskGitCommitRequest {
+    repoId: string
+    taskId: string
+    message: string
+    clientRequestId?: string
+}
+
+export interface OpenADETaskGitCommitResult {
+    repoId: string
+    taskId: string
+    committed: boolean
+    status: OpenADETaskGitCommitStatus
+    sha?: string
+    error?: string
+}
+
+export interface OpenADESnapshotPatchFile {
+    id: string
+    path: string
+    oldPath?: string
+    status: "added" | "deleted" | "modified" | "renamed"
+    binary: boolean
+    insertions: number
+    deletions: number
+    changedLines: number
+    hunkCount: number
+    patchStart: number
+    patchEnd: number
+}
+
+export interface OpenADESnapshotPatchIndex {
+    version: 1
+    patchSize: number
+    files: OpenADESnapshotPatchFile[]
+}
+
+export type OpenADESnapshotEventRecord = Record<string, unknown> & { id: string; type: "snapshot" }
+
+export interface OpenADETaskSnapshotPatchReadRequest {
+    repoId: string
+    taskId: string
+    eventId: string
+}
+
+export interface OpenADETaskSnapshotPatchReadResult {
+    repoId: string
+    taskId: string
+    eventId: string
+    patchFileId?: string
+    patch: string | null
+}
+
+export interface OpenADETaskSnapshotIndexReadRequest {
+    repoId: string
+    taskId: string
+    eventId: string
+}
+
+export interface OpenADETaskSnapshotIndexReadResult {
+    repoId: string
+    taskId: string
+    eventId: string
+    patchFileId?: string
+    index: OpenADESnapshotPatchIndex | null
+}
+
+export interface OpenADETaskSnapshotPatchSliceReadRequest {
+    repoId: string
+    taskId: string
+    eventId: string
+    start: number
+    end: number
+}
+
+export interface OpenADETaskSnapshotPatchSliceReadResult {
+    repoId: string
+    taskId: string
+    eventId: string
+    patchFileId?: string
+    patch: string | null
+}
+
 export interface OpenADETaskMetadataUpdateRequest extends OpenADEClientRequest {
     taskId: string
     title?: string
@@ -475,7 +902,13 @@ export interface OpenADETask {
     queuedTurns?: OpenADEQueuedTurn[]
     cancelledPlanEventId?: string
     deviceEnvironments: OpenADETaskDeviceEnvironment[]
+    createdBy?: OpenADEUser
+    createdAt?: string
+    updatedAt?: string
+    lastViewedAt?: string
+    lastEventAt?: string
     closed?: boolean
+    pullRequest?: { url: string; number?: number; provider: "github" | "gitlab" | "other" }
     unavailableReason?: string
     events: unknown[]
     comments: unknown[]

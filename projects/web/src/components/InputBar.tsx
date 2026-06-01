@@ -161,6 +161,7 @@ export const InputBar = observer(function InputBar({
     hideTray = false,
     enabledMcpServerIds,
     onMcpServerIdsChange,
+    onCommandExecute,
     autoFocusKey,
 }: {
     input: InputManager
@@ -189,6 +190,7 @@ export const InputBar = observer(function InputBar({
     hideTray?: boolean
     enabledMcpServerIds?: string[]
     onMcpServerIdsChange?: (serverIds: string[]) => void
+    onCommandExecute?: (commandId: string) => Promise<boolean> | boolean
     autoFocusKey?: string
 }) {
     const portalContainer = usePortalContainer()
@@ -201,6 +203,15 @@ export const InputBar = observer(function InputBar({
     const hasComments = unsubmittedComments.length > 0
     const hasPendingImages = editorManager.pendingImages.length > 0
     const queuedTurns = input.queuedTurns
+    const executeCommand = useCallback(
+        async (id: string) => {
+            tray.close()
+            const handled = await onCommandExecute?.(id)
+            if (handled === true) return
+            await input.runCommand(id)
+        },
+        [input, onCommandExecute, tray]
+    )
     const focusEditorAtEnd = useCallback(() => {
         if (input.isDisabled) return
 
@@ -228,13 +239,12 @@ export const InputBar = observer(function InputBar({
             if (!cmd) return
 
             event.preventDefault()
-            tray.close()
-            void input.runCommand(cmd.id)
+            void executeCommand(cmd.id)
         }
 
         window.addEventListener("keydown", handleCommandShortcut, true)
         return () => window.removeEventListener("keydown", handleCommandShortcut, true)
-    }, [commands, input, tray])
+    }, [commands, executeCommand])
 
     useEffect(() => {
         const handleFocusShortcut = (event: KeyboardEvent) => {
@@ -337,6 +347,8 @@ export const InputBar = observer(function InputBar({
                                         "btn h-7 px-2 flex items-center gap-1.5 text-xs font-mono border-0 bg-transparent hover:bg-base-200 shrink-0",
                                         enabledMcpServerIds.length > 0 ? "text-primary" : "text-muted"
                                     )}
+                                    title="MCP connectors"
+                                    aria-label="MCP connectors"
                                 >
                                     <Plug size={12} />
                                     {enabledMcpServerIds.length > 0 && <span>{enabledMcpServerIds.length}</span>}
@@ -485,10 +497,7 @@ export const InputBar = observer(function InputBar({
                                     shortcutNumber={getCommandShortcut(cmd)}
                                     showShortcut={showCommandShortcuts}
                                     portalContainer={portalContainer}
-                                    onExecute={(id) => {
-                                        tray.close()
-                                        input.runCommand(id)
-                                    }}
+                                    onExecute={(id) => void executeCommand(id)}
                                 />
                             </div>
                         ))}

@@ -1,22 +1,33 @@
-import type { RemoteQueuedTurn, RemoteTask } from "../../../shared/companion/src"
-import { groupStreamEvents } from "../components/events/messageGroups"
-import { compactText, presentMessageGroup, stringifyRaw, type PresentedGroup } from "../components/events/presentation"
-import type { HarnessId, HarnessStreamEvent } from "../electronAPI/harnessEventTypes"
+import type { OpenADEQueuedTurn, OpenADETask } from "../../../../openade-module/src"
+import { groupStreamEvents } from "../../components/events/messageGroups"
+import { compactText, presentMessageGroup, stringifyRaw, type PresentedGroup } from "../../components/events/presentation"
+import type { HarnessId, HarnessStreamEvent } from "../../electronAPI/harnessEventTypes"
 
-export type RemoteEventBlockKind = "action" | "setup" | "snapshot" | "queued" | "unknown"
+export type TaskEventBlockKind = "action" | "setup" | "snapshot" | "queued" | "unknown"
 
-export interface RemoteActionBlock {
+export interface TaskActionBlock {
     kind: "action"
     id: string
     title: string
     status?: string
     createdAt?: string
     userInput?: string
+    images: TaskImageAttachment[]
     groups: PresentedGroup[]
     emptyText: string
 }
 
-export interface RemoteSetupBlock {
+export interface TaskImageAttachment {
+    id: string
+    ext: string
+    mediaType?: string
+    originalWidth?: number
+    originalHeight?: number
+    resizedWidth?: number
+    resizedHeight?: number
+}
+
+export interface TaskSetupBlock {
     kind: "setup"
     id: string
     title: string
@@ -25,7 +36,7 @@ export interface RemoteSetupBlock {
     body: string
 }
 
-export interface RemoteSnapshotBlock {
+export interface TaskSnapshotBlock {
     kind: "snapshot"
     id: string
     title: string
@@ -37,16 +48,16 @@ export interface RemoteSnapshotBlock {
     deletions: number
 }
 
-export interface RemoteQueuedTurnBlock {
+export interface TaskQueuedTurnBlock {
     kind: "queued"
     id: string
     title: string
-    status: RemoteQueuedTurn["status"]
+    status: OpenADEQueuedTurn["status"]
     createdAt?: string
     body: string
 }
 
-export interface RemoteUnknownBlock {
+export interface TaskUnknownBlock {
     kind: "unknown"
     id: string
     title: string
@@ -55,7 +66,7 @@ export interface RemoteUnknownBlock {
     body: string
 }
 
-export type RemoteEventBlock = RemoteActionBlock | RemoteSetupBlock | RemoteSnapshotBlock | RemoteQueuedTurnBlock | RemoteUnknownBlock
+export type TaskEventBlock = TaskActionBlock | TaskSetupBlock | TaskSnapshotBlock | TaskQueuedTurnBlock | TaskUnknownBlock
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null
@@ -82,7 +93,31 @@ function asHarnessId(value: unknown): HarnessId | undefined {
     return value === "claude-code" || value === "codex" ? value : undefined
 }
 
-function actionBlock(rawEvent: Record<string, unknown>, eventId: string): RemoteActionBlock {
+function numberField(value: unknown): number | undefined {
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined
+}
+
+function imageAttachment(value: unknown): TaskImageAttachment | null {
+    if (!isRecord(value)) return null
+    if (typeof value.id !== "string" || typeof value.ext !== "string") return null
+    if (!/^[a-zA-Z0-9_-]+$/.test(value.id) || !/^[a-zA-Z0-9]+$/.test(value.ext)) return null
+    return {
+        id: value.id,
+        ext: value.ext.toLowerCase(),
+        mediaType: typeof value.mediaType === "string" && value.mediaType.startsWith("image/") ? value.mediaType : undefined,
+        originalWidth: numberField(value.originalWidth),
+        originalHeight: numberField(value.originalHeight),
+        resizedWidth: numberField(value.resizedWidth),
+        resizedHeight: numberField(value.resizedHeight),
+    }
+}
+
+function imageAttachments(value: unknown): TaskImageAttachment[] {
+    if (!Array.isArray(value)) return []
+    return value.map(imageAttachment).filter((image): image is TaskImageAttachment => image !== null)
+}
+
+function actionBlock(rawEvent: Record<string, unknown>, eventId: string): TaskActionBlock {
     const execution = isRecord(rawEvent.execution) ? rawEvent.execution : null
     const streamEvents = Array.isArray(execution?.events) ? execution.events : []
     const harnessId = asHarnessId(execution?.harnessId) ?? asHarnessId(streamEvents.find(isRecord)?.harnessId)
@@ -95,12 +130,13 @@ function actionBlock(rawEvent: Record<string, unknown>, eventId: string): Remote
         status: asString(rawEvent.status),
         createdAt: asString(rawEvent.createdAt),
         userInput: asString(rawEvent.userInput),
+        images: imageAttachments(rawEvent.images),
         groups,
         emptyText: asString(rawEvent.status) ?? "updated",
     }
 }
 
-function setupBlock(rawEvent: Record<string, unknown>, eventId: string): RemoteSetupBlock {
+function setupBlock(rawEvent: Record<string, unknown>, eventId: string): TaskSetupBlock {
     return {
         kind: "setup",
         id: eventId,
@@ -111,7 +147,7 @@ function setupBlock(rawEvent: Record<string, unknown>, eventId: string): RemoteS
     }
 }
 
-function snapshotBlock(rawEvent: Record<string, unknown>, eventId: string): RemoteSnapshotBlock {
+function snapshotBlock(rawEvent: Record<string, unknown>, eventId: string): TaskSnapshotBlock {
     const stats = isRecord(rawEvent.stats) ? rawEvent.stats : null
     return {
         kind: "snapshot",
@@ -126,7 +162,7 @@ function snapshotBlock(rawEvent: Record<string, unknown>, eventId: string): Remo
     }
 }
 
-function unknownBlock(rawEvent: Record<string, unknown>, eventId: string): RemoteUnknownBlock {
+function unknownBlock(rawEvent: Record<string, unknown>, eventId: string): TaskUnknownBlock {
     return {
         kind: "unknown",
         id: eventId,
@@ -137,7 +173,7 @@ function unknownBlock(rawEvent: Record<string, unknown>, eventId: string): Remot
     }
 }
 
-function queuedTurnBlock(turn: RemoteQueuedTurn): RemoteQueuedTurnBlock {
+function queuedTurnBlock(turn: OpenADEQueuedTurn): TaskQueuedTurnBlock {
     return {
         kind: "queued",
         id: `${turn.id}:queued-turn`,
@@ -148,10 +184,10 @@ function queuedTurnBlock(turn: RemoteQueuedTurn): RemoteQueuedTurnBlock {
     }
 }
 
-export function taskEventBlocks(task: RemoteTask | null): RemoteEventBlock[] {
+export function taskEventBlocks(task: Pick<OpenADETask, "events" | "queuedTurns"> | null): TaskEventBlock[] {
     if (!task) return []
 
-    const blocks: RemoteEventBlock[] = []
+    const blocks: TaskEventBlock[] = []
     for (const [index, rawEvent] of task.events.entries()) {
         if (!isRecord(rawEvent)) continue
 

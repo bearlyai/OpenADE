@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
-import type { RemoteTask } from "../../../shared/companion/src"
-import { taskEventBlocks } from "./messagePresentation"
+import type { OpenADETask } from "../../../../openade-module/src"
+import { taskEventBlocks } from "./taskEventPresentation"
 
-function remoteTask(events: unknown[], overrides: Partial<RemoteTask> = {}): RemoteTask {
+function openADETask(events: unknown[], overrides: Partial<OpenADETask> = {}): OpenADETask {
     return {
         id: "task-1",
         repoId: "repo-1",
@@ -19,7 +19,7 @@ function remoteTask(events: unknown[], overrides: Partial<RemoteTask> = {}): Rem
 describe("taskEventBlocks", () => {
     it("renders Codex assistant text and compact activity groups", () => {
         const blocks = taskEventBlocks(
-            remoteTask([
+            openADETask([
                 {
                     id: "event-1",
                     type: "action",
@@ -83,7 +83,7 @@ describe("taskEventBlocks", () => {
 
     it("renders queued turn metadata so mobile users can see pending follow-ups", () => {
         const blocks = taskEventBlocks(
-            remoteTask([], {
+            openADETask([], {
                 queuedTurns: [
                     {
                         id: "queued-1",
@@ -127,7 +127,7 @@ describe("taskEventBlocks", () => {
 
     it("renders unknown task events with raw details instead of hiding them", () => {
         const blocks = taskEventBlocks(
-            remoteTask([
+            openADETask([
                 {
                     id: "future-1",
                     type: "future_event",

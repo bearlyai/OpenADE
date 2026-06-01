@@ -9,6 +9,7 @@ import {
     FilePenLine,
     FilePlus2,
     FileText,
+    Image as ImageIcon,
     ListChecks,
     Loader2,
     Terminal,
@@ -16,7 +17,7 @@ import {
     Workflow,
     Zap,
 } from "lucide-react"
-import { Suspense, lazy, type ReactNode, useState } from "react"
+import { Suspense, lazy, type ReactNode, useEffect, useState } from "react"
 import type {
     BashGroup,
     EditGroup,
@@ -27,24 +28,28 @@ import type {
     TodoWriteGroup,
     ToolGroup,
     WriteGroup,
-} from "../components/events/messageGroups"
-import { compactText, stringifyRaw, type PresentedGroup, type PresentedTone } from "../components/events/presentation"
-import { formatInputCacheRate, normalizedCacheReadTokens } from "../components/events/usage"
+} from "../../components/events/messageGroups"
+import { compactText, stringifyRaw, type PresentedGroup, type PresentedTone } from "../../components/events/presentation"
+import { formatInputCacheRate, normalizedCacheReadTokens } from "../../components/events/usage"
 import type {
-    RemoteActionBlock,
-    RemoteEventBlock,
-    RemoteQueuedTurnBlock,
-    RemoteSetupBlock,
-    RemoteSnapshotBlock,
-    RemoteUnknownBlock,
-} from "./messagePresentation"
+    TaskActionBlock,
+    TaskEventBlock,
+    TaskImageAttachment,
+    TaskQueuedTurnBlock,
+    TaskSetupBlock,
+    TaskSnapshotBlock,
+    TaskUnknownBlock,
+} from "./taskEventPresentation"
 
-const MarkdownMessage = lazy(() => import("../components/MarkdownMessage").then((module) => ({ default: module.MarkdownMessage })))
+const MarkdownMessage = lazy(() => import("../../components/MarkdownMessage").then((module) => ({ default: module.MarkdownMessage })))
 
-interface RemoteEventThreadProps {
-    blocks: RemoteEventBlock[]
+interface TaskEventThreadProps {
+    blocks: TaskEventBlock[]
     isRunning: boolean
+    loadImage?: TaskImageLoader
 }
+
+export type TaskImageLoader = (image: TaskImageAttachment) => Promise<string | null>
 
 function statusTone(status: string | undefined): PresentedTone {
     if (status === "error" || status === "failed") return "bad"
@@ -76,7 +81,7 @@ function timeLabel(value: string | undefined): string | undefined {
     return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(time)
 }
 
-function blockIcon(block: RemoteEventBlock, tone: PresentedTone): ReactNode {
+function blockIcon(block: TaskEventBlock, tone: PresentedTone): ReactNode {
     const className = tone === "muted" ? "text-muted" : toneClass(tone).split(" ").at(-1)
     if (block.kind === "action")
         return block.status === "in_progress" ? <Loader2 size={15} className="animate-spin text-warning" /> : <Zap size={15} className={className} />
@@ -171,7 +176,50 @@ function RichText({ text }: { text: string }) {
     )
 }
 
-function UserPrompt({ text }: { text: string }) {
+function PromptImage({ image, loadImage }: { image: TaskImageAttachment; loadImage: TaskImageLoader }) {
+    const [src, setSrc] = useState<string | null>(null)
+    const [failed, setFailed] = useState(false)
+
+    useEffect(() => {
+        let active = true
+        setSrc(null)
+        setFailed(false)
+        void loadImage(image)
+            .then((value) => {
+                if (!active) return
+                if (value) setSrc(value)
+                else setFailed(true)
+            })
+            .catch(() => {
+                if (active) setFailed(true)
+            })
+        return () => {
+            active = false
+        }
+    }, [image, loadImage])
+
+    return (
+        <div
+            className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden border border-border bg-base-200/45"
+            title={failed ? "Image unavailable" : "Prompt image"}
+        >
+            {src ? <img src={src} alt="" className="h-full w-full object-cover" /> : <ImageIcon size={18} className={failed ? "text-error" : "text-muted"} />}
+        </div>
+    )
+}
+
+function PromptImages({ images, loadImage }: { images: TaskImageAttachment[]; loadImage?: TaskImageLoader }) {
+    if (!loadImage || images.length === 0) return null
+    return (
+        <div className="mt-3 flex max-w-full gap-2 overflow-x-auto pb-1">
+            {images.map((image) => (
+                <PromptImage key={`${image.id}.${image.ext}`} image={image} loadImage={loadImage} />
+            ))}
+        </div>
+    )
+}
+
+function UserPrompt({ text, images, loadImage }: { text: string; images: TaskImageAttachment[]; loadImage?: TaskImageLoader }) {
     const [expanded, setExpanded] = useState(false)
     const lines = text.split("\n")
     const isLong = lines.length > 8 || text.length > 900
@@ -186,6 +234,7 @@ function UserPrompt({ text }: { text: string }) {
                     {expanded ? "Show less" : "Show more"}
                 </button>
             )}
+            <PromptImages images={images} loadImage={loadImage} />
         </div>
     )
 }
@@ -328,12 +377,12 @@ function ResultDetail({ group }: { group: ResultGroup }) {
     return <RichText text={lines.join("\n\n")} />
 }
 
-function ActionBlockView({ block, isRunning }: { block: RemoteActionBlock; isRunning: boolean }) {
+function ActionBlockView({ block, isRunning, loadImage }: { block: TaskActionBlock; isRunning: boolean; loadImage?: TaskImageLoader }) {
     const tone = statusTone(block.status)
     const lastTextId = [...block.groups].reverse().find((item) => item.type === "text")?.id
     return (
         <BlockShell title={block.title} status={block.status} createdAt={block.createdAt} tone={tone} icon={blockIcon(block, tone)}>
-            {block.userInput && <UserPrompt text={block.userInput} />}
+            {(block.userInput || block.images.length > 0) && <UserPrompt text={block.userInput ?? ""} images={block.images} loadImage={loadImage} />}
             {block.groups.length === 0 ? (
                 <div className="px-3 py-3 text-sm text-muted">{block.emptyText}</div>
             ) : (
@@ -359,7 +408,7 @@ function ActionBlockView({ block, isRunning }: { block: RemoteActionBlock; isRun
     )
 }
 
-function SetupBlockView({ block }: { block: RemoteSetupBlock }) {
+function SetupBlockView({ block }: { block: TaskSetupBlock }) {
     const tone = statusTone(block.status)
     return (
         <BlockShell title={block.title} status={block.status} createdAt={block.createdAt} tone={tone} icon={blockIcon(block, tone)}>
@@ -370,7 +419,7 @@ function SetupBlockView({ block }: { block: RemoteSetupBlock }) {
     )
 }
 
-function SnapshotBlockView({ block }: { block: RemoteSnapshotBlock }) {
+function SnapshotBlockView({ block }: { block: TaskSnapshotBlock }) {
     const tone = statusTone(block.status)
     return (
         <BlockShell title={block.title} status={block.status} createdAt={block.createdAt} tone={tone} icon={blockIcon(block, tone)}>
@@ -393,7 +442,7 @@ function SnapshotBlockView({ block }: { block: RemoteSnapshotBlock }) {
     )
 }
 
-function QueuedBlockView({ block }: { block: RemoteQueuedTurnBlock }) {
+function QueuedBlockView({ block }: { block: TaskQueuedTurnBlock }) {
     const tone = statusTone(block.status)
     return (
         <BlockShell title={block.title} status={block.status} createdAt={block.createdAt} tone={tone} icon={blockIcon(block, tone)}>
@@ -404,7 +453,7 @@ function QueuedBlockView({ block }: { block: RemoteQueuedTurnBlock }) {
     )
 }
 
-function UnknownBlockView({ block }: { block: RemoteUnknownBlock }) {
+function UnknownBlockView({ block }: { block: TaskUnknownBlock }) {
     const tone = statusTone(block.status)
     return (
         <BlockShell title={block.title} status={block.status} createdAt={block.createdAt} tone={tone} icon={blockIcon(block, tone)}>
@@ -415,10 +464,10 @@ function UnknownBlockView({ block }: { block: RemoteUnknownBlock }) {
     )
 }
 
-function EventBlockView({ block, isRunning }: { block: RemoteEventBlock; isRunning: boolean }) {
+function EventBlockView({ block, isRunning, loadImage }: { block: TaskEventBlock; isRunning: boolean; loadImage?: TaskImageLoader }) {
     switch (block.kind) {
         case "action":
-            return <ActionBlockView block={block} isRunning={isRunning} />
+            return <ActionBlockView block={block} isRunning={isRunning} loadImage={loadImage} />
         case "setup":
             return <SetupBlockView block={block} />
         case "snapshot":
@@ -430,11 +479,11 @@ function EventBlockView({ block, isRunning }: { block: RemoteEventBlock; isRunni
     }
 }
 
-export function RemoteEventThread({ blocks, isRunning }: RemoteEventThreadProps) {
+export function TaskEventThread({ blocks, isRunning, loadImage }: TaskEventThreadProps) {
     return (
         <div className="flex w-full max-w-full flex-col gap-3 overflow-hidden">
             {blocks.map((block) => (
-                <EventBlockView key={block.id} block={block} isRunning={isRunning} />
+                <EventBlockView key={block.id} block={block} isRunning={isRunning} loadImage={loadImage} />
             ))}
             {isRunning && (
                 <div className="flex items-center gap-2 self-start border border-border bg-base-200/45 px-2 py-1 text-xs text-muted">

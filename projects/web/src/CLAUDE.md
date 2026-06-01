@@ -62,6 +62,10 @@ Also add to `TrayType` union in `store/managers/TrayManager.ts`.
 - **No mirror tests** — Do not export constants, split out helpers, or write tests whose only purpose is to repeat labels, classes, config arrays, or branches from the implementation. If a harmless copy/style/refactor forces the test to change in lockstep, delete it or rewrite it around the actual user-visible behavior or data contract.
 - **No implementation-only styling tests** — Do not test Tailwind/class-name substrings, snapshots, or incidental DOM wrappers just to lock layout. Test behavior, accessibility, state transitions, parsing, integration paths, or use browser/visual checks when layout matters. CSS class assertions are only acceptable when the class string itself is an explicit public API.
 
+### React Doctor
+
+Run React Doctor from `projects/web` when changing React state, effects, accessibility, security-sensitive rendering, or shared shell UI. Use [`../doctor.config.json`](../doctor.config.json) as the project baseline: cleanup, fresh effect dependencies, mutable deps, and unsafe rendering are blocking errors; ambiguous prop-to-state reset findings remain warnings until they are reviewed with behavior coverage. The scoped `MarkdownMessage.tsx` `no-danger` override depends on DOMPurify sanitization and the adjacent Biome suppressions in that file. Do not mass-fix the full backlog without targeted tests or a browser/runtime verification for the affected workflow.
+
 ## Architecture
 
 ```
@@ -71,6 +75,7 @@ pages/*.tsx         → Page components (TaskPage, TaskCreatePage, etc.)
 store/              → MobX state management (runtime)
 persistence/        → YJS-backed sync (RepoStore, TaskStore)
 electronAPI/        → Runtime/Electron host wrappers for renderer callers
+kernel/            → Shared kernel session, pairing, transport, OpenADE client construction, and runtime-backed product DTO store for desktop, web, and companion shells
 components/         → UI components
 routing.ts          → Local typesafe routing (isolated from @/state/routing)
 api.ts              → Data types, localStorage CRUD
@@ -123,6 +128,18 @@ Dashboard (`electronAPI/`) ↔ local runtime bridge/Electron host modules
 Main modules: runtime (agent/process/PTY/git/files transport), shell (directory picker, open URL), procs (typed read/edit/save for `openade.toml`)
 
 Task execution goes through the OpenADE runtime module (`openade/turn/start`, `openade/review/start`, `openade/turn/interrupt`). Durable repo/task/comment/task-metadata mutations should also use `runtime/localOpenADEClient.ts` (`openade/repo/*`, `openade/task/*`, `openade/comment/*`) and then refresh from storage or runtime notifications. Use `getHarnessQueryManager()` only for low-level harness helpers that are not task turns, such as small JSON-constrained helpers (cron generation, config suggestions).
+
+Companion device administration in desktop settings should use `electronAPI/companion.ts` wrappers backed by `runtime/localRuntimeClient.ts` for `remote/device/list`, `remote/device/revoke`, and `remote/device/dropAll`. Keep native companion enablement, pairing, keep-awake, and bound-URL state on narrow Electron IPC because those are shell adapter responsibilities.
+
+`CodeStore` has a disabled-by-default runtime product read bridge behind `VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE` or `CodeStoreConfig.enableRuntimeProductStore`. It hydrates `runtimeProductSnapshot` and task DTOs from `kernel/productStore.ts`; when a runtime snapshot is cached, `RepoManager.repos`, `CodeStore.getTaskPreviewsForRepo()`, `CodeLayout` task loading, and `TaskModel` reads should keep serving runtime DTOs even during transient bridge errors, otherwise they fall back to legacy Yjs stores. Runtime product notification tests should inject a real `RuntimeLocalClient` through `CodeStoreConfig.runtimeNotificationSource`; production desktop still uses `runtime/localRuntimeClient.ts` by default. Desktop route coverage for this bridge belongs in `Routes.runtimeProductStore.test.ts` and should install a real `RuntimeServer` behind the production `runtime/localRuntimeClient.ts` path instead of manually seeding `CodeStore` state. Reset cached Electron capability/platform state with the test-only reset helpers after installing a fake `window.openadeAPI`. Runtime-settlement after-event behavior must scan the unified `TaskManager` task view after refresh so DTO-backed and Yjs-backed tasks stay equivalent. `kernel/sessionStore.ts` owns browser-safe saved kernel session persistence, including active-session switching, legacy single-session migration, and invalid-session filtering; companion-specific storage keys and change events should wrap that helper instead of reimplementing config parsing in `remote/client.ts`. `kernel/productStore.ts` is also the shared client boundary for scoped project files/search/processes, scoped task terminals, scoped task git reads/commit, scoped task image reads, and scoped snapshot patch reads. The desktop route can render `pages/DesktopSharedTaskPage.tsx` behind `VITE_OPENADE_ENABLE_DESKTOP_SHARED_TASK_SCREEN` or `CodeStoreConfig.enableDesktopSharedTaskScreen`; keep desktop shared-screen frame/layout code in `shell/DesktopTaskShell.tsx`, keep desktop-specific action/store wiring in the page adapter, keep it gated until rollout fallback review is complete, and cover it through the same real local-runtime route smoke plus packaged-app smoke including metadata/comment/review mutations, rich desktop composer/tray affordances, workflow command/reload coverage, and command submission. Runtime product rollout observability is emitted from `CodeStore`: `app_opened` includes runtime-product gate/status fields, `runtime_product_store_error` records sanitized bridge error categories, and `runtime_product_store_fallback` records deduped legacy direct-read fallbacks without repo paths or task content. Extend `store/storeRuntimeProductStore.test.ts` with real `RuntimeServer`/`OpenADEClient` checks for each bridge slice and keep old-vs-new Yjs projection parity in Electron/OpenADE module fixture tests before moving more task detail, tray, settings, or command paths onto runtime DTOs.
+
+Shared task shell primitives live under `shell/task`. Desktop and remote task-thread scroll behavior should use `shell/task/useTaskThreadScroll.ts` instead of reimplementing bottom-follow or jump-to-latest behavior in medium-specific pages. Task event DTO presentation should use `shell/task/taskEventPresentation.ts` and `shell/task/TaskEventThread.tsx` instead of adding medium-specific event block rendering. Task command labels, composer ordering, and "queue while running" rules should use `shell/task/taskCommands.ts`; full command ids, labels, ordering, grouping, visibility, and enablement should use `shell/task/taskCommandModel.ts`. New task composer UI should use `shell/task/TaskComposer.tsx`, including optional shared agent controls for harness/model/thinking/fast-mode plus an MCP-control slot supplied by the medium adapter; desktop can supply its rich `InputBar` through `TaskScreen`'s composer slot so SmartEditor, attachments, desktop tray buttons, shortcuts, and desktop-only affordances stay outside mobile. Desktop route smoke must verify those controls reach `openade/turn/start` through the real local runtime path. Task title/close/delete, review, queued-turn, comments, and scoped git controls should use `shell/task/TaskProductPanel.tsx` instead of adding medium-specific task-control JSX. Use `shell/task/TaskScreen.tsx` when composing the full task route from OpenADE task/preview DTOs.
+
+Shared host panels live under `shell/project` and `shell/task`. Remote project file/search/process controls, including process reconnect/output viewing, must stay on the scoped product methods exposed by `kernel/productStore.ts`; raw `fs/*`, `host/*`, `process/*`, and `host/procs/*` are desktop/trusted-only. Remote task changes and diffs must use scoped task git read methods from `kernel/productStore.ts`; raw `git/*` is trusted-local only, and commit/push controls need explicit permission gates before they appear in remote shells.
+
+Medium chrome and companion-local session screens belong in `shell` rather than in product/session containers. Use `shell/MobileOpenADEShell.tsx` for the mobile companion chrome plus project/task/new-task/session/settings route composition, `shell/MobileChrome.tsx` for header/status/notices/bottom navigation, `shell/MobilePairingScreen.tsx` for the pairing/connect UI, and `shell/MobileSessionScreens.tsx` for saved-session management, self-revoke, and mobile theme selection so `remote/RemoteApp.tsx` can stay focused on pairing, session state, runtime refresh, and action handlers.
+
+Shared project/task screens also live under `shell/project` and `shell/task`. Use `shell/project/ProjectsScreen.tsx` for OpenADE snapshot-backed project/session lists, `shell/project/ProjectTasksScreen.tsx` for project task lists plus scoped host panels, and `shell/task/NewTaskScreen.tsx` for task creation forms. Do not add another mobile-only project-list, project-task, or task-create screen unless a medium-specific adapter is genuinely required.
 
 ## Task Lifecycle
 
@@ -214,7 +231,7 @@ Files are stored at `~/.openade/data/{folder}/{id}.{ext}` through trusted local 
 - `data/file/load` — returns base64 payload or null through the runtime wrapper
 - `data/file/delete` — best-effort unlink
 
-Allowed folders: `images`, `snapshots`, `cron`. Web side uses `dataFolderApi` from `electronAPI/dataFolder.ts` for generic blobs. Snapshot diffs use trusted runtime methods in `electronAPI/snapshots.ts` that store `{id}.patch` plus `{id}.json`, load the index first, and range-read only the selected file slice.
+Allowed folders: `images`, `snapshots`, `cron`. Web side uses `dataFolderApi` from `electronAPI/dataFolder.ts` for trusted local generic blobs. Shared/remote task image rendering must use `openade/task/image/read`, which verifies the image is referenced by the task before loading bytes. Snapshot diffs use trusted runtime methods in `electronAPI/snapshots.ts` that store `{id}.patch` plus `{id}.json`, load the index first, and range-read only the selected file slice.
 
 ### Image Attachments
 
@@ -268,7 +285,7 @@ Custom env vars automatically propagate to **all Electron subprocess calls**:
 
 MCP (Model Context Protocol) servers extend Claude's capabilities. Managed via `ConnectorsPage` and `TaskMcpSelector`.
 
-MCP test/OAuth operations go through trusted runtime methods in `electronAPI/mcp.ts`; OAuth completion is delivered by runtime notification `host/mcp/oauthComplete`.
+MCP test/OAuth operations go through trusted runtime methods in `electronAPI/mcp.ts`; OAuth completion is delivered by runtime notification `host/mcp/oauthComplete`. Keep `electronAPI/mcp.test.ts` on the production `runtime/localRuntimeClient.ts` bridge with a real `RuntimeServer` when changing this path.
 
 ### Presets
 

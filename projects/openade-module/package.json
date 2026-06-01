@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "../electron/node_modules/.bin/vitest run --reporter=verbose",
     "typecheck": "../electron/node_modules/.bin/tsgo --noEmit"
   },
   "exports": {

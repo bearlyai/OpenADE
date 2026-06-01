@@ -2,9 +2,9 @@ import { Popover } from "@base-ui-components/react/popover"
 import cx from "classnames"
 import { exhaustive } from "exhaustive"
 import {
-    Archive,
     AlertCircle,
     AlertTriangle,
+    Archive,
     ChevronDown,
     Code,
     FileText,
@@ -19,13 +19,13 @@ import {
     Zap,
 } from "lucide-react"
 import { observer } from "mobx-react"
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
+import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { FastModeToggle } from "../components/FastModeToggle"
 import { HarnessPicker } from "../components/HarnessPicker"
 import { ImageDropOverlay } from "../components/ImageDropOverlay"
 import { ModelPicker } from "../components/ModelPicker"
-import { FastModeToggle } from "../components/FastModeToggle"
-import { ThinkingPicker } from "../components/ThinkingPicker"
 import { SmartEditor, type SmartEditorRef } from "../components/SmartEditor"
+import { ThinkingPicker } from "../components/ThinkingPicker"
 import { StrategyPicker } from "../components/hyperplan/StrategyPicker"
 import { TaskMcpSelector } from "../components/mcp/TaskMcpSelector"
 import { Select, ShortcutBadge, Switch } from "../components/ui"
@@ -37,12 +37,11 @@ import { usePortalContainer } from "../hooks/usePortalContainer"
 import { useShortcutHintsVisible } from "../hooks/useShortcutHintsVisible"
 import { useCodeNavigate } from "../routing"
 import { useCodeStore } from "../store/context"
+import { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager"
 import type { StashedDraft } from "../store/managers/SmartEditorManager"
 import type { TaskCreation } from "../store/managers/TaskCreationManager"
-import { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager"
 import type { Repo } from "../types"
 import { processImageBlob } from "../utils/imageAttachment"
-import { getTaskCreationPhaseLabel } from "./taskCreationPhaseLabel"
 import {
     getMetaDigitShortcutIndex,
     isMetaOnlyShortcut,
@@ -50,6 +49,7 @@ import {
     onKeyboardNavigationSettled,
     shouldSuppressEditorAutoFocusForKeyboardNavigation,
 } from "../utils/keyboardShortcuts"
+import { getTaskCreationPhaseLabel } from "./taskCreationPhaseLabel"
 
 interface TaskCreatePageProps {
     workspaceId: string
@@ -464,39 +464,42 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
         }
     }, [repo?.path, editorManager])
 
-    const handleCreate = (mode: CreateMode) => {
-        if (!editorManager.value.trim() || !workspaceId) return
+    const handleCreate = useCallback(
+        (mode: CreateMode) => {
+            if (!editorManager.value.trim() || !workspaceId) return
 
-        const description = editorManager.value.trim()
-        const images = [...editorManager.pendingImages]
+            const description = editorManager.value.trim()
+            const images = [...editorManager.pendingImages]
 
-        console.log("[TaskCreatePage] Creating task with MCP servers", {
-            selectedMcpServerIds,
-            enabledServersCount: codeStore.mcpServers.enabledServers.length,
-        })
+            console.log("[TaskCreatePage] Creating task with MCP servers", {
+                selectedMcpServerIds,
+                enabledServersCount: codeStore.mcpServers.enabledServers.length,
+            })
 
-        const creationId = codeStore.creation.newTask({
-            repoId: workspaceId,
-            description,
-            mode,
-            isolationStrategy: useWorktree && selectedBranch ? { type: "worktree", sourceBranch: selectedBranch } : { type: "head" },
-            images,
-            enabledMcpServerIds: selectedMcpServerIds.length > 0 ? selectedMcpServerIds : undefined,
-            harnessId: codeStore.defaultHarnessId,
-            modelId: codeStore.defaultModel,
-            thinking: codeStore.defaultThinking,
-            fastMode: codeStore.defaultFastMode,
-        })
+            const creationId = codeStore.creation.newTask({
+                repoId: workspaceId,
+                description,
+                mode,
+                isolationStrategy: useWorktree && selectedBranch ? { type: "worktree", sourceBranch: selectedBranch } : { type: "head" },
+                images,
+                enabledMcpServerIds: selectedMcpServerIds.length > 0 ? selectedMcpServerIds : undefined,
+                harnessId: codeStore.defaultHarnessId,
+                modelId: codeStore.defaultModel,
+                thinking: codeStore.defaultThinking,
+                fastMode: codeStore.defaultFastMode,
+            })
 
-        editorManager.clear()
-        if (mode === "do" || mode === "ask") {
-            navigate.go("CodeWorkspaceTaskCreating", { workspaceId, creationId })
-        } else if (createMore) {
-            editorRef.current?.focus()
-        } else {
-            setPendingNavigationCreationId(creationId)
-        }
-    }
+            editorManager.clear()
+            if (mode === "do" || mode === "ask") {
+                navigate.go("CodeWorkspaceTaskCreating", { workspaceId, creationId })
+            } else if (createMore) {
+                editorRef.current?.focus()
+            } else {
+                setPendingNavigationCreationId(creationId)
+            }
+        },
+        [codeStore, createMore, editorManager, navigate, selectedBranch, selectedMcpServerIds, useWorktree, workspaceId]
+    )
 
     const isDisabled = !editorManager.value.trim()
     const showBranchSelector = gitInfoLoaded && branches.length > 0

@@ -38,6 +38,10 @@ export const hasElectronIpc = () => typeof window !== "undefined" && "openadeAPI
 
 let cachedCapabilities: CodeModuleCapabilities | null = null
 
+export function resetCodeModuleCapabilitiesForTests(): void {
+    cachedCapabilities = null
+}
+
 /**
  * Initialize code module capabilities by querying Electron.
  * Call this once during app startup (e.g., in CodeLayout init).

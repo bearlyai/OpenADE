@@ -167,6 +167,20 @@ export interface CommitWorkTreeResponse {
     error?: string
 }
 
+export type CommitWorkingTreeStatus = "committed" | "nothing_to_commit" | "failed"
+
+export interface CommitWorkingTreeParams {
+    workDir: string
+    message: string
+}
+
+export interface CommitWorkingTreeResponse {
+    committed: boolean
+    status: CommitWorkingTreeStatus
+    sha?: string
+    error?: string
+}
+
 export interface ListBranchesParams {
     repoDir: string
     includeRemote?: boolean
@@ -1396,6 +1410,57 @@ async function handleCommitWorkTree(params: CommitWorkTreeParams): Promise<Commi
     }
 }
 
+async function handleCommitWorkingTree(params: CommitWorkingTreeParams): Promise<CommitWorkingTreeResponse> {
+    const startTime = Date.now()
+    const workDir = path.resolve(params.workDir)
+    logger.info("[Git:commitWorkingTree] Committing changes", JSON.stringify({ workDir, message: params.message.slice(0, 50) }))
+
+    try {
+        if (!fs.existsSync(workDir)) {
+            throw new Error(`Working directory does not exist: ${workDir}`)
+        }
+
+        const insideWorkTree = await execGit(["rev-parse", "--is-inside-work-tree"], workDir)
+        if (!insideWorkTree.success || insideWorkTree.stdout.trim() !== "true") {
+            throw new Error("Working directory is not inside a git repository")
+        }
+
+        const addResult = await execGit(["add", "-A"], workDir)
+        if (!addResult.success) {
+            return { committed: false, status: "failed", error: addResult.stderr || addResult.stdout || "Failed to stage changes" }
+        }
+
+        const statusResult = await execGit(["status", "--porcelain"], workDir)
+        if (!statusResult.success) {
+            return { committed: false, status: "failed", error: statusResult.stderr || statusResult.stdout || "Failed to inspect changes" }
+        }
+        if (!statusResult.stdout.trim()) {
+            logger.info("[Git:commitWorkingTree] Nothing to commit", JSON.stringify({ duration: Date.now() - startTime }))
+            return { committed: false, status: "nothing_to_commit" }
+        }
+
+        const commitResult = await execGit(["commit", "-m", params.message], workDir)
+        if (!commitResult.success) {
+            const error = commitResult.stderr || commitResult.stdout || "Failed to commit"
+            if (error.includes("nothing to commit")) {
+                logger.info("[Git:commitWorkingTree] Nothing to commit", JSON.stringify({ duration: Date.now() - startTime }))
+                return { committed: false, status: "nothing_to_commit" }
+            }
+            return { committed: false, status: "failed", error }
+        }
+
+        const shaResult = await execGit(["rev-parse", "HEAD"], workDir)
+        const sha = shaResult.success ? shaResult.stdout.trim() : undefined
+        logger.info("[Git:commitWorkingTree] Commit successful", JSON.stringify({ sha, duration: Date.now() - startTime }))
+        return { committed: true, status: "committed", sha }
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error)
+        const stack = error instanceof Error ? error.stack : undefined
+        logger.error("[Git:commitWorkingTree] Error:", JSON.stringify({ error: message, stack, duration: Date.now() - startTime }))
+        return { committed: false, status: "failed", error: message }
+    }
+}
+
 /**
  * List branches in a repository
  */
@@ -2341,6 +2406,10 @@ export async function listRuntimeWorkTrees(params: ListWorkTreesParams): Promise
 
 export async function commitRuntimeWorkTree(params: CommitWorkTreeParams): Promise<CommitWorkTreeResponse> {
     return handleCommitWorkTree(params)
+}
+
+export async function commitRuntimeWorkingTree(params: CommitWorkingTreeParams): Promise<CommitWorkingTreeResponse> {
+    return handleCommitWorkingTree(params)
 }
 
 export async function listRuntimeBranches(params: ListBranchesParams): Promise<ListBranchesResponse> {

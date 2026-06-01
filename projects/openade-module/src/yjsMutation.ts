@@ -36,6 +36,7 @@ import type { OpenADEYjsStorageAdapter } from "./yjsProjection"
 type JsonPrimitive = string | number | boolean | null
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
 type JsonRecord = { [key: string]: JsonValue }
+const loadedStateVectors = new WeakMap<Y.Doc, Uint8Array>()
 
 export interface OpenADEYjsMutationStorageAdapter extends OpenADEYjsStorageAdapter {
     readDocumentUpdate(id: string): Promise<Uint8Array | null>
@@ -195,11 +196,14 @@ async function loadDoc(storage: OpenADEYjsMutationStorageAdapter, id: string): P
     const doc = new Y.Doc()
     const data = await storage.readDocumentUpdate(id)
     if (data) Y.applyUpdate(doc, data)
+    loadedStateVectors.set(doc, Y.encodeStateVector(doc))
     return doc
 }
 
 async function saveDoc(storage: OpenADEYjsMutationStorageAdapter, id: string, doc: Y.Doc): Promise<void> {
-    await storage.saveDocumentUpdate(id, Y.encodeStateAsUpdate(doc))
+    const loadedStateVector = loadedStateVectors.get(doc)
+    await storage.saveDocumentUpdate(id, loadedStateVector ? Y.encodeStateAsUpdate(doc, loadedStateVector) : Y.encodeStateAsUpdate(doc))
+    loadedStateVectors.set(doc, Y.encodeStateVector(doc))
 }
 
 function findRepoMap(doc: Y.Doc, repoId: string): Y.Map<unknown> | null {

@@ -16,6 +16,22 @@ import type {
     OpenADEHyperPlanSubExecutionAddRequest,
     OpenADEHyperPlanSubExecutionStreamAppendRequest,
     OpenADEHyperPlanSubExecutionUpdateRequest,
+    OpenADEProjectFileReadRequest,
+    OpenADEProjectFileReadResult,
+    OpenADEProjectFilesTreeRequest,
+    OpenADEProjectFilesTreeResult,
+    OpenADEProjectFileWriteRequest,
+    OpenADEProjectFileWriteResult,
+    OpenADEProjectProcessListRequest,
+    OpenADEProjectProcessListResult,
+    OpenADEProjectProcessReconnectRequest,
+    OpenADEProjectProcessReconnectResult,
+    OpenADEProjectProcessStartRequest,
+    OpenADEProjectProcessStartResult,
+    OpenADEProjectProcessStopRequest,
+    OpenADEProjectProcessStopResult,
+    OpenADEProjectSearchRequest,
+    OpenADEProjectSearchResult,
     OpenADEQueuedTurnCancelRequest,
     OpenADEQueuedTurnCancelResult,
     OpenADERepoCreateRequest,
@@ -26,10 +42,34 @@ import type {
     OpenADESnapshotEventCreateRequest,
     OpenADESnapshotEventCreateResult,
     OpenADETask,
+    OpenADETaskChangesReadRequest,
+    OpenADETaskChangesReadResult,
     OpenADETaskReadOptions,
     OpenADETaskDeleteRequest,
     OpenADETaskDeleteResult,
+    OpenADETaskDiffReadRequest,
+    OpenADETaskDiffReadResult,
     OpenADETaskEnvironmentSetupRequest,
+    OpenADETaskGitCommitRequest,
+    OpenADETaskGitCommitResult,
+    OpenADETaskGitLogRequest,
+    OpenADETaskGitLogResult,
+    OpenADETaskImageReadRequest,
+    OpenADETaskImageReadResult,
+    OpenADETaskTerminalMutationResult,
+    OpenADETaskTerminalReconnectRequest,
+    OpenADETaskTerminalReconnectResult,
+    OpenADETaskTerminalResizeRequest,
+    OpenADETaskTerminalStartRequest,
+    OpenADETaskTerminalStartResult,
+    OpenADETaskTerminalStopRequest,
+    OpenADETaskTerminalWriteRequest,
+    OpenADETaskSnapshotIndexReadRequest,
+    OpenADETaskSnapshotIndexReadResult,
+    OpenADETaskSnapshotPatchReadRequest,
+    OpenADETaskSnapshotPatchReadResult,
+    OpenADETaskSnapshotPatchSliceReadRequest,
+    OpenADETaskSnapshotPatchSliceReadResult,
     OpenADETaskMetadataUpdateRequest,
     OpenADEReviewStartRequest,
     OpenADETurnStartRequest,
@@ -86,6 +126,93 @@ export class OpenADEClient {
 
     async getTask(repoId: string, taskId: string, options: OpenADETaskReadOptions = {}): Promise<OpenADETask> {
         return this.request("openade/task/read", { repoId, taskId, ...options })
+    }
+
+    async readProjectFile(args: OpenADEProjectFileReadRequest): Promise<OpenADEProjectFileReadResult> {
+        return this.request("openade/project/file/read", args)
+    }
+
+    async listProjectFiles(args: OpenADEProjectFilesTreeRequest): Promise<OpenADEProjectFilesTreeResult> {
+        return this.request("openade/project/files/tree", args)
+    }
+
+    async writeProjectFile(args: OpenADEProjectFileWriteRequest, options: OpenADERequestOptions = {}): Promise<OpenADEProjectFileWriteResult> {
+        return this.request("openade/project/file/write", withClientRequestId(args, options))
+    }
+
+    async searchProject(args: OpenADEProjectSearchRequest): Promise<OpenADEProjectSearchResult> {
+        return this.request("openade/project/search", args)
+    }
+
+    async listProjectProcesses(args: OpenADEProjectProcessListRequest): Promise<OpenADEProjectProcessListResult> {
+        return this.request("openade/project/process/list", args)
+    }
+
+    async startProjectProcess(
+        args: OpenADEProjectProcessStartRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADEProjectProcessStartResult> {
+        return this.request("openade/project/process/start", withClientRequestId(args, options))
+    }
+
+    async reconnectProjectProcess(args: OpenADEProjectProcessReconnectRequest): Promise<OpenADEProjectProcessReconnectResult> {
+        return this.request("openade/project/process/reconnect", args)
+    }
+
+    async stopProjectProcess(args: OpenADEProjectProcessStopRequest, options: OpenADERequestOptions = {}): Promise<OpenADEProjectProcessStopResult> {
+        return this.request("openade/project/process/stop", withClientRequestId(args, options))
+    }
+
+    async readTaskChanges(args: OpenADETaskChangesReadRequest): Promise<OpenADETaskChangesReadResult> {
+        return this.request("openade/task/changes/read", args)
+    }
+
+    async readTaskDiff(args: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult> {
+        return this.request("openade/task/diff/read", args)
+    }
+
+    async readTaskGitLog(args: OpenADETaskGitLogRequest): Promise<OpenADETaskGitLogResult> {
+        return this.request("openade/task/git/log", args)
+    }
+
+    async commitTaskGit(args: OpenADETaskGitCommitRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskGitCommitResult> {
+        return this.request("openade/task/git/commit", withClientRequestId(args, options))
+    }
+
+    async startTaskTerminal(args: OpenADETaskTerminalStartRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskTerminalStartResult> {
+        return this.request("openade/task/terminal/start", withClientRequestId(args, options))
+    }
+
+    async reconnectTaskTerminal(args: OpenADETaskTerminalReconnectRequest): Promise<OpenADETaskTerminalReconnectResult> {
+        return this.request("openade/task/terminal/reconnect", args)
+    }
+
+    async writeTaskTerminal(args: OpenADETaskTerminalWriteRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskTerminalMutationResult> {
+        return this.request("openade/task/terminal/write", withClientRequestId(args, options))
+    }
+
+    async resizeTaskTerminal(args: OpenADETaskTerminalResizeRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskTerminalMutationResult> {
+        return this.request("openade/task/terminal/resize", withClientRequestId(args, options))
+    }
+
+    async stopTaskTerminal(args: OpenADETaskTerminalStopRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskTerminalMutationResult> {
+        return this.request("openade/task/terminal/stop", withClientRequestId(args, options))
+    }
+
+    async readTaskImage(args: OpenADETaskImageReadRequest): Promise<OpenADETaskImageReadResult> {
+        return this.request("openade/task/image/read", args)
+    }
+
+    async readTaskSnapshotPatch(args: OpenADETaskSnapshotPatchReadRequest): Promise<OpenADETaskSnapshotPatchReadResult> {
+        return this.request("openade/task/snapshot/patch/read", args)
+    }
+
+    async readTaskSnapshotIndex(args: OpenADETaskSnapshotIndexReadRequest): Promise<OpenADETaskSnapshotIndexReadResult> {
+        return this.request("openade/task/snapshot/index/read", args)
+    }
+
+    async readTaskSnapshotPatchSlice(args: OpenADETaskSnapshotPatchSliceReadRequest): Promise<OpenADETaskSnapshotPatchSliceReadResult> {
+        return this.request("openade/task/snapshot/patch/readSlice", args)
     }
 
     async createRepo(args: OpenADERepoCreateRequest, options: OpenADERequestOptions = {}): Promise<OpenADERepoCreateResult> {

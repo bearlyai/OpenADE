@@ -17,11 +17,19 @@ const createListener = (channel: string, callback: (...args: unknown[]) => void)
     return () => ipcRenderer.removeListener(channel, handler)
 }
 
+function envFlag(value: string | undefined): boolean {
+    return value === "1" || value === "true" || value === "yes" || value === "on"
+}
+
+const activeWorkUnloadBlockerDisabled =
+    envFlag(process.env.OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER) || envFlag(process.env.OPENADE_SMOKE_TEST)
+
 const openadeAPI = {
     // ========================================================================
     // App Controls
     // ========================================================================
     app: {
+        activeWorkUnloadBlockerDisabled,
         quit: () => ipcRenderer.invoke("quit-app"),
         openUrl: (url: string) => ipcRenderer.invoke("open-url", url),
         applyUpdate: () => ipcRenderer.invoke("apply-update"),
@@ -91,8 +99,6 @@ const openadeAPI = {
         setEnabled: (enabled: boolean) => ipcRenderer.invoke("companion:setEnabled", enabled),
         setKeepAwakeMode: (mode: string) => ipcRenderer.invoke("companion:setKeepAwakeMode", mode),
         startPairing: () => ipcRenderer.invoke("companion:startPairing"),
-        revokeDevice: (deviceId: string) => ipcRenderer.invoke("companion:revokeDevice", deviceId),
-        dropAllDevices: () => ipcRenderer.invoke("companion:dropAllDevices"),
     },
 
     // ========================================================================

@@ -69,6 +69,45 @@ import { isCodeModuleAvailable } from "./capabilities"
 // MCP API Functions
 // ============================================================================
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null
+}
+
+function optionalString(record: Record<string, unknown>, key: string): string | undefined {
+    const value = record[key]
+    return typeof value === "string" ? value : undefined
+}
+
+function parseMcpOAuthTokens(value: unknown): McpOAuthTokens | null {
+    if (!isRecord(value)) return null
+    const accessToken = optionalString(value, "accessToken")
+    const tokenType = optionalString(value, "tokenType")
+    if (!accessToken || !tokenType) return null
+    const refreshToken = optionalString(value, "refreshToken")
+    const expiresAt = optionalString(value, "expiresAt")
+
+    return {
+        accessToken,
+        tokenType,
+        ...(refreshToken ? { refreshToken } : {}),
+        ...(expiresAt ? { expiresAt } : {}),
+    }
+}
+
+function parseMcpOAuthComplete(value: unknown): Parameters<OnMcpOAuthCompleteCallback>[0] | null {
+    if (!isRecord(value)) return null
+    const serverId = optionalString(value, "serverId")
+    if (!serverId) return null
+
+    const error = optionalString(value, "error")
+    if (error !== undefined) return { serverId, error }
+
+    const tokens = parseMcpOAuthTokens(value.tokens)
+    if (tokens) return { serverId, tokens }
+
+    return null
+}
+
 /**
  * Check if MCP API is available (running in Electron)
  */
@@ -151,7 +190,8 @@ export function onMcpOAuthComplete(callback: OnMcpOAuthCompleteCallback): () => 
 
     return localRuntimeClient.subscribe((notification) => {
         if (notification.method !== "host/mcp/oauthComplete") return
-        callback(notification.params as Parameters<OnMcpOAuthCompleteCallback>[0])
+        const result = parseMcpOAuthComplete(notification.params)
+        if (result) callback(result)
     })
 }
 
