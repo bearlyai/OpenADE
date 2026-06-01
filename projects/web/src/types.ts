@@ -10,8 +10,6 @@ import type { HyperPlanSubExecution } from "./hyperplan/types"
 
 // Re-export types for convenience
 export type { HarnessStreamEvent, HarnessId }
-/** @deprecated Use HarnessStreamEvent instead */
-export type ClaudeStreamEvent = HarnessStreamEvent
 
 // ============================================================================
 // Execution Types - supports multiple execution engines

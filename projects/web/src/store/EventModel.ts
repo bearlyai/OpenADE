@@ -12,7 +12,7 @@
 import { action, computed, observable, runInAction } from "mobx"
 import { type SnapshotPatchIndex, snapshotsApi } from "../electronAPI/snapshots"
 import type { HyperPlanSubExecution } from "../hyperplan/types"
-import type { ActionEvent, ActionEventSource, ClaudeStreamEvent, CodeEvent, SetupEnvironmentEvent, SnapshotEvent } from "../types"
+import type { ActionEvent, ActionEventSource, CodeEvent, HarnessStreamEvent, SetupEnvironmentEvent, SnapshotEvent } from "../types"
 import type { CodeStore } from "./store"
 
 /**
@@ -64,7 +64,7 @@ export class EventModel {
     }
 
     @computed
-    get events(): ClaudeStreamEvent[] {
+    get events(): HarnessStreamEvent[] {
         const event = this.event
         if (!event) return []
         // Only action events have execution with events
