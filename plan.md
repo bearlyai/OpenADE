@@ -821,7 +821,7 @@ Record major decisions here as the migration proceeds.
 
 - Desktop `CodeStore` added a runtime product read bridge behind `VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE` or `CodeStoreConfig.enableRuntimeProductStore`; later slices in this branch promote that bridge to default-on with explicit false overrides.
 - The bridge hydrates `runtimeProductSnapshot` through `OpenADEProductStore` and `OpenADEClient`; when ready, `RepoManager.repos` and `CodeStore.getTaskPreviewsForRepo()` may serve repo/task preview reads from runtime DTOs.
-- Desktop sidebar/navigation callers now use those accessors, but the flag remains off by default and legacy Yjs renderer stores remain the fallback.
+- Desktop sidebar/navigation callers now use those accessors; later slices in this branch make the bridge default-on while legacy Yjs renderer stores remain the fallback.
 - `projects/web/src/store/storeRuntimeProductStore.test.ts` verifies the bridge through a real `RuntimeServer`, `RuntimeLocalClient`, and `OpenADEClient`.
 - `projects/electron/src/modules/companion/openadeProjectionFixtures.test.ts` compares committed legacy Yjs fixture reads against runtime projection DTO reads using the production Electron Yjs storage adapter.
 - This is a Phase 4 sidebar/navigation slice. Task route loading, comments, queued turns, runtime working state, metadata, and event detail reads still need to be switched one at a time after each slice has old-vs-new parity coverage.
@@ -867,7 +867,7 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - Required workflow coverage: desktop launch, repo/project list navigation, task preview navigation, task detail load, runtime notification refresh, Plan, Revise, Run Plan, Ask, comments, metadata edits, close/reopen, app close/relaunch reload, and scoped project file tree/read/write/search.
 - Required telemetry checks: `app_opened` must show the gate enabled and a ready runtime product store after normal startup; `runtime_product_store_error` must have no unexplained categories; `runtime_product_store_fallback` must be absent for normal workflows.
 - Data hygiene check: telemetry review must use only the sanitized fields emitted by `CodeStore` (`source`, `reason`, gate/status flags, snapshot presence, repo/task counts, and error kind). Do not add repo paths, task titles/content, prompt text, file contents, or user code to rollout events.
-- Failure handling: every fallback or unexplained bridge error blocks default-on promotion until the team captures a reproduction, adds a real regression fixture/test on the production bridge path, and reruns packaged workflow smoke.
+- Failure handling: every fallback or unexplained bridge error blocks broad rollout until the team captures a reproduction, adds a real regression fixture/test on the production bridge path, and reruns packaged workflow smoke.
 - Rollout rule: the default-on build can ship broadly only after the internal/default-on cohort has zero normal-flow fallback events and no unexplained bridge errors. Removal of the fallback path requires another telemetry/log review for that release.
 
 ### 2026-06-01: Runtime Migration Verification Sweep
