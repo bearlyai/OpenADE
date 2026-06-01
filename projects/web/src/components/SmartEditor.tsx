@@ -16,11 +16,9 @@ import type React from "react"
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { twMerge } from "tailwind-merge"
-import type { TreeMatch } from "../electronAPI/files"
-import { fuzzySearch, isFilesApiAvailable } from "../electronAPI/files"
 import { usePortalContainer } from "../hooks/usePortalContainer"
 import type { SdkCapabilitiesManager, SlashCommandEntry } from "../store/managers/SdkCapabilitiesManager"
-import type { SmartEditorManager } from "../store/managers/SmartEditorManager"
+import type { SmartEditorFileTreeMatch, SmartEditorManager } from "../store/managers/SmartEditorManager"
 import { processImageBlob } from "../utils/imageAttachment"
 import { emitEmptyEditorGlobalShortcut, isEmptyEditorGlobalShortcut } from "../utils/keyboardShortcuts"
 import { getFileName } from "./utils/paths"
@@ -66,7 +64,7 @@ interface SuggestionItem {
 
 interface SuggestionListProps {
     items: SuggestionItem[]
-    treeMatch: TreeMatch | null
+    treeMatch: SmartEditorFileTreeMatch | null
     selectedIndex: number
     onSelectIndex: (index: number) => void
     onSelectItem: (index: number) => void
@@ -228,7 +226,7 @@ function extractFilesFromEditor(editor: Editor): string[] {
 interface FileSuggestionPopupState {
     open: boolean
     items: SuggestionItem[]
-    treeMatch: TreeMatch | null
+    treeMatch: SmartEditorFileTreeMatch | null
     selectedIndex: number
     anchorRect: DOMRect | null
 }
@@ -281,7 +279,7 @@ export const SmartEditor = observer(
             })
 
             // Determine if features should be enabled
-            const mentionsEnabled = fileMentionsDir !== null && isFilesApiAvailable()
+            const mentionsEnabled = fileMentionsDir !== null && manager.canSearchFileMentions(fileMentionsDir)
             const slashEnabled = slashCommandsDir !== null
 
             // Load SDK capabilities when slashCommandsDir is provided
@@ -293,10 +291,10 @@ export const SmartEditor = observer(
 
             // Warm up file search cache when fileMentionsDir is provided
             useEffect(() => {
-                if (fileMentionsDir && isFilesApiAvailable()) {
-                    fuzzySearch({ dir: fileMentionsDir, query: "", matchDirs: false, limit: 20 }).catch(() => {})
+                if (fileMentionsDir && mentionsEnabled) {
+                    manager.warmFileMentionSearch(fileMentionsDir).catch(() => {})
                 }
-            }, [fileMentionsDir])
+            }, [fileMentionsDir, manager, mentionsEnabled])
 
             const slashCommands = slashEnabled && sdkCapabilities ? sdkCapabilities.allCommands : []
 
@@ -350,12 +348,7 @@ export const SmartEditor = observer(
                     const delay = query ? 150 : 50
                     searchTimeoutRef.current = setTimeout(async () => {
                         try {
-                            const result = await fuzzySearch({
-                                dir: fileMentionsDir,
-                                query,
-                                matchDirs: false,
-                                limit: 20,
-                            })
+                            const result = await manager.searchFileMentions(fileMentionsDir, query, 20)
                             if (query === lastQueryRef.current) {
                                 const items = result.results.map((path) => ({
                                     type: "file" as const,
@@ -381,7 +374,7 @@ export const SmartEditor = observer(
                         }
                     }, delay)
                 },
-                [fileMentionsDir]
+                [fileMentionsDir, manager]
             )
 
             const fileDisplayItems: SuggestionItem[] = fileSuggestion.treeMatch
@@ -797,7 +790,7 @@ export const SmartEditor = observer(
                         manager.clear()
                     },
                 }),
-                [manager]
+                [editor, manager]
             )
 
             const handleContainerClick = () => {

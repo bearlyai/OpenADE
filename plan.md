@@ -1239,6 +1239,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - `ContentSearchManager` keeps the classic desktop Search tray behavior but now sends `taskId` through `searchProductProject()` and `readProductProjectFile()` for runtime-backed head and worktree tasks.
 - Focused verification passed: OpenADE module typecheck, web typecheck, Electron typecheck, scoped project host real-filesystem tests, OpenADE kernel integration, web `FileBrowserManager` plus `storeRuntimeProductStore` through a real `RuntimeServer`/`RuntimeLocalClient`/`OpenADEClient` with legacy `filesApi` forced to fail, and Electron companion runtime API integration with a real paired WebSocket.
 
+### 2026-06-01: Classic SmartEditor File Mentions Runtime Path Added
+
+- `openade/project/files/fuzzySearch` now returns an optional product-owned `treeMatch` so the classic SmartEditor file mention popup can keep directory browsing without importing raw runtime-node/Electron file-search types.
+- `SmartEditorManager` now owns file mention search and tracked-file validation. Runtime-backed task editors call `CodeStore.fuzzySearchProductProjectFiles()` with the active `taskId`; repo-scoped task creation and scratchpads call the same product method with the repo id. `SmartEditor.tsx` no longer imports `electronAPI/files`.
+- Legacy `filesApi` fuzzy/describe calls remain contained as the unscoped trusted-local fallback inside `SmartEditorManager`; once a product context exists, the editor does not fall back to raw `fs/*`.
+- Focused verification passed: OpenADE module typecheck, web typecheck, Electron typecheck, scoped project host real-filesystem tests for fuzzy `treeMatch`, OpenADE kernel integration, web `SmartEditorManager` tests, web `storeRuntimeProductStore` through a real `RuntimeServer`/`RuntimeLocalClient`/`OpenADEClient` with legacy file APIs forced to fail, and React Doctor diff scan with no blocking errors.
+
 ### 2026-06-01: Classic Search Tray Runtime Project Path Added
 
 - `CodeStore` now exposes project file/search/process wrappers alongside the existing task/git/snapshot product helpers, so renderer callers do not need to choose between `OpenADEProductStore` and `runtime/localOpenADEClient.ts` directly.

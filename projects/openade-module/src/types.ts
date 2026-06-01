@@ -473,12 +473,24 @@ export interface OpenADEProjectFilesFuzzySearchRequest {
     includeGenerated?: boolean
 }
 
+export interface OpenADEProjectFilesFuzzyTreeChild {
+    name: string
+    isDir: boolean
+    fullPath: string
+}
+
+export interface OpenADEProjectFilesFuzzyTreeMatch {
+    path: string
+    children: OpenADEProjectFilesFuzzyTreeChild[]
+}
+
 export interface OpenADEProjectFilesFuzzySearchResult {
     repoId: string
     taskId?: string
     results: string[]
     truncated: boolean
     source: "filesystem"
+    treeMatch?: OpenADEProjectFilesFuzzyTreeMatch
 }
 
 export interface OpenADEProjectSearchRequest {

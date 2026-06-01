@@ -12,6 +12,7 @@
 
 import { makeAutoObservable, observable, runInAction } from "mobx"
 import { ulid } from "ulid"
+import type { OpenADEProjectFilesFuzzySearchRequest, OpenADEProjectFilesFuzzySearchResult } from "../../../../openade-module/src"
 import { dataFolderApi } from "../../electronAPI/dataFolder"
 import { filesApi } from "../../electronAPI/files"
 import type { ImageAttachment } from "../../types"
@@ -61,6 +62,32 @@ interface FileUsageStat {
 type NamespaceStats = Record<string, FileUsageStat>
 type AllStats = Record<string, NamespaceStats>
 
+export interface SmartEditorFileTreeChild {
+    name: string
+    isDir: boolean
+    fullPath: string
+}
+
+export interface SmartEditorFileTreeMatch {
+    path: string
+    children: SmartEditorFileTreeChild[]
+}
+
+export interface SmartEditorFileSearchResult {
+    results: string[]
+    treeMatch: SmartEditorFileTreeMatch | null
+}
+
+interface SmartEditorProductFileContext {
+    repoId: string
+    taskId?: string
+}
+
+export interface SmartEditorProductFileAccess {
+    getContext(id: string, workspaceId: string, dir: string): SmartEditorProductFileContext | null
+    fuzzySearchProjectFiles(args: OpenADEProjectFilesFuzzySearchRequest): Promise<OpenADEProjectFilesFuzzySearchResult>
+}
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -85,6 +112,22 @@ function cloneEditorContent(content: Record<string, unknown> | null): Record<str
 
 function clonePendingImages(images: ImageAttachment[]): ImageAttachment[] {
     return images.map((image) => ({ ...image }))
+}
+
+function normalizeMentionPath(path: string): string {
+    return path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/").replace(/\/+$/, "")
+}
+
+function toFileSearchTreeMatch(treeMatch: OpenADEProjectFilesFuzzySearchResult["treeMatch"]): SmartEditorFileTreeMatch | null {
+    if (!treeMatch) return null
+    return {
+        path: treeMatch.path,
+        children: treeMatch.children.map((child) => ({
+            name: child.name,
+            isDir: child.isDir,
+            fullPath: child.fullPath,
+        })),
+    }
 }
 
 async function loadImagePreviewUrl(image: ImageAttachment): Promise<string | null> {
@@ -127,7 +170,11 @@ export class SmartEditorManager {
     private onClear: (() => void) | null = null
     private onSetContent: ((content: string | Record<string, unknown> | null) => void) | null = null
 
-    constructor(id: string, workspaceId: string) {
+    constructor(
+        id: string,
+        workspaceId: string,
+        private readonly productAccess: SmartEditorProductFileAccess | null = null
+    ) {
         this.id = id
         this.workspaceId = workspaceId
         makeAutoObservable(this)
@@ -278,6 +325,59 @@ export class SmartEditorManager {
         this.onInsertFile?.(path)
     }
 
+    // === File search ===
+
+    canSearchFileMentions(dir: string): boolean {
+        return this.productContextFor(dir) !== null || filesApi.isAvailable()
+    }
+
+    async warmFileMentionSearch(dir: string): Promise<void> {
+        await this.searchFileMentions(dir, "", 20)
+    }
+
+    async searchFileMentions(dir: string, query: string, limit = 20): Promise<SmartEditorFileSearchResult> {
+        const productContext = this.productContextFor(dir)
+        if (productContext) {
+            const result = await this.productAccess?.fuzzySearchProjectFiles({
+                repoId: productContext.repoId,
+                taskId: productContext.taskId,
+                query,
+                matchDirs: false,
+                limit,
+                includeHidden: true,
+            })
+            if (!result) return { results: [], treeMatch: null }
+            return {
+                results: result.results,
+                treeMatch: toFileSearchTreeMatch(result.treeMatch),
+            }
+        }
+
+        if (!filesApi.isAvailable()) {
+            throw new Error("Files API is not available")
+        }
+
+        const result = await filesApi.fuzzySearch({
+            dir,
+            query,
+            matchDirs: false,
+            limit,
+        })
+        return {
+            results: result.results,
+            treeMatch: result.treeMatch
+                ? {
+                      path: result.treeMatch.path,
+                      children: result.treeMatch.children.map((child) => ({
+                          name: child.name,
+                          isDir: child.isDir,
+                          fullPath: child.fullPath,
+                      })),
+                  }
+                : null,
+        }
+    }
+
     // === Favorites (computed from localStorage, scoped to workspaceId, ranked by frecency) ===
 
     get favorites(): FileUsageItem[] {
@@ -297,6 +397,11 @@ export class SmartEditorManager {
         const results = await Promise.all(
             paths.map(async (relPath) => {
                 try {
+                    const productContext = this.productContextFor(dir)
+                    if (productContext) {
+                        return { relPath, exists: await this.productFileExists(productContext, relPath) }
+                    }
+
                     const fullPath = `${dir}/${relPath}`
                     const desc = await filesApi.describePath({ path: fullPath })
                     return { relPath, exists: desc.type !== "not_found" }
@@ -319,6 +424,23 @@ export class SmartEditorManager {
         }
         localStorage.setItem(FILE_USAGE_STATS_KEY, JSON.stringify(all))
         this._statsVersion++
+    }
+
+    private productContextFor(dir: string): SmartEditorProductFileContext | null {
+        return this.productAccess?.getContext(this.id, this.workspaceId, dir) ?? null
+    }
+
+    private async productFileExists(context: SmartEditorProductFileContext, relPath: string): Promise<boolean> {
+        const normalizedPath = normalizeMentionPath(relPath)
+        const result = await this.productAccess?.fuzzySearchProjectFiles({
+            repoId: context.repoId,
+            taskId: context.taskId,
+            query: normalizedPath,
+            matchDirs: false,
+            limit: 5,
+            includeHidden: true,
+        })
+        return result?.results.some((path) => normalizeMentionPath(path) === normalizedPath) ?? true
     }
 
     // === Private: localStorage operations (uses workspaceId as namespace) ===
@@ -481,7 +603,7 @@ export class SmartEditorManager {
 export class SmartEditorManagerStore {
     private managers = new Map<string, SmartEditorManager>()
 
-    constructor() {
+    constructor(private readonly productAccess: SmartEditorProductFileAccess | null = null) {
         makeAutoObservable(this)
     }
 
@@ -490,7 +612,7 @@ export class SmartEditorManagerStore {
         const existing = this.managers.get(key)
         if (existing) return existing
 
-        const manager = new SmartEditorManager(id, workspaceId)
+        const manager = new SmartEditorManager(id, workspaceId, this.productAccess)
         this.managers.set(key, manager)
         return manager
     }

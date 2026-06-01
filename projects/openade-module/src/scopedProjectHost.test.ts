@@ -72,11 +72,24 @@ describe("OpenADE scoped project host helpers", () => {
     })
 
     it("fuzzy-searches real scoped file paths", async () => {
+        const root = await fuzzySearchOpenADEProjectFiles({ repoId: repo.id, repo, query: "", limit: 5 })
+        expect(root.treeMatch).toEqual({
+            path: "",
+            children: [{ name: "src", isDir: true, fullPath: "src" }],
+        })
+
         const result = await fuzzySearchOpenADEProjectFiles({ repoId: repo.id, repo, query: "upper", limit: 5 })
         expect(result.results).toEqual(["src/upper.ts"])
 
         const dirs = await fuzzySearchOpenADEProjectFiles({ repoId: repo.id, repo, query: "src", matchDirs: true, limit: 5 })
         expect(dirs.results).toContain("src")
+        expect(dirs.treeMatch).toEqual({
+            path: "src",
+            children: [
+                { name: "app.ts", isDir: false, fullPath: "src/app.ts" },
+                { name: "upper.ts", isDir: false, fullPath: "src/upper.ts" },
+            ],
+        })
     })
 
     it("searches real files while skipping hidden and generated directories", async () => {

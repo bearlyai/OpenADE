@@ -99,7 +99,7 @@ import { RepoManager } from "./managers/RepoManager"
 import { RepoProcessesManager } from "./managers/RepoProcessesManager"
 import { RuntimeManager } from "./managers/RuntimeManager"
 import { ScratchpadManager } from "./managers/ScratchpadManager"
-import { SmartEditorManagerStore } from "./managers/SmartEditorManager"
+import { type SmartEditorProductFileAccess, SmartEditorManagerStore } from "./managers/SmartEditorManager"
 import { type CreationPhase, type TaskCreation, TaskCreationManager, type TaskCreationOptions } from "./managers/TaskCreationManager"
 import { TaskManager } from "./managers/TaskManager"
 import { UIStateManager, type ViewMode } from "./managers/UIStateManager"
@@ -140,6 +140,10 @@ function notificationRecord(notification: RuntimeNotification): Record<string, u
     return typeof notification.params === "object" && notification.params !== null && !Array.isArray(notification.params)
         ? (notification.params as Record<string, unknown>)
         : {}
+}
+
+function normalizedDirectoryPath(path: string): string {
+    return path.replace(/\\/g, "/").replace(/\/+$/, "")
 }
 
 type AnalyticsDeviceIdSource =
@@ -260,7 +264,7 @@ export class CodeStore {
         this.comments = new CommentManager(this)
         this.repoProcesses = new RepoProcessesManager()
         this.mcpServers = new McpServerManager(this)
-        this.smartEditors = new SmartEditorManagerStore()
+        this.smartEditors = new SmartEditorManagerStore(this.smartEditorProductFileAccess())
         this.runtimes = new RuntimeManager()
         this.queuedTurns = new QueuedTurnManager()
         this.crons = new CronManager(this)
@@ -295,6 +299,34 @@ export class CodeStore {
             repeat: false,
             scratchpads: false,
         })
+    }
+
+    private smartEditorProductFileAccess(): SmartEditorProductFileAccess {
+        return {
+            getContext: (id, workspaceId, dir) => this.getSmartEditorProductFileContext(id, workspaceId, dir),
+            fuzzySearchProjectFiles: (args) => this.fuzzySearchProductProjectFiles(args),
+        }
+    }
+
+    private getSmartEditorProductFileContext(id: string, workspaceId: string, dir: string): { repoId: string; taskId?: string } | null {
+        if (!this.shouldUseRuntimeProductReads()) return null
+
+        const normalizedDir = normalizedDirectoryPath(dir)
+        if (id.startsWith("task-") && id !== "task-create") {
+            const taskId = id.slice("task-".length)
+            const repoId = this.findRuntimeProductRepoIdForTask(taskId) ?? workspaceId
+            const repo = this.repos.getRepo(repoId)
+            if (!repo) return null
+
+            const taskModel = this.tasks.getTaskModel(taskId)
+            const taskDir = taskModel?.environment?.taskWorkingDir ?? repo.path
+            if (normalizedDirectoryPath(taskDir) !== normalizedDir) return null
+            return { repoId, taskId }
+        }
+
+        const repo = this.repos.getRepo(workspaceId)
+        if (!repo || normalizedDirectoryPath(repo.path) !== normalizedDir) return null
+        return { repoId: workspaceId }
     }
 
     async initializeStores(): Promise<void> {

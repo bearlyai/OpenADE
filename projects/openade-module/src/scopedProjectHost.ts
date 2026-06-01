@@ -6,6 +6,7 @@ import type {
     OpenADEProject,
     OpenADEProjectFilesFuzzySearchRequest,
     OpenADEProjectFilesFuzzySearchResult,
+    OpenADEProjectFilesFuzzyTreeChild,
     OpenADEProjectFileReadRequest,
     OpenADEProjectFileReadResult,
     OpenADEProjectFilesTreeEntry,
@@ -30,6 +31,13 @@ type ScopedGitResult = {
     stdout: string
     stderr: string
     success: boolean
+}
+
+interface ScopedPathTreeNode {
+    name: string
+    isDir: boolean
+    fullPath: string
+    children: Map<string, ScopedPathTreeNode>
 }
 
 function scopedGit(args: string[], cwd: string): Promise<ScopedGitResult> {
@@ -143,6 +151,67 @@ function rankScopedPathMatch(pathname: string, query: string): number {
         if (queryIndex === lowerQuery.length) return lowerPath.length
     }
     return Number.POSITIVE_INFINITY
+}
+
+function buildScopedPathTree(entries: Array<{ relativePath: string; isDir: boolean }>): ScopedPathTreeNode {
+    const root: ScopedPathTreeNode = { name: "", isDir: true, fullPath: "", children: new Map() }
+
+    for (const entry of entries) {
+        const parts = entry.relativePath.split("/").filter(Boolean)
+        let current = root
+        let pathSoFar = ""
+
+        for (let index = 0; index < parts.length; index++) {
+            const part = parts[index]
+            pathSoFar = pathSoFar ? `${pathSoFar}/${part}` : part
+            const isLast = index === parts.length - 1
+            const existing = current.children.get(part)
+            if (existing) {
+                if (isLast && entry.isDir) existing.isDir = true
+                current = existing
+                continue
+            }
+
+            const child: ScopedPathTreeNode = {
+                name: part,
+                isDir: isLast ? entry.isDir : true,
+                fullPath: pathSoFar,
+                children: new Map(),
+            }
+            current.children.set(part, child)
+            current = child
+        }
+    }
+
+    return root
+}
+
+function normalizeScopedTreeQuery(query: string): string {
+    return query.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "")
+}
+
+function lookupScopedPathTree(root: ScopedPathTreeNode, treePath: string): ScopedPathTreeNode | null {
+    if (!treePath) return root
+    const parts = treePath.split("/").filter(Boolean)
+    let current = root
+    for (const part of parts) {
+        const child = current.children.get(part)
+        if (!child) return null
+        current = child
+    }
+    return current
+}
+
+function getScopedTreeChildren(root: ScopedPathTreeNode, treePath: string): OpenADEProjectFilesFuzzyTreeChild[] {
+    const node = lookupScopedPathTree(root, treePath)
+    if (!node?.isDir) return []
+
+    return Array.from(node.children.values())
+        .map((child) => ({ name: child.name, isDir: child.isDir, fullPath: child.fullPath }))
+        .sort((a, b) => {
+            if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
+            return a.name.localeCompare(b.name)
+        })
 }
 
 async function walkOpenADEProjectPaths(
@@ -273,13 +342,23 @@ export async function fuzzySearchOpenADEProjectFiles(
 ): Promise<OpenADEProjectFilesFuzzySearchResult> {
     const root = await scopedHostRoot(params)
     const limit = params.limit ?? DEFAULT_SCOPED_SEARCH_LIMIT
-    const query = params.query.trim()
-    const paths = await walkOpenADEProjectPaths(root, {
-        includeDirs: params.matchDirs === true,
-        includeFiles: params.matchDirs !== true,
+    const query = normalizeScopedTreeQuery(params.query)
+    const allPaths = await walkOpenADEProjectPaths(root, {
+        includeDirs: true,
+        includeFiles: true,
         includeHidden: params.includeHidden,
         includeGenerated: params.includeGenerated,
     })
+    const tree = buildScopedPathTree(allPaths)
+    const treeNode = lookupScopedPathTree(tree, query)
+    const treeMatch =
+        !query || treeNode?.isDir
+            ? {
+                  path: query,
+                  children: getScopedTreeChildren(tree, query),
+              }
+            : undefined
+    const paths = allPaths.filter((entry) => (params.matchDirs === true ? entry.isDir : !entry.isDir))
     const ranked = paths
         .map((entry) => ({ ...entry, rank: rankScopedPathMatch(entry.relativePath, query) }))
         .filter((entry) => Number.isFinite(entry.rank))
@@ -289,8 +368,9 @@ export async function fuzzySearchOpenADEProjectFiles(
         repoId: params.repoId,
         taskId: params.taskId,
         results: ranked.slice(0, limit).map((entry) => entry.relativePath),
-        truncated: ranked.length > limit || paths.length >= 10_000,
+        truncated: ranked.length > limit || allPaths.length >= 10_000,
         source: "filesystem",
+        treeMatch,
     }
 }
 

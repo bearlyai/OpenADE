@@ -997,6 +997,18 @@ describe("CodeStore runtime product store bridge", () => {
             taskModel.contentSearch.setQuery("needle")
             taskModel.fileBrowser.setWorkingDir("/tmp/runtime-repo")
             await taskModel.fileBrowser.openFileReference("runtime-search.ts", { line: 2 })
+            localStorage.setItem(
+                "code:fileUsageStats",
+                JSON.stringify({
+                    "repo-1": {
+                        "src/runtime-search.ts": { count: 2, lastUsed: Date.parse(now) },
+                        "src/deleted.ts": { count: 1, lastUsed: Date.parse(now) },
+                    },
+                })
+            )
+            const editorManager = codeStore.smartEditors.getManager("task-task-1", "repo-1")
+            const mentionSearch = await editorManager.searchFileMentions("/tmp/runtime-repo", "runtime", 20)
+            await editorManager.validateFiles("/tmp/runtime-repo")
 
             await vi.waitFor(() => {
                 expect(taskModel.contentSearch.contentResults).toEqual([
@@ -1013,6 +1025,8 @@ describe("CodeStore runtime product store bridge", () => {
             await vi.waitFor(() => {
                 expect(taskModel.fileBrowser.activeFileData?.content).toBe(runtimeSearchFixture.content)
             })
+            expect(mentionSearch.results).toEqual(["src/runtime-search.ts"])
+            expect(editorManager.favorites.map((item) => item.path)).toEqual(["src/runtime-search.ts"])
 
             expect(runtimeSearch).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1", query: "needle", limit: 100, caseSensitive: false })
             expect(runtimeFileRead).toHaveBeenCalledWith({
@@ -1039,10 +1053,27 @@ describe("CodeStore runtime product store bridge", () => {
                 includeHidden: true,
                 includeGenerated: true,
             })
+            expect(runtimeFuzzySearch).toHaveBeenCalledWith({
+                repoId: "repo-1",
+                taskId: "task-1",
+                query: "runtime",
+                matchDirs: false,
+                limit: 20,
+                includeHidden: true,
+            })
+            expect(runtimeFuzzySearch).toHaveBeenCalledWith({
+                repoId: "repo-1",
+                taskId: "task-1",
+                query: "src/runtime-search.ts",
+                matchDirs: false,
+                limit: 5,
+                includeHidden: true,
+            })
             expect(legacyContentSearch).not.toHaveBeenCalled()
             expect(legacyDescribePath).not.toHaveBeenCalled()
             expect(legacyFuzzySearch).not.toHaveBeenCalled()
         } finally {
+            localStorage.removeItem("code:fileUsageStats")
             runtimeSearch.mockRestore()
             runtimeFileRead.mockRestore()
             runtimeFileList.mockRestore()

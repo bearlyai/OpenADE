@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { SmartEditorManager } from "./SmartEditorManager"
+import { SmartEditorManager, type SmartEditorProductFileAccess } from "./SmartEditorManager"
 
 // Mock filesApi
 vi.mock("../../electronAPI/files", () => ({
     filesApi: {
         describePath: vi.fn(),
+        fuzzySearch: vi.fn(),
+        isAvailable: vi.fn(() => true),
     },
 }))
 
@@ -127,6 +129,7 @@ describe("SmartEditorManager frecency ranking", () => {
 describe("SmartEditorManager.validateFiles", () => {
     beforeEach(() => {
         localStorage.clear()
+        vi.mocked(filesApi.isAvailable).mockReturnValue(true)
     })
 
     afterEach(() => {
@@ -211,6 +214,121 @@ describe("SmartEditorManager.validateFiles", () => {
         // Stats should be unchanged
         const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}")
         expect(stored[WORKSPACE]["src/a.ts"]).toBeDefined()
+    })
+
+    it("validates tracked files through product search when product context is available", async () => {
+        const now = Date.now()
+        seedStats({
+            "src/exists.ts": { count: 5, lastUsed: now },
+            "src/deleted.ts": { count: 3, lastUsed: now },
+        })
+        const fuzzySearchProjectFiles: SmartEditorProductFileAccess["fuzzySearchProjectFiles"] = async (params) => ({
+            repoId: params.repoId,
+            taskId: params.taskId,
+            results: params.query === "src/exists.ts" ? ["src/exists.ts"] : [],
+            truncated: false,
+            source: "filesystem",
+        })
+        const productAccess: SmartEditorProductFileAccess = {
+            getContext: vi.fn(() => ({ repoId: "repo-1", taskId: "task-1" })),
+            fuzzySearchProjectFiles: vi.fn(fuzzySearchProjectFiles),
+        }
+        vi.mocked(filesApi.describePath).mockRejectedValue(new Error("legacy describe should not be used"))
+
+        const manager = new SmartEditorManager("task-task-1", WORKSPACE, productAccess)
+        await manager.validateFiles("/repo")
+
+        expect(productAccess.fuzzySearchProjectFiles).toHaveBeenCalledWith({
+            repoId: "repo-1",
+            taskId: "task-1",
+            query: "src/exists.ts",
+            matchDirs: false,
+            limit: 5,
+            includeHidden: true,
+        })
+        expect(filesApi.describePath).not.toHaveBeenCalled()
+        const paths = manager.favorites.map((f) => f.path)
+        expect(paths).toContain("src/exists.ts")
+        expect(paths).not.toContain("src/deleted.ts")
+    })
+})
+
+describe("SmartEditorManager.searchFileMentions", () => {
+    beforeEach(() => {
+        localStorage.clear()
+        vi.mocked(filesApi.isAvailable).mockReturnValue(true)
+    })
+
+    afterEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    it("routes mention search through product fuzzy search when product context is available", async () => {
+        const fuzzySearchProjectFiles: SmartEditorProductFileAccess["fuzzySearchProjectFiles"] = async (params) => ({
+            repoId: params.repoId,
+            taskId: params.taskId,
+            results: ["src/runtime-search.ts"],
+            truncated: false,
+            source: "filesystem",
+            treeMatch: {
+                path: "src",
+                children: [{ name: "runtime-search.ts", isDir: false, fullPath: "src/runtime-search.ts" }],
+            },
+        })
+        const productAccess: SmartEditorProductFileAccess = {
+            getContext: vi.fn(() => ({ repoId: "repo-1", taskId: "task-1" })),
+            fuzzySearchProjectFiles: vi.fn(fuzzySearchProjectFiles),
+        }
+        vi.mocked(filesApi.fuzzySearch).mockRejectedValue(new Error("legacy fuzzy search should not be used"))
+
+        const manager = new SmartEditorManager("task-task-1", WORKSPACE, productAccess)
+        const result = await manager.searchFileMentions("/repo", "src", 20)
+
+        expect(result).toEqual({
+            results: ["src/runtime-search.ts"],
+            treeMatch: {
+                path: "src",
+                children: [{ name: "runtime-search.ts", isDir: false, fullPath: "src/runtime-search.ts" }],
+            },
+        })
+        expect(productAccess.fuzzySearchProjectFiles).toHaveBeenCalledWith({
+            repoId: "repo-1",
+            taskId: "task-1",
+            query: "src",
+            matchDirs: false,
+            limit: 20,
+            includeHidden: true,
+        })
+        expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
+    })
+
+    it("keeps legacy file search as the unscoped fallback", async () => {
+        const productAccess: SmartEditorProductFileAccess = {
+            getContext: vi.fn(() => null),
+            fuzzySearchProjectFiles: vi.fn(),
+        }
+        vi.mocked(filesApi.fuzzySearch).mockResolvedValue({
+            results: ["src/fallback.ts"],
+            truncated: false,
+            source: "fs",
+            treeMatch: {
+                path: "src",
+                children: [{ name: "fallback.ts", isDir: false, fullPath: "src/fallback.ts" }],
+            },
+        })
+
+        const manager = new SmartEditorManager("scratchpad-pad-1", WORKSPACE, productAccess)
+        const result = await manager.searchFileMentions("/repo", "src", 10)
+
+        expect(result.results).toEqual(["src/fallback.ts"])
+        expect(result.treeMatch?.children).toEqual([{ name: "fallback.ts", isDir: false, fullPath: "src/fallback.ts" }])
+        expect(productAccess.fuzzySearchProjectFiles).not.toHaveBeenCalled()
+        expect(filesApi.fuzzySearch).toHaveBeenCalledWith({
+            dir: "/repo",
+            query: "src",
+            matchDirs: false,
+            limit: 10,
+        })
     })
 })
 
