@@ -9,7 +9,7 @@
 
 - `src/modules/code/hostBridgeTypes.ts` owns browser-safe DTOs for desktop-specific trusted host utilities such as binaries, platform, shell, frame colors, and code-module capability probes.
 - `src/modules/code/gitBridgeTypes.ts` owns browser-safe DTOs for raw trusted-local `git/*` bridge methods. Product-scoped task git DTOs still come from `projects/openade-module/src/types.ts`.
-- `src/modules/deviceConfigTypes.ts` owns browser-safe device config result DTOs, and `src/modules/code/snapshotsIndex.ts` owns snapshot patch index DTOs.
+- `src/modules/deviceConfigTypes.ts` owns browser-safe device config result DTOs. Snapshot patch index DTOs and indexing/slicing helpers live in `projects/openade-module/src/snapshotPatchIndex.ts`; `src/modules/code/snapshotsIndex.ts` should stay a compatibility re-export for Electron callers.
 - `openade.toml` process/cron DTOs and parser/serializer live in `projects/openade-module/src/types.ts` and `projects/openade-module/src/procs.ts`. Electron procs modules should alias or re-export those product-owned contracts, not keep a second parser or type set.
 - Scoped OpenADE project file tree/read/write/search behavior lives in `projects/openade-module/src/scopedProjectHost.ts`. The companion runtime gateway should import those product-owned helpers instead of carrying Electron-only copies of path containment, hidden/generated filtering, file-size limits, or search behavior.
 - Scoped OpenADE project process definition building and cwd containment live in `projects/openade-module/src/scopedProjectProcesses.ts`. Electron may keep its process start/reconnect/kill plumbing, but should import the shared builder for parsed `openade.toml` configs.

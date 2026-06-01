@@ -123,7 +123,7 @@ import {
     loadRuntimeSnapshotPatchSlice,
     saveRuntimeSnapshotBundle,
 } from "../code/snapshots"
-import { buildSnapshotPatchIndex, type SnapshotPatchFile, type SnapshotPatchIndex } from "../code/snapshotsIndex"
+import { buildSnapshotPatchIndex, sliceSnapshotPatchBytes, type SnapshotPatchFile, type SnapshotPatchIndex } from "../code/snapshotsIndex"
 import { killRuntimePty, reconnectRuntimePty, resizeRuntimePty, spawnRuntimePty, writeRuntimePty } from "../code/pty"
 import { getDeviceConfig } from "../deviceConfig"
 import { getRuntimeCodeCapabilities, getRuntimeSdkCapabilities, invalidateRuntimeSdkCapabilities } from "../code/capabilities"
@@ -1160,12 +1160,6 @@ function scopedSnapshotInlinePatch(snapshotEvent: OpenADESnapshotEventRecord): s
     return typeof snapshotEvent.fullPatch === "string" && snapshotEvent.fullPatch.length > 0 ? snapshotEvent.fullPatch : null
 }
 
-function sliceInlineSnapshotPatch(patch: string, start: number, end: number): string {
-    const buffer = Buffer.from(patch, "utf8")
-    if (end > buffer.byteLength) throw new Error("Patch slice exceeds patch size")
-    return buffer.subarray(start, end).toString("utf8")
-}
-
 async function readScopedTaskSnapshotPatch(
     params: OpenADETaskSnapshotPatchReadRequest & { repo: OpenADEProject; task: OpenADETask; snapshotEvent: OpenADESnapshotEventRecord }
 ): Promise<OpenADETaskSnapshotPatchReadResult> {
@@ -1191,7 +1185,7 @@ async function readScopedTaskSnapshotPatchSlice(
     const inlinePatch = scopedSnapshotInlinePatch(params.snapshotEvent)
     const patch =
         inlinePatch !== null
-            ? sliceInlineSnapshotPatch(inlinePatch, params.start, params.end)
+            ? sliceSnapshotPatchBytes(inlinePatch, params.start, params.end)
             : patchFileId
               ? await loadRuntimeSnapshotPatchSlice({ id: patchFileId, start: params.start, end: params.end })
               : null
