@@ -20,12 +20,12 @@
 
 import { Cron } from "croner"
 import { makeAutoObservable, observable, runInAction } from "mobx"
+import type { OpenADETurnStartRequest } from "../../../../openade-module/src"
 import { dataFolderApi } from "../../electronAPI/dataFolder"
 import type { CronDef, ReadProcsResult } from "../../electronAPI/procs"
 import { readProcs } from "../../electronAPI/procs"
 import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { HarnessId } from "../../types"
-import type { OpenADETurnStartRequest } from "../../../../openade-module/src"
 import type { CodeStore } from "../store"
 
 // ============================================================================
@@ -553,10 +553,9 @@ export class CronManager {
 
             const result = await localOpenADEClient.startTurn(args)
             if (args.inTaskId) {
-                await this.store.refreshTaskStoreFromStorage(result.taskId)
+                await this.store.refreshProductStateAfterTaskMutation(result.taskId)
             } else {
-                await this.store.refreshRepoStoreFromStorage()
-                await this.store.getTaskStore(repoState.repoId, result.taskId)
+                await this.store.refreshProductStateAfterTaskCreation(repoState.repoId, result.taskId)
             }
 
             if (state) {

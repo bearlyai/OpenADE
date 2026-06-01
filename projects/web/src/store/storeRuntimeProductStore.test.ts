@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest"
 import { OpenADEClient } from "../../../openade-client/src"
-import { createOpenADEModule, type OpenADEModuleAdapters } from "../../../openade-module/src/module"
+import { type OpenADEModuleAdapters, createOpenADEModule } from "../../../openade-module/src/module"
 import type { OpenADEProject, OpenADETask, OpenADETaskPreview } from "../../../openade-module/src/types"
-import { RuntimeServer, type RuntimeConnection } from "../../../runtime/src"
-import type { RuntimeMessage, RuntimeRecord, RuntimeRequest } from "../../../runtime-protocol/src"
 import { RuntimeLocalClient, type RuntimeLocalTransport } from "../../../runtime-client/src"
+import type { RuntimeMessage, RuntimeRecord, RuntimeRequest } from "../../../runtime-protocol/src"
+import { type RuntimeConnection, RuntimeServer } from "../../../runtime/src"
 import { analytics } from "../analytics"
 import { OpenADEProductStore } from "../kernel/productStore"
 import { CodeStore } from "./store"
@@ -283,6 +283,38 @@ describe("CodeStore runtime product store bridge", () => {
             expect(taskModel?.exists).toBe(true)
             expect(taskModel?.title).toBe("Runtime task")
             expect(taskModel?.events.map((event) => event.id)).toEqual(["event-1"])
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("refreshes runtime task state after a mutation without using legacy store refreshes", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+
+            const legacyTaskRefresh = vi.spyOn(codeStore, "refreshTaskStoreFromStorage")
+            const legacyRepoRefresh = vi.spyOn(codeStore, "refreshRepoStoreFromStorage")
+
+            if (!state.task) throw new Error("Expected runtime task fixture")
+            state.task.title = "Runtime mutation title"
+
+            await codeStore.refreshProductStateAfterTaskMutation("task-1")
+
+            expect(legacyTaskRefresh).not.toHaveBeenCalled()
+            expect(legacyRepoRefresh).not.toHaveBeenCalled()
+            expect(codeStore.tasks.getTask("task-1")?.title).toBe("Runtime mutation title")
+            expect(codeStore.getTaskPreviewsForRepo("repo-1")[0]?.title).toBe("Runtime mutation title")
         } finally {
             codeStore.disconnectAllStores()
             await runtime.close()

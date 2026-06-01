@@ -37,18 +37,8 @@ describe("EventManager.getLastEventSessionId", () => {
             },
         ]
 
-        const taskStore = {
-            events: {
-                all: () => events,
-                update: vi.fn(),
-            },
-            meta: {
-                current: { repoId: "repo-1" },
-                update: vi.fn(),
-            },
-        }
         const store = {
-            getCachedTaskStore: vi.fn(() => taskStore),
+            tasks: { getTask: vi.fn(() => ({ events })) },
             repoStore: null,
         } as unknown as CodeStore
 
@@ -61,18 +51,8 @@ describe("EventManager.getLastEventSessionId", () => {
 
 describe("EventManager.getLastEventSessionContext", () => {
     function createStoreForEvents(events: MutableActionEvent[]): CodeStore {
-        const taskStore = {
-            events: {
-                all: () => events,
-                update: vi.fn(),
-            },
-            meta: {
-                current: { repoId: "repo-1" },
-                update: vi.fn(),
-            },
-        }
         return {
-            getCachedTaskStore: vi.fn(() => taskStore),
+            tasks: { getTask: vi.fn(() => ({ events })) },
             repoStore: null,
         } as unknown as CodeStore
     }

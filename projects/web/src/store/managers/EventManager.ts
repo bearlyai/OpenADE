@@ -6,7 +6,7 @@
  * task metadata actions that go through the protocol.
  */
 
-import type { HarnessStreamEvent, HarnessId } from "../../electronAPI/harnessEventTypes"
+import type { HarnessId, HarnessStreamEvent } from "../../electronAPI/harnessEventTypes"
 import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { ActionEvent } from "../../types"
 import type { CodeStore } from "../store"
@@ -16,12 +16,11 @@ export class EventManager {
 
     /** Get the latest completed plan/revise event for a task */
     getTaskLatestCompletedPlanEvent(taskId: string): ActionEvent | null {
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) return null
+        const task = this.store.tasks.getTask(taskId)
+        if (!task) return null
 
-        const events = taskStore.events.all()
-        for (let i = events.length - 1; i >= 0; i--) {
-            const event = events[i]
+        for (let i = task.events.length - 1; i >= 0; i--) {
+            const event = task.events[i]
             if (
                 event.type === "action" &&
                 (event.source.type === "plan" || event.source.type === "revise" || event.source.type === "hyperplan") &&
@@ -85,13 +84,12 @@ export class EventManager {
      * event with an execution, skipping review events and defunct sessions.
      */
     getLastEventSessionContext(taskId: string): { sessionId: string; harnessId: HarnessId; modelId?: string } | undefined {
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) return undefined
+        const task = this.store.tasks.getTask(taskId)
+        if (!task) return undefined
 
-        const events = taskStore.events.all()
         const defunctSessionIds = new Set<string>()
-        for (let i = events.length - 1; i >= 0; i--) {
-            const event = events[i]
+        for (let i = task.events.length - 1; i >= 0; i--) {
+            const event = task.events[i]
             if (event.type !== "action") continue
             if (event.source.type === "review") continue
 
@@ -115,12 +113,10 @@ export class EventManager {
     }
 
     async cancelPlan(taskId: string, planEventId: string): Promise<boolean> {
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) return false
+        if (!this.store.tasks.getTask(taskId)) return false
 
         await localOpenADEClient.updateTaskMetadata({ taskId, cancelledPlanEventId: planEventId })
-        await this.store.refreshTaskStoreFromStorage(taskId)
-        await this.store.refreshRepoStoreFromStorage()
+        await this.store.refreshProductStateAfterTaskMutation(taskId)
         return true
     }
 }

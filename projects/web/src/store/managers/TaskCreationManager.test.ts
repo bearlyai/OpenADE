@@ -117,8 +117,7 @@ describe("TaskCreationManager creation plumbing", () => {
             repos: {
                 getRepo: vi.fn(() => ({ id: "repo-1", path: "/tmp/repo" })),
             },
-            refreshRepoStoreFromStorage: vi.fn(async () => undefined),
-            getTaskStore: vi.fn(async () => ({})),
+            refreshProductStateAfterTaskCreation: vi.fn(async () => undefined),
             getActiveHyperPlanStrategy: vi.fn(),
         } as unknown as CodeStore
 
@@ -167,6 +166,7 @@ describe("TaskCreationManager creation plumbing", () => {
                 fastMode: true,
             })
         )
+        expect(store.refreshProductStateAfterTaskCreation).toHaveBeenCalledWith("repo-1", "task-1")
         expect(manager.getCreation("creation-1")?.completedTaskId).toBe("task-1")
     })
 })

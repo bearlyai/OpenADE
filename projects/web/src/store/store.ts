@@ -1,4 +1,6 @@
 import { makeAutoObservable, reaction, runInAction } from "mobx"
+import type { OpenADEProject, OpenADESnapshot, OpenADETask, OpenADETaskPreview, OpenADETaskReadOptions } from "../../../openade-module/src"
+import type { RuntimeNotification } from "../../../runtime-protocol/src"
 import { analytics, track } from "../analytics"
 import { DEFAULT_HARNESS_ID, DEFAULT_MODEL, MODEL_REGISTRY, getDefaultModelForHarness } from "../constants"
 import { getDeviceConfig, setDeviceId as setDeviceConfigDeviceId, setTelemetryDisabled } from "../electronAPI/deviceConfig"
@@ -18,11 +20,9 @@ import { type RepoStoreConnection, connectRepoStore } from "../persistence/repoS
 import { type TaskStoreConnection, loadTaskStore } from "../persistence/taskLoader"
 import { computeTaskUsage, needsTaskUsageBackfill, normalizeTaskPreviewUsage } from "../persistence/taskStatsUtils"
 import type { TaskStore } from "../persistence/taskStore"
-import type { OpenADEProject, OpenADESnapshot, OpenADETask, OpenADETaskPreview, OpenADETaskReadOptions } from "../../../openade-module/src"
-import type { RuntimeNotification } from "../../../runtime-protocol/src"
-import type { Task, User } from "../types"
-import { localRuntimeClient } from "../runtime/localRuntimeClient"
 import { localOpenADEClient } from "../runtime/localOpenADEClient"
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
+import type { Task, User } from "../types"
 import type { ThinkingLevel } from "./TaskModel"
 
 import { CommentManager } from "./managers/CommentManager"
@@ -856,6 +856,41 @@ export class CodeStore {
             model?.syncHarnessFromHistory()
         }
         await this.refreshRuntimeProductTaskById(taskId)
+    }
+
+    async refreshProductStateAfterTaskMutation(taskId: string): Promise<void> {
+        if (this.shouldUseRuntimeProductReads()) {
+            await Promise.all([this.refreshRuntimeProductSnapshot(), this.refreshRuntimeProductTaskForTaskId(taskId)])
+            return
+        }
+
+        await this.refreshTaskStoreFromStorage(taskId)
+        await this.refreshRepoStoreFromStorage()
+    }
+
+    async refreshProductStateAfterTaskCreation(repoId: string, taskId: string): Promise<void> {
+        if (this.shouldUseRuntimeProductReads()) {
+            await this.refreshRuntimeProductSnapshot()
+            await this.getRuntimeProductTask(repoId, taskId)
+            return
+        }
+
+        await this.refreshRepoStoreFromStorage()
+        await this.getTaskStore(repoId, taskId)
+    }
+
+    async refreshProductStateAfterTaskDeletion(taskId: string): Promise<void> {
+        this.disconnectTaskStore(taskId)
+
+        if (this.shouldUseRuntimeProductReads()) {
+            runInAction(() => {
+                this.runtimeProductTasks.delete(taskId)
+            })
+            await this.refreshRuntimeProductSnapshot()
+            return
+        }
+
+        await this.refreshRepoStoreFromStorage()
     }
 
     async reloadRepoStoreFromStorage(): Promise<void> {

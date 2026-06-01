@@ -13,21 +13,18 @@ export class CommentManager {
             selectedText,
             author: this.store.currentUser,
         })
-        await this.store.refreshTaskStoreFromStorage(taskId)
-        await this.store.refreshRepoStoreFromStorage()
+        await this.store.refreshProductStateAfterTaskMutation(taskId)
         return result.commentId
     }
 
     async removeComment(taskId: string, commentId: string): Promise<void> {
         await localOpenADEClient.deleteComment({ taskId, commentId })
-        await this.store.refreshTaskStoreFromStorage(taskId)
-        await this.store.refreshRepoStoreFromStorage()
+        await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     async editComment(taskId: string, commentId: string, newContent: string): Promise<void> {
         await localOpenADEClient.editComment({ taskId, commentId, content: newContent })
-        await this.store.refreshTaskStoreFromStorage(taskId)
-        await this.store.refreshRepoStoreFromStorage()
+        await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     /**
@@ -35,14 +32,14 @@ export class CommentManager {
      * Checks the includesCommentIds field on all ActionEvents.
      */
     getIncludedCommentIds(taskId: string): Set<string> {
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) return new Set()
+        const task = this.store.tasks.getTask(taskId)
+        if (!task) return new Set()
 
         const includedIds = new Set<string>()
-        for (const event of taskStore.events.all()) {
+        for (const event of task.events) {
             if (event.type === "action") {
                 const actionEvent = event as ActionEvent
-                for (const commentId of actionEvent.includesCommentIds) {
+                for (const commentId of actionEvent.includesCommentIds ?? []) {
                     includedIds.add(commentId)
                 }
             }
@@ -55,11 +52,11 @@ export class CommentManager {
      * These are "pending" comments that should be included in the next revise.
      */
     getUnsubmittedComments(taskId: string): Comment[] {
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (!taskStore) return []
+        const task = this.store.tasks.getTask(taskId)
+        if (!task) return []
 
         const includedIds = this.getIncludedCommentIds(taskId)
-        return taskStore.comments.all().filter((c) => !includedIds.has(c.id))
+        return task.comments.filter((c) => !includedIds.has(c.id))
     }
 
     getPendingCommentCount(taskId: string): number {

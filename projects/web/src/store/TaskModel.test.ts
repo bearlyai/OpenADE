@@ -292,14 +292,11 @@ describe("HyperPlan handoff consistency", () => {
     }
 
     function createEventManager(events: ActionEvent[]): EventManager {
-        const eventStore = {
-            events: {
-                all: () => events,
-                update: vi.fn(),
+        return new EventManager({
+            tasks: {
+                getTask: (taskId: string) => (taskId === "task-1" ? createTask(events) : null),
             },
-            meta: { current: { repoId: "repo-1" }, update: vi.fn() },
-        }
-        return new EventManager({ getCachedTaskStore: () => eventStore } as unknown as CodeStore)
+        } as unknown as CodeStore)
     }
 
     it("syncHarnessFromHistory updates TaskModel after HyperPlan (cross-harness)", () => {

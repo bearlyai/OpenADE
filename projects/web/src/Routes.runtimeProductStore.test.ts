@@ -7,6 +7,7 @@ import {
     type OpenADEProject,
     type OpenADESnapshot,
     type OpenADETask,
+    type OpenADETaskMetadataUpdateRequest,
     type OpenADETaskPreview,
     type OpenADETurnStartRequest,
     createOpenADEModule,
@@ -55,7 +56,16 @@ const routeTask: OpenADETask = {
             result: { success: true },
         },
     ],
-    comments: [],
+    comments: [
+        {
+            id: "comment-1",
+            content: "Runtime pending comment",
+            source: { type: "llm_output", eventId: "event-1", lineStart: 1, lineEnd: 1 },
+            selectedText: { text: "runtime", linesBefore: "", linesAfter: "" },
+            author: { id: "user-1", email: "user@example.com" },
+            createdAt: now,
+        },
+    ],
 }
 
 function cloneTask(value: OpenADETask): OpenADETask {
@@ -67,6 +77,7 @@ function routeTaskPreview(value: OpenADETask): OpenADETaskPreview {
         id: value.id,
         slug: value.slug,
         title: value.title,
+        closed: value.closed,
         createdAt: value.createdAt ?? now,
         lastEventAt: "2026-05-31T00:01:00.000Z",
         lastEvent: { type: "action", status: "completed", sourceType: "do", sourceLabel: "Do", at: "2026-05-31T00:01:00.000Z" },
@@ -111,6 +122,7 @@ function unsupportedMutation(method: string): () => Promise<never> {
 
 interface RouteRuntimeServerHooks {
     onStartTurn?: (params: OpenADETurnStartRequest) => void
+    onUpdateTaskMetadata?: (params: OpenADETaskMetadataUpdateRequest) => void
 }
 
 function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeServer {
@@ -269,6 +281,7 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
         },
         updateTaskMetadata: async (params) => {
             if (params.taskId !== task.id) throw new Error(`Task ${params.taskId} not found`)
+            hooks.onUpdateTaskMetadata?.(structuredClone(params))
             if (params.title !== undefined) task.title = params.title
             if (params.closed !== undefined) task.closed = params.closed
             if (params.lastViewedAt !== undefined) task.lastViewedAt = params.lastViewedAt
@@ -638,7 +651,13 @@ describe("Code routes with runtime product reads", () => {
     it("renders the classic desktop task route by default after loading task detail through the real local runtime product store", async () => {
         const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
         const startedTurns: OpenADETurnStartRequest[] = []
-        cleanupOpenADEApi = installOpenADEApiRuntimeBridge(createRouteRuntimeServer({ onStartTurn: (params) => startedTurns.push(params) }))
+        const metadataUpdates: OpenADETaskMetadataUpdateRequest[] = []
+        cleanupOpenADEApi = installOpenADEApiRuntimeBridge(
+            createRouteRuntimeServer({
+                onStartTurn: (params) => startedTurns.push(params),
+                onUpdateTaskMetadata: (params) => metadataUpdates.push(params),
+            })
+        )
         const codeStore = new CodeStore({
             getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
             navigateToTask: () => undefined,
@@ -664,6 +683,9 @@ describe("Code routes with runtime product reads", () => {
             expect(container.querySelector('[data-openade-surface="desktop-shared-task"]')).toBeNull()
             await waitForText(container, "Runtime route task")
             await waitForText(container, "Do the runtime-backed work")
+            await waitForText(container, "1 comment")
+            clickElement(findButtonByText(container, "1 comment"))
+            await waitForText(container, "Runtime pending comment")
             expect(findButtonByTitle(container, "Attach image")).toBeInstanceOf(HTMLButtonElement)
 
             codeStore.smartEditors.getManager("task-task-1", "repo-1").setValue("Classic desktop runtime turn")
@@ -683,6 +705,13 @@ describe("Code routes with runtime product reads", () => {
                 fastMode: false,
             })
             await waitForText(container, "Classic desktop runtime turn")
+
+            clickElement(findButtonByText(container, "Close"))
+            await waitForText(container, "Reopen")
+            clickElement(findButtonByText(container, "Reopen"))
+            await vi.waitFor(() => expect(findButtonByText(container, "Close")).toBeInstanceOf(HTMLButtonElement), { timeout: 1000, interval: 10 })
+            expect(metadataUpdates).toEqual(expect.arrayContaining([expect.objectContaining({ taskId: "task-1", closed: true })]))
+            expect(metadataUpdates).toEqual(expect.arrayContaining([expect.objectContaining({ taskId: "task-1", closed: false })]))
             expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
         } finally {
             trackSpy.mockRestore()

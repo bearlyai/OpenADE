@@ -209,8 +209,7 @@ export class TaskCreationManager {
                 fastMode: creation.fastMode,
                 hyperplanStrategy: creation.mode === "hyperplan" ? cloneHyperPlanStrategy(this.store.getActiveHyperPlanStrategy()) : undefined,
             })
-            await this.store.refreshRepoStoreFromStorage()
-            await this.store.getTaskStore(creation.repoId, result.taskId)
+            await this.store.refreshProductStateAfterTaskCreation(creation.repoId, result.taskId)
 
             if (signal.aborted) {
                 await localOpenADEClient.interruptTurn(result.taskId).catch((err) => {

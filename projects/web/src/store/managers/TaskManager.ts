@@ -251,8 +251,7 @@ export class TaskManager {
 
         await this.store.queries.abortTask(id)
         await localOpenADEClient.deleteTask({ repoId, taskId: id, options })
-        await this.store.refreshRepoStoreFromStorage()
-        this.store.disconnectTaskStore(id)
+        await this.store.refreshProductStateAfterTaskDeletion(id)
 
         // Clean up pinned state
         const pinned = this.store.personalSettingsStore?.settings.current.pinnedTaskIds
@@ -277,14 +276,12 @@ export class TaskManager {
 
     async setSessionId({ taskId, key, sessionId }: { taskId: string; key: string; sessionId: string }): Promise<void> {
         await localOpenADEClient.updateTaskMetadata({ taskId, sessionIds: { [key]: sessionId } })
-        await this.store.refreshTaskStoreFromStorage(taskId)
-        await this.store.refreshRepoStoreFromStorage()
+        await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     async addDeviceEnvironment(taskId: string, deviceEnv: TaskDeviceEnvironment): Promise<void> {
         await localOpenADEClient.setupTaskEnvironment({ taskId, deviceEnvironment: deviceEnv })
-        await this.store.refreshTaskStoreFromStorage(taskId)
-        await this.store.refreshRepoStoreFromStorage()
+        await this.store.refreshProductStateAfterTaskMutation(taskId)
         this.invalidateTaskModel(taskId)
     }
 
@@ -311,8 +308,7 @@ export class TaskManager {
         if (!this.getTask(taskId)) return
 
         await localOpenADEClient.updateTaskMetadata({ taskId, lastViewedAt: new Date().toISOString() })
-        await this.store.refreshTaskStoreFromStorage(taskId)
-        await this.store.refreshRepoStoreFromStorage()
+        await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     async setTaskClosed(taskId: string, closed: boolean): Promise<void> {
@@ -322,15 +318,13 @@ export class TaskManager {
         }
 
         await localOpenADEClient.updateTaskMetadata({ taskId, closed })
-        await this.store.refreshTaskStoreFromStorage(taskId)
-        await this.store.refreshRepoStoreFromStorage()
+        await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     setEnabledMcpServerIds(taskId: string, serverIds: string[]): void {
         void (async () => {
             await localOpenADEClient.updateTaskMetadata({ taskId, enabledMcpServerIds: serverIds })
-            await this.store.refreshTaskStoreFromStorage(taskId)
-            await this.store.refreshRepoStoreFromStorage()
+            await this.store.refreshProductStateAfterTaskMutation(taskId)
         })().catch((error) => {
             console.error("[TaskManager] Failed to update MCP server selection:", error)
         })
@@ -342,8 +336,7 @@ export class TaskManager {
 
         void (async () => {
             await localOpenADEClient.updateTaskMetadata({ taskId, title: trimmed })
-            await this.store.refreshTaskStoreFromStorage(taskId)
-            await this.store.refreshRepoStoreFromStorage()
+            await this.store.refreshProductStateAfterTaskMutation(taskId)
         })().catch((error) => {
             console.error("[TaskManager] Failed to update task title:", error)
         })

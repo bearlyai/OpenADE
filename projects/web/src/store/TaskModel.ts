@@ -270,7 +270,7 @@ export class TaskModel {
             taskId: this.taskId,
             queuedTurnId,
         })
-        await this.store.refreshTaskStoreFromStorage(this.taskId)
+        await this.store.refreshProductStateAfterTaskMutation(this.taskId)
     }
 
     setEnabledMcpServerIds(serverIds: string[]): void {

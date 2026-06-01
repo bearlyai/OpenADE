@@ -52,6 +52,8 @@ function makeMockStore(repos: Array<{ id: string; path: string }> = []): CodeSto
         execution: { onAfterEvent: vi.fn(() => vi.fn()) },
         refreshRepoStoreFromStorage: vi.fn().mockResolvedValue(undefined),
         refreshTaskStoreFromStorage: vi.fn().mockResolvedValue(undefined),
+        refreshProductStateAfterTaskMutation: vi.fn().mockResolvedValue(undefined),
+        refreshProductStateAfterTaskCreation: vi.fn().mockResolvedValue(undefined),
         getTaskStore: vi.fn().mockResolvedValue(undefined),
     } as unknown as CodeStore
 }

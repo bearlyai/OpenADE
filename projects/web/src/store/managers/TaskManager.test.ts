@@ -33,8 +33,7 @@ describe("TaskManager setTaskClosed", () => {
             getCachedRuntimeProductTask: vi.fn(() => null),
             getCachedTaskStore: vi.fn(() => null),
             repoStore,
-            refreshTaskStoreFromStorage: vi.fn(async () => undefined),
-            refreshRepoStoreFromStorage: vi.fn(async () => undefined),
+            refreshProductStateAfterTaskMutation: vi.fn(async () => undefined),
         } as unknown as CodeStore
 
         const manager = new TaskManager(store)
@@ -42,7 +41,6 @@ describe("TaskManager setTaskClosed", () => {
         await manager.setTaskClosed("task-1", true)
 
         expect(localOpenADEClient.updateTaskMetadata).toHaveBeenCalledWith({ taskId: "task-1", closed: true })
-        expect(store.refreshTaskStoreFromStorage).toHaveBeenCalledWith("task-1")
-        expect(store.refreshRepoStoreFromStorage).toHaveBeenCalledTimes(1)
+        expect(store.refreshProductStateAfterTaskMutation).toHaveBeenCalledWith("task-1")
     })
 })
