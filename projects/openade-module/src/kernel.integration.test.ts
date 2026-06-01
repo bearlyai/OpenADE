@@ -229,7 +229,27 @@ describe("OpenADE kernel composition", () => {
         const repoPath = path.join(root, "repo")
         fs.mkdirSync(repoPath, { recursive: true })
         fs.writeFileSync(path.join(repoPath, "README.md"), "scoped kernel file search\n")
-        fs.writeFileSync(path.join(repoPath, "openade.toml"), '[[process]]\nname = "Echo"\ncommand = "printf \'scoped process ok\\n\'"\ntype = "task"\n')
+        fs.writeFileSync(
+            path.join(repoPath, "openade.toml"),
+            [
+                "# The kernel process list must use the shared openade.toml parser.",
+                "[[process]]",
+                "name = 'Echo'",
+                'command = "printf \'scoped process ok\\n\'" # inline comments outside strings are ignored',
+                'type = "task"',
+                'work_dir = "."',
+                'url = "http://localhost:5173/#task"',
+                "",
+                "[[cron]]",
+                'name = "Ignored Cron"',
+                'schedule = "0 9 * * 1"',
+                'type = "ask"',
+                'prompt = "Should not appear in project process results"',
+                'images = ["screen#1.png"]',
+                "reuse_task = false",
+                "",
+            ].join("\n")
+        )
         fs.mkdirSync(path.join(root, "images"), { recursive: true })
         fs.writeFileSync(path.join(root, "images", "image-kernel.png"), Buffer.from("kernel image bytes"))
         initializeGitRepo(repoPath)
@@ -291,7 +311,14 @@ describe("OpenADE kernel composition", () => {
             const processes = await client.listProjectProcesses({ repoId: repo.repoId })
             expect(processes).toMatchObject({
                 repoId: repo.repoId,
-                processes: [expect.objectContaining({ id: "openade.toml::Echo", name: "Echo", cwd: fs.realpathSync(repoPath) })],
+                processes: [
+                    expect.objectContaining({
+                        id: "openade.toml::Echo",
+                        name: "Echo",
+                        cwd: fs.realpathSync(repoPath),
+                        url: "http://localhost:5173/#task",
+                    }),
+                ],
                 errors: [],
             })
             const projectProcess = await client.startProjectProcess(

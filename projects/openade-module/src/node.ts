@@ -15,6 +15,7 @@ import {
 } from "./hyperplan"
 import { createOpenADEModule, publishOpenADECompanionEvent, type OpenADEModuleAdapters } from "./module"
 import { buildOpenADEPrompt } from "./promptBuilder"
+import { parseProcsFile } from "./procs"
 import { buildOpenADEPlanReviewPrompt, buildOpenADEReviewHandoffPrompt, buildOpenADEWorkReviewPrompt } from "./review"
 import type {
     OpenADEActionEventCreateRequest,
@@ -41,7 +42,6 @@ import type {
     OpenADEProjectProcessStartResult,
     OpenADEProjectProcessStopRequest,
     OpenADEProjectProcessStopResult,
-    OpenADEProjectProcessType,
     OpenADEProjectSearchRequest,
     OpenADEProjectSearchResult,
     OpenADEReviewStartRequest,
@@ -1064,122 +1064,6 @@ const DAEMON_SCOPED_PROJECT_PROCESS_TIMEOUT_MS = 24 * 60 * 60 * 1000
 const MAX_SCOPED_PROJECT_PROCESS_TIMEOUT_MS = 24 * 60 * 60 * 1000
 let scopedProjectProcessRequestId = 0
 
-function isProjectProcessType(value: string): value is OpenADEProjectProcessType {
-    return value === "setup" || value === "daemon" || value === "task" || value === "check"
-}
-
-function stripTomlComment(line: string): string {
-    let quote: "'" | '"' | null = null
-    let escaped = false
-    for (let index = 0; index < line.length; index++) {
-        const char = line[index]
-        if (quote === '"') {
-            if (escaped) {
-                escaped = false
-            } else if (char === "\\") {
-                escaped = true
-            } else if (char === '"') {
-                quote = null
-            }
-            continue
-        }
-        if (quote === "'") {
-            if (char === "'") quote = null
-            continue
-        }
-        if (char === "'" || char === '"') {
-            quote = char
-            continue
-        }
-        if (char === "#") return line.slice(0, index)
-    }
-    return line
-}
-
-function parseTomlStringValue(rawValue: string): string | null {
-    const value = rawValue.trim()
-    if (value.startsWith('"') && value.endsWith('"')) {
-        try {
-            const parsed = JSON.parse(value) as unknown
-            return typeof parsed === "string" ? parsed : null
-        } catch {
-            return null
-        }
-    }
-    if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1)
-    return null
-}
-
-function parseTomlKeyValue(line: string): { key: string; value: string } | null {
-    const equalsIndex = line.indexOf("=")
-    if (equalsIndex < 1) return null
-    const key = line.slice(0, equalsIndex).trim()
-    const value = parseTomlStringValue(line.slice(equalsIndex + 1))
-    if (!key || value === null) return null
-    return { key, value }
-}
-
-function parseNodeOpenADEProcsFile(content: string, relativePath: string): {
-    processes: Array<Omit<OpenADEProjectProcessDefinition, "cwd">>
-    errors: OpenADEProjectProcessConfigError[]
-} {
-    const processes: Array<Omit<OpenADEProjectProcessDefinition, "cwd">> = []
-    const errors: OpenADEProjectProcessConfigError[] = []
-    let current: { line: number; values: Map<string, { value: string; line: number }> } | null = null
-
-    const finishProcess = () => {
-        if (!current) return
-        const name = current.values.get("name")?.value
-        const command = current.values.get("command")?.value
-        const rawType = current.values.get("type")?.value ?? "daemon"
-        if (!name || !command) {
-            errors.push({ relativePath, error: "process.name and process.command are required", line: current.line })
-            current = null
-            return
-        }
-        if (!isProjectProcessType(rawType)) {
-            errors.push({ relativePath, error: `process.type '${rawType}' is invalid`, line: current.values.get("type")?.line ?? current.line })
-            current = null
-            return
-        }
-        processes.push({
-            id: `${relativePath}::${name}`,
-            name,
-            command,
-            workDir: current.values.get("work_dir")?.value,
-            url: current.values.get("url")?.value,
-            type: rawType,
-            configPath: relativePath,
-        })
-        current = null
-    }
-
-    const lines = content.split(/\r?\n/)
-    for (let index = 0; index < lines.length; index++) {
-        const lineNumber = index + 1
-        const trimmed = stripTomlComment(lines[index]).trim()
-        if (!trimmed) continue
-        if (trimmed === "[[process]]") {
-            finishProcess()
-            current = { line: lineNumber, values: new Map() }
-            continue
-        }
-        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-            finishProcess()
-            continue
-        }
-        if (!current) continue
-        const pair = parseTomlKeyValue(trimmed)
-        if (!pair) {
-            errors.push({ relativePath, error: `Invalid process key/value at line ${lineNumber}`, line: lineNumber })
-            continue
-        }
-        current.values.set(pair.key, { value: pair.value, line: lineNumber })
-    }
-    finishProcess()
-    return { processes, errors }
-}
-
 async function nodeProjectProcessGitInfo(searchRoot: string): Promise<{ repoRoot: string; isWorktree: boolean; worktreeRoot?: string } | null> {
     const repoRoot = await scopedGit(["rev-parse", "--show-toplevel"], searchRoot)
     if (!repoRoot.success) return null
@@ -1254,9 +1138,12 @@ async function readNodeProjectProcessDefinitions(searchRoot: string): Promise<No
             return null
         })
         if (content === null) continue
-        const parsed = parseNodeOpenADEProcsFile(content, relativePath)
-        errors.push(...parsed.errors)
-        for (const processDef of parsed.processes) {
+        const parsed = parseProcsFile(content, relativePath)
+        if ("error" in parsed) {
+            errors.push(parsed.error)
+            continue
+        }
+        for (const processDef of parsed.config.processes.map((process) => ({ ...process, configPath: relativePath }))) {
             try {
                 processes.push({ ...processDef, cwd: nodeProjectProcessCwd(repoRoot, processDef) })
             } catch (error) {

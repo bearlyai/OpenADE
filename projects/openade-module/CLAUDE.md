@@ -2,8 +2,9 @@
 
 Target package for OpenADE product semantics loaded into a runtime server.
 
-- Own projects, tasks, turns, comments, snapshots, openade.toml process config DTOs, and Yjs compatibility.
+- Own projects, tasks, turns, comments, snapshots, openade.toml process config DTOs/parser/serializer, and Yjs compatibility.
 - Own OpenADE product and openade.toml config types in src/types.ts; companion shared types and host bridges should only re-export or alias them for compatibility.
+- `src/procs.ts` owns the shared dependency-light `openade.toml` parser/serializer used by Electron procs editing and Node project-process discovery. Do not add a second host-specific parser in Electron, web, or node adapters.
 - Register OpenADE methods under `openade/*` on the single runtime server.
 - Treat `openade/action/*` as trusted-local mutation methods unless remote permissions are intentionally narrowed and reviewed.
 - Do not start a second server.

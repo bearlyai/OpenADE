@@ -1202,8 +1202,16 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 
 - Browser-safe `openade.toml` process, cron, editable-file, read-result, save-result, and run-context DTOs now live in `projects/openade-module/src/types.ts`, alongside the OpenADE project process DTOs that consume those config definitions.
 - `projects/electron/src/modules/code/procs/types.ts` and `projects/web/src/electronAPI/procs.ts` alias the OpenADE-owned config DTOs instead of carrying a copied renderer/main-process contract.
-- This removes another "keep in sync" type pair while preserving the existing trusted local procs parser, editor, and classic desktop process tray behavior.
+- This removes another "keep in sync" type pair while preserving the existing trusted local procs editor and classic desktop process tray behavior.
 - Focused verification passed: OpenADE module typecheck, Electron typecheck, web typecheck, Electron procs parse/discovery tests, Electron `runtimeData.integration` host utility method, web `CronManager` tests, and Biome lint for the touched procs/docs files.
+
+### 2026-06-01: openade.toml Parser/Serializer Consolidated
+
+- `projects/openade-module/src/procs.ts` now owns the shared dependency-light `openade.toml` parser, editable parser, validation, and serializer for process/cron config.
+- `projects/electron/src/modules/code/procs/parse.ts` and `projects/electron/src/modules/code/procs/serialize.ts` re-export that product-owned implementation instead of maintaining a second Electron-only parser/serializer.
+- `projects/openade-module/src/node.ts` now uses the same parser for runtime project-process discovery, attaches `configPath` at the OpenADE process boundary, and keeps cwd escape validation server-side.
+- Kernel verification covers a real `openade.toml` with comments, single-quoted values, cron blocks, arrays, `work_dir`, and URL fragments through `OpenADEClient.listProjectProcesses()`, proving the production runtime path is not using a duplicate hand parser.
+- Focused verification passed: OpenADE module typecheck, Electron typecheck, web typecheck, OpenADE procs parser tests, Electron procs parse/discovery tests, OpenADE kernel integration, Biome lint for touched files, and `git diff --check`.
 
 ### 2026-06-01: Preload API Contract Consolidated
 

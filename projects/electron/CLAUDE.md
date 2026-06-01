@@ -10,6 +10,7 @@
 - `src/modules/code/hostBridgeTypes.ts` owns browser-safe DTOs for desktop-specific trusted host utilities such as binaries, platform, shell, frame colors, and code-module capability probes.
 - `src/modules/code/gitBridgeTypes.ts` owns browser-safe DTOs for raw trusted-local `git/*` bridge methods. Product-scoped task git DTOs still come from `projects/openade-module/src/types.ts`.
 - `src/modules/deviceConfigTypes.ts` owns browser-safe device config result DTOs, and `src/modules/code/snapshotsIndex.ts` owns snapshot patch index DTOs.
+- `openade.toml` process/cron DTOs and parser/serializer live in `projects/openade-module/src/types.ts` and `projects/openade-module/src/procs.ts`. Electron procs modules should alias or re-export those product-owned contracts, not keep a second parser or type set.
 - Renderer wrappers under `projects/web/src/electronAPI` should alias those types instead of re-declaring matching Electron main-process interfaces.
 
 ## Packaged Smoke Tests

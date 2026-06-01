@@ -1,6 +1,7 @@
 export * from "./module"
 export * from "./hyperplan"
 export * from "./promptBuilder"
+export * from "./procs"
 export * from "./review"
 export * from "./types"
 export * from "./yjsMutation"
