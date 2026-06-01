@@ -12,7 +12,7 @@ Target package for Node host adapters.
 - localGit.ts owns the default headless Node Git adapter used by `runtime-node serve`.
 - process.ts owns runtime `process/*` registration, lifecycle projection, and generic process DTO types through an adapter. Electron and renderer process bridges should import those DTOs instead of duplicating start/output/reconnect/list shapes.
 - localProcess.ts owns the default headless Node process adapter used by `runtime-node serve`.
-- pty.ts owns runtime `pty/*` registration and lifecycle projection through an adapter.
+- pty.ts owns runtime `pty/*` registration, lifecycle projection, and generic PTY DTO types through an adapter. Raw `pty/write` input and `pty/output` chunks use base64-encoded terminal bytes; product-level OpenADE terminal methods may expose plain text by encoding/decoding at the product adapter boundary.
 - localPty.ts owns the default headless shell-backed PTY adapter used by `runtime-node serve`. It provides PTY lifecycle semantics without depending on Electron or native `node-pty`; embedders can inject a richer native PTY adapter later.
 - Host adapter mutable state must be per adapter/server instance, not module global. Multiple embedded runtime servers in one process must not see each other's process, PTY, or watch records.
 - agents.ts owns generic runtime `agent/*` registration for process-backed Claude Code and Codex harnesses in headless Node mode.

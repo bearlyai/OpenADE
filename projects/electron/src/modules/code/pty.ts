@@ -1,63 +1,30 @@
 import * as pty from "node-pty"
-import * as os from "os"
-import * as fs from "fs"
+import * as os from "node:os"
+import * as fs from "node:fs"
 import logger from "electron-log"
+import type {
+    RuntimeNodePtyKillParams,
+    RuntimeNodePtyLifecycleEvent,
+    RuntimeNodePtyMutationResult,
+    RuntimeNodePtyOutputEvent,
+    RuntimeNodePtyReconnectParams,
+    RuntimeNodePtyReconnectResult,
+    RuntimeNodePtyResizeParams,
+    RuntimeNodePtySpawnParams,
+    RuntimeNodePtySpawnResult,
+    RuntimeNodePtyWriteParams,
+} from "../../../../runtime-node/src/pty"
 
-// IMPORTANT: Keep in sync with projects/dashboard/src/pages/code/electronAPI/pty.ts
-
-export interface SpawnParams {
-    ptyId: string
-    cwd: string
-    env?: Record<string, string>
-    cols: number
-    rows: number
-}
-
-export interface SpawnResponse {
-    ok: boolean
-    error?: string
-}
-
-export interface WriteParams {
-    ptyId: string
-    data: string // base64 encoded
-}
-
-export interface ResizeParams {
-    ptyId: string
-    cols: number
-    rows: number
-}
-
-export interface KillParams {
-    ptyId: string
-}
-
-export interface ReconnectParams {
-    ptyId: string
-}
-
-export interface ReconnectResponse {
-    ok: boolean
-    found: boolean
-    exited?: boolean
-    exitCode?: number
-}
-
-export interface RuntimeReconnectResponse extends ReconnectResponse {
-    output: PtyOutputEvent[]
-}
-
-export interface PtyOutputEvent {
-    data: string // base64 encoded
-    timestamp: number
-}
-
-export type PtyLifecycleEvent =
-    | { type: "started"; ptyId: string; pid: number; cwd: string; shell: string }
-    | { type: "output"; ptyId: string; chunk: PtyOutputEvent }
-    | { type: "exit"; ptyId: string; exitCode: number }
-    | { type: "killed"; ptyId: string }
+export type SpawnParams = RuntimeNodePtySpawnParams
+export type SpawnResponse = RuntimeNodePtySpawnResult
+export type WriteParams = RuntimeNodePtyWriteParams
+export type ResizeParams = RuntimeNodePtyResizeParams
+export type KillParams = RuntimeNodePtyKillParams
+export type ReconnectParams = RuntimeNodePtyReconnectParams
+export type ReconnectResponse = Omit<RuntimeNodePtyReconnectResult, "output">
+export type RuntimeReconnectResponse = RuntimeNodePtyReconnectResult
+export type PtyOutputEvent = RuntimeNodePtyOutputEvent
+export type PtyLifecycleEvent = RuntimeNodePtyLifecycleEvent
 
 
 interface ActivePty {
@@ -248,7 +215,7 @@ async function handleSpawn(params: SpawnParams): Promise<SpawnResponse> {
     }
 }
 
-async function handleWrite(params: WriteParams): Promise<{ ok: boolean }> {
+async function handleWrite(params: WriteParams): Promise<RuntimeNodePtyMutationResult> {
     const p = activePtys.get(params.ptyId)
     if (!p || p.exited) {
         return { ok: false }
@@ -264,7 +231,7 @@ async function handleWrite(params: WriteParams): Promise<{ ok: boolean }> {
     }
 }
 
-async function handleResize(params: ResizeParams): Promise<{ ok: boolean }> {
+async function handleResize(params: ResizeParams): Promise<RuntimeNodePtyMutationResult> {
     const p = activePtys.get(params.ptyId)
     if (!p || p.exited) {
         return { ok: false }
@@ -279,7 +246,7 @@ async function handleResize(params: ResizeParams): Promise<{ ok: boolean }> {
     }
 }
 
-async function handleKill(params: KillParams): Promise<{ ok: boolean }> {
+async function handleKill(params: KillParams): Promise<RuntimeNodePtyMutationResult> {
     logger.info("[Pty:kill] Killing PTY", JSON.stringify({ ptyId: params.ptyId }))
 
     const p = activePtys.get(params.ptyId)
@@ -309,15 +276,15 @@ export async function spawnRuntimePty(params: SpawnParams): Promise<SpawnRespons
     return handleSpawn(params)
 }
 
-export async function writeRuntimePty(params: WriteParams): Promise<{ ok: boolean }> {
+export async function writeRuntimePty(params: WriteParams): Promise<RuntimeNodePtyMutationResult> {
     return handleWrite(params)
 }
 
-export async function resizeRuntimePty(params: ResizeParams): Promise<{ ok: boolean }> {
+export async function resizeRuntimePty(params: ResizeParams): Promise<RuntimeNodePtyMutationResult> {
     return handleResize(params)
 }
 
-export async function killRuntimePty(params: KillParams): Promise<{ ok: boolean }> {
+export async function killRuntimePty(params: KillParams): Promise<RuntimeNodePtyMutationResult> {
     return handleKill(params)
 }
 

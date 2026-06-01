@@ -541,13 +541,19 @@ describe("runtime-node WebSocket server", () => {
             result: { ok: true, ptyId: "test-pty", runtimeId: "pty:test-pty" },
         })
 
-        socket.send(JSON.stringify({ id: 12, method: "pty/write", params: { ptyId: "test-pty", data: "echo pty-adapter-ok\nexit\n" } }))
+        socket.send(
+            JSON.stringify({ id: 12, method: "pty/write", params: { ptyId: "test-pty", data: Buffer.from("echo pty-adapter-ok\nexit\n", "utf8").toString("base64") } })
+        )
         await expect(readResponse(inbox, 12, notifications)).resolves.toMatchObject({ id: 12, result: { ok: true } })
 
         await expect(readNotification(inbox, "pty/exit", notifications)).resolves.toMatchObject({
             method: "pty/exit",
             params: { ptyId: "test-pty", exitCode: 0 },
         })
+        socket.send(JSON.stringify({ id: 13, method: "pty/reconnect", params: { ptyId: "test-pty" } }))
+        const reconnectedPty = (await readResponse(inbox, 13, notifications)) as { result: { output: Array<{ data: string }> } }
+        const ptyOutput = reconnectedPty.result.output.map((chunk) => Buffer.from(chunk.data, "base64").toString("utf8")).join("")
+        expect(ptyOutput).toContain("pty-adapter-ok")
     })
 
     it("publishes terminal runtime state when killing all headless processes", async () => {

@@ -41,13 +41,36 @@ export interface RuntimeNodePtySpawnResult {
     error?: string
 }
 
+export interface RuntimeNodePtySpawnResponse extends RuntimeNodePtySpawnResult {
+    ptyId: string
+    runtimeId: string
+}
+
 export interface RuntimeNodePtyMutationResult {
     ok: boolean
 }
 
+export interface RuntimeNodePtyOutputEvent {
+    data: string
+    timestamp: number
+}
+
+export interface RuntimeNodePtyExitEvent {
+    exitCode: number
+}
+
+export interface RuntimeNodePtyReconnectResult {
+    ok: boolean
+    found: boolean
+    exited?: boolean
+    exitCode?: number | null
+    outputCount?: number
+    output: RuntimeNodePtyOutputEvent[]
+}
+
 export type RuntimeNodePtyLifecycleEvent =
     | { type: "started"; ptyId: string; pid: number; pgid?: number; cwd: string; shell: string; processStartedAt?: string }
-    | { type: "output"; ptyId: string; chunk: unknown }
+    | { type: "output"; ptyId: string; chunk: RuntimeNodePtyOutputEvent }
     | { type: "exit"; ptyId: string; exitCode: number }
     | { type: "killed"; ptyId: string }
 
@@ -56,9 +79,9 @@ export interface RuntimeNodePtyAdapter {
     spawn(params: RuntimeNodePtySpawnParams): Promise<RuntimeNodePtySpawnResult>
     write(params: RuntimeNodePtyWriteParams): Promise<RuntimeNodePtyMutationResult>
     resize(params: RuntimeNodePtyResizeParams): Promise<RuntimeNodePtyMutationResult>
-    reconnect(params: RuntimeNodePtyReconnectParams): Promise<unknown>
+    reconnect(params: RuntimeNodePtyReconnectParams): Promise<RuntimeNodePtyReconnectResult>
     kill(params: RuntimeNodePtyKillParams): Promise<RuntimeNodePtyMutationResult>
-    killAll(): Promise<unknown>
+    killAll(): Promise<RuntimeNodePtyMutationResult>
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

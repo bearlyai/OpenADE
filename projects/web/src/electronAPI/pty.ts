@@ -1,33 +1,20 @@
-// IMPORTANT: Keep in sync with projects/electron/src/modules/code/pty.ts
+import type {
+    RuntimeNodePtyExitEvent,
+    RuntimeNodePtyOutputEvent,
+    RuntimeNodePtyReconnectResult,
+    RuntimeNodePtySpawnParams,
+    RuntimeNodePtySpawnResponse,
+} from "../../../runtime-node/src/pty"
 
-export interface SpawnParams {
-    ptyId: string
-    cwd: string
-    env?: Record<string, string>
-    cols: number
-    rows: number
-}
+export type SpawnParams = RuntimeNodePtySpawnParams
 
-export interface PtyOutputEvent {
-    data: string // base64 encoded
-    timestamp: number
-}
+export type PtyOutputEvent = RuntimeNodePtyOutputEvent
 
-export interface PtyExitEvent {
-    exitCode: number
-}
+export type PtyExitEvent = RuntimeNodePtyExitEvent
 
-interface SpawnResponse {
-    ok: boolean
-    error?: string
-}
+type SpawnResponse = RuntimeNodePtySpawnResponse
 
-interface ReconnectResponse {
-    ok: boolean
-    found: boolean
-    exited?: boolean
-    exitCode?: number
-}
+type ReconnectResponse = RuntimeNodePtyReconnectResult
 
 import { isCodeModuleAvailable } from "./capabilities"
 import { localRuntimeClient } from "../runtime/localRuntimeClient"
@@ -89,7 +76,7 @@ export class PtyHandle {
         const handle = new PtyHandle(ptyId)
         handle.setupListeners()
 
-        const result = await localRuntimeClient.request<ReconnectResponse & { output?: PtyOutputEvent[] }>("pty/reconnect", { ptyId })
+        const result = await localRuntimeClient.request<ReconnectResponse>("pty/reconnect", { ptyId })
 
         if (!result.found) {
             console.debug("[PtyHandle] PTY not found")
@@ -98,7 +85,7 @@ export class PtyHandle {
         }
 
         console.debug("[PtyHandle] Reconnected to PTY")
-        for (const chunk of result.output ?? []) {
+        for (const chunk of result.output) {
             handle.emit("output", chunk)
         }
 

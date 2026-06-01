@@ -1475,6 +1475,15 @@ function assertScopedTaskTerminal(params: { repoId: string; taskId: string; term
     if (params.terminalId !== scopedTaskTerminalId(params.repoId, params.taskId)) throw new Error("terminalId is invalid")
 }
 
+function decodeRuntimePtyOutputData(data: string): string {
+    if (!data || data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) return data
+    try {
+        return Buffer.from(data, "base64").toString("utf8")
+    } catch {
+        return data
+    }
+}
+
 function taskTerminalOutputChunk(value: unknown): OpenADETaskTerminalOutputChunk | null {
     if (typeof value === "string") return { data: value }
     const record = eventRecord(value)
@@ -1482,7 +1491,7 @@ function taskTerminalOutputChunk(value: unknown): OpenADETaskTerminalOutputChunk
     const data = record.data
     if (typeof data !== "string") return null
     return {
-        data,
+        data: decodeRuntimePtyOutputData(data),
         timestamp: typeof record.timestamp === "number" ? record.timestamp : undefined,
     }
 }
@@ -1545,7 +1554,7 @@ async function writeNodeTaskTerminal(
     params: OpenADETaskTerminalWriteRequest & { repo: OpenADEProject; task: OpenADETask; server?: RuntimeServer }
 ): Promise<OpenADETaskTerminalMutationResult> {
     assertScopedTaskTerminal(params)
-    const result = await nodeRuntimeRequest(params.server, "pty/write", { ptyId: params.terminalId, data: params.data })
+    const result = await nodeRuntimeRequest(params.server, "pty/write", { ptyId: params.terminalId, data: Buffer.from(params.data, "utf8").toString("base64") })
     return taskTerminalMutationResult(result, params)
 }
 

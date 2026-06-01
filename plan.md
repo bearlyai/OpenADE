@@ -1183,6 +1183,14 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - Desktop `ProcessHandle` still uses the trusted local runtime process methods, but reconnect now consumes the exact runtime reconnect result rather than a partial local interface plus cast.
 - Focused verification passed: runtime-node typecheck, Electron typecheck, web typecheck, Biome lint for the touched process files, `runtimeHost.integration`, and the process-covered `runtimeNodeServer.integration` path.
 
+### 2026-06-01: Generic PTY Bridge DTOs And Encoding Consolidated
+
+- Generic `pty/spawn`, `pty/write`, `pty/resize`, `pty/reconnect`, `pty/kill`, PTY output chunks, and PTY lifecycle DTOs now live in `projects/runtime-node/src/pty.ts`.
+- The raw runtime `pty/*` contract now uses base64-encoded terminal data for both `pty/write` input and `pty/output` chunks across Electron and headless runtime-node hosts.
+- `projects/electron/src/modules/code/pty.ts`, `projects/web/src/electronAPI/pty.ts`, and `projects/runtime-node/src/localPty.ts` import those runtime-node DTOs instead of maintaining separate `SpawnResponse`, `PtyOutputEvent`, reconnect, and lifecycle shapes.
+- OpenADE task-terminal methods remain product-level plain text: `projects/openade-module/src/node.ts` encodes plain text before raw `pty/write` and decodes raw PTY output before returning `OpenADETaskTerminalOutputChunk`.
+- Focused verification passed: runtime-node typecheck, Electron typecheck, web typecheck, OpenADE module typecheck, Biome lint for the touched PTY/terminal files, full `runtimeNodeServer.integration`, and `openade-module` kernel integration tests.
+
 ## Remaining Work Under Corrected Direction
 
 The remaining work is not a desktop UI rewrite. It is a boundary migration: keep the old desktop app experience and replace its direct renderer storage/host assumptions with runtime/OpenADE APIs.

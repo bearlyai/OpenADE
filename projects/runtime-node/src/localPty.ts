@@ -5,6 +5,7 @@ import type {
     RuntimeNodePtyAdapter,
     RuntimeNodePtyKillParams,
     RuntimeNodePtyLifecycleEvent,
+    RuntimeNodePtyOutputEvent,
     RuntimeNodePtyReconnectParams,
     RuntimeNodePtyResizeParams,
     RuntimeNodePtySpawnParams,
@@ -13,7 +14,7 @@ import type {
 
 interface ActivePty {
     process: ChildProcess
-    output: string[]
+    output: RuntimeNodePtyOutputEvent[]
     completed: boolean
     exitCode: number | null
     cwd: string
@@ -40,8 +41,19 @@ function shellCommand(): string {
     return process.env.SHELL || "/bin/bash"
 }
 
-function bufferOutput(state: ActivePty, data: string): void {
-    state.output.push(data)
+function outputChunk(data: string): RuntimeNodePtyOutputEvent {
+    return {
+        data: Buffer.from(data, "utf8").toString("base64"),
+        timestamp: Date.now(),
+    }
+}
+
+function decodeInputData(data: string): string {
+    return Buffer.from(data, "base64").toString("utf8")
+}
+
+function bufferOutput(state: ActivePty, chunk: RuntimeNodePtyOutputEvent): void {
+    state.output.push(chunk)
     while (state.output.length > MAX_BUFFERED_CHUNKS) state.output.shift()
 }
 
@@ -78,14 +90,14 @@ export function createRuntimeNodeLocalPtyAdapter(): RuntimeNodePtyAdapter {
             local.active.set(ptyId, state)
 
             child.stdout?.on("data", (data: Buffer) => {
-                const text = data.toString("utf8")
-                bufferOutput(state, text)
-                emit(local, { type: "output", ptyId, chunk: text })
+                const chunk = outputChunk(data.toString("utf8"))
+                bufferOutput(state, chunk)
+                emit(local, { type: "output", ptyId, chunk })
             })
             child.stderr?.on("data", (data: Buffer) => {
-                const text = data.toString("utf8")
-                bufferOutput(state, text)
-                emit(local, { type: "output", ptyId, chunk: text })
+                const chunk = outputChunk(data.toString("utf8"))
+                bufferOutput(state, chunk)
+                emit(local, { type: "output", ptyId, chunk })
             })
             child.once("exit", (exitCode) => {
                 if (state.completed) return
@@ -97,7 +109,9 @@ export function createRuntimeNodeLocalPtyAdapter(): RuntimeNodePtyAdapter {
                 if (state.completed) return
                 state.completed = true
                 state.exitCode = 1
-                emit(local, { type: "output", ptyId, chunk: error.message })
+                const chunk = outputChunk(error.message)
+                bufferOutput(state, chunk)
+                emit(local, { type: "output", ptyId, chunk })
                 emit(local, { type: "exit", ptyId, exitCode: 1 })
             })
 
@@ -115,7 +129,7 @@ export function createRuntimeNodeLocalPtyAdapter(): RuntimeNodePtyAdapter {
         async write(params: RuntimeNodePtyWriteParams) {
             const state = local.active.get(params.ptyId)
             if (!state || !state.process.stdin || state.completed) return { ok: false }
-            state.process.stdin.write(params.data)
+            state.process.stdin.write(decodeInputData(params.data))
             return { ok: true }
         },
         async resize(_params: RuntimeNodePtyResizeParams) {
@@ -123,8 +137,8 @@ export function createRuntimeNodeLocalPtyAdapter(): RuntimeNodePtyAdapter {
         },
         async reconnect(params: RuntimeNodePtyReconnectParams) {
             const state = local.active.get(params.ptyId)
-            if (!state) return { ok: true, found: false }
-            return { ok: true, found: true, completed: state.completed, exitCode: state.exitCode, output: [...state.output], outputCount: state.output.length }
+            if (!state) return { ok: true, found: false, output: [] }
+            return { ok: true, found: true, exited: state.completed, exitCode: state.exitCode, output: [...state.output], outputCount: state.output.length }
         },
         async kill(params: RuntimeNodePtyKillParams) {
             const state = local.active.get(params.ptyId)
