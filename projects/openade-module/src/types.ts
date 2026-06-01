@@ -625,6 +625,7 @@ export interface OpenADEProjectProcessListResult {
     repoRoot: string
     isWorktree: boolean
     worktreeRoot?: string
+    configs?: OpenADEProcsConfig[]
     processes: OpenADEProjectProcessDefinition[]
     errors: OpenADEProjectProcessConfigError[]
     instances: OpenADEProjectProcessInstance[]

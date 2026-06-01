@@ -521,6 +521,29 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
                     searchRoot: "/tmp/runtime-repo",
                     repoRoot: "/tmp/runtime-repo",
                     isWorktree: false,
+                    configs: [
+                        {
+                            relativePath: "openade.toml",
+                            processes: [
+                                {
+                                    id: "openade.toml::Runtime Process",
+                                    name: "Runtime Process",
+                                    command: "printf runtime-process",
+                                    type: "task",
+                                },
+                            ],
+                            crons: [
+                                {
+                                    id: "openade.toml::Runtime Cron",
+                                    name: "Runtime Cron",
+                                    schedule: "0 9 * * *",
+                                    type: "do",
+                                    prompt: "Run runtime cron",
+                                    reuseTask: false,
+                                },
+                            ],
+                        },
+                    ],
                     processes: [
                         {
                             id: "openade.toml::Runtime Process",
@@ -1223,6 +1246,45 @@ describe("CodeStore runtime product store bridge", () => {
             legacyContentSearch.mockRestore()
             legacyDescribePath.mockRestore()
             legacyFuzzySearch.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("loads classic cron definitions through runtime project process configs", async () => {
+        const { client, runtime } = createRuntimeBackedClient({
+            project: { ...project, path: "/tmp/runtime-repo" },
+            task: { ...task, isolationStrategy: { type: "head" } },
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            const runtimeProcessList = vi.spyOn(codeStore, "listProductProjectProcesses")
+
+            await codeStore.crons.startAll()
+
+            expect(runtimeProcessList).toHaveBeenCalledWith({ repoId: "repo-1" })
+            expect(codeStore.crons.getCronsForRepo("repo-1")).toEqual([
+                expect.objectContaining({
+                    repoId: "repo-1",
+                    configFilePath: "/tmp/runtime-repo/openade.toml",
+                    def: expect.objectContaining({
+                        id: "openade.toml::Runtime Cron",
+                        name: "Runtime Cron",
+                        prompt: "Run runtime cron",
+                    }),
+                }),
+            ])
+            runtimeProcessList.mockRestore()
+        } finally {
+            codeStore.crons.stop()
             codeStore.disconnectAllStores()
             await runtime.close()
         }

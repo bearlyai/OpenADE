@@ -25,6 +25,7 @@ import { dataFolderApi } from "../../electronAPI/dataFolder"
 import type { CronDef, ReadProcsResult } from "../../electronAPI/procs"
 import { readProcs } from "../../electronAPI/procs"
 import type { HarnessId } from "../../types"
+import { readProcsResultFromProductProcesses } from "../projectProcessReadResult"
 import type { CodeStore } from "../store"
 
 // ============================================================================
@@ -313,6 +314,12 @@ export class CronManager {
 
     private async refreshRepoConfig(repoState: RepoState): Promise<void> {
         try {
+            if (this.store.shouldUseRuntimeProductReads()) {
+                const result = await this.store.listProductProjectProcesses({ repoId: repoState.repoId })
+                this.applyProcsResult(repoState, readProcsResultFromProductProcesses(result))
+                this._lastConfigRefreshAt = Date.now()
+                return
+            }
             const result = await readProcs(repoState.repoPath)
             this.applyProcsResult(repoState, result)
             this._lastConfigRefreshAt = Date.now()

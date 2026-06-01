@@ -319,6 +319,18 @@ describe("OpenADE kernel composition", () => {
                         url: "http://localhost:5173/#task",
                     }),
                 ],
+                configs: [
+                    expect.objectContaining({
+                        relativePath: "openade.toml",
+                        crons: [
+                            expect.objectContaining({
+                                id: "openade.toml::Ignored Cron",
+                                name: "Ignored Cron",
+                                prompt: "Should not appear in project process results",
+                            }),
+                        ],
+                    }),
+                ],
                 errors: [],
             })
             const projectProcess = await client.startProjectProcess(

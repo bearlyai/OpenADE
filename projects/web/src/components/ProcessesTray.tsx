@@ -3,11 +3,11 @@ import cx from "classnames"
 import { AlertTriangle, CheckCircle, ExternalLink, FileText, Folder, Pencil, Play, RefreshCw, RotateCcw, Server, Square, Wrench } from "lucide-react"
 import { observer } from "mobx-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
-import type { OpenADEProjectProcessListResult } from "../../../openade-module/src"
 import { type ProcessDef, type ProcessType, type ProcsConfig, type ReadProcsResult, type RunContext, readProcs } from "../electronAPI/procs"
 import { openUrlInNativeBrowser } from "../electronAPI/shell"
 import { useCodeStore } from "../store/context"
 import type { ProcessInstance, ProcessStatus, ProductProjectProcessAccess } from "../store/managers/RepoProcessesManager"
+import { readProcsResultFromProductProcesses } from "../store/projectProcessReadResult"
 import { ProcsEditorModal } from "./procs/ProcsEditorModal"
 import { ProcessOutput } from "./ProcessOutput"
 import { type MenuItem, Menu } from "./ui/Menu"
@@ -51,35 +51,6 @@ function joinPath(root: string, relativePath: string): string {
     return `${root}${separator}${relativePath}`
 }
 
-function readProcsFromProductProcesses(result: OpenADEProjectProcessListResult): ReadProcsResult {
-    const configsByPath = new Map<string, ProcsConfig>()
-    for (const process of result.processes) {
-        const config = configsByPath.get(process.configPath) ?? {
-            relativePath: process.configPath,
-            processes: [],
-            crons: [],
-        }
-        config.processes.push({
-            id: process.id,
-            name: process.name,
-            command: process.command,
-            workDir: process.workDir,
-            url: process.url,
-            type: process.type,
-        })
-        configsByPath.set(process.configPath, config)
-    }
-
-    return {
-        repoRoot: result.repoRoot,
-        searchRoot: result.searchRoot,
-        isWorktree: result.isWorktree,
-        worktreeRoot: result.worktreeRoot,
-        configs: [...configsByPath.values()],
-        errors: result.errors,
-    }
-}
-
 export const ProcessesTray = observer(function ProcessesTray({ searchPath, context, workspaceId, isOpen, productScope = null }: ProcessesTrayProps) {
     const codeStore = useCodeStore()
     const { repoProcesses } = codeStore
@@ -111,7 +82,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
             try {
                 if (productRequest) {
                     const result = await codeStore.listProductProjectProcesses(productRequest)
-                    const readResult = readProcsFromProductProcesses(result)
+                    const readResult = readProcsResultFromProductProcesses(result)
                     setProcsResult(readResult)
                     codeStore.repoProcesses.syncProductProcesses(context, readResult, result)
                     return

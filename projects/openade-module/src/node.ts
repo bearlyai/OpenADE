@@ -858,6 +858,7 @@ type NodeProjectProcessProcsResult = {
     searchRoot: string
     isWorktree: boolean
     worktreeRoot?: string
+    configs: OpenADEProcsConfig[]
     processes: OpenADEProjectProcessDefinition[]
     errors: OpenADEProjectProcessConfigError[]
 }
@@ -938,6 +939,7 @@ async function readNodeProjectProcessDefinitions(searchRoot: string): Promise<No
         searchRoot: resolvedSearchRoot,
         isWorktree: gitInfo?.isWorktree ?? false,
         worktreeRoot: gitInfo?.worktreeRoot,
+        configs,
         processes: definitions.processes,
         errors: [...errors, ...definitions.errors],
     }
@@ -987,6 +989,7 @@ async function listNodeProjectProcesses(
         repoRoot: result.repoRoot,
         isWorktree: result.isWorktree,
         worktreeRoot: result.worktreeRoot,
+        configs: result.configs,
         processes: result.processes,
         errors: result.errors,
         instances,
