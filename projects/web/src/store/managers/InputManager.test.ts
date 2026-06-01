@@ -69,6 +69,7 @@ function createManager({
     const store = {
         isTaskRunning: vi.fn((taskId: string) => taskId === "task-1" && isTaskRunning(taskId)),
         shouldUseRuntimeProductReads: vi.fn(() => false),
+        startProductTurn: mocks.startTurn,
         refreshRuntimeProductSnapshot: vi.fn(async () => null),
         refreshRuntimeProductTaskForTaskId: vi.fn(async () => null),
         getTaskStore: vi.fn(async () => undefined),

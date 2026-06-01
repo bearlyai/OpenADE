@@ -1,4 +1,3 @@
-import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { ActionEvent, Comment, CommentSelectedText, CommentSource } from "../../types"
 import type { CodeStore } from "../store"
 
@@ -6,7 +5,7 @@ export class CommentManager {
     constructor(private store: CodeStore) {}
 
     async addComment(taskId: string, source: CommentSource, content: string, selectedText: CommentSelectedText): Promise<string> {
-        const result = await localOpenADEClient.createComment({
+        const result = await this.store.createProductComment({
             taskId,
             content,
             source: source as unknown as Record<string, unknown>,
@@ -18,12 +17,12 @@ export class CommentManager {
     }
 
     async removeComment(taskId: string, commentId: string): Promise<void> {
-        await localOpenADEClient.deleteComment({ taskId, commentId })
+        await this.store.deleteProductComment({ taskId, commentId })
         await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     async editComment(taskId: string, commentId: string, newContent: string): Promise<void> {
-        await localOpenADEClient.editComment({ taskId, commentId, content: newContent })
+        await this.store.editProductComment({ taskId, commentId, content: newContent })
         await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 

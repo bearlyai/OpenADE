@@ -24,7 +24,6 @@ import type { OpenADETurnStartRequest } from "../../../../openade-module/src"
 import { dataFolderApi } from "../../electronAPI/dataFolder"
 import type { CronDef, ReadProcsResult } from "../../electronAPI/procs"
 import { readProcs } from "../../electronAPI/procs"
-import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { HarnessId } from "../../types"
 import type { CodeStore } from "../store"
 
@@ -551,7 +550,7 @@ export class CronManager {
                 hyperplanStrategy: def.type === "hyperplan" ? this.store.getActiveHyperPlanStrategy() : undefined,
             }
 
-            const result = await localOpenADEClient.startTurn(args)
+            const result = await this.store.startProductTurn(args)
             if (args.inTaskId) {
                 await this.store.refreshProductStateAfterTaskMutation(result.taskId)
             } else {

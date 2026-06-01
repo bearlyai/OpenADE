@@ -118,6 +118,11 @@ function unsupportedMutation(method: string): () => Promise<never> {
     }
 }
 
+function requireStateTask(state: RuntimeBridgeState, taskId: string): OpenADETask {
+    if (!state.task || state.task.id !== taskId) throw new Error(`Task ${taskId} not found`)
+    return state.task
+}
+
 function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapters {
     return {
         version: () => "bridge-test-version",
@@ -161,12 +166,114 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
             state.project = null
             if (state.task?.repoId === params.repoId) state.task = null
         },
-        startTurn: unsupportedMutation("startTurn"),
-        startReview: unsupportedMutation("startReview"),
-        interruptTurn: unsupportedMutation("interruptTurn"),
-        cancelQueuedTurn: unsupportedMutation("cancelQueuedTurn"),
-        deleteTask: unsupportedMutation("deleteTask"),
-        setupTaskEnvironment: unsupportedMutation("setupTaskEnvironment"),
+        startTurn: async (params) => {
+            const existingTaskId = params.inTaskId ?? state.task?.id
+            const taskId = existingTaskId ?? "task-started"
+            const repoId = params.repoId
+            const eventId = "event-started"
+            const actionEvent = {
+                id: eventId,
+                type: "action",
+                status: "completed",
+                createdAt: now,
+                completedAt: now,
+                userInput: params.input,
+                execution: {
+                    harnessId: params.harnessId ?? "codex",
+                    executionId: "exec-started",
+                    modelId: params.modelId,
+                    events: [],
+                    thinking: params.thinking,
+                    fastMode: params.fastMode,
+                },
+                source: { type: params.type, userLabel: params.label ?? params.type },
+                includesCommentIds: [],
+                result: { success: true },
+            }
+            if (state.task && existingTaskId === state.task.id) {
+                state.task = {
+                    ...state.task,
+                    events: [...state.task.events, actionEvent],
+                    lastEventAt: now,
+                    updatedAt: now,
+                }
+            } else {
+                state.project = state.project ?? { id: repoId, name: "Runtime Repo", path: "/tmp/runtime-repo", tasks: [] }
+                state.task = {
+                    id: taskId,
+                    repoId,
+                    slug: "task-started",
+                    title: params.title ?? "Started task",
+                    description: params.input,
+                    isolationStrategy: params.isolationStrategy,
+                    enabledMcpServerIds: params.enabledMcpServerIds,
+                    deviceEnvironments: [],
+                    createdBy: { id: "user-1", email: "user@example.com" },
+                    createdAt: now,
+                    updatedAt: now,
+                    events: [actionEvent],
+                    comments: [],
+                }
+            }
+            return { taskId, eventId }
+        },
+        startReview: async (params) => {
+            const current = requireStateTask(state, params.taskId)
+            const eventId = "event-review"
+            state.task = {
+                ...current,
+                events: [
+                    ...current.events,
+                    {
+                        id: eventId,
+                        type: "action",
+                        status: "completed",
+                        createdAt: now,
+                        completedAt: now,
+                        userInput: params.customInstructions ?? "",
+                        execution: {
+                            harnessId: params.harnessId,
+                            executionId: "exec-review",
+                            modelId: params.modelId,
+                            events: [],
+                        },
+                        source: { type: "review", userLabel: params.reviewType },
+                        includesCommentIds: [],
+                        result: { success: true },
+                    },
+                ],
+                lastEventAt: now,
+                updatedAt: now,
+            }
+            return { taskId: params.taskId, eventId }
+        },
+        interruptTurn: async (params) => {
+            requireStateTask(state, params.taskId)
+        },
+        cancelQueuedTurn: async (params) => {
+            const current = requireStateTask(state, params.taskId)
+            state.task = {
+                ...current,
+                queuedTurns: (current.queuedTurns ?? []).map((turn) =>
+                    turn.id === params.queuedTurnId ? { ...turn, status: "cancelled", updatedAt: now } : turn
+                ),
+                updatedAt: now,
+            }
+            return { taskId: params.taskId, queuedTurnId: params.queuedTurnId, cancelled: true }
+        },
+        deleteTask: async (params) => {
+            requireStateTask(state, params.taskId)
+            state.task = null
+            return { repoId: params.repoId, taskId: params.taskId, deleted: true }
+        },
+        setupTaskEnvironment: async (params) => {
+            const current = requireStateTask(state, params.taskId)
+            state.task = {
+                ...current,
+                deviceEnvironments: [...current.deviceEnvironments.filter((env) => env.id !== params.deviceEnvironment.id), params.deviceEnvironment],
+                updatedAt: now,
+            }
+        },
         createActionEvent: unsupportedMutation("createActionEvent"),
         appendActionStreamEvent: unsupportedMutation("appendActionStreamEvent"),
         completeActionEvent: unsupportedMutation("completeActionEvent"),
@@ -179,10 +286,64 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
         updateHyperPlanSubExecution: unsupportedMutation("updateHyperPlanSubExecution"),
         setHyperPlanReconcileLabels: unsupportedMutation("setHyperPlanReconcileLabels"),
         createSnapshotEvent: unsupportedMutation("createSnapshotEvent"),
-        createComment: unsupportedMutation("createComment"),
-        editComment: unsupportedMutation("editComment"),
-        deleteComment: unsupportedMutation("deleteComment"),
-        updateTaskMetadata: unsupportedMutation("updateTaskMetadata"),
+        createComment: async (params) => {
+            const current = requireStateTask(state, params.taskId)
+            const commentId = params.commentId ?? "comment-created"
+            const createdAt = params.createdAt ?? now
+            state.task = {
+                ...current,
+                comments: [
+                    ...current.comments,
+                    {
+                        id: commentId,
+                        content: params.content,
+                        source: params.source,
+                        selectedText: params.selectedText,
+                        author: params.author,
+                        createdAt,
+                    },
+                ],
+                updatedAt: createdAt,
+            }
+            return { commentId, createdAt }
+        },
+        editComment: async (params) => {
+            const current = requireStateTask(state, params.taskId)
+            state.task = {
+                ...current,
+                comments: current.comments.map((comment) => {
+                    if (typeof comment !== "object" || comment === null || !("id" in comment) || comment.id !== params.commentId) return comment
+                    return { ...comment, content: params.content, updatedAt: params.updatedAt ?? now }
+                }),
+                updatedAt: params.updatedAt ?? now,
+            }
+        },
+        deleteComment: async (params) => {
+            const current = requireStateTask(state, params.taskId)
+            state.task = {
+                ...current,
+                comments: current.comments.filter((comment) => {
+                    if (typeof comment !== "object" || comment === null || !("id" in comment)) return true
+                    return comment.id !== params.commentId
+                }),
+                updatedAt: params.updatedAt ?? now,
+            }
+        },
+        updateTaskMetadata: async (params) => {
+            const current = requireStateTask(state, params.taskId)
+            state.task = {
+                ...current,
+                title: params.title ?? current.title,
+                closed: params.closed ?? current.closed,
+                lastViewedAt: params.lastViewedAt ?? current.lastViewedAt,
+                lastEventAt: params.lastEventAt ?? current.lastEventAt,
+                cancelledPlanEventId: params.cancelledPlanEventId ?? current.cancelledPlanEventId,
+                enabledMcpServerIds: params.enabledMcpServerIds ?? current.enabledMcpServerIds,
+                sessionIds: params.sessionIds ? { ...(current.sessionIds ?? {}), ...params.sessionIds } : current.sessionIds,
+                queuedTurns: params.queuedTurns ?? current.queuedTurns,
+                updatedAt: params.updatedAt ?? now,
+            }
+        },
     }
 }
 
@@ -368,6 +529,95 @@ describe("CodeStore runtime product store bridge", () => {
             await expect(codeStore.repos.deleteRepo("repo-created")).resolves.toBe(true)
             expect(codeStore.runtimeProductSnapshot?.repos).toEqual([])
             expect(codeStore.repos.repos).toEqual([])
+            expect(legacyRepoRefresh).not.toHaveBeenCalled()
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("routes classic task, comment, review, and turn mutations through the runtime product store", async () => {
+        const { client, runtime } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+            const legacyTaskRead = vi.spyOn(codeStore, "getTaskStore")
+            const legacyTaskRefresh = vi.spyOn(codeStore, "refreshTaskStoreFromStorage")
+            const legacyRepoRefresh = vi.spyOn(codeStore, "refreshRepoStoreFromStorage")
+
+            const commentId = await codeStore.comments.addComment(
+                "task-1",
+                { type: "llm_output", eventId: "event-1", lineStart: 1, lineEnd: 1 },
+                "Runtime comment",
+                { text: "Runtime", linesBefore: "", linesAfter: "" }
+            )
+            expect(commentId).toBe("comment-created")
+            expect(codeStore.tasks.getTask("task-1")?.comments).toEqual(
+                expect.arrayContaining([expect.objectContaining({ id: "comment-created", content: "Runtime comment" })])
+            )
+
+            await codeStore.comments.editComment("task-1", commentId, "Edited runtime comment")
+            expect(codeStore.tasks.getTask("task-1")?.comments).toEqual(
+                expect.arrayContaining([expect.objectContaining({ id: "comment-created", content: "Edited runtime comment" })])
+            )
+
+            await codeStore.tasks.markTaskViewed("task-1")
+            expect(codeStore.getTaskPreviewsForRepo("repo-1")[0]?.lastViewedAt).toBeDefined()
+
+            await codeStore.tasks.setSessionId({ taskId: "task-1", key: "review", sessionId: "session-runtime" })
+            expect(codeStore.tasks.getTask("task-1")?.sessionIds).toEqual(expect.objectContaining({ review: "session-runtime" }))
+
+            await codeStore.tasks.addDeviceEnvironment("task-1", {
+                id: "device-1",
+                deviceId: "device-1",
+                setupComplete: true,
+                createdAt: now,
+                lastUsedAt: now,
+            })
+            expect(codeStore.tasks.getTask("task-1")?.deviceEnvironments).toEqual([expect.objectContaining({ id: "device-1" })])
+
+            await codeStore.startProductReview({
+                repoId: "repo-1",
+                taskId: "task-1",
+                reviewType: "plan",
+                harnessId: "codex",
+                modelId: "gpt-test",
+            })
+            await codeStore.refreshProductStateAfterTaskMutation("task-1")
+
+            await codeStore.startProductTurn({
+                repoId: "repo-1",
+                type: "do",
+                input: "Run through runtime product store",
+                inTaskId: "task-1",
+                harnessId: "codex",
+                modelId: "gpt-test",
+            })
+            await codeStore.refreshProductStateAfterTaskMutation("task-1")
+            expect(codeStore.tasks.getTask("task-1")?.events).toEqual(expect.arrayContaining([expect.objectContaining({ id: "event-started" })]))
+
+            await codeStore.comments.removeComment("task-1", commentId)
+            expect(codeStore.tasks.getTask("task-1")?.comments).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "comment-created" })]))
+
+            await codeStore.tasks.deepRemoveTask("task-1", {
+                deleteSnapshots: false,
+                deleteImages: false,
+                deleteSessions: false,
+                deleteWorktrees: false,
+            })
+            expect(codeStore.tasks.getTask("task-1")).toBeNull()
+            expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([])
+
+            expect(legacyTaskRead).not.toHaveBeenCalled()
+            expect(legacyTaskRefresh).not.toHaveBeenCalled()
             expect(legacyRepoRefresh).not.toHaveBeenCalled()
         } finally {
             codeStore.disconnectAllStores()

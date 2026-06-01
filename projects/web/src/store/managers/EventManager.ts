@@ -7,7 +7,6 @@
  */
 
 import type { HarnessId, HarnessStreamEvent } from "../../electronAPI/harnessEventTypes"
-import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { ActionEvent } from "../../types"
 import type { CodeStore } from "../store"
 
@@ -115,7 +114,7 @@ export class EventManager {
     async cancelPlan(taskId: string, planEventId: string): Promise<boolean> {
         if (!this.store.tasks.getTask(taskId)) return false
 
-        await localOpenADEClient.updateTaskMetadata({ taskId, cancelledPlanEventId: planEventId })
+        await this.store.updateProductTaskMetadata({ taskId, cancelledPlanEventId: planEventId })
         await this.store.refreshProductStateAfterTaskMutation(taskId)
         return true
     }

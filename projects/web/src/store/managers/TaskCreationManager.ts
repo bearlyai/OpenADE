@@ -3,7 +3,6 @@ import { track } from "../../analytics"
 import type { HarnessId } from "../../electronAPI/harnessEventTypes"
 import type { HyperPlanStrategy } from "../../hyperplan/types"
 import { fallbackTitle, generateTitle } from "../../prompts/titleExtractor"
-import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { ImageAttachment, IsolationStrategy, UserInputContext } from "../../types"
 import { ulid } from "../../utils/ulid"
 import type { ThinkingLevel } from "../TaskModel"
@@ -196,7 +195,7 @@ export class TaskCreationManager {
                 creation.phase = "completing"
             })
 
-            const result = await localOpenADEClient.startTurn({
+            const result = await this.store.startProductTurn({
                 repoId: creation.repoId,
                 type: creation.mode,
                 input: creation.description,
@@ -212,7 +211,7 @@ export class TaskCreationManager {
             await this.store.refreshProductStateAfterTaskCreation(creation.repoId, result.taskId)
 
             if (signal.aborted) {
-                await localOpenADEClient.interruptTurn(result.taskId).catch((err) => {
+                await this.store.interruptProductTurn(result.taskId).catch((err) => {
                     console.warn("[TaskCreationManager] Failed to interrupt cancelled runtime task:", err)
                 })
                 throw new Error("Task creation cancelled")

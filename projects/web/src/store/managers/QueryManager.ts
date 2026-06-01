@@ -6,7 +6,6 @@
  */
 
 import { makeAutoObservable } from "mobx"
-import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { CodeStore } from "../store"
 
 export class QueryManager {
@@ -20,7 +19,7 @@ export class QueryManager {
             return false
         }
 
-        await localOpenADEClient.interruptTurn(taskId)
+        await this.store.interruptProductTurn(taskId)
         return true
     }
 

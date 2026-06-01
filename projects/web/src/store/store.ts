@@ -1,14 +1,27 @@
 import { makeAutoObservable, reaction, runInAction } from "mobx"
 import type {
+    OpenADECommentCreateRequest,
+    OpenADECommentCreateResult,
+    OpenADECommentDeleteRequest,
+    OpenADECommentEditRequest,
     OpenADEProject,
+    OpenADEQueuedTurnCancelRequest,
+    OpenADEQueuedTurnCancelResult,
     OpenADERepoCreateRequest,
     OpenADERepoCreateResult,
     OpenADERepoDeleteRequest,
     OpenADERepoUpdateRequest,
+    OpenADEReviewStartRequest,
     OpenADESnapshot,
     OpenADETask,
+    OpenADETaskDeleteRequest,
+    OpenADETaskDeleteResult,
+    OpenADETaskEnvironmentSetupRequest,
+    OpenADETaskMetadataUpdateRequest,
     OpenADETaskPreview,
     OpenADETaskReadOptions,
+    OpenADETurnStartRequest,
+    OpenADETurnStartResult,
 } from "../../../openade-module/src"
 import type { RuntimeNotification } from "../../../runtime-protocol/src"
 import { analytics, track } from "../analytics"
@@ -815,10 +828,10 @@ export class CodeStore {
         const cached = this.taskStoreConnections.get(taskId)
         if (cached) {
             if (cached.store.meta.current.id === taskId) {
-                await localOpenADEClient.updateTaskMetadata({ taskId, usage: computeTaskUsage(cached.store.events.all()) })
+                await this.updateProductTaskMetadata({ taskId, usage: computeTaskUsage(cached.store.events.all()) })
                 await this.refreshRepoStoreFromStorage()
             } else {
-                await localOpenADEClient.updateTaskMetadata({ taskId, usage: normalizeTaskPreviewUsage(preview.usage) })
+                await this.updateProductTaskMetadata({ taskId, usage: normalizeTaskPreviewUsage(preview.usage) })
                 await this.refreshRepoStoreFromStorage()
                 this.disconnectTaskStore(taskId)
             }
@@ -828,9 +841,9 @@ export class CodeStore {
         const connection = await loadTaskStore({ taskId })
         try {
             if (connection.store.meta.current.id === taskId) {
-                await localOpenADEClient.updateTaskMetadata({ taskId, usage: computeTaskUsage(connection.store.events.all()) })
+                await this.updateProductTaskMetadata({ taskId, usage: computeTaskUsage(connection.store.events.all()) })
             } else {
-                await localOpenADEClient.updateTaskMetadata({ taskId, usage: normalizeTaskPreviewUsage(preview.usage) })
+                await this.updateProductTaskMetadata({ taskId, usage: normalizeTaskPreviewUsage(preview.usage) })
             }
             await this.refreshRepoStoreFromStorage()
         } finally {
@@ -948,6 +961,91 @@ export class CodeStore {
         }
 
         await localOpenADEClient.deleteRepo(params)
+    }
+
+    async startProductTurn(params: OpenADETurnStartRequest): Promise<OpenADETurnStartResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.startTurn(params)
+        }
+
+        return localOpenADEClient.startTurn(params)
+    }
+
+    async startProductReview(params: OpenADEReviewStartRequest): Promise<{ taskId: string }> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.startReview(params)
+        }
+
+        return localOpenADEClient.startReview(params)
+    }
+
+    async interruptProductTurn(taskId: string): Promise<void> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            await this.runtimeProductStore.interruptTurn(taskId)
+            return
+        }
+
+        await localOpenADEClient.interruptTurn(taskId)
+    }
+
+    async cancelProductQueuedTurn(params: OpenADEQueuedTurnCancelRequest): Promise<OpenADEQueuedTurnCancelResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.cancelQueuedTurn(params)
+        }
+
+        return localOpenADEClient.cancelQueuedTurn(params)
+    }
+
+    async updateProductTaskMetadata(params: OpenADETaskMetadataUpdateRequest): Promise<void> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            await this.runtimeProductStore.updateTaskMetadata(params)
+            return
+        }
+
+        await localOpenADEClient.updateTaskMetadata(params)
+    }
+
+    async setupProductTaskEnvironment(params: OpenADETaskEnvironmentSetupRequest): Promise<void> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            await this.runtimeProductStore.setupTaskEnvironment(params)
+            return
+        }
+
+        await localOpenADEClient.setupTaskEnvironment(params)
+    }
+
+    async createProductComment(params: OpenADECommentCreateRequest): Promise<OpenADECommentCreateResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.createComment(params)
+        }
+
+        return localOpenADEClient.createComment(params)
+    }
+
+    async editProductComment(params: OpenADECommentEditRequest): Promise<void> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            await this.runtimeProductStore.editComment(params)
+            return
+        }
+
+        await localOpenADEClient.editComment(params)
+    }
+
+    async deleteProductComment(params: OpenADECommentDeleteRequest): Promise<void> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            await this.runtimeProductStore.deleteComment(params)
+            return
+        }
+
+        await localOpenADEClient.deleteComment(params)
+    }
+
+    async deleteProductTask(params: OpenADETaskDeleteRequest): Promise<OpenADETaskDeleteResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.deleteTask(params)
+        }
+
+        return localOpenADEClient.deleteTask(params)
     }
 
     async loadProductTaskForRead(repoId: string, taskId: string): Promise<Task | null> {

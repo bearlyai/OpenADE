@@ -1,17 +1,10 @@
 import { describe, expect, it, vi } from "vitest"
-import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { CodeStore } from "../store"
 import { TaskManager } from "./TaskManager"
 
 vi.mock("../../persistence", () => ({
     syncTaskPreviewFromStore: vi.fn(),
     taskFromStore: vi.fn(),
-}))
-
-vi.mock("../../runtime/localOpenADEClient", () => ({
-    localOpenADEClient: {
-        updateTaskMetadata: vi.fn(async () => undefined),
-    },
 }))
 
 describe("TaskManager setTaskClosed", () => {
@@ -34,6 +27,7 @@ describe("TaskManager setTaskClosed", () => {
             getCachedTaskStore: vi.fn(() => null),
             findRuntimeProductRepoIdForTask: vi.fn(() => null),
             repoStore,
+            updateProductTaskMetadata: vi.fn(async () => undefined),
             refreshProductStateAfterTaskMutation: vi.fn(async () => undefined),
         } as unknown as CodeStore
 
@@ -41,7 +35,7 @@ describe("TaskManager setTaskClosed", () => {
 
         await manager.setTaskClosed("task-1", true)
 
-        expect(localOpenADEClient.updateTaskMetadata).toHaveBeenCalledWith({ taskId: "task-1", closed: true })
+        expect(store.updateProductTaskMetadata).toHaveBeenCalledWith({ taskId: "task-1", closed: true })
         expect(store.refreshProductStateAfterTaskMutation).toHaveBeenCalledWith("task-1")
     })
 })

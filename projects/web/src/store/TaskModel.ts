@@ -11,7 +11,6 @@ import type { GitSummaryResponse } from "../electronAPI/git"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { computeTaskUsage } from "../persistence/taskStatsUtils"
 import { type TaskThreadFormat, type TaskThreadJson, buildTaskThreadJson, buildTaskThreadXml } from "../prompts/taskThreadSerializer"
-import { localOpenADEClient } from "../runtime/localOpenADEClient"
 import type { ActionEvent, CodeEvent, IsolationStrategy, QueuedTurn, SetupEnvironmentEvent, SnapshotEvent, Task, TaskDeviceEnvironment } from "../types"
 import { getDeviceId } from "../utils/deviceId"
 import { ActionEventModel, type EventModel, SetupEnvironmentEventModel, SnapshotEventModel } from "./EventModel"
@@ -265,7 +264,7 @@ export class TaskModel {
 
     async cancelQueuedTurn(queuedTurnId: string): Promise<void> {
         if (!this.repoId) return
-        await localOpenADEClient.cancelQueuedTurn({
+        await this.store.cancelProductQueuedTurn({
             repoId: this.repoId,
             taskId: this.taskId,
             queuedTurnId,

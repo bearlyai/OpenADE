@@ -1,6 +1,5 @@
 import { makeAutoObservable } from "mobx"
 import { extractRawMessageEvents } from "../../electronAPI/harnessEventTypes"
-import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { ActionEvent } from "../../types"
 import type { CodeStore } from "../store"
 
@@ -135,7 +134,7 @@ export class RepeatManager {
                 if (!this.store.shouldUseRuntimeProductReads()) {
                     await this.store.getTaskStore(taskModel.repoId, taskId)
                 }
-                await localOpenADEClient.startTurn({
+                await this.store.startProductTurn({
                     repoId: taskModel.repoId,
                     type: "do",
                     input: prompt,

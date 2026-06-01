@@ -31,7 +31,6 @@ import type { OpenADETurnStartRequest, OpenADETurnStartResult } from "../../../.
 import { track } from "../../analytics"
 import { ReviewPickerModal } from "../../components/ReviewPickerModal"
 import { ACTION_PROMPTS } from "../../prompts/prompts"
-import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import {
     COMMIT_AND_PUSH_COMMAND_LABEL,
     TRACKABLE_TASK_COMMAND_IDS,
@@ -200,7 +199,7 @@ export class InputManager {
         if (!useRuntimeProductReads) {
             await this.store.getTaskStore(taskModel.repoId, this.taskId)
         }
-        const result = await localOpenADEClient.startTurn({
+        const result = await this.store.startProductTurn({
             repoId: taskModel.repoId,
             type,
             input: input.userInput,

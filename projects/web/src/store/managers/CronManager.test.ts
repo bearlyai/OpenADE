@@ -15,14 +15,7 @@ vi.mock("../../electronAPI/procs", () => ({
     readProcs: vi.fn(),
 }))
 
-vi.mock("../../runtime/localOpenADEClient", () => ({
-    localOpenADEClient: {
-        startTurn: vi.fn().mockResolvedValue({ taskId: "task-1" }),
-    },
-}))
-
 import { readProcs } from "../../electronAPI/procs"
-import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import { CronManager } from "./CronManager"
 
 function makeCronDef(overrides?: Partial<CronDef>): CronDef {
@@ -55,13 +48,13 @@ function makeMockStore(repos: Array<{ id: string; path: string }> = []): CodeSto
         refreshProductStateAfterTaskMutation: vi.fn().mockResolvedValue(undefined),
         refreshProductStateAfterTaskCreation: vi.fn().mockResolvedValue(undefined),
         getTaskStore: vi.fn().mockResolvedValue(undefined),
+        startProductTurn: vi.fn().mockResolvedValue({ taskId: "task-1" }),
     } as unknown as CodeStore
 }
 
 describe("CronManager scheduling", () => {
     beforeEach(() => {
         vi.useFakeTimers()
-        vi.mocked(localOpenADEClient.startTurn).mockResolvedValue({ taskId: "task-1" })
     })
 
     afterEach(() => {
@@ -81,13 +74,13 @@ describe("CronManager scheduling", () => {
         await manager.addRepo("repo-1", "/repo")
         await manager.installCron("repo-1", cronDef.id)
 
-        expect(localOpenADEClient.startTurn).not.toHaveBeenCalled()
+        expect(store.startProductTurn).not.toHaveBeenCalled()
 
         // Advance to 10:05:00 — the next minute boundary
         await vi.advanceTimersByTimeAsync(30_000)
 
-        expect(localOpenADEClient.startTurn).toHaveBeenCalledTimes(1)
-        expect(localOpenADEClient.startTurn).toHaveBeenCalledWith(
+        expect(store.startProductTurn).toHaveBeenCalledTimes(1)
+        expect(store.startProductTurn).toHaveBeenCalledWith(
             expect.objectContaining({
                 repoId: "repo-1",
                 input: "Run tests",
@@ -111,7 +104,7 @@ describe("CronManager scheduling", () => {
         // Advance 500ms past the target (simulating late callback)
         await vi.advanceTimersByTimeAsync(30_500)
 
-        expect(localOpenADEClient.startTurn).toHaveBeenCalledTimes(1)
+        expect(store.startProductTurn).toHaveBeenCalledTimes(1)
     })
 
     it("chains next occurrence after firing", async () => {
@@ -128,11 +121,11 @@ describe("CronManager scheduling", () => {
 
         // First fire at 10:05:00
         await vi.advanceTimersByTimeAsync(30_000)
-        expect(localOpenADEClient.startTurn).toHaveBeenCalledTimes(1)
+        expect(store.startProductTurn).toHaveBeenCalledTimes(1)
 
         // Second fire at 10:06:00
         await vi.advanceTimersByTimeAsync(60_000)
-        expect(localOpenADEClient.startTurn).toHaveBeenCalledTimes(2)
+        expect(store.startProductTurn).toHaveBeenCalledTimes(2)
     })
 
     it("does not reschedule running crons during rescheduleRepo", async () => {
@@ -141,7 +134,7 @@ describe("CronManager scheduling", () => {
         const cronDef = makeCronDef()
         let resolveRun!: (value: { taskId: string }) => void
         const store = makeMockStore()
-        vi.mocked(localOpenADEClient.startTurn).mockReturnValue(
+        vi.mocked(store.startProductTurn).mockReturnValue(
             new Promise((r) => {
                 resolveRun = r
             })
@@ -153,9 +146,9 @@ describe("CronManager scheduling", () => {
         await manager.addRepo("repo-1", "/repo")
         await manager.installCron("repo-1", cronDef.id)
 
-        // Fire at 10:05:00 — starts executing but hangs on localOpenADEClient.startTurn
+        // Fire at 10:05:00 — starts executing but hangs on startProductTurn
         await vi.advanceTimersByTimeAsync(30_000)
-        expect(localOpenADEClient.startTurn).toHaveBeenCalledTimes(1)
+        expect(store.startProductTurn).toHaveBeenCalledTimes(1)
 
         // Trigger rescheduleRepo while cron is running — should skip it
         manager.updateCronDefs("repo-1", makeReadProcsResult([cronDef]))
@@ -166,7 +159,7 @@ describe("CronManager scheduling", () => {
 
         // fireCron.finally() should have scheduled next — advance to 10:06:00
         await vi.advanceTimersByTimeAsync(60_000)
-        expect(localOpenADEClient.startTurn).toHaveBeenCalledTimes(2)
+        expect(store.startProductTurn).toHaveBeenCalledTimes(2)
     })
 
     it("debounces rapid refresh calls from onAfterEvent", async () => {
@@ -293,7 +286,7 @@ describe("CronManager scheduling", () => {
         // But after the first fire (at 10:06:00), lastRunAt gets set.
         // Let's verify the first scheduled fire works:
         await vi.advanceTimersByTimeAsync(30_000)
-        expect(localOpenADEClient.startTurn).toHaveBeenCalledTimes(1)
+        expect(store.startProductTurn).toHaveBeenCalledTimes(1)
     })
 
     it("prunes install state for removed cron definitions", async () => {

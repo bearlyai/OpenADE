@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { ImageAttachment } from "../../types"
 import type { CodeStore } from "../store"
 import { TaskCreationManager, buildTaskCreationInput } from "./TaskCreationManager"
@@ -23,13 +22,6 @@ vi.mock("../../persistence", () => ({
     updateTaskPreview: vi.fn(),
 }))
 
-vi.mock("../../runtime/localOpenADEClient", () => ({
-    localOpenADEClient: {
-        startTurn: vi.fn(),
-        interruptTurn: vi.fn(),
-    },
-}))
-
 const TEST_IMAGE: ImageAttachment = {
     id: "img-1",
     mediaType: "image/png",
@@ -43,8 +35,6 @@ const TEST_IMAGE: ImageAttachment = {
 describe("TaskCreationManager creation plumbing", () => {
     beforeEach(() => {
         vi.useRealTimers()
-        vi.mocked(localOpenADEClient.startTurn).mockResolvedValue({ taskId: "task-1" })
-        vi.mocked(localOpenADEClient.interruptTurn).mockResolvedValue(undefined)
     })
 
     afterEach(() => {
@@ -105,7 +95,7 @@ describe("TaskCreationManager creation plumbing", () => {
     })
 
     it("passes the selected model to server-owned turn start", async () => {
-        vi.mocked(localOpenADEClient.startTurn).mockImplementation(async (args) => {
+        const startProductTurn = vi.fn(async (args) => {
             expect(JSON.parse(JSON.stringify(args))).toEqual(args)
             return { taskId: "task-1" }
         })
@@ -117,6 +107,7 @@ describe("TaskCreationManager creation plumbing", () => {
             repos: {
                 getRepo: vi.fn(() => ({ id: "repo-1", path: "/tmp/repo" })),
             },
+            startProductTurn,
             refreshProductStateAfterTaskCreation: vi.fn(async () => undefined),
             getActiveHyperPlanStrategy: vi.fn(),
         } as unknown as CodeStore
@@ -152,7 +143,7 @@ describe("TaskCreationManager creation plumbing", () => {
                 cwd: "/tmp/repo",
             })
         )
-        expect(localOpenADEClient.startTurn).toHaveBeenCalledWith(
+        expect(startProductTurn).toHaveBeenCalledWith(
             expect.objectContaining({
                 repoId: "repo-1",
                 type: "do",

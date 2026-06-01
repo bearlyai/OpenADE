@@ -3,6 +3,7 @@ import type { OpenADEClientOptions } from "../../../openade-client/src"
 import type { RuntimeClientOptions } from "../../../runtime-client/src"
 import type { RemoteSnapshot, RemoteTask, RemoteTurnStartResult } from "../../../shared/companion/src"
 import {
+    type RemoteConfig,
     __setRemoteClientConstructorsForTest,
     cancelRemoteQueuedTurn,
     createRemoteComment,
@@ -14,7 +15,6 @@ import {
     startRemoteTurn,
     subscribeRemoteChanges,
     updateRemoteTaskMetadata,
-    type RemoteConfig,
 } from "./client"
 
 const runtimeClients: RuntimeClient[] = []
@@ -129,6 +129,7 @@ class OpenADEClient {
     editComment = vi.fn(async () => undefined)
     deleteComment = vi.fn(async () => undefined)
     deleteTask = vi.fn(async (args: { repoId: string; taskId: string }) => ({ repoId: args.repoId, taskId: args.taskId, deleted: true as const }))
+    setupTaskEnvironment = vi.fn(async () => undefined)
     subscribeToChanges = vi.fn((listener: (notification: { method: string; params?: unknown }) => void) => {
         changeListeners.push(listener)
         return () => {

@@ -2,7 +2,6 @@ import { makeAutoObservable, runInAction } from "mobx"
 import { gitApi } from "../../electronAPI/git"
 import { taskFromStore } from "../../persistence"
 import { fallbackTitle, generateTitle } from "../../prompts/titleExtractor"
-import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { Task, TaskDeviceEnvironment } from "../../types"
 import { TaskModel } from "../TaskModel"
 import type { CodeStore } from "../store"
@@ -240,7 +239,7 @@ export class TaskManager {
         }
 
         await this.store.queries.abortTask(id)
-        await localOpenADEClient.deleteTask({ repoId, taskId: id, options })
+        await this.store.deleteProductTask({ repoId, taskId: id, options })
         await this.store.refreshProductStateAfterTaskDeletion(id)
 
         // Clean up pinned state
@@ -265,12 +264,12 @@ export class TaskManager {
     // ==================== Session Management ====================
 
     async setSessionId({ taskId, key, sessionId }: { taskId: string; key: string; sessionId: string }): Promise<void> {
-        await localOpenADEClient.updateTaskMetadata({ taskId, sessionIds: { [key]: sessionId } })
+        await this.store.updateProductTaskMetadata({ taskId, sessionIds: { [key]: sessionId } })
         await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     async addDeviceEnvironment(taskId: string, deviceEnv: TaskDeviceEnvironment): Promise<void> {
-        await localOpenADEClient.setupTaskEnvironment({ taskId, deviceEnvironment: deviceEnv })
+        await this.store.setupProductTaskEnvironment({ taskId, deviceEnvironment: deviceEnv })
         await this.store.refreshProductStateAfterTaskMutation(taskId)
         this.invalidateTaskModel(taskId)
     }
@@ -297,7 +296,7 @@ export class TaskManager {
     async markTaskViewed(taskId: string): Promise<void> {
         if (!this.getTask(taskId)) return
 
-        await localOpenADEClient.updateTaskMetadata({ taskId, lastViewedAt: new Date().toISOString() })
+        await this.store.updateProductTaskMetadata({ taskId, lastViewedAt: new Date().toISOString() })
         await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
@@ -307,13 +306,13 @@ export class TaskManager {
             return
         }
 
-        await localOpenADEClient.updateTaskMetadata({ taskId, closed })
+        await this.store.updateProductTaskMetadata({ taskId, closed })
         await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     setEnabledMcpServerIds(taskId: string, serverIds: string[]): void {
         void (async () => {
-            await localOpenADEClient.updateTaskMetadata({ taskId, enabledMcpServerIds: serverIds })
+            await this.store.updateProductTaskMetadata({ taskId, enabledMcpServerIds: serverIds })
             await this.store.refreshProductStateAfterTaskMutation(taskId)
         })().catch((error) => {
             console.error("[TaskManager] Failed to update MCP server selection:", error)
@@ -325,7 +324,7 @@ export class TaskManager {
         if (!trimmed) return
 
         void (async () => {
-            await localOpenADEClient.updateTaskMetadata({ taskId, title: trimmed })
+            await this.store.updateProductTaskMetadata({ taskId, title: trimmed })
             await this.store.refreshProductStateAfterTaskMutation(taskId)
         })().catch((error) => {
             console.error("[TaskManager] Failed to update task title:", error)

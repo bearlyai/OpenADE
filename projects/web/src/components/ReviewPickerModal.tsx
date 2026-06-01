@@ -6,7 +6,6 @@ import { HARNESS_META, MODEL_REGISTRY } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { getVisibleModelEntries, getVisibleModelId } from "../modelVisibility"
 import type { ReviewType } from "../prompts/reviewPrompts"
-import { localOpenADEClient } from "../runtime/localOpenADEClient"
 import { useCodeStore } from "../store/context"
 import { Modal } from "./ui"
 
@@ -83,8 +82,8 @@ export const ReviewPickerModal = NiceModal.create(
             if (!taskModel?.repoId) return
             onStart?.()
             modal.remove()
-            void localOpenADEClient
-                .startReview({
+            void codeStore
+                .startProductReview({
                     repoId: taskModel.repoId,
                     taskId,
                     reviewType,

@@ -6,10 +6,10 @@ import type {
     OpenADECommentEditRequest,
     OpenADEProjectFileReadRequest,
     OpenADEProjectFileReadResult,
-    OpenADEProjectFilesTreeRequest,
-    OpenADEProjectFilesTreeResult,
     OpenADEProjectFileWriteRequest,
     OpenADEProjectFileWriteResult,
+    OpenADEProjectFilesTreeRequest,
+    OpenADEProjectFilesTreeResult,
     OpenADEProjectProcessListRequest,
     OpenADEProjectProcessListResult,
     OpenADEProjectProcessReconnectRequest,
@@ -29,19 +29,27 @@ import type {
     OpenADEReviewStartRequest,
     OpenADESnapshot,
     OpenADETask,
-    OpenADETaskDeleteRequest,
-    OpenADETaskDeleteResult,
     OpenADETaskChangesReadRequest,
     OpenADETaskChangesReadResult,
+    OpenADETaskDeleteRequest,
+    OpenADETaskDeleteResult,
     OpenADETaskDiffReadRequest,
     OpenADETaskDiffReadResult,
-    OpenADETaskMetadataUpdateRequest,
+    OpenADETaskEnvironmentSetupRequest,
     OpenADETaskGitCommitRequest,
     OpenADETaskGitCommitResult,
     OpenADETaskGitLogRequest,
     OpenADETaskGitLogResult,
     OpenADETaskImageReadRequest,
     OpenADETaskImageReadResult,
+    OpenADETaskMetadataUpdateRequest,
+    OpenADETaskReadOptions,
+    OpenADETaskSnapshotIndexReadRequest,
+    OpenADETaskSnapshotIndexReadResult,
+    OpenADETaskSnapshotPatchReadRequest,
+    OpenADETaskSnapshotPatchReadResult,
+    OpenADETaskSnapshotPatchSliceReadRequest,
+    OpenADETaskSnapshotPatchSliceReadResult,
     OpenADETaskTerminalMutationResult,
     OpenADETaskTerminalReconnectRequest,
     OpenADETaskTerminalReconnectResult,
@@ -50,18 +58,11 @@ import type {
     OpenADETaskTerminalStartResult,
     OpenADETaskTerminalStopRequest,
     OpenADETaskTerminalWriteRequest,
-    OpenADETaskSnapshotIndexReadRequest,
-    OpenADETaskSnapshotIndexReadResult,
-    OpenADETaskSnapshotPatchReadRequest,
-    OpenADETaskSnapshotPatchReadResult,
-    OpenADETaskSnapshotPatchSliceReadRequest,
-    OpenADETaskSnapshotPatchSliceReadResult,
-    OpenADETaskReadOptions,
     OpenADETurnStartRequest,
     OpenADETurnStartResult,
 } from "../../../openade-module/src"
-import type { RuntimeNotification } from "../../../runtime-protocol/src"
 import { RuntimeRecordCache } from "../../../runtime-client/src"
+import type { RuntimeNotification } from "../../../runtime-protocol/src"
 
 function taskKey(repoId: string, taskId: string): string {
     return `${repoId}\0${taskId}`
@@ -257,6 +258,13 @@ export class OpenADEProductStore {
         return result
     }
 
+    async setupTaskEnvironment(args: OpenADETaskEnvironmentSetupRequest, options: OpenADERequestOptions = {}): Promise<void> {
+        await this.client.setupTaskEnvironment(args, options)
+        const cached = [...this.tasks.values()].find((task) => task.id === args.taskId)
+        if (cached) await this.refreshTask(cached.repoId, args.taskId)
+        await this.refreshSnapshot()
+    }
+
     async handleNotification(notification: RuntimeNotification): Promise<void> {
         this.runtimes.applyNotification(notification)
         const params = notificationRecord(notification)
@@ -339,5 +347,6 @@ export interface OpenADEProductClient {
     editComment(args: OpenADECommentEditRequest, options?: OpenADERequestOptions): Promise<void>
     deleteComment(args: OpenADECommentDeleteRequest, options?: OpenADERequestOptions): Promise<void>
     deleteTask(args: OpenADETaskDeleteRequest, options?: OpenADERequestOptions): Promise<OpenADETaskDeleteResult>
+    setupTaskEnvironment(args: OpenADETaskEnvironmentSetupRequest, options?: OpenADERequestOptions): Promise<void>
     subscribeToChanges(onEvent: (notification: RuntimeNotification) => void): () => void
 }

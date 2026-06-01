@@ -49,7 +49,7 @@ Runtime lifecycle notifications update `RuntimeManager`. Check with `codeStore.i
 
 ### Durable Mutations
 
-Repo, task, comment, plan-cancel, and preview-usage mutations go through `runtime/localOpenADEClient.ts`. The renderer store is a cache/view over persisted Yjs documents and should refresh from runtime notifications or explicit `refresh*FromStorage()` calls after protocol writes.
+Repo, task, comment, plan-cancel, turn, review, queued-turn, environment-setup, and preview-usage mutations should enter through `CodeStore` product helpers such as `startProductTurn()`, `updateProductTaskMetadata()`, and `createProductComment()`. When runtime product reads are active, those helpers use the injected `OpenADEProductStore`; otherwise they fall back to `runtime/localOpenADEClient.ts` and the legacy Yjs refresh path. The renderer store is a cache/view over persisted product state and should refresh through runtime DTO helpers or explicit legacy `refresh*FromStorage()` calls only on the fallback path.
 
 ## Environment Classes
 
@@ -65,7 +65,7 @@ Both are thin wrappers around electron git API calls.
 |------|------|
 | Task observable state | `store/TaskModel.ts` |
 | Event observable state | `store/EventModel.ts` |
-| Task execution protocol client | `runtime/localOpenADEClient.ts` |
+| Task execution and product mutations | `store/store.ts` product helpers |
 | Available commands (Plan, Do, etc.) | `store/managers/InputManager.ts` |
 | Comment tracking | `store/managers/CommentManager.ts` |
 
