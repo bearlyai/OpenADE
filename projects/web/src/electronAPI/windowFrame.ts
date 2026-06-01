@@ -6,15 +6,13 @@
  * Provides frame visibility and color customization.
  */
 
+import type { FrameColors as HostFrameColors } from "../../../electron/src/modules/code/hostBridgeTypes"
+
 // ============================================================================
 // Type Definitions
-// IMPORTANT: Keep in sync with projects/electron/src/modules/code/windowFrame.ts
 // ============================================================================
 
-export interface FrameColors {
-    symbolColor: string
-    color: string
-}
+export type FrameColors = HostFrameColors
 
 // ============================================================================
 // Window Frame API Functions

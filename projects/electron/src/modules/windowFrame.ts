@@ -1,13 +1,9 @@
 import { app, ipcMain } from "electron"
 import Store from "electron-store"
 import { currentExecutor } from "../executor"
+import type { FrameColors } from "./code/hostBridgeTypes"
 
 const frameColorStore = new Store<Record<string, FrameColors>>()
-
-interface FrameColors {
-    symbolColor: string
-    color: string
-}
 
 const titleBarOverlayHeight = 44
 

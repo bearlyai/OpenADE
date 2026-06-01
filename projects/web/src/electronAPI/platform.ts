@@ -7,20 +7,13 @@
  */
 
 import { localRuntimeClient } from "../runtime/localRuntimeClient"
+import type { PlatformInfo as HostPlatformInfo } from "../../../electron/src/modules/code/hostBridgeTypes"
 
 // ============================================================================
 // Type Definitions
-// IMPORTANT: Keep in sync with projects/electron/src/modules/code/platform.ts
 // ============================================================================
 
-export interface PlatformInfo {
-    platform: "win32" | "darwin" | "linux"
-    pathSeparator: "/" | "\\"
-    homeDir: string
-    isWindows: boolean
-    isMac: boolean
-    isLinux: boolean
-}
+export type PlatformInfo = HostPlatformInfo
 
 // ============================================================================
 // Cached Platform Info

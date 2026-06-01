@@ -1212,6 +1212,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - This removes the duplicate preload/web global contract while preserving the existing Electron IPC runtime bridge and classic desktop wrappers.
 - Focused verification passed: Electron typecheck, web typecheck, web Electron API wrapper tests for companion/MCP/harness status, and Biome lint for the touched preload/global/docs files.
 
+### 2026-06-01: Desktop Host Utility DTOs Consolidated
+
+- `projects/electron/src/modules/code/hostBridgeTypes.ts` now owns browser-safe DTOs for managed binaries, code-module capabilities, SDK capabilities, platform info, shell directory creation/selection/opening, binary checks, and Electron frame colors.
+- Electron main-process modules and renderer wrappers now alias that shared contract instead of keeping duplicate `binaries`, `capabilities`, `platform`, `shell`, and `windowFrame` interfaces with "keep in sync" comments.
+- This keeps desktop-specific host utility contracts in the Electron code module boundary while preserving the existing trusted local runtime methods and classic desktop settings/process wrappers.
+- Focused verification passed: Electron typecheck, web typecheck, Electron `runtimeData.integration` host utility method, web `Routes.runtimeProductStore.test.ts`, and Biome lint for the touched host bridge files.
+
 ## Remaining Work Under Corrected Direction
 
 The remaining work is not a desktop UI rewrite. It is a boundary migration: keep the old desktop app experience and replace its direct renderer storage/host assumptions with runtime/OpenADE APIs.

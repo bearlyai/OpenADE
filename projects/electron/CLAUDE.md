@@ -5,6 +5,11 @@
 - `src/preload-api.ts` owns the browser-safe `OpenADEAPI` shape exposed by `src/preload.ts` and consumed by `projects/web/src/vite-env.d.ts`.
 - When changing the contextBridge surface, update `src/preload-api.ts` first and keep `src/preload.ts` using `satisfies OpenADEAPI` so the renderer global cannot drift from the actual preload object.
 
+## Code Host Bridge Contracts
+
+- `src/modules/code/hostBridgeTypes.ts` owns browser-safe DTOs for desktop-specific trusted host utilities such as binaries, platform, shell, frame colors, and code-module capability probes.
+- Renderer wrappers under `projects/web/src/electronAPI` should alias those types instead of re-declaring matching Electron main-process interfaces.
+
 ## Packaged Smoke Tests
 
 - `tests/smoke.spec.ts` drives the packaged app artifact, not the dev server. Rebuild with `npm run build`, `npm run build:web`, and `NONOTARY=1 CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir` before trusting smoke results after main/preload/web changes.

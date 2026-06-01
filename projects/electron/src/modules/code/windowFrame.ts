@@ -10,16 +10,7 @@ import logger from "electron-log"
 import Store from "electron-store"
 import { isDev } from "../../config"
 import { currentExecutor } from "../../executor"
-
-// ============================================================================
-// Type Definitions
-// IMPORTANT: Keep in sync with projects/dashboard/src/pages/code/electronAPI/windowFrame.ts
-// ============================================================================
-
-interface FrameColors {
-    symbolColor: string
-    color: string
-}
+import type { FrameColors } from "./hostBridgeTypes"
 
 // ============================================================================
 // State

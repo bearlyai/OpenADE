@@ -6,20 +6,13 @@
  */
 
 import { localRuntimeClient } from "../runtime/localRuntimeClient"
+import type { ManagedBinaryEnsureResult, ManagedBinaryStatus as HostManagedBinaryStatus } from "../../../electron/src/modules/code/hostBridgeTypes"
 
 // ============================================================================
 // Type Definitions
-// IMPORTANT: Keep in sync with projects/electron/src/modules/code/binaries.ts
 // ============================================================================
 
-export interface ManagedBinaryStatus {
-    name: string
-    displayName: string
-    version: string
-    status: "available" | "downloading" | "not_downloaded" | "error"
-    path: string | null
-    error: string | null
-}
+export type ManagedBinaryStatus = HostManagedBinaryStatus
 
 // ============================================================================
 // API Functions
@@ -38,11 +31,11 @@ export async function getStatuses(): Promise<ManagedBinaryStatus[]> {
 }
 
 /** Ensure a binary is downloaded and available. Downloads if needed. */
-export async function ensureBinary(name: string): Promise<{ ok: boolean; path?: string; error?: string }> {
+export async function ensureBinary(name: string): Promise<ManagedBinaryEnsureResult> {
     if (!window.openadeAPI?.runtime) return { ok: false, error: "Not running in Electron" }
 
     try {
-        return await localRuntimeClient.request<{ ok: boolean; path?: string; error?: string }>("host/binaries/ensure", { name })
+        return await localRuntimeClient.request<ManagedBinaryEnsureResult>("host/binaries/ensure", { name })
     } catch (error) {
         console.error("[BinariesAPI] Failed to ensure binary:", error)
         return { ok: false, error: error instanceof Error ? error.message : "Unknown error" }

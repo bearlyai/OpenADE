@@ -9,36 +9,14 @@ import { ipcMain, dialog, shell, type IpcMainInvokeEvent } from "electron"
 import logger from "electron-log"
 import fs from "fs/promises"
 import { isDev } from "../../config"
-
-// ============================================================================
-// Type Definitions
-// IMPORTANT: Keep in sync with projects/dashboard/src/pages/code/electronAPI/shell.ts
-// ============================================================================
-
-interface SelectDirectoryParams {
-    defaultPath?: string
-}
-
-interface SelectDirectoryResponse {
-    path: string | null
-}
-
-interface OpenUrlParams {
-    url: string
-}
-
-interface OpenPathParams {
-    path: string
-}
-
-export interface CreateDirectoryParams {
-    path: string
-}
-
-export interface CreateDirectoryResponse {
-    success: boolean
-    error?: string
-}
+import type {
+    CreateDirectoryParams,
+    CreateDirectoryResponse,
+    OpenPathParams,
+    OpenUrlParams,
+    SelectDirectoryParams,
+    SelectDirectoryResponse,
+} from "./hostBridgeTypes"
 
 // ============================================================================
 // Helper Functions

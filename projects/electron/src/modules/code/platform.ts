@@ -10,26 +10,7 @@ import path from "path"
 import os from "os"
 import { execCommand } from "./subprocess"
 import { resolve as resolveBinary } from "./binaries"
-
-// ============================================================================
-// Type Definitions
-// IMPORTANT: Keep in sync with projects/dashboard/src/pages/code/electronAPI/platform.ts
-// ============================================================================
-
-export interface PlatformInfo {
-    platform: "win32" | "darwin" | "linux"
-    pathSeparator: "/" | "\\"
-    homeDir: string
-    isWindows: boolean
-    isMac: boolean
-    isLinux: boolean
-}
-
-export interface BinaryCheckResult {
-    installed: boolean
-    path?: string
-    error?: string
-}
+import type { BinaryCheckResult, PlatformInfo } from "./hostBridgeTypes"
 
 /**
  * Get platform information

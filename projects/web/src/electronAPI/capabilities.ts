@@ -11,16 +11,16 @@
  */
 
 import { localRuntimeClient } from "../runtime/localRuntimeClient"
+import type {
+    CodeModuleCapabilities as HostCodeModuleCapabilities,
+    SdkCapabilities as HostSdkCapabilities,
+} from "../../../electron/src/modules/code/hostBridgeTypes"
 
 // ============================================================================
 // Type Definitions
-// IMPORTANT: Keep in sync with projects/electron/src/modules/code/capabilities.ts
 // ============================================================================
 
-export interface CodeModuleCapabilities {
-    enabled: boolean
-    version: string
-}
+export type CodeModuleCapabilities = HostCodeModuleCapabilities
 
 // ============================================================================
 // Low-level Electron detection
@@ -79,15 +79,9 @@ export function isCodeModuleAvailable(): boolean {
 
 // ============================================================================
 // SDK Capabilities (slash commands, skills, plugins)
-// IMPORTANT: Keep SdkCapabilities in sync with projects/electron/src/modules/code/capabilities.ts
 // ============================================================================
 
-export interface SdkCapabilities {
-    slash_commands: string[]
-    skills: string[]
-    plugins: { name: string; path: string }[]
-    cachedAt: number
-}
+export type SdkCapabilities = HostSdkCapabilities
 
 /**
  * Fetch SDK capabilities for a working directory.

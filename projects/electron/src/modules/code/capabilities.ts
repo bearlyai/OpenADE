@@ -11,23 +11,7 @@
 import logger from "electron-log"
 import { registry } from "./harness"
 import type { HarnessId } from "@openade/harness"
-
-// ============================================================================
-// Type Definitions
-// IMPORTANT: Keep in sync with projects/dashboard/src/pages/code/electronAPI/capabilities.ts
-// ============================================================================
-
-export interface CodeModuleCapabilities {
-	enabled: boolean
-	version: string
-}
-
-export interface SdkCapabilities {
-	slash_commands: string[]
-	skills: string[]
-	plugins: { name: string; path: string }[]
-	cachedAt: number
-}
+import type { CodeModuleCapabilities, SdkCapabilities } from "./hostBridgeTypes"
 
 // ============================================================================
 // SDK Capabilities Cache (in-memory, keyed by "harnessId:cwd")

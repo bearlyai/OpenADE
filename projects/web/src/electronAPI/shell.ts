@@ -7,20 +7,13 @@
 
 import { localRuntimeClient } from "../runtime/localRuntimeClient"
 import { getExternalUrlToOpen } from "../utils/externalLinks"
+import type { CreateDirectoryResponse, SelectDirectoryResponse } from "../../../electron/src/modules/code/hostBridgeTypes"
 
 // ============================================================================
 // Type Definitions
-// IMPORTANT: Keep in sync with projects/electron/src/modules/code/shell.ts
 // ============================================================================
 
-export interface SelectDirectoryResponse {
-    path: string | null
-}
-
-export interface CreateDirectoryResponse {
-    success: boolean
-    error?: string
-}
+export type { CreateDirectoryResponse, SelectDirectoryResponse }
 
 // ============================================================================
 // Shell API Functions

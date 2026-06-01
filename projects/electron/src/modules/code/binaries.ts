@@ -12,24 +12,11 @@ import path from "path"
 import fs from "fs"
 import { execCommand } from "./subprocess"
 import { createWriteStream } from "fs"
+import type { ManagedBinaryStatus } from "./hostBridgeTypes"
 
 // Note: getCliJsPath() has been removed. The @openade/harness library handles
 // binary resolution internally via its ClaudeCodeHarnessConfig.binaryPath and
 // resolveExecutable() utilities.
-
-// ============================================================================
-// Type Definitions
-// IMPORTANT: Keep ManagedBinaryStatus in sync with projects/dashboard/src/pages/code/electronAPI/binaries.ts
-// ============================================================================
-
-export interface ManagedBinaryStatus {
-    name: string
-    displayName: string
-    version: string
-    status: "available" | "downloading" | "not_downloaded" | "error"
-    path: string | null
-    error: string | null
-}
 
 // ============================================================================
 // Binary Registry — hardcoded URLs from bearlyai/crossbins
