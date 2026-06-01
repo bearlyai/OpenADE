@@ -5,6 +5,22 @@ import type {
     OpenADECommentDeleteRequest,
     OpenADECommentEditRequest,
     OpenADEProject,
+    OpenADEProjectFileReadRequest,
+    OpenADEProjectFileReadResult,
+    OpenADEProjectFileWriteRequest,
+    OpenADEProjectFileWriteResult,
+    OpenADEProjectFilesTreeRequest,
+    OpenADEProjectFilesTreeResult,
+    OpenADEProjectProcessListRequest,
+    OpenADEProjectProcessListResult,
+    OpenADEProjectProcessReconnectRequest,
+    OpenADEProjectProcessReconnectResult,
+    OpenADEProjectProcessStartRequest,
+    OpenADEProjectProcessStartResult,
+    OpenADEProjectProcessStopRequest,
+    OpenADEProjectProcessStopResult,
+    OpenADEProjectSearchRequest,
+    OpenADEProjectSearchResult,
     OpenADEQueuedTurnCancelRequest,
     OpenADEQueuedTurnCancelResult,
     OpenADERepoCreateRequest,
@@ -1112,6 +1128,70 @@ export class CodeStore {
         }
 
         return localOpenADEClient.readTaskFilePair(params)
+    }
+
+    async listProductProjectFiles(params: OpenADEProjectFilesTreeRequest): Promise<OpenADEProjectFilesTreeResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.listProjectFiles(params)
+        }
+
+        return localOpenADEClient.listProjectFiles(params)
+    }
+
+    async readProductProjectFile(params: OpenADEProjectFileReadRequest): Promise<OpenADEProjectFileReadResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readProjectFile(params)
+        }
+
+        return localOpenADEClient.readProjectFile(params)
+    }
+
+    async writeProductProjectFile(params: OpenADEProjectFileWriteRequest): Promise<OpenADEProjectFileWriteResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.writeProjectFile(params)
+        }
+
+        return localOpenADEClient.writeProjectFile(params)
+    }
+
+    async searchProductProject(params: OpenADEProjectSearchRequest): Promise<OpenADEProjectSearchResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.searchProject(params)
+        }
+
+        return localOpenADEClient.searchProject(params)
+    }
+
+    async listProductProjectProcesses(params: OpenADEProjectProcessListRequest): Promise<OpenADEProjectProcessListResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.listProjectProcesses(params)
+        }
+
+        return localOpenADEClient.listProjectProcesses(params)
+    }
+
+    async startProductProjectProcess(params: OpenADEProjectProcessStartRequest): Promise<OpenADEProjectProcessStartResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.startProjectProcess(params)
+        }
+
+        return localOpenADEClient.startProjectProcess(params)
+    }
+
+    async reconnectProductProjectProcess(params: OpenADEProjectProcessReconnectRequest): Promise<OpenADEProjectProcessReconnectResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.reconnectProjectProcess(params)
+        }
+
+        return localOpenADEClient.reconnectProjectProcess(params)
+    }
+
+    async stopProductProjectProcess(params: OpenADEProjectProcessStopRequest): Promise<OpenADEProjectProcessStopResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.stopProjectProcess(params)
+        }
+
+        return localOpenADEClient.stopProjectProcess(params)
     }
 
     async readProductTaskGitLog(params: OpenADETaskGitLogRequest): Promise<OpenADETaskGitLogResult> {

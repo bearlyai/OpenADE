@@ -10,6 +10,7 @@ import { type RuntimeConnection, RuntimeServer } from "../../../runtime/src"
 import { analytics } from "../analytics"
 import { GitLogTray } from "../components/GitLogTray"
 import { ViewPatch } from "../components/ViewPatch"
+import { filesApi } from "../electronAPI/files"
 import { gitApi } from "../electronAPI/git"
 import { snapshotsApi } from "../electronAPI/snapshots"
 import { OpenADEProductStore } from "../kernel/productStore"
@@ -199,6 +200,16 @@ function snapshotIndexForPatch(patch: string | null): OpenADESnapshotPatchIndex 
 function requireStateTask(state: RuntimeBridgeState, taskId: string): OpenADETask {
     if (!state.task || state.task.id !== taskId) throw new Error(`Task ${taskId} not found`)
     return state.task
+}
+
+function requireStateProject(state: RuntimeBridgeState, repoId: string): OpenADEProject {
+    if (!state.project || state.project.id !== repoId) throw new Error(`Repo ${repoId} not found`)
+    return state.project
+}
+
+const runtimeSearchFixture = {
+    path: "src/runtime-search.ts",
+    content: "export const marker = 'runtime needle';\n",
 }
 
 function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapters {
@@ -428,10 +439,55 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
             state.taskUsage = params.usage ?? state.taskUsage
         },
         scopedHost: {
-            listProjectFiles: unsupportedMutation("listProjectFiles"),
-            readProjectFile: unsupportedMutation("readProjectFile"),
+            listProjectFiles: async (params) => {
+                requireStateProject(state, params.repoId)
+                return {
+                    repoId: params.repoId,
+                    path: params.path ?? "",
+                    entries: [
+                        { path: "src", name: "src", type: "directory" },
+                        { path: runtimeSearchFixture.path, name: "runtime-search.ts", type: "file", size: runtimeSearchFixture.content.length },
+                    ],
+                    truncated: false,
+                }
+            },
+            readProjectFile: async (params) => {
+                requireStateProject(state, params.repoId)
+                if (params.path !== runtimeSearchFixture.path) throw new Error(`Project file ${params.path} not found`)
+                const tooLarge = runtimeSearchFixture.content.length > (params.maxBytes ?? Number.POSITIVE_INFINITY)
+                return {
+                    repoId: params.repoId,
+                    path: params.path,
+                    encoding: params.encoding ?? "utf8",
+                    size: runtimeSearchFixture.content.length,
+                    tooLarge,
+                    content: tooLarge ? null : runtimeSearchFixture.content,
+                }
+            },
             writeProjectFile: unsupportedMutation("writeProjectFile"),
-            searchProject: unsupportedMutation("searchProject"),
+            searchProject: async (params) => {
+                requireStateProject(state, params.repoId)
+                const line = runtimeSearchFixture.content.trimEnd()
+                const haystack = params.caseSensitive ? line : line.toLowerCase()
+                const needle = params.caseSensitive ? params.query : params.query.toLowerCase()
+                const matchStart = haystack.indexOf(needle)
+                return {
+                    repoId: params.repoId,
+                    matches:
+                        matchStart >= 0
+                            ? [
+                                  {
+                                      path: runtimeSearchFixture.path,
+                                      line: 1,
+                                      content: line,
+                                      matchStart,
+                                      matchEnd: matchStart + params.query.length,
+                                  },
+                              ]
+                            : [],
+                    truncated: false,
+                }
+            },
             listProjectProcesses: unsupportedMutation("listProjectProcesses"),
             startProjectProcess: unsupportedMutation("startProjectProcess"),
             reconnectProjectProcess: unsupportedMutation("reconnectProjectProcess"),
@@ -896,6 +952,59 @@ describe("CodeStore runtime product store bridge", () => {
             ])
             expect(legacyTaskStoreRead).not.toHaveBeenCalled()
         } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("routes classic content search and preview through runtime project methods for repo-root tasks", async () => {
+        const { client, runtime } = createRuntimeBackedClient({
+            project: { ...project, path: "/tmp/runtime-repo" },
+            task: { ...task, isolationStrategy: { type: "head" } },
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const legacyContentSearch = vi.spyOn(filesApi, "contentSearch").mockRejectedValue(new Error("legacy content search should not be used"))
+        const legacyDescribePath = vi.spyOn(filesApi, "describePath").mockRejectedValue(new Error("legacy file preview should not be used"))
+        const runtimeSearch = vi.spyOn(codeStore, "searchProductProject")
+        const runtimeFileRead = vi.spyOn(codeStore, "readProductProjectFile")
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+
+            const taskModel = codeStore.tasks.getTaskModel("task-1")
+            if (!taskModel) throw new Error("Expected runtime task model")
+            taskModel.contentSearch.setWorkingDir("/tmp/runtime-repo")
+            taskModel.contentSearch.setQuery("needle")
+
+            await vi.waitFor(() => {
+                expect(taskModel.contentSearch.contentResults).toEqual([
+                    expect.objectContaining({
+                        file: "src/runtime-search.ts",
+                        line: 1,
+                        content: expect.stringContaining("runtime needle"),
+                    }),
+                ])
+            })
+            await vi.waitFor(() => {
+                expect(taskModel.contentSearch.previewData?.content).toBe(runtimeSearchFixture.content)
+            })
+
+            expect(runtimeSearch).toHaveBeenCalledWith({ repoId: "repo-1", query: "needle", limit: 100, caseSensitive: false })
+            expect(runtimeFileRead).toHaveBeenCalledWith({ repoId: "repo-1", path: "src/runtime-search.ts", maxBytes: 5 * 1024 * 1024 })
+            expect(legacyContentSearch).not.toHaveBeenCalled()
+            expect(legacyDescribePath).not.toHaveBeenCalled()
+        } finally {
+            runtimeSearch.mockRestore()
+            runtimeFileRead.mockRestore()
+            legacyContentSearch.mockRestore()
+            legacyDescribePath.mockRestore()
             codeStore.disconnectAllStores()
             await runtime.close()
         }

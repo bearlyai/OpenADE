@@ -60,6 +60,10 @@ function gitSummaryFromProductChanges(files: OpenADETaskChangesReadResult["files
     }
 }
 
+function normalizedDirectoryPath(path: string): string {
+    return path.replace(/\\/g, "/").replace(/\/+$/, "")
+}
+
 export class TaskModel {
     gitStatus: GitSummaryResponse | null = null
     model: string = DEFAULT_MODEL
@@ -145,7 +149,16 @@ export class TaskModel {
 
     get contentSearch(): ContentSearchManager {
         if (!this._contentSearch) {
-            this._contentSearch = new ContentSearchManager()
+            this._contentSearch = new ContentSearchManager({
+                getContext: (workingDir) => {
+                    if (!this.usesRuntimeProductReads || !this.repoId) return null
+                    const repo = this.store.repos.getRepo(this.repoId)
+                    if (!repo || normalizedDirectoryPath(repo.path) !== normalizedDirectoryPath(workingDir)) return null
+                    return { repoId: this.repoId }
+                },
+                searchProject: (args) => this.store.searchProductProject(args),
+                readProjectFile: (args) => this.store.readProductProjectFile(args),
+            })
             const dir = this.environment?.taskWorkingDir
             if (dir) this._contentSearch.setWorkingDir(dir)
         }

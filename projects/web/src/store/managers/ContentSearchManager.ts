@@ -1,8 +1,19 @@
 import { makeAutoObservable, runInAction } from "mobx"
+import type { OpenADEProjectFileReadResult, OpenADEProjectSearchResult } from "../../../../openade-module/src"
 import { type ContentSearchMatch, type DescribePathResponse, filesApi } from "../../electronAPI/files"
 
 const MAX_FILE_READ_SIZE = 5 * 1024 * 1024 // 5MB
 const CONTENT_RESULTS_LIMIT = 100 // Max content matches to show
+
+interface ProductProjectSearchContext {
+    repoId: string
+}
+
+interface ProductProjectSearchAccess {
+    getContext(workingDir: string): ProductProjectSearchContext | null
+    searchProject(args: { repoId: string; query: string; limit: number; caseSensitive: boolean }): Promise<OpenADEProjectSearchResult>
+    readProjectFile(args: { repoId: string; path: string; maxBytes: number }): Promise<OpenADEProjectFileReadResult>
+}
 
 /**
  * ContentSearchManager - Manages content search state (ripgrep)
@@ -35,8 +46,53 @@ export class ContentSearchManager {
 
     private searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
-    constructor() {
+    constructor(private readonly productAccess: ProductProjectSearchAccess | null = null) {
         makeAutoObservable(this)
+    }
+
+    private get productContext(): ProductProjectSearchContext | null {
+        return this.productAccess?.getContext(this.workingDir) ?? null
+    }
+
+    private async searchContent(query: string): Promise<{ matches: ContentSearchMatch[]; truncated: boolean }> {
+        const productAccess = this.productAccess
+        const productContext = this.productContext
+        if (productAccess && productContext) {
+            const result = await productAccess.searchProject({
+                repoId: productContext.repoId,
+                query,
+                limit: CONTENT_RESULTS_LIMIT,
+                caseSensitive: false,
+            })
+            return {
+                matches: result.matches.map((match) => ({ ...match, file: match.path })),
+                truncated: result.truncated,
+            }
+        }
+
+        return filesApi.contentSearch({
+            dir: this.workingDir,
+            query,
+            limit: CONTENT_RESULTS_LIMIT,
+            caseSensitive: false,
+            regex: false,
+            rankByHotFiles: true,
+        })
+    }
+
+    private async readPreviewFile(absolutePath: string, relativePath: string): Promise<DescribePathResponse> {
+        const productAccess = this.productAccess
+        const productContext = this.productContext
+        if (productAccess && productContext) {
+            const result = await productAccess.readProjectFile({ repoId: productContext.repoId, path: relativePath, maxBytes: MAX_FILE_READ_SIZE })
+            return productFileReadToDescribePath(absolutePath, result)
+        }
+
+        return filesApi.describePath({
+            path: absolutePath,
+            readContents: true,
+            maxReadSize: MAX_FILE_READ_SIZE,
+        })
     }
 
     setWorkingDir(path: string): void {
@@ -86,14 +142,7 @@ export class ContentSearchManager {
             })
 
             try {
-                const result = await filesApi.contentSearch({
-                    dir: this.workingDir,
-                    query: query.trim(),
-                    limit: CONTENT_RESULTS_LIMIT,
-                    caseSensitive: false,
-                    regex: false,
-                    rankByHotFiles: true,
-                })
+                const result = await this.searchContent(query.trim())
 
                 runInAction(() => {
                     // Only update if query hasn't changed
@@ -188,11 +237,7 @@ export class ContentSearchManager {
         this.previewError = null
 
         try {
-            const response = await filesApi.describePath({
-                path: absolutePath,
-                readContents: true,
-                maxReadSize: MAX_FILE_READ_SIZE,
-            })
+            const response = await this.readPreviewFile(absolutePath, match.file)
 
             runInAction(() => {
                 // Only update if still viewing this file
@@ -226,5 +271,17 @@ export class ContentSearchManager {
 
     get isSearching(): boolean {
         return this.query.trim().length > 0
+    }
+}
+
+function productFileReadToDescribePath(path: string, result: OpenADEProjectFileReadResult): DescribePathResponse {
+    return {
+        type: "file",
+        path,
+        size: result.size,
+        mode: 0,
+        content: result.content,
+        tooLarge: result.tooLarge,
+        isReadable: true,
     }
 }
