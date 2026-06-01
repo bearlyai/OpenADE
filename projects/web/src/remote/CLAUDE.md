@@ -10,6 +10,7 @@ Renderer-side remote control surface shared by the desktop-hosted mobile view an
 - `RemoteApp.tsx` is the remote session adapter and should stay thin over `client.ts`, shared session helpers, and shared shell components.
 - `projects/web/src/kernel/session.ts` owns shared pairing URL parsing, private-host validation, runtime WebSocket URL construction, runtime client caching, and OpenADE client construction. `client.ts` owns companion config persistence and remote-specific read/action helpers on top of that shared session layer.
 - `projects/web/src/kernel/productStore.ts` owns runtime-backed product DTO caching and product mutations. RemoteApp product controls must call the helpers in `client.ts`, which route through this store instead of bespoke companion commands.
+- OpenADE product types should be imported directly from `projects/openade-module/src`; `projects/shared/companion` is only for companion-owned pairing/device/service DTOs.
 - client.ts must cache one runtime WebSocket client per paired host id; navigation, refresh, and multiple subscriptions must not create extra sockets for the same saved credentials.
 - Shared `projects/web/src/shell/task/taskEventPresentation.ts` turns task events into message and activity rows; keep remote-specific code limited to image loading and session wiring.
 - Task-thread scroll behavior is shared with desktop through `projects/web/src/shell/task/useTaskThreadScroll.ts`; do not add remote-only bottom-follow logic back into `RemoteApp.tsx`.

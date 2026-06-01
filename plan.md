@@ -907,7 +907,7 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - `openade/task/changes/read`, `openade/task/diff/read`, and `openade/task/git/log` were added to the OpenADE scoped host boundary for read-only task change inspection.
 - Node kernel hosts execute real git commands against server-resolved task work dirs; Electron hosts wrap the existing desktop git helpers from `projects/electron/src/modules/code/git.ts`.
 - Paired devices may call these scoped OpenADE methods, while raw `git/*`, `fs/*`, `host/*`, `snapshot/*`, and `data/yjs/*` methods remain hidden and denied.
-- `OpenADEClient`, `OpenADEProductStore`, and shared companion DTO aliases now expose typed helpers for task changes, file patches, and git log reads.
+- `OpenADEClient` and `OpenADEProductStore` expose typed helpers for task changes, file patches, and git log reads using OpenADE module DTOs directly.
 - Kernel and companion integration tests cover real temp git repos, modified and untracked files, patch stats/content, git log reads, traversal denial, and authenticated paired WebSocket permission behavior.
 - `projects/web/src/kernel/productStore.test.ts` verifies the shared UI-facing product store reaches the scoped task git helpers through a real `RuntimeServer`, `RuntimeLocalClient`, `OpenADEClient`, and OpenADE module route.
 
@@ -915,7 +915,7 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 
 - `openade/task/git/commit` now lives on the OpenADE scoped host boundary for trusted/local product clients.
 - Node and Electron hosts resolve the task work dir server-side, stage scoped task changes with `git add -A`, commit with a validated message, and report `committed`, `nothing_to_commit`, or `failed` without granting raw `git/*`.
-- `OpenADEClient`, `OpenADEProductStore`, and shared companion DTO aliases expose typed commit helpers that preserve `clientRequestId` for idempotent retry behavior.
+- `OpenADEClient` and `OpenADEProductStore` expose typed commit helpers that preserve `clientRequestId` for idempotent retry behavior.
 - Paired devices do not get `openade/task/git/commit` by default; companion capabilities hide it and permission tests deny it over the authenticated WebSocket path.
 - Kernel and companion integration tests cover real temp-repo commits through the Node kernel and Electron host paths, plus paired-device denial.
 
@@ -939,14 +939,14 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - `openade/project/process/list`, `openade/project/process/start`, `openade/project/process/reconnect`, and `openade/project/process/stop` now live on the OpenADE scoped host boundary.
 - Node and Electron hosts read `openade.toml`, resolve process ids and cwd server-side, reject cwd escape attempts, and then use the existing runtime process adapter for real lifecycle execution.
 - Paired devices may call only these scoped process methods; raw `process/command/start`, `process/script/start`, `process/list`, `process/reconnect`, and `process/kill` remain hidden and denied.
-- `OpenADEClient`, `OpenADEProductStore`, and shared companion DTO aliases expose the typed process list/start/reconnect/stop helpers.
+- `OpenADEClient` and `OpenADEProductStore` expose the typed process list/start/reconnect/stop helpers.
 - Kernel tests cover real WebSocket process list/start/reconnect/stop against a temp repo and invalid `work_dir`; companion tests cover authenticated paired WebSocket process lifecycle plus raw process denial.
 
 ### 2026-05-31: Scoped Task Terminal Methods Added
 
 - `openade/task/terminal/start`, `openade/task/terminal/write`, `openade/task/terminal/reconnect`, `openade/task/terminal/resize`, and `openade/task/terminal/stop` now live on the OpenADE scoped host boundary.
 - Node and Electron hosts derive PTY ids server-side from repo/task ids, resolve the initial cwd through the task workdir rules, normalize reconnect output, and reject client-supplied terminal ids that do not match the task.
-- The typed terminal helpers are exposed through `OpenADEClient`, `OpenADEProductStore`, and shared companion DTO aliases.
+- The typed terminal helpers are exposed through `OpenADEClient` and `OpenADEProductStore`.
 - Paired-device permissions intentionally do not include scoped terminal methods yet. The companion tests prove both raw `pty/*` and scoped `openade/task/terminal/*` methods are hidden and denied until explicit role/admin grants exist.
 - Kernel tests cover real WebSocket PTY start/write/reconnect/resize/stop against a temp repo task and invalid terminal id denial.
 
@@ -1115,7 +1115,8 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - Classic desktop task read helpers now share `CodeStore.loadProductTaskForRead()`. Delete-resource inventory, title regeneration, sidebar task lists, and sidebar copy-path load runtime task DTOs when runtime product reads are active and only use legacy task stores in the fallback path.
 - Runtime notifications now preserve that same boundary: task updates, preview changes, deletions, queued-turn reconciliation, repo snapshot changes, and runtime-settlement after-event callbacks refresh `OpenADEProductStore`/runtime DTO state when runtime reads are active, and only call `refreshRepoStoreFromStorage()` or `refreshTaskStoreFromStorage()` in the legacy fallback path.
 - Classic desktop changes tray reads now keep the old desktop UI while routing file lists, split-view file pairs, unified patches, and from-base comparisons through `CodeStore.readProductTaskChanges()`, `readProductTaskDiff()`, and `readProductTaskFilePair()` when runtime product reads are active. The scoped OpenADE API now exposes `openade/task/filePair/read` so desktop, remote web, and mobile adapters can share the same task-scoped core read without raw trusted-local `git/*`.
-- Classic desktop Git Log tray commit-list reads now keep the old tray UI while routing task-scoped branch history through `CodeStore.readProductTaskGitLog()` when runtime product reads are active. Branch/worktree scope discovery and commit-file/detail reads still use trusted-local `gitApi` until scoped product APIs exist for those details.
+- Classic desktop Git Log tray commit-list, commit-file list, commit file-content, and commit patch reads now keep the old tray UI while routing task-scoped branch history/details through `CodeStore.readProductTaskGitLog()`, `readProductTaskGitCommitFiles()`, `readProductTaskGitFileAtTreeish()`, and `readProductTaskGitCommitFilePatch()`. Branch/worktree scope discovery still uses trusted-local `gitApi`; non-task worktree scopes remain the explicit local fallback until the product API owns scope discovery.
+- `projects/shared/companion` no longer exports `Remote*` aliases for OpenADE product DTOs. Remote/mobile code imports product types directly from `projects/openade-module/src`, leaving the companion package for actual companion-owned pairing, device, keep-awake, and coarse event contracts.
 - Classic desktop snapshot event reads now keep `SnapshotEventItem` and `ViewPatch` while routing external patch, index, and slice loads through `CodeStore.readProductTaskSnapshotPatch()`, `readProductTaskSnapshotIndex()`, and `readProductTaskSnapshotPatchSlice()` when runtime product reads are active. Raw `snapshotsApi` reads remain trusted-local fallback only.
 - `projects/web/src/Routes.runtimeProductStore.test.ts` now verifies the default workspace redirect and classic desktop task route through a real `RuntimeServer` behind the production local runtime bridge, while asserting the compact shared task surface is absent and there is no `runtime_product_store_fallback` or `runtime_product_store_error` telemetry during normal default-on route flows.
 - Latest packaged default-on verification passed after rebuilding Electron, rebuilding the bundled web app, and packaging a mac directory build: `cd projects/electron && npm run build && npm run build:web && NONOTARY=1 CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir`, then `npm run test:smoke`. The packaged smoke relaunches the built app, navigates from the workspace URL to the classic desktop task route, and asserts the stable `data-openade-surface="desktop-classic-task"` marker while verifying the shared project/task markers are absent by default.

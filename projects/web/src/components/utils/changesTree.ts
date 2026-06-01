@@ -1,4 +1,4 @@
-import type { ChangedFileInfo } from "../../electronAPI/git"
+import type { OpenADETaskGitChangedFile } from "../../../../openade-module/src"
 import { splitPath } from "./paths"
 
 export interface FileTreeNode {
@@ -6,7 +6,7 @@ export interface FileTreeNode {
     path: string
     isDir: boolean
     children: FileTreeNode[]
-    file?: ChangedFileInfo
+    file?: OpenADETaskGitChangedFile
     fileCount: number
 }
 
@@ -63,7 +63,7 @@ function getOrCreateDirNode(parentChildren: FileTreeNode[], name: string, path: 
     return dirNode
 }
 
-export function buildFileTree(files: ChangedFileInfo[]): FileTreeNode[] {
+export function buildFileTree(files: OpenADETaskGitChangedFile[]): FileTreeNode[] {
     const rootNodes: FileTreeNode[] = []
 
     for (const file of files) {

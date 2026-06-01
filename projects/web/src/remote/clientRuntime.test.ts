@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { OpenADEClientOptions } from "../../../openade-client/src"
+import type { OpenADESnapshot, OpenADETask, OpenADETurnStartResult } from "../../../openade-module/src"
 import type { RuntimeClientOptions } from "../../../runtime-client/src"
-import type { RemoteSnapshot, RemoteTask, RemoteTurnStartResult } from "../../../shared/companion/src"
 import {
     type RemoteConfig,
     __setRemoteClientConstructorsForTest,
@@ -21,7 +21,7 @@ const runtimeClients: RuntimeClient[] = []
 const openadeClients: OpenADEClient[] = []
 const changeListeners: Array<(notification: { method: string; params?: unknown }) => void> = []
 let testRun = 0
-let startTurnResult: RemoteTurnStartResult = { taskId: "task-1" }
+let startTurnResult: OpenADETurnStartResult = { taskId: "task-1" }
 let getTaskFailures = 0
 let restoreClientConstructors: (() => void) | undefined
 
@@ -37,13 +37,13 @@ class RuntimeClient {
 
 class OpenADEClient {
     getSnapshot = vi.fn(
-        async (): Promise<RemoteSnapshot> => ({
+        async (): Promise<OpenADESnapshot> => ({
             repos: [],
             workingTaskIds: [],
             server: { version: "test", hostName: "test", theme: { setting: "system", className: "code-theme-light" } },
         })
     )
-    getTask = vi.fn(async (): Promise<RemoteTask> => {
+    getTask = vi.fn(async (): Promise<OpenADETask> => {
         if (getTaskFailures > 0) {
             getTaskFailures -= 1
             throw new Error("Runtime socket disconnected")
@@ -59,7 +59,7 @@ class OpenADEClient {
             deviceEnvironments: [],
         }
     })
-    startTurn = vi.fn(async (): Promise<RemoteTurnStartResult> => startTurnResult)
+    startTurn = vi.fn(async (): Promise<OpenADETurnStartResult> => startTurnResult)
     listProjectFiles = vi.fn(async () => ({ repoId: "repo-1", path: "", entries: [], truncated: false }))
     readProjectFile = vi.fn(async () => ({ repoId: "repo-1", path: "README.md", encoding: "utf8" as const, size: 0, tooLarge: false, content: "" }))
     writeProjectFile = vi.fn(async (args: { repoId: string; path: string; content: string }) => ({
@@ -118,6 +118,25 @@ class OpenADEClient {
         after: "after\n",
     }))
     readTaskGitLog = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", commits: [], hasMore: false }))
+    readTaskGitCommitFiles = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", commit: "abc123", files: [] }))
+    readTaskGitFileAtTreeish = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        treeish: "abc123",
+        filePath: "README.md",
+        content: "",
+        exists: true,
+    }))
+    readTaskGitCommitFilePatch = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        commit: "abc123",
+        filePath: "README.md",
+        patch: "",
+        truncated: false,
+        heavy: false,
+        stats: { insertions: 0, deletions: 0, changedLines: 0, hunkCount: 0 },
+    }))
     commitTaskGit = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", committed: false, status: "nothing_to_commit" as const }))
     readTaskImage = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", imageId: "image-1", ext: "png", mediaType: "image/png", data: "" }))
     readTaskSnapshotPatch = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", eventId: "snapshot-1", patch: "" }))

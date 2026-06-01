@@ -58,8 +58,15 @@ import {
     type OpenADETaskDiffReadResult,
     type OpenADETaskFilePairReadRequest,
     type OpenADETaskFilePairReadResult,
+    type OpenADETaskGitChangedFile,
+    type OpenADETaskGitCommitFilePatchRequest,
+    type OpenADETaskGitCommitFilePatchResult,
+    type OpenADETaskGitCommitFilesRequest,
+    type OpenADETaskGitCommitFilesResult,
     type OpenADETaskGitCommitRequest,
     type OpenADETaskGitCommitResult,
+    type OpenADETaskGitFileAtTreeishRequest,
+    type OpenADETaskGitFileAtTreeishResult,
     type OpenADETaskGitLogRequest,
     type OpenADETaskGitLogResult,
     type OpenADETaskImageReadRequest,
@@ -101,6 +108,9 @@ import {
     deleteRuntimeBranch,
     deleteRuntimeWorkTree,
     getRuntimeChangedFiles,
+    getRuntimeCommitFilePatch,
+    getRuntimeCommitFiles,
+    getRuntimeFileAtTreeish,
     getRuntimeFilePair,
     getRuntimeGitLog,
     getOrCreateRuntimeWorkTree,
@@ -108,7 +118,6 @@ import {
     getRuntimeMergeBase,
     getRuntimeWorktreeFilePatch,
     isRuntimeGitDirectory,
-    type ChangedFileInfo,
     commitRuntimeWorkingTree,
 } from "../code/git"
 import {
@@ -1221,6 +1230,60 @@ async function readScopedTaskGitLog(params: OpenADETaskGitLogRequest & { repo: O
     }
 }
 
+async function readScopedTaskGitCommitFiles(
+    params: OpenADETaskGitCommitFilesRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskGitCommitFilesResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const result = await getRuntimeCommitFiles({ workDir, commit: params.commit })
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        commit: params.commit,
+        files: result.files,
+    }
+}
+
+async function readScopedTaskGitFileAtTreeish(
+    params: OpenADETaskGitFileAtTreeishRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskGitFileAtTreeishResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const result = await getRuntimeFileAtTreeish({ workDir, treeish: params.treeish, filePath: params.filePath })
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        treeish: params.treeish,
+        filePath: params.filePath,
+        content: result.content,
+        exists: result.exists,
+        tooLarge: result.tooLarge,
+    }
+}
+
+async function readScopedTaskGitCommitFilePatch(
+    params: OpenADETaskGitCommitFilePatchRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskGitCommitFilePatchResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const result = await getRuntimeCommitFilePatch({
+        workDir,
+        commit: params.commit,
+        filePath: params.filePath,
+        oldPath: params.oldPath,
+        contextLines: params.contextLines ?? 3,
+        allowTruncation: params.allowTruncation,
+    })
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        commit: params.commit,
+        filePath: params.filePath,
+        oldPath: params.oldPath,
+        patch: result.patch,
+        truncated: result.truncated,
+        heavy: result.heavy,
+        stats: result.stats,
+    }
+}
+
 async function commitScopedTaskGit(params: OpenADETaskGitCommitRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitCommitResult> {
     const workDir = await scopedTaskWorkDir(params.repo, params.task)
     const result = await commitRuntimeWorkingTree({ workDir, message: params.message })
@@ -2103,7 +2166,7 @@ async function buildSnapshotPatch(rootPath: string, fromTreeish: string): Promis
 
 function snapshotPatchFile(
     id: string,
-    file: ChangedFileInfo,
+    file: OpenADETaskGitChangedFile,
     patchResult: Awaited<ReturnType<typeof getRuntimeWorktreeFilePatch>>,
     patch: string,
     patchStart: number,
@@ -2347,6 +2410,9 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                 readTaskDiff: readScopedTaskDiff,
                 readTaskFilePair: readScopedTaskFilePair,
                 readTaskGitLog: readScopedTaskGitLog,
+                readTaskGitCommitFiles: readScopedTaskGitCommitFiles,
+                readTaskGitFileAtTreeish: readScopedTaskGitFileAtTreeish,
+                readTaskGitCommitFilePatch: readScopedTaskGitCommitFilePatch,
                 commitTaskGit: commitScopedTaskGit,
                 listProjectProcesses: listScopedProjectProcesses,
                 startProjectProcess: startScopedProjectProcess,

@@ -5,17 +5,28 @@
  * Implements worktree management, diff generation, file listing with fuzzy search, and basic git commands.
  */
 
-import * as path from "path"
-import * as os from "os"
-import * as fs from "fs"
+import * as path from "node:path"
+import * as os from "node:os"
+import * as fs from "node:fs"
 import * as fsExtra from "fs-extra"
 import logger from "electron-log"
 import fuzzysort from "fuzzysort"
+import type {
+    OpenADETaskChangesReadResult,
+    OpenADETaskDiffContextLines,
+    OpenADETaskDiffReadResult,
+    OpenADETaskFilePairReadResult,
+    OpenADETaskGitChangedFile,
+    OpenADETaskGitCommitFilesResult,
+    OpenADETaskGitFileAtTreeishResult,
+    OpenADETaskGitLogEntry,
+    OpenADETaskGitLogResult,
+} from "../../../../openade-module/src"
 import { execCommand } from "./subprocess"
 
 // ============================================================================
 // Type Definitions
-// IMPORTANT: Keep in sync with projects/dashboard/src/pages/code/electronAPI/git.ts
+// Product-equivalent git payloads derive from OpenADE DTOs; only bridge params stay local.
 // ============================================================================
 
 export interface IsGitInstalledResponse {
@@ -243,17 +254,7 @@ export interface GetChangedFilesParams {
     toTreeish: string
 }
 
-export interface ChangedFileInfo {
-    path: string
-    status: "added" | "deleted" | "modified" | "renamed"
-    oldPath?: string // For renamed files
-}
-
-export interface GetChangedFilesResponse {
-    files: ChangedFileInfo[]
-    fromTreeish: string
-    toTreeish: string
-}
+export type GetChangedFilesResponse = Pick<OpenADETaskChangesReadResult, "files" | "fromTreeish" | "toTreeish">
 
 export interface GetFileAtTreeishParams {
     workDir: string
@@ -261,11 +262,7 @@ export interface GetFileAtTreeishParams {
     filePath: string
 }
 
-export interface GetFileAtTreeishResponse {
-    content: string
-    exists: boolean
-    tooLarge?: boolean
-}
+export type GetFileAtTreeishResponse = Pick<OpenADETaskGitFileAtTreeishResult, "content" | "exists" | "tooLarge">
 
 export interface GetFilePairParams {
     workDir: string
@@ -275,18 +272,14 @@ export interface GetFilePairParams {
     oldPath?: string // For renamed files
 }
 
-export interface GetFilePairResponse {
-    before: string
-    after: string
-    tooLarge?: boolean
-}
+export type GetFilePairResponse = Pick<OpenADETaskFilePairReadResult, "before" | "after" | "tooLarge">
 
 export interface GetWorktreeFilePatchParams {
     workDir: string
     fromTreeish: string
     filePath: string
     oldPath?: string // For renamed files
-    contextLines: 1 | 3 | 10 | 25 | 100
+    contextLines: OpenADETaskDiffContextLines
     allowTruncation?: boolean
 }
 
@@ -295,21 +288,11 @@ export interface GetCommitFilePatchParams {
     commit: string
     filePath: string
     oldPath?: string // For renamed files
-    contextLines: 1 | 3 | 10 | 25 | 100
+    contextLines: OpenADETaskDiffContextLines
     allowTruncation?: boolean
 }
 
-export interface GetFilePatchResponse {
-    patch: string
-    truncated: boolean
-    heavy: boolean
-    stats: {
-        insertions: number
-        deletions: number
-        changedLines: number
-        hunkCount: number
-    }
-}
+export type GetFilePatchResponse = Pick<OpenADETaskDiffReadResult, "patch" | "truncated" | "heavy" | "stats">
 
 export interface GetGitLogParams {
     workDir: string
@@ -318,29 +301,14 @@ export interface GetGitLogParams {
     skip?: number
 }
 
-export interface GitLogEntry {
-    sha: string
-    shortSha: string
-    message: string
-    author: string
-    date: string
-    relativeDate: string
-    parentCount: number
-}
-
-export interface GetGitLogResponse {
-    commits: GitLogEntry[]
-    hasMore: boolean
-}
+export type GetGitLogResponse = Pick<OpenADETaskGitLogResult, "commits" | "hasMore">
 
 export interface GetCommitFilesParams {
     workDir: string
     commit: string
 }
 
-export interface GetCommitFilesResponse {
-    files: ChangedFileInfo[]
-}
+export type GetCommitFilesResponse = Pick<OpenADETaskGitCommitFilesResult, "files">
 
 // ============================================================================
 // Helper Functions
@@ -431,8 +399,8 @@ async function execGit(args: string[], cwd?: string): Promise<{ stdout: string; 
     return execCommand("git", args, { cwd, maxBuffer: 50 * 1024 * 1024 })
 }
 
-function parseNameStatusOutput(stdout: string): ChangedFileInfo[] {
-    const files: ChangedFileInfo[] = []
+function parseNameStatusOutput(stdout: string): OpenADETaskGitChangedFile[] {
+    const files: OpenADETaskGitChangedFile[] = []
     const lines = stdout.trim().split("\n").filter(Boolean)
 
     for (const line of lines) {
@@ -973,7 +941,7 @@ function parseNumstatOutput(output: string): GitFileInfo[] {
 }
 
 /** Merge status codes from --name-status into GitFileInfo[] from --numstat */
-function mergeFileStatuses(files: GitFileInfo[], statuses: ChangedFileInfo[]): void {
+function mergeFileStatuses(files: GitFileInfo[], statuses: OpenADETaskGitChangedFile[]): void {
     const statusMap = new Map(statuses.map((s) => [s.path, s.status]))
     for (const file of files) {
         file.status = statusMap.get(file.path) ?? "modified"
@@ -999,10 +967,10 @@ function parseNumstatStats(output: string): UncommittedChangesStats {
         const additions = parts[0]
         const removals = parts[1]
         if (additions !== "-") {
-            insertions += parseInt(additions, 10) || 0
+            insertions += Number.parseInt(additions, 10) || 0
         }
         if (removals !== "-") {
-            deletions += parseInt(removals, 10) || 0
+            deletions += Number.parseInt(removals, 10) || 0
         }
     }
 
@@ -1058,11 +1026,11 @@ async function collectGitSummaryData(workingDir: string): Promise<GitSummaryData
     if (branch) {
         const aheadResult = await execGit(["rev-list", "--count", "@{upstream}..HEAD"], workingDir)
         if (aheadResult.success) {
-            ahead = parseInt(aheadResult.stdout.trim(), 10) || 0
+            ahead = Number.parseInt(aheadResult.stdout.trim(), 10) || 0
         } else {
             const fallbackResult = await execGit(["rev-list", "--count", "origin/HEAD..HEAD"], workingDir)
             if (fallbackResult.success) {
-                ahead = parseInt(fallbackResult.stdout.trim(), 10) || 0
+                ahead = Number.parseInt(fallbackResult.stdout.trim(), 10) || 0
             }
         }
     }
@@ -1256,7 +1224,7 @@ async function handleListFiles(params: ListFilesParams): Promise<ListFilesRespon
         logger.info("[Git:listFiles] Files retrieved", JSON.stringify({ count: files.length }))
 
         // Apply fuzzy search if query provided
-        if (params.query && params.query.trim()) {
+        if (params.query?.trim()) {
             const fuzzyResults = fuzzysort.go(params.query, files)
             files = fuzzyResults.map((result) => result.target)
             logger.info("[Git:listFiles] Fuzzy search applied", JSON.stringify({ query: params.query, matchCount: files.length }))
@@ -1706,7 +1674,7 @@ async function handleGetGitLog(params: GetGitLogParams): Promise<GetGitLogRespon
             .split(RECORD_SEPARATOR)
             .map((record) => record.trim())
             .filter(Boolean)
-            .map((record): GitLogEntry => {
+            .map((record): OpenADETaskGitLogEntry => {
                 const [rawSha = "", rawShortSha = "", message = "", author = "", rawDate = "", rawRelativeDate = "", rawParents = ""] =
                     record.split(FIELD_SEPARATOR)
                 const sha = rawSha.trim()
@@ -1933,7 +1901,7 @@ function resolveWorktreeFilePath(workDir: string, filePath: string): { absoluteP
     }
 }
 
-function finalizeFilePatchResponse(patch: string, allowTruncation: boolean = true): GetFilePatchResponse {
+function finalizeFilePatchResponse(patch: string, allowTruncation = true): GetFilePatchResponse {
     if (!patch) {
         return createEmptyFilePatchResponse()
     }
@@ -1960,7 +1928,7 @@ async function getUntrackedFilePatch(
     workDir: string,
     filePath: string,
     contextLines: 1 | 3 | 10 | 25 | 100,
-    allowTruncation: boolean = true
+    allowTruncation = true
 ): Promise<GetFilePatchResponse> {
     const resolvedPath = resolveWorktreeFilePath(workDir, filePath)
     if (!resolvedPath) {
@@ -2011,7 +1979,7 @@ async function handleGetFileAtTreeish(params: GetFileAtTreeishParams): Promise<G
             throw new Error(`Failed to get file size: ${sizeResult.stderr}`)
         }
 
-        const fileSize = parseInt(sizeResult.stdout.trim(), 10)
+        const fileSize = Number.parseInt(sizeResult.stdout.trim(), 10)
         if (fileSize > MAX_FILE_SIZE_FOR_DIFF) {
             logger.info("[Git:getFileAtTreeish] File too large for diff", JSON.stringify({
                 filePath: params.filePath,

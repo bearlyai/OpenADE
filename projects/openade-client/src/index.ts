@@ -52,8 +52,14 @@ import type {
     OpenADETaskFilePairReadRequest,
     OpenADETaskFilePairReadResult,
     OpenADETaskEnvironmentSetupRequest,
+    OpenADETaskGitCommitFilePatchRequest,
+    OpenADETaskGitCommitFilePatchResult,
+    OpenADETaskGitCommitFilesRequest,
+    OpenADETaskGitCommitFilesResult,
     OpenADETaskGitCommitRequest,
     OpenADETaskGitCommitResult,
+    OpenADETaskGitFileAtTreeishRequest,
+    OpenADETaskGitFileAtTreeishResult,
     OpenADETaskGitLogRequest,
     OpenADETaskGitLogResult,
     OpenADETaskImageReadRequest,
@@ -179,6 +185,18 @@ export class OpenADEClient {
 
     async readTaskGitLog(args: OpenADETaskGitLogRequest): Promise<OpenADETaskGitLogResult> {
         return this.request("openade/task/git/log", args)
+    }
+
+    async readTaskGitCommitFiles(args: OpenADETaskGitCommitFilesRequest): Promise<OpenADETaskGitCommitFilesResult> {
+        return this.request("openade/task/git/commit/files/read", args)
+    }
+
+    async readTaskGitFileAtTreeish(args: OpenADETaskGitFileAtTreeishRequest): Promise<OpenADETaskGitFileAtTreeishResult> {
+        return this.request("openade/task/git/fileAtTreeish/read", args)
+    }
+
+    async readTaskGitCommitFilePatch(args: OpenADETaskGitCommitFilePatchRequest): Promise<OpenADETaskGitCommitFilePatchResult> {
+        return this.request("openade/task/git/commit/filePatch/read", args)
     }
 
     async commitTaskGit(args: OpenADETaskGitCommitRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskGitCommitResult> {

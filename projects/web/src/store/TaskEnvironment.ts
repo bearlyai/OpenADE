@@ -1,5 +1,6 @@
 import { exhaustive } from "exhaustive"
-import { type ChangedFileInfo, type GetFilePairResponse, type GitStatusResponse, type GitSummaryResponse, gitApi } from "../electronAPI/git"
+import type { OpenADETaskGitChangedFile } from "../../../openade-module/src"
+import { type GetFilePairResponse, type GitStatusResponse, type GitSummaryResponse, gitApi } from "../electronAPI/git"
 import type { SnapshotPatchIndex } from "../electronAPI/snapshots"
 import type { IsolationStrategy, Repo, SnapshotChangedFile, Task, TaskDeviceEnvironment } from "../types"
 import { getDeviceId } from "../utils/deviceId"
@@ -116,7 +117,7 @@ export class TaskEnvironment {
         }
     }
 
-    private async getSnapshotChangedFiles(fromTreeish: string): Promise<ChangedFileInfo[]> {
+    private async getSnapshotChangedFiles(fromTreeish: string): Promise<OpenADETaskGitChangedFile[]> {
         const result = await gitApi.getChangedFiles({
             workDir: this.taskRootDir,
             fromTreeish,
@@ -125,7 +126,7 @@ export class TaskEnvironment {
         return result.files
     }
 
-    private async buildPatchResult(fromTreeish: string, changedFiles: ChangedFileInfo[]): Promise<PatchResult> {
+    private async buildPatchResult(fromTreeish: string, changedFiles: OpenADETaskGitChangedFile[]): Promise<PatchResult> {
         if (changedFiles.length === 0) {
             return {
                 patch: "",

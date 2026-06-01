@@ -53,8 +53,14 @@ import type {
     OpenADETaskDiffReadResult,
     OpenADETaskFilePairReadRequest,
     OpenADETaskFilePairReadResult,
+    OpenADETaskGitCommitFilePatchRequest,
+    OpenADETaskGitCommitFilePatchResult,
+    OpenADETaskGitCommitFilesRequest,
+    OpenADETaskGitCommitFilesResult,
     OpenADETaskGitCommitRequest,
     OpenADETaskGitCommitResult,
+    OpenADETaskGitFileAtTreeishRequest,
+    OpenADETaskGitFileAtTreeishResult,
     OpenADETaskGitLogRequest,
     OpenADETaskGitLogResult,
     OpenADETaskImageReadRequest,
@@ -156,6 +162,13 @@ export interface OpenADEScopedHostAdapter {
     readTaskDiff(params: OpenADETaskDiffReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskDiffReadResult>
     readTaskFilePair(params: OpenADETaskFilePairReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskFilePairReadResult>
     readTaskGitLog(params: OpenADETaskGitLogRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitLogResult>
+    readTaskGitCommitFiles(params: OpenADETaskGitCommitFilesRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitCommitFilesResult>
+    readTaskGitFileAtTreeish(
+        params: OpenADETaskGitFileAtTreeishRequest & { repo: OpenADEProject; task: OpenADETask }
+    ): Promise<OpenADETaskGitFileAtTreeishResult>
+    readTaskGitCommitFilePatch(
+        params: OpenADETaskGitCommitFilePatchRequest & { repo: OpenADEProject; task: OpenADETask }
+    ): Promise<OpenADETaskGitCommitFilePatchResult>
     commitTaskGit(params: OpenADETaskGitCommitRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitCommitResult>
     readTaskSnapshotPatch(
         params: OpenADETaskSnapshotPatchReadRequest & { repo: OpenADEProject; task: OpenADETask; snapshotEvent: OpenADESnapshotEventRecord }
@@ -505,6 +518,46 @@ function taskGitLogParams(params: unknown): OpenADETaskGitLogRequest {
         ref: optionalStringParam(record, "ref"),
         limit: optionalPositiveIntegerParam(record, "limit"),
         skip: optionalNonNegativeIntegerParam(record, "skip", 0),
+    }
+}
+
+function taskGitTreeishParam(record: Record<string, unknown>, key: string): string {
+    const value = stringParam(record, key).trim()
+    if (!value || value.length > 512 || value.includes("\0") || value.includes(":") || value.includes("..") || value.startsWith("-") || /\s/.test(value)) {
+        throw new Error(`${key} is invalid`)
+    }
+    return value
+}
+
+function taskGitCommitFilesParams(params: unknown): OpenADETaskGitCommitFilesRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        commit: taskGitTreeishParam(record, "commit"),
+    }
+}
+
+function taskGitFileAtTreeishParams(params: unknown): OpenADETaskGitFileAtTreeishRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        treeish: taskGitTreeishParam(record, "treeish"),
+        filePath: scopedRelativePathParam(record, "filePath"),
+    }
+}
+
+function taskGitCommitFilePatchParams(params: unknown): OpenADETaskGitCommitFilePatchRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        commit: taskGitTreeishParam(record, "commit"),
+        filePath: scopedRelativePathParam(record, "filePath"),
+        oldPath: optionalScopedRelativePathParam(record, "oldPath") || undefined,
+        contextLines: taskDiffContextLinesParam(record.contextLines),
+        allowTruncation: booleanParam(record, "allowTruncation"),
     }
 }
 
@@ -1362,6 +1415,21 @@ export function createOpenADEModule(adapters: OpenADEModuleAdapters): RuntimeMod
                     const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
                     return scopedHost.readTaskGitLog({ ...request, repo, task })
                 }, { validateParams: validateWith(taskGitLogParams) })
+                server.register("openade/task/git/commit/files/read", async (params) => {
+                    const request = taskGitCommitFilesParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return scopedHost.readTaskGitCommitFiles({ ...request, repo, task })
+                }, { validateParams: validateWith(taskGitCommitFilesParams) })
+                server.register("openade/task/git/fileAtTreeish/read", async (params) => {
+                    const request = taskGitFileAtTreeishParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return scopedHost.readTaskGitFileAtTreeish({ ...request, repo, task })
+                }, { validateParams: validateWith(taskGitFileAtTreeishParams) })
+                server.register("openade/task/git/commit/filePatch/read", async (params) => {
+                    const request = taskGitCommitFilePatchParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return scopedHost.readTaskGitCommitFilePatch({ ...request, repo, task })
+                }, { validateParams: validateWith(taskGitCommitFilePatchParams) })
                 server.register("openade/task/git/commit", async (params) => {
                     const request = taskGitCommitParams(params)
                     const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)

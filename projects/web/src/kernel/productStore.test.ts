@@ -298,6 +298,31 @@ function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: Runt
                 ],
                 hasMore: false,
             }),
+            readTaskGitCommitFiles: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                commit: params.commit,
+                files: [{ path: "README.md", status: "modified" }],
+            }),
+            readTaskGitFileAtTreeish: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                treeish: params.treeish,
+                filePath: params.filePath,
+                content: "runtime product store\n",
+                exists: true,
+            }),
+            readTaskGitCommitFilePatch: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                commit: params.commit,
+                filePath: params.filePath,
+                oldPath: params.oldPath,
+                patch: "diff --git a/README.md b/README.md\n+runtime product store\n",
+                truncated: false,
+                heavy: false,
+                stats: { insertions: 1, deletions: 0, changedLines: 1, hunkCount: 1 },
+            }),
             commitTaskGit: async (params) => ({
                 repoId: params.repoId,
                 taskId: params.taskId,
@@ -417,6 +442,20 @@ describe("OpenADEProductStore", () => {
         })
         await expect(store.readTaskGitLog({ repoId: "repo-1", taskId: "task-1" })).resolves.toMatchObject({
             commits: [expect.objectContaining({ message: "Runtime product store commit" })],
+        })
+        await expect(store.readTaskGitCommitFiles({ repoId: "repo-1", taskId: "task-1", commit: "abc123" })).resolves.toMatchObject({
+            commit: "abc123",
+            files: [expect.objectContaining({ path: "README.md", status: "modified" })],
+        })
+        await expect(store.readTaskGitFileAtTreeish({ repoId: "repo-1", taskId: "task-1", treeish: "abc123", filePath: "README.md" })).resolves.toMatchObject({
+            treeish: "abc123",
+            filePath: "README.md",
+            content: "runtime product store\n",
+        })
+        await expect(store.readTaskGitCommitFilePatch({ repoId: "repo-1", taskId: "task-1", commit: "abc123", filePath: "README.md" })).resolves.toMatchObject({
+            commit: "abc123",
+            filePath: "README.md",
+            patch: expect.stringContaining("+runtime product store"),
         })
         await expect(store.commitTaskGit({ repoId: "repo-1", taskId: "task-1", message: "Product store commit" })).resolves.toMatchObject({
             committed: true,

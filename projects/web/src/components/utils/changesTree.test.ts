@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest"
-import type { ChangedFileInfo } from "../../electronAPI/git"
+import type { OpenADETaskGitChangedFile } from "../../../../openade-module/src"
 import { buildFileTree, collectAllDirPaths, collectAncestorDirPaths, collectInitialDirPaths, flattenFileTree } from "./changesTree"
 
-function changedFile(path: string, status: ChangedFileInfo["status"] = "modified", extra: Partial<ChangedFileInfo> = {}): ChangedFileInfo {
+function changedFile(
+    path: string,
+    status: OpenADETaskGitChangedFile["status"] = "modified",
+    extra: Partial<OpenADETaskGitChangedFile> = {}
+): OpenADETaskGitChangedFile {
     return {
         path,
         status,
@@ -62,7 +66,7 @@ describe("buildFileTree", () => {
         expect(utils?.fileCount).toBe(1)
     })
 
-    it("preserves ChangedFileInfo on leaf nodes including renamed files", () => {
+    it("preserves OpenADE git changed file data on leaf nodes including renamed files", () => {
         const tree = buildFileTree([
             changedFile("src/new-name.ts", "renamed", {
                 oldPath: "src/old-name.ts",

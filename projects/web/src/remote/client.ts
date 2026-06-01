@@ -1,12 +1,5 @@
 import type { RuntimeNotification } from "../../../runtime-protocol/src"
-import type {
-    PairRequest,
-    RemoteDeviceSelfRevokeResult,
-    RemoteSnapshot,
-    RemoteTask,
-    RemoteTurnStartRequest,
-    RemoteTurnStartResult,
-} from "../../../shared/companion/src"
+import type { PairRequest, RemoteDeviceSelfRevokeResult } from "../../../shared/companion/src"
 import type {
     OpenADECommentCreateRequest,
     OpenADECommentCreateResult,
@@ -29,6 +22,8 @@ import type {
     OpenADEQueuedTurnCancelRequest,
     OpenADEQueuedTurnCancelResult,
     OpenADEReviewStartRequest,
+    OpenADESnapshot,
+    OpenADETask,
     OpenADETaskDeleteRequest,
     OpenADETaskDeleteResult,
     OpenADETaskChangesReadRequest,
@@ -43,6 +38,8 @@ import type {
     OpenADETaskImageReadResult,
     OpenADETaskMetadataUpdateRequest,
     OpenADETaskReadOptions,
+    OpenADETurnStartRequest,
+    OpenADETurnStartResult,
 } from "../../../openade-module/src"
 import { RuntimeClientError } from "../../../runtime-client/src"
 import {
@@ -66,16 +63,7 @@ export interface RemoteConfig extends KernelSessionConfig {}
 export const REMOTE_CONFIG_STORAGE_KEY = "openade-companion-config"
 export type RemoteRealtimeConnectionStatus = KernelRealtimeConnectionStatus
 
-interface RemoteRuntimeClient extends KernelRuntimeClientLike {}
-
-interface RemoteOpenADEClient extends OpenADEProductClient {
-    getSnapshot(): Promise<RemoteSnapshot>
-    getTask(repoId: string, taskId: string, options?: OpenADETaskReadOptions): Promise<RemoteTask>
-    startTurn(args: RemoteTurnStartRequest): Promise<RemoteTurnStartResult>
-    interruptTurn(taskId: string): Promise<void>
-}
-
-type RemoteClientConstructors = KernelSessionConstructors<RemoteRuntimeClient, RemoteOpenADEClient>
+type RemoteClientConstructors = KernelSessionConstructors<KernelRuntimeClientLike, OpenADEProductClient>
 
 const remoteSessionDefaults = {
     clientName: "OpenADE Companion",
@@ -83,8 +71,8 @@ const remoteSessionDefaults = {
     protocolVersion: 1,
     reconnect: true,
 }
-let remoteSessionManager = new KernelSessionManager<RemoteRuntimeClient, RemoteOpenADEClient>(defaultKernelSessionConstructors, remoteSessionDefaults)
-const remoteProductStores = new Map<string, { openade: RemoteOpenADEClient; store: OpenADEProductStore }>()
+let remoteSessionManager = new KernelSessionManager<KernelRuntimeClientLike, OpenADEProductClient>(defaultKernelSessionConstructors, remoteSessionDefaults)
+const remoteProductStores = new Map<string, { openade: OpenADEProductClient; store: OpenADEProductStore }>()
 
 function clearRuntimeClientCache(): void {
     for (const entry of remoteProductStores.values()) {
@@ -97,7 +85,7 @@ function clearRuntimeClientCache(): void {
 export function __setRemoteClientConstructorsForTest(constructors: RemoteClientConstructors): () => void {
     const previous = remoteSessionManager
     clearRuntimeClientCache()
-    remoteSessionManager = new KernelSessionManager<RemoteRuntimeClient, RemoteOpenADEClient>(constructors, remoteSessionDefaults)
+    remoteSessionManager = new KernelSessionManager<KernelRuntimeClientLike, OpenADEProductClient>(constructors, remoteSessionDefaults)
     return () => {
         clearRuntimeClientCache()
         remoteSessionManager = previous
@@ -161,7 +149,7 @@ async function retryTransientRead<T>(read: () => Promise<T>): Promise<T> {
 function runtimeEntry(
     config: RemoteConfig,
     onStatus?: (status: RemoteRealtimeConnectionStatus) => void
-): { entry: KernelSessionEntry<RemoteRuntimeClient, RemoteOpenADEClient>; removeStatus: () => void } {
+): { entry: KernelSessionEntry<KernelRuntimeClientLike, OpenADEProductClient>; removeStatus: () => void } {
     return remoteSessionManager.session(config, onStatus)
 }
 
@@ -193,11 +181,11 @@ export async function pairRemote(baseUrl: string, token: string): Promise<Remote
     return saveRemoteConfig({ baseUrl: target.baseUrl, token: result.deviceToken, host: target.host, hostId: target.hostId })
 }
 
-export function getSnapshot(config: RemoteConfig): Promise<RemoteSnapshot> {
+export function getSnapshot(config: RemoteConfig): Promise<OpenADESnapshot> {
     return retryTransientRead(() => productStore(config).refreshSnapshot())
 }
 
-export function getTask(config: RemoteConfig, repoId: string, taskId: string, options: OpenADETaskReadOptions = {}): Promise<RemoteTask> {
+export function getTask(config: RemoteConfig, repoId: string, taskId: string, options: OpenADETaskReadOptions = {}): Promise<OpenADETask> {
     return retryTransientRead(() => productStore(config).getTask(repoId, taskId, options))
 }
 
@@ -252,7 +240,7 @@ export function stopRemoteProjectProcess(config: RemoteConfig, args: OpenADEProj
     return productStore(config).stopProjectProcess(args)
 }
 
-export function startRemoteTurn(config: RemoteConfig, args: RemoteTurnStartRequest): Promise<RemoteTurnStartResult> {
+export function startRemoteTurn(config: RemoteConfig, args: OpenADETurnStartRequest): Promise<OpenADETurnStartResult> {
     return productStore(config).startTurn(args)
 }
 

@@ -1,6 +1,6 @@
 import { ArrowRight, Columns2, FileCode, FileImage, FileText, Minus, Pencil, Plus, Rows2 } from "lucide-react"
 import { twMerge } from "tailwind-merge"
-import type { ChangedFileInfo } from "../../electronAPI/git"
+import type { OpenADETaskGitChangedFile } from "../../../../openade-module/src"
 import { DIFF_CONTEXT_OPTIONS, type DiffContextSetting } from "../../utils/gitDiffContext"
 import { Select } from "../ui/Select"
 
@@ -42,7 +42,7 @@ export function DiffContextSelect({ value, onChange }: { value: DiffContextSetti
     )
 }
 
-export function StatusIcon({ status }: { status: ChangedFileInfo["status"] }) {
+export function StatusIcon({ status }: { status: OpenADETaskGitChangedFile["status"] }) {
     switch (status) {
         case "added":
             return <Plus size="1em" className="flex-shrink-0 text-success" />
@@ -56,7 +56,7 @@ export function StatusIcon({ status }: { status: ChangedFileInfo["status"] }) {
 }
 
 interface FileListItemProps {
-    file: ChangedFileInfo
+    file: OpenADETaskGitChangedFile
     displayPath?: string
     displayOldPath?: string
     selected: boolean

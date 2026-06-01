@@ -53,7 +53,7 @@ Repo, task, comment, plan-cancel, turn, review, queued-turn, environment-setup, 
 
 ### Task Scoped Git Reads
 
-The classic desktop changes tray stays on `TaskPage`/`ChangesManager`, but runtime-backed reads should use `CodeStore.readProductTaskChanges()`, `readProductTaskDiff()`, and `readProductTaskFilePair()` through `TaskModel`. The classic Git Log tray should use `CodeStore.readProductTaskGitLog()` for task-scoped branch commit lists when runtime product reads are active. Raw `gitApi` calls remain the trusted-local fallback when runtime product reads are disabled or the tray needs scopes/detail APIs that are not product-scoped yet.
+The classic desktop changes tray stays on `TaskPage`/`ChangesManager`, but runtime-backed reads should use `CodeStore.readProductTaskChanges()`, `readProductTaskDiff()`, and `readProductTaskFilePair()` through `TaskModel`. The classic Git Log tray should use `CodeStore.readProductTaskGitLog()`, `readProductTaskGitCommitFiles()`, `readProductTaskGitFileAtTreeish()`, and `readProductTaskGitCommitFilePatch()` for task-scoped branch history/details. Raw `gitApi` calls remain the trusted-local fallback only for scope discovery and non-task worktree scopes that are not product-scoped yet.
 
 ### Task Snapshot Reads
 

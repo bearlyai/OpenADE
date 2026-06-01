@@ -3,7 +3,8 @@ import { RefreshCw } from "lucide-react"
 import { observer } from "mobx-react"
 import { type ReactNode, useEffect, useMemo, useState } from "react"
 import { twMerge } from "tailwind-merge"
-import { type ChangedFileInfo, type GetFilePatchResponse, type GitLogEntry, type WorkTreeInfo, gitApi } from "../electronAPI/git"
+import type { OpenADETaskGitChangedFile, OpenADETaskGitCommitFilePatchResult, OpenADETaskGitLogEntry } from "../../../openade-module/src"
+import { type WorkTreeInfo, gitApi } from "../electronAPI/git"
 import { useCodeStore } from "../store/context"
 import { getPatchContextLines, shouldUsePatchDiff } from "../utils/gitDiffContext"
 import { FileDiffViewer, FileViewer, MultiFileDiffViewer } from "./FilesAndDiffs"
@@ -110,18 +111,18 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
     const [scopeRefreshToken, setScopeRefreshToken] = useState(0)
     const [selectedScopeId, setSelectedScopeId] = useState<string>("branch:HEAD")
 
-    const [commits, setCommits] = useState<GitLogEntry[]>([])
+    const [commits, setCommits] = useState<OpenADETaskGitLogEntry[]>([])
     const [logLoading, setLogLoading] = useState(false)
     const [loadingMore, setLoadingMore] = useState(false)
     const [hasMore, setHasMore] = useState(false)
     const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null)
     const [logError, setLogError] = useState<string | null>(null)
 
-    const [commitFiles, setCommitFiles] = useState<ChangedFileInfo[]>([])
+    const [commitFiles, setCommitFiles] = useState<OpenADETaskGitChangedFile[]>([])
     const [commitFilesLoading, setCommitFilesLoading] = useState(false)
     const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
     const [filePair, setFilePair] = useState<{ before: string; after: string; tooLarge?: boolean } | null>(null)
-    const [filePatch, setFilePatch] = useState<GetFilePatchResponse | null>(null)
+    const [filePatch, setFilePatch] = useState<OpenADETaskGitCommitFilePatchResult | null>(null)
     const [fileLoading, setFileLoading] = useState(false)
     const [patchLoading, setPatchLoading] = useState(false)
     const [fileError, setFileError] = useState<string | null>(null)
@@ -134,7 +135,6 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
     const patchDiffStyle = viewMode === "split" ? "split" : "unified"
     const shouldLoadFilePair = viewMode === "current"
     const runtimeRepoId = codeStore.tasks.getTask(taskId)?.repoId ?? codeStore.findRuntimeProductRepoIdForTask(taskId)
-    const runtimeProductReadsActive = codeStore.shouldUseRuntimeProductReads()
     const setDiffContext = (context: typeof diffContext) => {
         if (viewMode !== "current") {
             setPatchLoading(true)
@@ -222,10 +222,6 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
     }, [deferLargeDiff, filePatch?.patch])
 
     useEffect(() => {
-        setRenderLargeDiffKey(null)
-    }, [selectedCommitSha, selectedFile?.path])
-
-    useEffect(() => {
         let cancelled = false
         setScopeLoading(true)
 
@@ -289,7 +285,7 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         async function loadLog(scopeValue: ScopeOption) {
             try {
                 const result =
-                    runtimeProductReadsActive && runtimeRepoId && scopeValue.workDir === workDir
+                    runtimeRepoId && scopeValue.workDir === workDir
                         ? await codeStore.readProductTaskGitLog({
                               repoId: runtimeRepoId,
                               taskId,
@@ -330,7 +326,7 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         return () => {
             cancelled = true
         }
-    }, [codeStore, runtimeProductReadsActive, runtimeRepoId, selectedScope, taskId, workDir])
+    }, [codeStore, runtimeRepoId, selectedScope, taskId, workDir])
 
     useEffect(() => {
         const scope = selectedScope
@@ -349,12 +345,19 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         setFilePatch(null)
         setFileError(null)
 
-        async function loadCommitFiles(scopeValue: ScopeOption, commitValue: GitLogEntry) {
+        async function loadCommitFiles(scopeValue: ScopeOption, commitValue: OpenADETaskGitLogEntry) {
             try {
-                const result = await gitApi.getCommitFiles({
-                    workDir: scopeValue.workDir,
-                    commit: commitValue.sha,
-                })
+                const result =
+                    runtimeRepoId && scopeValue.workDir === workDir
+                        ? await codeStore.readProductTaskGitCommitFiles({
+                              repoId: runtimeRepoId,
+                              taskId,
+                              commit: commitValue.sha,
+                          })
+                        : await gitApi.getCommitFiles({
+                              workDir: scopeValue.workDir,
+                              commit: commitValue.sha,
+                          })
                 if (cancelled) return
                 setCommitFiles(result.files)
             } catch (error) {
@@ -373,7 +376,7 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         return () => {
             cancelled = true
         }
-    }, [selectedScope, selectedCommit])
+    }, [codeStore, runtimeRepoId, selectedScope, selectedCommit, taskId, workDir])
 
     useEffect(() => {
         setSelectedFilePath((previousPath) => {
@@ -400,7 +403,7 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         setFileError(null)
         setFilePair(null)
 
-        async function loadFilePair(scopeValue: ScopeOption, commitValue: GitLogEntry, fileValue: ChangedFileInfo) {
+        async function loadFilePair(scopeValue: ScopeOption, commitValue: OpenADETaskGitLogEntry, fileValue: OpenADETaskGitChangedFile) {
             try {
                 const basename = fileValue.path.split("/").pop() ?? fileValue.path
                 if (GENERATED_FILE_BASENAMES.has(basename)) {
@@ -410,20 +413,33 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
 
                 const beforeTreeish = commitValue.parentCount === 0 ? null : `${commitValue.sha}^`
                 const beforePath = fileValue.oldPath ?? fileValue.path
+                const runtimeGitDetails = runtimeRepoId && scopeValue.workDir === workDir ? { repoId: runtimeRepoId, taskId } : null
 
                 const [beforeResult, afterResult] = await Promise.all([
                     beforeTreeish
-                        ? gitApi.getFileAtTreeish({
-                              workDir: scopeValue.workDir,
-                              treeish: beforeTreeish,
-                              filePath: beforePath,
-                          })
+                        ? runtimeGitDetails
+                            ? codeStore.readProductTaskGitFileAtTreeish({
+                                  ...runtimeGitDetails,
+                                  treeish: beforeTreeish,
+                                  filePath: beforePath,
+                              })
+                            : gitApi.getFileAtTreeish({
+                                  workDir: scopeValue.workDir,
+                                  treeish: beforeTreeish,
+                                  filePath: beforePath,
+                              })
                         : Promise.resolve({ content: "", exists: false, tooLarge: false }),
-                    gitApi.getFileAtTreeish({
-                        workDir: scopeValue.workDir,
-                        treeish: commitValue.sha,
-                        filePath: fileValue.path,
-                    }),
+                    runtimeGitDetails
+                        ? codeStore.readProductTaskGitFileAtTreeish({
+                              ...runtimeGitDetails,
+                              treeish: commitValue.sha,
+                              filePath: fileValue.path,
+                          })
+                        : gitApi.getFileAtTreeish({
+                              workDir: scopeValue.workDir,
+                              treeish: commitValue.sha,
+                              filePath: fileValue.path,
+                          }),
                 ])
 
                 if (cancelled) return
@@ -469,7 +485,7 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         return () => {
             cancelled = true
         }
-    }, [selectedScope, selectedCommit, selectedFile, shouldLoadFilePair])
+    }, [codeStore, runtimeRepoId, selectedScope, selectedCommit, selectedFile, shouldLoadFilePair, taskId, workDir])
 
     useEffect(() => {
         const scope = selectedScope
@@ -486,15 +502,32 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         setFileError(null)
         setFilePatch(null)
 
-        async function loadFilePatch(scopeValue: ScopeOption, commitValue: GitLogEntry, fileValue: ChangedFileInfo) {
+        async function loadFilePatch(scopeValue: ScopeOption, commitValue: OpenADETaskGitLogEntry, fileValue: OpenADETaskGitChangedFile) {
             try {
-                const result = await gitApi.getCommitFilePatch({
-                    workDir: scopeValue.workDir,
-                    commit: commitValue.sha,
-                    filePath: fileValue.path,
-                    oldPath: fileValue.oldPath,
-                    contextLines: patchContextLines,
-                })
+                const result =
+                    runtimeRepoId && scopeValue.workDir === workDir
+                        ? await codeStore.readProductTaskGitCommitFilePatch({
+                              repoId: runtimeRepoId,
+                              taskId,
+                              commit: commitValue.sha,
+                              filePath: fileValue.path,
+                              oldPath: fileValue.oldPath,
+                              contextLines: patchContextLines,
+                          })
+                        : {
+                              repoId: runtimeRepoId ?? "",
+                              taskId,
+                              commit: commitValue.sha,
+                              filePath: fileValue.path,
+                              oldPath: fileValue.oldPath,
+                              ...(await gitApi.getCommitFilePatch({
+                                  workDir: scopeValue.workDir,
+                                  commit: commitValue.sha,
+                                  filePath: fileValue.path,
+                                  oldPath: fileValue.oldPath,
+                                  contextLines: patchContextLines,
+                              })),
+                          }
 
                 if (cancelled) return
 
@@ -515,7 +548,7 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         return () => {
             cancelled = true
         }
-    }, [selectedScope, selectedCommit, selectedFile, usePatchDiff, patchContextLines])
+    }, [codeStore, runtimeRepoId, selectedScope, selectedCommit, selectedFile, usePatchDiff, patchContextLines, taskId, workDir])
 
     const refresh = () => {
         setScopeRefreshToken((value) => value + 1)
@@ -529,7 +562,7 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         setLoadingMore(true)
         try {
             const result =
-                runtimeProductReadsActive && runtimeRepoId && selectedScope.workDir === workDir
+                runtimeRepoId && selectedScope.workDir === workDir
                     ? await codeStore.readProductTaskGitLog({
                           repoId: runtimeRepoId,
                           taskId,

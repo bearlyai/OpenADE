@@ -448,6 +448,31 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
                     hasMore: gitLogCommits.length > skip + limit,
                 }
             },
+            readTaskGitCommitFiles: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                commit: params.commit,
+                files: [{ path: "README.md", status: "modified" }],
+            }),
+            readTaskGitFileAtTreeish: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                treeish: params.treeish,
+                filePath: params.filePath,
+                content: params.treeish.endsWith("^") ? "before runtime commit\n" : "after runtime commit\n",
+                exists: true,
+            }),
+            readTaskGitCommitFilePatch: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                commit: params.commit,
+                filePath: params.filePath,
+                oldPath: params.oldPath,
+                patch: "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-before runtime commit\n+after runtime commit\n",
+                truncated: false,
+                heavy: false,
+                stats: { insertions: 1, deletions: 1, changedLines: 2, hunkCount: 1 },
+            }),
             commitTaskGit: unsupportedMutation("commitTaskGit"),
             readTaskSnapshotPatch: async (params) => {
                 const { patchFileId, patch } = snapshotPatchForEvent(params.snapshotEvent)
@@ -828,7 +853,7 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
-    it("routes classic git log commit reads through the runtime product store", async () => {
+    it("routes classic git log reads through the runtime product store", async () => {
         const { client, runtime } = createRuntimeBackedClient()
         const codeStore = new CodeStore({
             getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
@@ -843,8 +868,11 @@ describe("CodeStore runtime product store bridge", () => {
         })
         const worktreeRead = vi.spyOn(gitApi, "listWorkTrees").mockResolvedValue({ worktrees: [] })
         const legacyLogRead = vi.spyOn(gitApi, "getLog").mockRejectedValue(new Error("legacy git log read should not be used"))
-        const legacyCommitFilesRead = vi.spyOn(gitApi, "getCommitFiles").mockResolvedValue({ files: [] })
+        const legacyCommitFilesRead = vi.spyOn(gitApi, "getCommitFiles").mockRejectedValue(new Error("legacy commit-file read should not be used"))
+        const legacyCommitPatchRead = vi.spyOn(gitApi, "getCommitFilePatch").mockRejectedValue(new Error("legacy commit patch read should not be used"))
         const runtimeGitLogRead = vi.spyOn(codeStore, "readProductTaskGitLog")
+        const runtimeCommitFilesRead = vi.spyOn(codeStore, "readProductTaskGitCommitFiles")
+        const runtimeCommitPatchRead = vi.spyOn(codeStore, "readProductTaskGitCommitFilePatch")
         ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
         const container = document.createElement("div")
         document.body.appendChild(container)
@@ -872,19 +900,32 @@ describe("CodeStore runtime product store bridge", () => {
             await vi.waitFor(() => {
                 expect(container.textContent).toContain("Runtime product store commit")
                 expect(runtimeGitLogRead).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1", ref: "HEAD", limit: 50, skip: 0 })
+                expect(runtimeCommitFilesRead).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1", commit: "abc123456789" })
+                expect(runtimeCommitPatchRead).toHaveBeenCalledWith({
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    commit: "abc123456789",
+                    filePath: "README.md",
+                    oldPath: undefined,
+                    contextLines: 3,
+                })
             })
             expect(branchRead).toHaveBeenCalled()
             expect(worktreeRead).toHaveBeenCalled()
-            expect(legacyCommitFilesRead).toHaveBeenCalled()
             expect(legacyLogRead).not.toHaveBeenCalled()
+            expect(legacyCommitFilesRead).not.toHaveBeenCalled()
+            expect(legacyCommitPatchRead).not.toHaveBeenCalled()
         } finally {
             act(() => root.unmount())
             container.remove()
             runtimeGitLogRead.mockRestore()
+            runtimeCommitFilesRead.mockRestore()
+            runtimeCommitPatchRead.mockRestore()
             branchRead.mockRestore()
             worktreeRead.mockRestore()
             legacyLogRead.mockRestore()
             legacyCommitFilesRead.mockRestore()
+            legacyCommitPatchRead.mockRestore()
             codeStore.disconnectAllStores()
             await runtime.close()
         }

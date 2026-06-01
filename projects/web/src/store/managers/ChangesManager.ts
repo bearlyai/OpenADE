@@ -1,14 +1,15 @@
 import { makeAutoObservable, reaction, runInAction } from "mobx"
+import type { OpenADETaskGitChangedFile } from "../../../../openade-module/src"
 import { type FileTreeNode, type FlatTreeEntry, buildFileTree, collectAllDirPaths, flattenFileTree } from "../../components/utils/changesTree"
-import { type ChangedFileInfo, type GetFilePairResponse, type GetFilePatchResponse, type GitSummaryResponse, gitApi } from "../../electronAPI/git"
+import { type GetFilePairResponse, type GetFilePatchResponse, type GitSummaryResponse, gitApi } from "../../electronAPI/git"
 import type { PatchContextLines } from "../../utils/gitDiffContext"
 import type { TaskModel } from "../TaskModel"
 
 type DiffSource = "uncommitted" | "from-base"
 type ChangesViewMode = "current" | "split" | "unified"
 
-function deriveUncommittedFiles(status: GitSummaryResponse): ChangedFileInfo[] {
-    const files: ChangedFileInfo[] = []
+function deriveUncommittedFiles(status: GitSummaryResponse): OpenADETaskGitChangedFile[] {
+    const files: OpenADETaskGitChangedFile[] = []
     const seen = new Set<string>()
 
     for (const file of [...status.staged.files, ...status.unstaged.files]) {
@@ -35,7 +36,7 @@ export class ChangesManager {
     filePairLoading = false
     filePatchLoading = false
 
-    fromBaseFiles: ChangedFileInfo[] | null = null
+    fromBaseFiles: OpenADETaskGitChangedFile[] | null = null
     fromBaseLoading = false
 
     private filePairLoadId = 0
@@ -74,13 +75,13 @@ export class ChangesManager {
 
     // === Computed ===
 
-    get uncommittedFiles(): ChangedFileInfo[] {
+    get uncommittedFiles(): OpenADETaskGitChangedFile[] {
         const status = this.taskModel.gitStatus
         if (!status) return []
         return deriveUncommittedFiles(status)
     }
 
-    get files(): ChangedFileInfo[] {
+    get files(): OpenADETaskGitChangedFile[] {
         return this.diffSource === "uncommitted" ? this.uncommittedFiles : (this.fromBaseFiles ?? [])
     }
 
@@ -100,7 +101,7 @@ export class ChangesManager {
         return this.diffSource === "uncommitted" ? this.taskModel.gitStatus === null : this.fromBaseLoading
     }
 
-    get selectedFile(): ChangedFileInfo | null {
+    get selectedFile(): OpenADETaskGitChangedFile | null {
         if (this.files.length === 0) return null
         if (this.selectedFilePath) {
             return this.files.find((f) => f.path === this.selectedFilePath) ?? this.files[0]
@@ -409,11 +410,11 @@ export class ChangesManager {
         this.filePatchCache.clear()
     }
 
-    private getFilePairCacheKey(file: ChangedFileInfo): string {
+    private getFilePairCacheKey(file: OpenADETaskGitChangedFile): string {
         return [this.diffSource, this.cacheFromTreeish, this.toTreeish, file.path, file.oldPath ?? ""].join("::")
     }
 
-    private getFilePatchCacheKey(file: ChangedFileInfo, contextLines: PatchContextLines): string {
+    private getFilePatchCacheKey(file: OpenADETaskGitChangedFile, contextLines: PatchContextLines): string {
         return [this.diffSource, this.cacheFromTreeish, this.toTreeish, file.path, file.oldPath ?? "", `U${contextLines}`].join("::")
     }
 }

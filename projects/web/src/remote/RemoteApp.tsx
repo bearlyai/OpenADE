@@ -5,12 +5,14 @@ import type {
     OpenADEProjectProcessListResult,
     OpenADEProjectProcessReconnectResult,
     OpenADEProjectSearchResult,
+    OpenADESnapshot,
+    OpenADETask,
     OpenADETaskChangesReadResult,
     OpenADETaskDiffReadResult,
     OpenADETaskGitChangedFile,
     OpenADETaskGitLogResult,
+    OpenADETurnStartRequest,
 } from "../../../openade-module/src"
-import type { RemoteSnapshot, RemoteTask, RemoteTurnStartRequest } from "../../../shared/companion/src"
 import { DEFAULT_HARNESS_ID, getDefaultModelForHarness } from "../constants"
 import { type OpenADEThemeSetting, isOpenADEThemeSetting } from "../shell/OpenADESessionScreens"
 import { OpenADEShell, type OpenADEShellScreen } from "../shell/OpenADEShell"
@@ -62,7 +64,7 @@ import { nextRemoteRefreshDelay } from "./refreshQueue"
 import { REMOTE_STATUS_GRACE_MS, isRemoteRealtimeOnline, shouldDelayRemoteStatusDisplay, statusCopy } from "./status"
 import { beginRemoteSubmission, finishRemoteSubmission } from "./submission"
 
-type CommandType = RemoteTurnStartRequest["type"]
+type CommandType = OpenADETurnStartRequest["type"]
 type PendingConnection = PairingTarget & { mode: "pair" | "manual" }
 type RemoteScreen = OpenADEShellScreen
 type SnapshotRefreshOptions = { repairNavigation?: boolean }
@@ -148,8 +150,8 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const [pairToken, setPairToken] = useState(initialParams.token ?? "")
     const [pairHostId, setPairHostId] = useState<string | undefined>()
     const [pendingConnection, setPendingConnection] = useState<PendingConnection | null>(null)
-    const [snapshot, setSnapshot] = useState<RemoteSnapshot | null>(null)
-    const [sessionSnapshots, setSessionSnapshots] = useState<Record<string, RemoteSnapshot>>({})
+    const [snapshot, setSnapshot] = useState<OpenADESnapshot | null>(null)
+    const [sessionSnapshots, setSessionSnapshots] = useState<Record<string, OpenADESnapshot>>({})
     const [projectFiles, setProjectFiles] = useState<OpenADEProjectFilesTreeResult | null>(null)
     const [projectFilesLoading, setProjectFilesLoading] = useState(false)
     const [projectFileRead, setProjectFileRead] = useState<OpenADEProjectFileReadResult | null>(null)
@@ -170,7 +172,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const [themeSetting, setThemeSetting] = useState<OpenADEThemeSetting>(() => loadOpenADEThemeSetting())
     const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null)
     const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
-    const [task, setTask] = useState<RemoteTask | null>(null)
+    const [task, setTask] = useState<OpenADETask | null>(null)
     const [input, setInput] = useState("")
     const [commandType, setCommandType] = useState<CommandType>("do")
     const [taskTitleDraft, setTaskTitleDraft] = useState("")
@@ -191,7 +193,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const selectedTaskIdRef = useRef<string | null>(null)
     const screenRef = useRef<RemoteScreen>(screen)
     const configRef = useRef<RemoteConfig | null>(config)
-    const snapshotRef = useRef<RemoteSnapshot | null>(snapshot)
+    const snapshotRef = useRef<OpenADESnapshot | null>(snapshot)
     const snapshotRefreshTimerRef = useRef<number | null>(null)
     const snapshotRefreshRepairsNavigationRef = useRef(false)
     const taskRefreshTimerRef = useRef<number | null>(null)
@@ -281,7 +283,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         return () => window.removeEventListener("openade-pairing-url", updateFromUrl)
     }, [])
 
-    const refreshSnapshot = async (nextConfig = config, options: SnapshotRefreshOptions = {}): Promise<RemoteSnapshot | null> => {
+    const refreshSnapshot = async (nextConfig = config, options: SnapshotRefreshOptions = {}): Promise<OpenADESnapshot | null> => {
         if (!nextConfig) return null
         const next = await getSnapshot(nextConfig)
         const currentRepoId = selectedRepoIdRef.current

@@ -762,6 +762,58 @@ export interface OpenADETaskGitLogResult {
     hasMore: boolean
 }
 
+export interface OpenADETaskGitCommitFilesRequest {
+    repoId: string
+    taskId: string
+    commit: string
+}
+
+export interface OpenADETaskGitCommitFilesResult {
+    repoId: string
+    taskId: string
+    commit: string
+    files: OpenADETaskGitChangedFile[]
+}
+
+export interface OpenADETaskGitFileAtTreeishRequest {
+    repoId: string
+    taskId: string
+    treeish: string
+    filePath: string
+}
+
+export interface OpenADETaskGitFileAtTreeishResult {
+    repoId: string
+    taskId: string
+    treeish: string
+    filePath: string
+    content: string
+    exists: boolean
+    tooLarge?: boolean
+}
+
+export interface OpenADETaskGitCommitFilePatchRequest {
+    repoId: string
+    taskId: string
+    commit: string
+    filePath: string
+    oldPath?: string
+    contextLines?: OpenADETaskDiffContextLines
+    allowTruncation?: boolean
+}
+
+export interface OpenADETaskGitCommitFilePatchResult {
+    repoId: string
+    taskId: string
+    commit: string
+    filePath: string
+    oldPath?: string
+    patch: string
+    truncated: boolean
+    heavy: boolean
+    stats: OpenADETaskDiffStats
+}
+
 export type OpenADETaskGitCommitStatus = "committed" | "nothing_to_commit" | "failed"
 
 export interface OpenADETaskGitCommitRequest {

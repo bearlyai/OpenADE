@@ -16,72 +16,78 @@ import {
 import { createOpenADEModule, publishOpenADECompanionEvent, type OpenADEModuleAdapters } from "./module"
 import { buildOpenADEPrompt } from "./promptBuilder"
 import { buildOpenADEPlanReviewPrompt, buildOpenADEReviewHandoffPrompt, buildOpenADEWorkReviewPrompt } from "./review"
-import {
-    type OpenADEActionEventCreateRequest,
-    type OpenADEActionEventSource,
-    type OpenADEHyperPlanStep,
-    type OpenADEHyperPlanStrategy,
-    type OpenADEProject,
-    type OpenADEProjectFileReadRequest,
-    type OpenADEProjectFileReadResult,
-    type OpenADEProjectFilesTreeEntry,
-    type OpenADEProjectFilesTreeRequest,
-    type OpenADEProjectFilesTreeResult,
-    type OpenADEProjectFileWriteRequest,
-    type OpenADEProjectFileWriteResult,
-    type OpenADEProjectProcessConfigError,
-    type OpenADEProjectProcessDefinition,
-    type OpenADEProjectProcessInstance,
-    type OpenADEProjectProcessListRequest,
-    type OpenADEProjectProcessListResult,
-    type OpenADEProjectProcessOutputChunk,
-    type OpenADEProjectProcessReconnectRequest,
-    type OpenADEProjectProcessReconnectResult,
-    type OpenADEProjectProcessStartRequest,
-    type OpenADEProjectProcessStartResult,
-    type OpenADEProjectProcessStopRequest,
-    type OpenADEProjectProcessStopResult,
-    type OpenADEProjectProcessType,
-    type OpenADEProjectSearchRequest,
-    type OpenADEProjectSearchResult,
-    type OpenADEReviewStartRequest,
-    type OpenADESnapshotEventRecord,
-    type OpenADESnapshotPatchFile,
-    type OpenADESnapshotPatchIndex,
-    type OpenADETask,
-    type OpenADETaskChangesReadRequest,
-    type OpenADETaskChangesReadResult,
-    type OpenADETaskCreateRequest,
-    type OpenADETaskDiffReadRequest,
-    type OpenADETaskDiffReadResult,
-    type OpenADETaskFilePairReadRequest,
-    type OpenADETaskFilePairReadResult,
-    type OpenADETaskDiffStats,
-    type OpenADETaskGitChangedFile,
-    type OpenADETaskGitCommitRequest,
-    type OpenADETaskGitCommitResult,
-    type OpenADETaskGitLogEntry,
-    type OpenADETaskGitLogRequest,
-    type OpenADETaskGitLogResult,
-    type OpenADETaskImageReadRequest,
-    type OpenADETaskImageReadResult,
-    type OpenADETaskImageReference,
-    type OpenADETaskTerminalMutationResult,
-    type OpenADETaskTerminalOutputChunk,
-    type OpenADETaskTerminalReconnectRequest,
-    type OpenADETaskTerminalReconnectResult,
-    type OpenADETaskTerminalResizeRequest,
-    type OpenADETaskTerminalStartRequest,
-    type OpenADETaskTerminalStartResult,
-    type OpenADETaskTerminalStopRequest,
-    type OpenADETaskTerminalWriteRequest,
-    type OpenADETaskSnapshotIndexReadRequest,
-    type OpenADETaskSnapshotIndexReadResult,
-    type OpenADETaskSnapshotPatchReadRequest,
-    type OpenADETaskSnapshotPatchReadResult,
-    type OpenADETaskSnapshotPatchSliceReadRequest,
-    type OpenADETaskSnapshotPatchSliceReadResult,
-    type OpenADETurnStartRequest,
+import type {
+    OpenADEActionEventCreateRequest,
+    OpenADEActionEventSource,
+    OpenADEHyperPlanStep,
+    OpenADEHyperPlanStrategy,
+    OpenADEProject,
+    OpenADEProjectFileReadRequest,
+    OpenADEProjectFileReadResult,
+    OpenADEProjectFilesTreeEntry,
+    OpenADEProjectFilesTreeRequest,
+    OpenADEProjectFilesTreeResult,
+    OpenADEProjectFileWriteRequest,
+    OpenADEProjectFileWriteResult,
+    OpenADEProjectProcessConfigError,
+    OpenADEProjectProcessDefinition,
+    OpenADEProjectProcessInstance,
+    OpenADEProjectProcessListRequest,
+    OpenADEProjectProcessListResult,
+    OpenADEProjectProcessOutputChunk,
+    OpenADEProjectProcessReconnectRequest,
+    OpenADEProjectProcessReconnectResult,
+    OpenADEProjectProcessStartRequest,
+    OpenADEProjectProcessStartResult,
+    OpenADEProjectProcessStopRequest,
+    OpenADEProjectProcessStopResult,
+    OpenADEProjectProcessType,
+    OpenADEProjectSearchRequest,
+    OpenADEProjectSearchResult,
+    OpenADEReviewStartRequest,
+    OpenADESnapshotEventRecord,
+    OpenADESnapshotPatchFile,
+    OpenADESnapshotPatchIndex,
+    OpenADETask,
+    OpenADETaskChangesReadRequest,
+    OpenADETaskChangesReadResult,
+    OpenADETaskCreateRequest,
+    OpenADETaskDiffReadRequest,
+    OpenADETaskDiffReadResult,
+    OpenADETaskFilePairReadRequest,
+    OpenADETaskFilePairReadResult,
+    OpenADETaskDiffStats,
+    OpenADETaskGitChangedFile,
+    OpenADETaskGitCommitFilePatchRequest,
+    OpenADETaskGitCommitFilePatchResult,
+    OpenADETaskGitCommitFilesRequest,
+    OpenADETaskGitCommitFilesResult,
+    OpenADETaskGitCommitRequest,
+    OpenADETaskGitCommitResult,
+    OpenADETaskGitFileAtTreeishRequest,
+    OpenADETaskGitFileAtTreeishResult,
+    OpenADETaskGitLogEntry,
+    OpenADETaskGitLogRequest,
+    OpenADETaskGitLogResult,
+    OpenADETaskImageReadRequest,
+    OpenADETaskImageReadResult,
+    OpenADETaskImageReference,
+    OpenADETaskTerminalMutationResult,
+    OpenADETaskTerminalOutputChunk,
+    OpenADETaskTerminalReconnectRequest,
+    OpenADETaskTerminalReconnectResult,
+    OpenADETaskTerminalResizeRequest,
+    OpenADETaskTerminalStartRequest,
+    OpenADETaskTerminalStartResult,
+    OpenADETaskTerminalStopRequest,
+    OpenADETaskTerminalWriteRequest,
+    OpenADETaskSnapshotIndexReadRequest,
+    OpenADETaskSnapshotIndexReadResult,
+    OpenADETaskSnapshotPatchReadRequest,
+    OpenADETaskSnapshotPatchReadResult,
+    OpenADETaskSnapshotPatchSliceReadRequest,
+    OpenADETaskSnapshotPatchSliceReadResult,
+    OpenADETurnStartRequest,
 } from "./types"
 import { createOpenADEYjsWriter } from "./yjsMutation"
 import { createOpenADEYjsProjection } from "./yjsProjection"
@@ -680,6 +686,127 @@ async function scopedTaskGitLog(params: OpenADETaskGitLogRequest & { repo: OpenA
         commits: commits.slice(0, limit),
         hasMore: commits.length > limit,
     }
+}
+
+async function scopedTaskGitCommitFiles(
+    params: OpenADETaskGitCommitFilesRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskGitCommitFilesResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const parentOutput = await scopedGitRequire(["show", "--no-patch", "--format=%P", params.commit], workDir, "Failed to resolve commit parents")
+    const parents = parentOutput.trim().split(/\s+/).filter(Boolean)
+    const diffOutput =
+        parents.length === 0
+            ? await scopedGitRequire(
+                  ["diff-tree", "--root", "-r", "--no-commit-id", "--name-status", "-M", params.commit],
+                  workDir,
+                  "Failed to get commit files"
+              )
+            : await scopedGitRequire(["diff", "--name-status", "-M", parents[0], params.commit], workDir, "Failed to get commit files")
+
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        commit: params.commit,
+        files: parseScopedNameStatusOutput(diffOutput),
+    }
+}
+
+async function scopedTaskGitFileAtTreeish(
+    params: OpenADETaskGitFileAtTreeishRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskGitFileAtTreeishResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const result = await readScopedTaskFileAtTreeish(workDir, params.treeish, params.filePath)
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        treeish: params.treeish,
+        filePath: params.filePath,
+        content: result.content,
+        exists: result.exists,
+        tooLarge: result.tooLarge,
+    }
+}
+
+function createEmptyTaskGitCommitFilePatchResult(params: {
+    repoId: string
+    taskId: string
+    commit: string
+    filePath: string
+    oldPath?: string
+}): OpenADETaskGitCommitFilePatchResult {
+    return {
+        ...params,
+        patch: "",
+        truncated: false,
+        heavy: false,
+        stats: {
+            insertions: 0,
+            deletions: 0,
+            changedLines: 0,
+            hunkCount: 0,
+        },
+    }
+}
+
+function finalizeScopedTaskGitCommitFilePatch(
+    patch: string,
+    allowTruncation: boolean,
+    params: {
+        repoId: string
+        taskId: string
+        commit: string
+        filePath: string
+        oldPath?: string
+    }
+): OpenADETaskGitCommitFilePatchResult {
+    if (!patch) return createEmptyTaskGitCommitFilePatchResult(params)
+
+    const truncated = allowTruncation && patch.length > MAX_SCOPED_TASK_PATCH_SIZE
+    const patchStats = parseScopedPatchStats(patch)
+    const changedLines = patchStats.insertions + patchStats.deletions
+    const hunkCount = countScopedPatchHunks(patch)
+    return {
+        ...params,
+        patch: truncated ? patch.slice(0, MAX_SCOPED_TASK_PATCH_SIZE) : patch,
+        truncated,
+        heavy: truncated || patch.length > 256 * 1024 || changedLines > 4_000 || hunkCount > 50,
+        stats: {
+            insertions: patchStats.insertions,
+            deletions: patchStats.deletions,
+            changedLines,
+            hunkCount,
+        },
+    }
+}
+
+async function scopedTaskGitCommitFilePatch(
+    params: OpenADETaskGitCommitFilePatchRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskGitCommitFilePatchResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const contextLines = params.contextLines ?? 3
+    const allowTruncation = params.allowTruncation !== false
+    const resultBase = {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        commit: params.commit,
+        filePath: params.filePath,
+        oldPath: params.oldPath,
+    }
+
+    if (SCOPED_TASK_GENERATED_FILE_BASENAMES.has(path.basename(params.filePath))) {
+        return createEmptyTaskGitCommitFilePatchResult(resultBase)
+    }
+
+    const parentOutput = await scopedGitRequire(["show", "--no-patch", "--format=%P", params.commit], workDir, "Failed to resolve commit parents")
+    const parents = parentOutput.trim().split(/\s+/).filter(Boolean)
+    const pathspecs = taskGitDiffPathspecs(workDir, params.filePath, params.oldPath)
+    const result =
+        parents.length === 0
+            ? await scopedGit(["diff-tree", "--root", "-p", "-M", `-U${contextLines}`, params.commit, "--", ...pathspecs], workDir)
+            : await scopedGit(["diff", "-M", `-U${contextLines}`, parents[0], params.commit, "--", ...pathspecs], workDir)
+
+    if (!result.success) throw new Error(`Failed to get commit file patch: ${result.stderr || result.stdout}`)
+    return finalizeScopedTaskGitCommitFilePatch(result.stdout, allowTruncation, resultBase)
 }
 
 async function scopedTaskGitCommit(
@@ -2070,6 +2197,9 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
             readTaskDiff: scopedTaskDiff,
             readTaskFilePair: scopedTaskFilePair,
             readTaskGitLog: scopedTaskGitLog,
+            readTaskGitCommitFiles: scopedTaskGitCommitFiles,
+            readTaskGitFileAtTreeish: scopedTaskGitFileAtTreeish,
+            readTaskGitCommitFilePatch: scopedTaskGitCommitFilePatch,
             commitTaskGit: scopedTaskGitCommit,
             listProjectProcesses: (params) => listNodeProjectProcesses({ ...params, registry: scopedProjectProcesses, server }),
             startProjectProcess: (params) => startNodeProjectProcess({ ...params, registry: scopedProjectProcesses, server }),

@@ -23,6 +23,12 @@ import type {
     OpenADETaskDiffReadResult,
     OpenADETaskFilePairReadRequest,
     OpenADETaskFilePairReadResult,
+    OpenADETaskGitCommitFilePatchRequest,
+    OpenADETaskGitCommitFilePatchResult,
+    OpenADETaskGitCommitFilesRequest,
+    OpenADETaskGitCommitFilesResult,
+    OpenADETaskGitFileAtTreeishRequest,
+    OpenADETaskGitFileAtTreeishResult,
     OpenADETaskGitLogRequest,
     OpenADETaskGitLogResult,
     OpenADETaskMetadataUpdateRequest,
@@ -1092,6 +1098,30 @@ export class CodeStore {
         }
 
         return localOpenADEClient.readTaskGitLog(params)
+    }
+
+    async readProductTaskGitCommitFiles(params: OpenADETaskGitCommitFilesRequest): Promise<OpenADETaskGitCommitFilesResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readTaskGitCommitFiles(params)
+        }
+
+        return localOpenADEClient.readTaskGitCommitFiles(params)
+    }
+
+    async readProductTaskGitFileAtTreeish(params: OpenADETaskGitFileAtTreeishRequest): Promise<OpenADETaskGitFileAtTreeishResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readTaskGitFileAtTreeish(params)
+        }
+
+        return localOpenADEClient.readTaskGitFileAtTreeish(params)
+    }
+
+    async readProductTaskGitCommitFilePatch(params: OpenADETaskGitCommitFilePatchRequest): Promise<OpenADETaskGitCommitFilePatchResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readTaskGitCommitFilePatch(params)
+        }
+
+        return localOpenADEClient.readTaskGitCommitFilePatch(params)
     }
 
     async readProductTaskSnapshotPatch(params: OpenADETaskSnapshotPatchReadRequest): Promise<OpenADETaskSnapshotPatchReadResult> {

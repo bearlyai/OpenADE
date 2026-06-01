@@ -229,10 +229,7 @@ describe("OpenADE kernel composition", () => {
         const repoPath = path.join(root, "repo")
         fs.mkdirSync(repoPath, { recursive: true })
         fs.writeFileSync(path.join(repoPath, "README.md"), "scoped kernel file search\n")
-        fs.writeFileSync(
-            path.join(repoPath, "openade.toml"),
-            '[[process]]\nname = "Echo"\ncommand = "printf \'scoped process ok\\n\'"\ntype = "task"\n'
-        )
+        fs.writeFileSync(path.join(repoPath, "openade.toml"), '[[process]]\nname = "Echo"\ncommand = "printf \'scoped process ok\\n\'"\ntype = "task"\n')
         fs.mkdirSync(path.join(root, "images"), { recursive: true })
         fs.writeFileSync(path.join(root, "images", "image-kernel.png"), Buffer.from("kernel image bytes"))
         initializeGitRepo(repoPath)
@@ -354,7 +351,9 @@ describe("OpenADE kernel composition", () => {
                     executionId: "execution-image",
                     harnessId: "codex",
                     source: { type: "do", userLabel: "Do" },
-                    images: [{ id: "image-kernel", ext: "png", mediaType: "image/png", originalWidth: 1, originalHeight: 1, resizedWidth: 1, resizedHeight: 1 }],
+                    images: [
+                        { id: "image-kernel", ext: "png", mediaType: "image/png", originalWidth: 1, originalHeight: 1, resizedWidth: 1, resizedHeight: 1 },
+                    ],
                 },
                 { clientRequestId: "image-action" }
             )
@@ -442,13 +441,51 @@ describe("OpenADE kernel composition", () => {
             })
             expect(untrackedDiff.patch).toContain("+written through scoped kernel")
 
-            await expect(client.readTaskDiff({ repoId: repo.repoId, taskId: started.taskId, filePath: "../outside.txt" })).rejects.toThrow(/filePath is invalid/)
+            await expect(client.readTaskDiff({ repoId: repo.repoId, taskId: started.taskId, filePath: "../outside.txt" })).rejects.toThrow(
+                /filePath is invalid/
+            )
             await expect(client.readTaskGitLog({ repoId: repo.repoId, taskId: started.taskId, limit: 5 })).resolves.toMatchObject({
                 repoId: repo.repoId,
                 taskId: started.taskId,
                 commits: [expect.objectContaining({ message: "Initial kernel fixture", author: "Kernel Test" })],
                 hasMore: false,
             })
+            const initialCommit = gitOutput(repoPath, ["rev-parse", "HEAD"])
+            await expect(client.readTaskGitCommitFiles({ repoId: repo.repoId, taskId: started.taskId, commit: initialCommit })).resolves.toMatchObject({
+                repoId: repo.repoId,
+                taskId: started.taskId,
+                commit: initialCommit,
+                files: [expect.objectContaining({ path: "README.md", status: "added" })],
+            })
+            await expect(
+                client.readTaskGitFileAtTreeish({ repoId: repo.repoId, taskId: started.taskId, treeish: initialCommit, filePath: "README.md" })
+            ).resolves.toMatchObject({
+                repoId: repo.repoId,
+                taskId: started.taskId,
+                treeish: initialCommit,
+                filePath: "README.md",
+                content: "scoped kernel file search\n",
+                exists: true,
+            })
+            const initialCommitPatch = await client.readTaskGitCommitFilePatch({
+                repoId: repo.repoId,
+                taskId: started.taskId,
+                commit: initialCommit,
+                filePath: "README.md",
+                contextLines: 3,
+            })
+            expect(initialCommitPatch).toMatchObject({
+                repoId: repo.repoId,
+                taskId: started.taskId,
+                commit: initialCommit,
+                filePath: "README.md",
+                stats: { insertions: 1, deletions: 0, changedLines: 1, hunkCount: 1 },
+            })
+            expect(initialCommitPatch.patch).toContain("+scoped kernel file search")
+            await expect(
+                client.readTaskGitFileAtTreeish({ repoId: repo.repoId, taskId: started.taskId, treeish: initialCommit, filePath: "../README.md" })
+            ).rejects.toThrow(/filePath is invalid/)
+            await expect(client.readTaskGitCommitFiles({ repoId: repo.repoId, taskId: started.taskId, commit: "../HEAD" })).rejects.toThrow(/commit is invalid/)
             await expect(
                 client.commitTaskGit(
                     { repoId: repo.repoId, taskId: started.taskId, message: "Commit scoped kernel task changes" },

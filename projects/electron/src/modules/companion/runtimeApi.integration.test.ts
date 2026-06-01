@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process"
 import * as Y from "yjs"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { WebSocket, type RawData } from "ws"
-import { type RuntimeMessage } from "../../../../runtime-protocol/src"
+import type { RuntimeMessage } from "../../../../runtime-protocol/src"
 import type { RemoteDeviceDropAllResult, RemoteDeviceListResult, RemoteDeviceRevokeResult } from "../../../../shared/companion/src"
 import { saveYjsDocument } from "../code/yjsStorage"
 import { startPairing } from "./auth"
@@ -417,8 +417,8 @@ describe("companion runtime API integration", () => {
             server = null
         }
         resetRuntimeServer()
-        delete process.env.OPENADE_RUNTIME_CHECKPOINT_FILE
-        delete process.env.OPENADE_YJS_STORAGE_DIR
+        Reflect.deleteProperty(process.env, "OPENADE_RUNTIME_CHECKPOINT_FILE")
+        Reflect.deleteProperty(process.env, "OPENADE_YJS_STORAGE_DIR")
         fs.rmSync(checkpointDir, { recursive: true, force: true })
     })
 
@@ -492,6 +492,9 @@ describe("companion runtime API integration", () => {
                 "openade/task/terminal/reconnect",
                 "openade/task/terminal/resize",
                 "openade/task/terminal/stop",
+                "openade/task/git/commit/files/read",
+                "openade/task/git/fileAtTreeish/read",
+                "openade/task/git/commit/filePatch/read",
                 "openade/task/git/commit",
                 "remote/device/list",
                 "remote/device/revoke",
@@ -569,6 +572,9 @@ describe("companion runtime API integration", () => {
             [33, "openade/task/terminal/resize", { repoId: "repo-1", taskId: "task-1", terminalId: "blocked", cols: 100, rows: 30 }],
             [34, "openade/task/terminal/stop", { repoId: "repo-1", taskId: "task-1", terminalId: "blocked" }],
             [37, "openade/task/git/commit", { repoId: "repo-1", taskId: "task-1", message: "blocked" }],
+            [45, "openade/task/git/commit/files/read", { repoId: "repo-1", taskId: "task-1", commit: "HEAD" }],
+            [46, "openade/task/git/fileAtTreeish/read", { repoId: "repo-1", taskId: "task-1", treeish: "HEAD", filePath: "README.md" }],
+            [47, "openade/task/git/commit/filePatch/read", { repoId: "repo-1", taskId: "task-1", commit: "HEAD", filePath: "README.md" }],
             [38, "remote/device/list"],
             [39, "remote/device/revoke", { deviceId: "blocked-device" }],
             [40, "remote/device/dropAll"],
@@ -702,6 +708,56 @@ describe("companion runtime API integration", () => {
                 24
             )
         ).toMatchObject({ commits: [expect.objectContaining({ message: "Initial companion fixture", author: "Companion Test" })] })
+        const initialCommit = gitOutput(repoPath, ["rev-parse", "HEAD"])
+        await expect(
+            trustedRuntimeResult("trusted-git-commit-files", "openade/task/git/commit/files/read", {
+                repoId: "repo-1",
+                taskId: "task-1",
+                commit: initialCommit,
+            })
+        ).resolves.toMatchObject({
+            repoId: "repo-1",
+            taskId: "task-1",
+            commit: initialCommit,
+            files: [expect.objectContaining({ path: "README.md", status: "added" })],
+        })
+        await expect(
+            trustedRuntimeResult("trusted-git-file-at-treeish", "openade/task/git/fileAtTreeish/read", {
+                repoId: "repo-1",
+                taskId: "task-1",
+                treeish: initialCommit,
+                filePath: "README.md",
+            })
+        ).resolves.toMatchObject({
+            repoId: "repo-1",
+            taskId: "task-1",
+            treeish: initialCommit,
+            filePath: "README.md",
+            content: "hello from scoped project search\n",
+            exists: true,
+        })
+        const trustedCommitPatch = await trustedRuntimeResult<{
+            repoId: string
+            taskId: string
+            commit: string
+            filePath: string
+            patch: string
+            stats: { insertions: number; deletions: number; changedLines: number; hunkCount: number }
+        }>("trusted-git-commit-patch", "openade/task/git/commit/filePatch/read", {
+            repoId: "repo-1",
+            taskId: "task-1",
+            commit: initialCommit,
+            filePath: "README.md",
+            contextLines: 3,
+        })
+        expect(trustedCommitPatch).toMatchObject({
+            repoId: "repo-1",
+            taskId: "task-1",
+            commit: initialCommit,
+            filePath: "README.md",
+            stats: { insertions: 1, deletions: 0, changedLines: 1, hunkCount: 1 },
+        })
+        expect(trustedCommitPatch.patch).toContain("+hello from scoped project search")
         const trustedCommit = await getRuntimeServer().handleRequest(
             {
                 id: "trusted-git-commit",

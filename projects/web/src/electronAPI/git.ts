@@ -5,9 +5,19 @@
  * Communicates with Electron main process via openadeAPI.
  */
 
+import type {
+    OpenADETaskChangesReadResult,
+    OpenADETaskDiffContextLines,
+    OpenADETaskDiffReadResult,
+    OpenADETaskFilePairReadResult,
+    OpenADETaskGitCommitFilesResult,
+    OpenADETaskGitFileAtTreeishResult,
+    OpenADETaskGitLogResult,
+} from "../../../openade-module/src"
+
 // ============================================================================
 // Type Definitions
-// IMPORTANT: Keep in sync with projects/electron/src/modules/code/git.ts
+// Product-equivalent git payloads derive from OpenADE DTOs; only bridge params stay local.
 // ============================================================================
 
 interface IsGitInstalledResponse {
@@ -221,18 +231,7 @@ interface GetChangedFilesParams {
     toTreeish: string
 }
 
-export interface ChangedFileInfo {
-    path: string
-    status: "added" | "deleted" | "modified" | "renamed"
-    oldPath?: string
-    binary?: boolean
-}
-
-interface GetChangedFilesResponse {
-    files: ChangedFileInfo[]
-    fromTreeish: string
-    toTreeish: string
-}
+type GetChangedFilesResponse = Pick<OpenADETaskChangesReadResult, "files" | "fromTreeish" | "toTreeish">
 
 interface GetFileAtTreeishParams {
     workDir: string
@@ -240,11 +239,7 @@ interface GetFileAtTreeishParams {
     filePath: string
 }
 
-interface GetFileAtTreeishResponse {
-    content: string
-    exists: boolean
-    tooLarge?: boolean
-}
+type GetFileAtTreeishResponse = Pick<OpenADETaskGitFileAtTreeishResult, "content" | "exists" | "tooLarge">
 
 interface GetFilePairParams {
     workDir: string
@@ -254,18 +249,14 @@ interface GetFilePairParams {
     oldPath?: string
 }
 
-export interface GetFilePairResponse {
-    before: string
-    after: string
-    tooLarge?: boolean
-}
+export type GetFilePairResponse = Pick<OpenADETaskFilePairReadResult, "before" | "after" | "tooLarge">
 
 interface GetWorktreeFilePatchParams {
     workDir: string
     fromTreeish: string
     filePath: string
     oldPath?: string
-    contextLines: 1 | 3 | 10 | 25 | 100
+    contextLines: OpenADETaskDiffContextLines
     allowTruncation?: boolean
 }
 
@@ -274,21 +265,11 @@ interface GetCommitFilePatchParams {
     commit: string
     filePath: string
     oldPath?: string
-    contextLines: 1 | 3 | 10 | 25 | 100
+    contextLines: OpenADETaskDiffContextLines
     allowTruncation?: boolean
 }
 
-export interface GetFilePatchResponse {
-    patch: string
-    truncated: boolean
-    heavy: boolean
-    stats: {
-        insertions: number
-        deletions: number
-        changedLines: number
-        hunkCount: number
-    }
-}
+export type GetFilePatchResponse = Pick<OpenADETaskDiffReadResult, "patch" | "truncated" | "heavy" | "stats">
 
 interface GetGitLogParams {
     workDir: string
@@ -297,29 +278,14 @@ interface GetGitLogParams {
     skip?: number
 }
 
-export interface GitLogEntry {
-    sha: string
-    shortSha: string
-    message: string
-    author: string
-    date: string
-    relativeDate: string
-    parentCount: number
-}
-
-interface GetGitLogResponse {
-    commits: GitLogEntry[]
-    hasMore: boolean
-}
+type GetGitLogResponse = Pick<OpenADETaskGitLogResult, "commits" | "hasMore">
 
 interface GetCommitFilesParams {
     workDir: string
     commit: string
 }
 
-interface GetCommitFilesResponse {
-    files: ChangedFileInfo[]
-}
+type GetCommitFilesResponse = Pick<OpenADETaskGitCommitFilesResult, "files">
 
 // ============================================================================
 // API Check
