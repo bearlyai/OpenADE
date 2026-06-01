@@ -19,6 +19,12 @@ import { parseProcsFile } from "./procs"
 import { buildOpenADEPlanReviewPrompt, buildOpenADEReviewHandoffPrompt, buildOpenADEWorkReviewPrompt } from "./review"
 import { listOpenADEProjectFiles, readOpenADEProjectFile, searchOpenADEProject, writeOpenADEProjectFile } from "./scopedProjectHost"
 import { buildOpenADEProjectProcessDefinitions } from "./scopedProjectProcesses"
+import {
+    assertOpenADETaskTerminalId,
+    encodeOpenADETaskTerminalInput,
+    openADETaskTerminalId,
+    openADETaskTerminalOutputChunkFromUnknown,
+} from "./scopedTaskTerminal"
 import { buildOpenADESnapshotPatchIndex, sliceOpenADESnapshotPatchBytes } from "./snapshotPatchIndex"
 import type {
     OpenADEActionEventCreateRequest,
@@ -1083,36 +1089,6 @@ async function stopNodeProjectProcess(
     return result
 }
 
-function scopedTaskTerminalId(repoId: string, taskId: string): string {
-    const hash = createHash("sha256").update(repoId).update("\0").update(taskId).digest("hex").slice(0, 24)
-    return `openade-task-terminal-${hash}`
-}
-
-function assertScopedTaskTerminal(params: { repoId: string; taskId: string; terminalId: string }): void {
-    if (params.terminalId !== scopedTaskTerminalId(params.repoId, params.taskId)) throw new Error("terminalId is invalid")
-}
-
-function decodeRuntimePtyOutputData(data: string): string {
-    if (!data || data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) return data
-    try {
-        return Buffer.from(data, "base64").toString("utf8")
-    } catch {
-        return data
-    }
-}
-
-function taskTerminalOutputChunk(value: unknown): OpenADETaskTerminalOutputChunk | null {
-    if (typeof value === "string") return { data: value }
-    const record = eventRecord(value)
-    if (!record) return null
-    const data = record.data
-    if (typeof data !== "string") return null
-    return {
-        data: decodeRuntimePtyOutputData(data),
-        timestamp: typeof record.timestamp === "number" ? record.timestamp : undefined,
-    }
-}
-
 function taskTerminalMutationResult(value: unknown, params: { repoId: string; taskId: string; terminalId: string }): OpenADETaskTerminalMutationResult {
     const record = eventRecord(value)
     return {
@@ -1127,7 +1103,7 @@ async function startNodeTaskTerminal(
     params: OpenADETaskTerminalStartRequest & { repo: OpenADEProject; task: OpenADETask; server?: RuntimeServer }
 ): Promise<OpenADETaskTerminalStartResult> {
     const cwd = await scopedTaskWorkDir(params.repo, params.task)
-    const terminalId = scopedTaskTerminalId(params.repoId, params.taskId)
+    const terminalId = openADETaskTerminalId(params.repoId, params.taskId)
     const result = eventRecord(
         await nodeRuntimeRequest(params.server, "pty/spawn", {
             ptyId: terminalId,
@@ -1149,11 +1125,11 @@ async function startNodeTaskTerminal(
 async function reconnectNodeTaskTerminal(
     params: OpenADETaskTerminalReconnectRequest & { repo: OpenADEProject; task: OpenADETask; server?: RuntimeServer }
 ): Promise<OpenADETaskTerminalReconnectResult> {
-    assertScopedTaskTerminal(params)
+    assertOpenADETaskTerminalId(params)
     const result = eventRecord(await nodeRuntimeRequest(params.server, "pty/reconnect", { ptyId: params.terminalId }))
     if (!result || result.found !== true) return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, found: false, output: [] }
     const output = Array.isArray(result.output)
-        ? result.output.map(taskTerminalOutputChunk).filter((chunk): chunk is OpenADETaskTerminalOutputChunk => chunk !== null)
+        ? result.output.map(openADETaskTerminalOutputChunkFromUnknown).filter((chunk): chunk is OpenADETaskTerminalOutputChunk => chunk !== null)
         : []
     return {
         repoId: params.repoId,
@@ -1170,15 +1146,15 @@ async function reconnectNodeTaskTerminal(
 async function writeNodeTaskTerminal(
     params: OpenADETaskTerminalWriteRequest & { repo: OpenADEProject; task: OpenADETask; server?: RuntimeServer }
 ): Promise<OpenADETaskTerminalMutationResult> {
-    assertScopedTaskTerminal(params)
-    const result = await nodeRuntimeRequest(params.server, "pty/write", { ptyId: params.terminalId, data: Buffer.from(params.data, "utf8").toString("base64") })
+    assertOpenADETaskTerminalId(params)
+    const result = await nodeRuntimeRequest(params.server, "pty/write", { ptyId: params.terminalId, data: encodeOpenADETaskTerminalInput(params.data) })
     return taskTerminalMutationResult(result, params)
 }
 
 async function resizeNodeTaskTerminal(
     params: OpenADETaskTerminalResizeRequest & { repo: OpenADEProject; task: OpenADETask; server?: RuntimeServer }
 ): Promise<OpenADETaskTerminalMutationResult> {
-    assertScopedTaskTerminal(params)
+    assertOpenADETaskTerminalId(params)
     const result = await nodeRuntimeRequest(params.server, "pty/resize", { ptyId: params.terminalId, cols: params.cols, rows: params.rows })
     return taskTerminalMutationResult(result, params)
 }
@@ -1186,7 +1162,7 @@ async function resizeNodeTaskTerminal(
 async function stopNodeTaskTerminal(
     params: OpenADETaskTerminalStopRequest & { repo: OpenADEProject; task: OpenADETask; server?: RuntimeServer }
 ): Promise<OpenADETaskTerminalMutationResult> {
-    assertScopedTaskTerminal(params)
+    assertOpenADETaskTerminalId(params)
     const result = await nodeRuntimeRequest(params.server, "pty/kill", { ptyId: params.terminalId })
     return taskTerminalMutationResult(result, params)
 }

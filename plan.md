@@ -1243,6 +1243,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - This removes another duplicated OpenADE API-boundary implementation without changing classic desktop process tray behavior or remote process permissions.
 - Focused verification passed: OpenADE module typecheck, Electron typecheck, scoped project process helper tests, OpenADE kernel integration, Electron companion runtime API integration, Biome lint for touched files, and `git diff --check`.
 
+### 2026-06-01: Scoped Task Terminal Helpers Consolidated
+
+- `projects/openade-module/src/scopedTaskTerminal.ts` now owns scoped task terminal id derivation and the raw PTY base64/plain-text conversion helpers used at the OpenADE task-terminal boundary.
+- `projects/openade-module/src/node.ts` and `projects/electron/src/modules/companion/runtimeGateway.ts` both import those helpers while keeping host-specific PTY lifecycle plumbing in their respective runtime adapters.
+- This removes duplicate terminal hash and encoding logic without changing classic desktop terminal behavior; the desktop `Terminal` component still uses trusted-local PTY streaming until product terminal notifications can preserve live output without raw `pty/*` subscription.
+- Focused verification passed: OpenADE module typecheck, Electron typecheck, scoped task terminal helper tests, OpenADE kernel integration, Electron companion runtime API integration, Biome lint for touched files, and `git diff --check`.
+
 ### 2026-06-01: Snapshot Patch Indexing Consolidated
 
 - `projects/openade-module/src/snapshotPatchIndex.ts` now owns OpenADE snapshot patch indexing and byte slicing for both inline and external snapshot patches.

@@ -12,13 +12,17 @@ import {
     buildOpenADEReviseStepPrompt,
     buildOpenADEWorkReviewPrompt,
     buildOpenADEPrompt,
+    assertOpenADETaskTerminalId,
     createOpenADEModule,
     createOpenADEYjsProjection,
     createOpenADEYjsWriter,
+    decodeOpenADETaskTerminalOutputChunk,
+    encodeOpenADETaskTerminalInput,
     extractOpenADEPlanText,
     groupOpenADEHyperPlanByDepth,
     isStandardOpenADEHyperPlanStrategy,
     listOpenADEProjectFiles,
+    openADETaskTerminalId,
     publishOpenADECompanionEvent,
     readOpenADEProjectFile,
     resolveOpenADEHyperPlanStrategy,
@@ -69,7 +73,6 @@ import {
     type OpenADETaskImageReadResult,
     type OpenADETaskImageReference,
     type OpenADETaskTerminalMutationResult,
-    type OpenADETaskTerminalOutputChunk,
     type OpenADETaskTerminalReconnectRequest,
     type OpenADETaskTerminalReconnectResult,
     type OpenADETaskTerminalResizeRequest,
@@ -1360,27 +1363,11 @@ async function stopScopedProjectProcess(
     }
 }
 
-function scopedTaskTerminalId(repoId: string, taskId: string): string {
-    const hash = createHash("sha256").update(repoId).update("\0").update(taskId).digest("hex").slice(0, 24)
-    return `openade-task-terminal-${hash}`
-}
-
-function assertScopedTaskTerminal(params: { repoId: string; taskId: string; terminalId: string }): void {
-    if (params.terminalId !== scopedTaskTerminalId(params.repoId, params.taskId)) throw new Error("terminalId is invalid")
-}
-
-function terminalOutputChunk(chunk: { data: string; timestamp: number }): OpenADETaskTerminalOutputChunk {
-    return {
-        data: Buffer.from(chunk.data, "base64").toString("utf8"),
-        timestamp: chunk.timestamp,
-    }
-}
-
 async function startScopedTaskTerminal(
     params: OpenADETaskTerminalStartRequest & { repo: OpenADEProject; task: OpenADETask }
 ): Promise<OpenADETaskTerminalStartResult> {
     const cwd = await scopedTaskWorkDir(params.repo, params.task)
-    const terminalId = scopedTaskTerminalId(params.repoId, params.taskId)
+    const terminalId = openADETaskTerminalId(params.repoId, params.taskId)
     const result = await spawnRuntimePty({
         ptyId: terminalId,
         cwd,
@@ -1400,7 +1387,7 @@ async function startScopedTaskTerminal(
 async function reconnectScopedTaskTerminal(
     params: OpenADETaskTerminalReconnectRequest & { repo: OpenADEProject; task: OpenADETask }
 ): Promise<OpenADETaskTerminalReconnectResult> {
-    assertScopedTaskTerminal(params)
+    assertOpenADETaskTerminalId(params)
     const result = await reconnectRuntimePty({ ptyId: params.terminalId })
     return {
         repoId: params.repoId,
@@ -1410,22 +1397,22 @@ async function reconnectScopedTaskTerminal(
         exited: result.exited,
         exitCode: result.exitCode ?? null,
         outputCount: result.output.length,
-        output: result.output.map(terminalOutputChunk),
+        output: result.output.map(decodeOpenADETaskTerminalOutputChunk),
     }
 }
 
 async function writeScopedTaskTerminal(
     params: OpenADETaskTerminalWriteRequest & { repo: OpenADEProject; task: OpenADETask }
 ): Promise<OpenADETaskTerminalMutationResult> {
-    assertScopedTaskTerminal(params)
-    const result = await writeRuntimePty({ ptyId: params.terminalId, data: Buffer.from(params.data, "utf8").toString("base64") })
+    assertOpenADETaskTerminalId(params)
+    const result = await writeRuntimePty({ ptyId: params.terminalId, data: encodeOpenADETaskTerminalInput(params.data) })
     return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: result.ok }
 }
 
 async function resizeScopedTaskTerminal(
     params: OpenADETaskTerminalResizeRequest & { repo: OpenADEProject; task: OpenADETask }
 ): Promise<OpenADETaskTerminalMutationResult> {
-    assertScopedTaskTerminal(params)
+    assertOpenADETaskTerminalId(params)
     const result = await resizeRuntimePty({ ptyId: params.terminalId, cols: params.cols, rows: params.rows })
     return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: result.ok }
 }
@@ -1433,7 +1420,7 @@ async function resizeScopedTaskTerminal(
 async function stopScopedTaskTerminal(
     params: OpenADETaskTerminalStopRequest & { repo: OpenADEProject; task: OpenADETask }
 ): Promise<OpenADETaskTerminalMutationResult> {
-    assertScopedTaskTerminal(params)
+    assertOpenADETaskTerminalId(params)
     const result = await killRuntimePty({ ptyId: params.terminalId })
     return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: result.ok }
 }
