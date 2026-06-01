@@ -1273,7 +1273,7 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 ### 2026-06-01: Desktop Storage/Config DTOs Consolidated
 
 - `projects/electron/src/modules/deviceConfigTypes.ts` now owns the browser-safe device config/result DTO used by Electron main and the renderer device-config wrapper.
-- `projects/electron/src/modules/code/snapshotsIndex.ts` remains the owner for snapshot patch index DTOs; `projects/web/src/electronAPI/snapshots.ts` now aliases those types instead of copying the patch-index shape.
+- `projects/web/src/electronAPI/snapshots.ts` aliases `projects/electron/src/modules/code/snapshotsIndex.ts` for Electron compatibility; snapshot patch index DTOs and helpers were later moved to the OpenADE module, with Electron keeping that compatibility re-export.
 - This removes two more small duplicate renderer/main-process type pairs without changing device config persistence or snapshot bundle storage.
 - Focused verification passed: Electron typecheck, web typecheck, Electron `deviceConfig.test.ts`, web `store.test.ts` and `Routes.runtimeProductStore.test.ts`, and Biome lint for the touched storage/config files.
 
