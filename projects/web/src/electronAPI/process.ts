@@ -6,67 +6,27 @@
  * Supports reconnection after renderer refresh.
  */
 
-// ============================================================================
-// Type Definitions
-// IMPORTANT: Keep in sync with projects/electron/src/modules/code/process.ts
-// ============================================================================
+import type {
+    RuntimeNodeCommandStartParams,
+    RuntimeNodeProcessExitEvent,
+    RuntimeNodeProcessInfo,
+    RuntimeNodeProcessKillResult,
+    RuntimeNodeProcessListResult,
+    RuntimeNodeProcessOutputChunk,
+    RuntimeNodeProcessReconnectResult,
+    RuntimeNodeProcessStartResponse,
+    RuntimeNodeScriptStartParams,
+} from "../../../runtime-node/src/process"
 
-export interface StartCommandParams {
-    cmd: string
-    args?: string[]
-    cwd: string
-    env?: Record<string, string>
-    timeoutMs?: number // Default: 10 minutes (600000ms)
-}
-
-export interface StartScriptParams {
-    script: string
-    cwd: string
-    env?: Record<string, string>
-    timeoutMs?: number // Default: 10 minutes (600000ms)
-}
-
-export interface StartProcessResponse {
-    processId: string
-}
-
-export interface ProcessOutputChunk {
-    type: "stdout" | "stderr"
-    data: string
-    timestamp: number
-}
-
-export interface ProcessExitEvent {
-    exitCode: number | null
-    signal: string | null
-}
-
-interface ReconnectResponse {
-    ok: boolean
-    found: boolean
-    completed?: boolean
-    exitCode?: number | null
-    signal?: string | null
-    error?: string
-    outputCount?: number
-}
-
-interface KillResponse {
-    ok: boolean
-    error?: string
-}
-
-interface ProcessInfo {
-    processId: string
-    completed: boolean
-    exitCode: number | null
-    signal: string | null
-    error?: string
-}
-
-interface ListResponse {
-    processes: ProcessInfo[]
-}
+export type StartCommandParams = RuntimeNodeCommandStartParams
+export type StartScriptParams = RuntimeNodeScriptStartParams
+export type StartProcessResponse = RuntimeNodeProcessStartResponse
+export type ProcessOutputChunk = RuntimeNodeProcessOutputChunk
+export type ProcessExitEvent = RuntimeNodeProcessExitEvent
+type ReconnectResponse = RuntimeNodeProcessReconnectResult
+type KillResponse = RuntimeNodeProcessKillResult
+type ProcessInfo = RuntimeNodeProcessInfo
+type ListResponse = RuntimeNodeProcessListResult
 
 // ============================================================================
 // API Check
@@ -177,11 +137,9 @@ export class ProcessHandle {
         const handle = new ProcessHandle(processId)
         handle.setupListeners()
 
-        const result = (await localRuntimeClient.request<ReconnectResponse & { output?: ProcessOutputChunk[] }>("process/reconnect", {
+        const result = await localRuntimeClient.request<ReconnectResponse>("process/reconnect", {
             processId,
-        })) as ReconnectResponse & {
-            output?: ProcessOutputChunk[]
-        }
+        })
 
         if (!result.found) {
             console.debug("[ProcessHandle] Process not found (cleaned up or never existed)")
@@ -190,7 +148,7 @@ export class ProcessHandle {
         }
 
         console.debug("[ProcessHandle] Reconnected, replayed", result.outputCount, "output chunks")
-        for (const chunk of result.output ?? []) {
+        for (const chunk of result.output) {
             handle.emit("output", chunk)
         }
 

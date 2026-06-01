@@ -5,41 +5,27 @@
  * Supports reconnection after renderer refresh through output buffering.
  */
 
-import { spawn, type ChildProcess } from "child_process"
-import * as path from "path"
-import * as os from "os"
-import * as fs from "fs"
+import { spawn, type ChildProcess } from "node:child_process"
+import * as path from "node:path"
+import * as os from "node:os"
+import * as fs from "node:fs"
 import logger from "electron-log"
+import type {
+    RuntimeNodeCommandStartParams,
+    RuntimeNodeProcessInfo,
+    RuntimeNodeProcessKillResult,
+    RuntimeNodeProcessLifecycleEvent,
+    RuntimeNodeProcessListResult,
+    RuntimeNodeProcessOutputChunk,
+    RuntimeNodeProcessReconnectResult,
+    RuntimeNodeProcessStartResult,
+    RuntimeNodeScriptStartParams,
+} from "../../../../runtime-node/src/process"
 
-// ============================================================================
-// Type Definitions
-// IMPORTANT: Keep in sync with projects/dashboard/src/pages/code/electronAPI/process.ts
-// ============================================================================
-
-export interface StartCommandParams {
-    cmd: string
-    args?: string[]
-    cwd: string
-    env?: Record<string, string>
-    timeoutMs?: number // Default: 10 minutes (600000ms)
-}
-
-export interface StartScriptParams {
-    script: string
-    cwd: string
-    env?: Record<string, string>
-    timeoutMs?: number // Default: 10 minutes (600000ms)
-}
-
-export interface StartProcessResponse {
-    processId: string
-}
-
-export interface ProcessOutputChunk {
-    type: "stdout" | "stderr"
-    data: string
-    timestamp: number
-}
+export type StartCommandParams = RuntimeNodeCommandStartParams
+export type StartScriptParams = RuntimeNodeScriptStartParams
+export type StartProcessResponse = RuntimeNodeProcessStartResult
+export type ProcessOutputChunk = RuntimeNodeProcessOutputChunk
 
 interface ActiveProcess {
     process: ChildProcess
@@ -54,41 +40,12 @@ interface ActiveProcess {
     tempScriptPath?: string // For cleanup
 }
 
-export interface ReconnectResponse {
-    ok: boolean
-    found: boolean
-    completed?: boolean
-    exitCode?: number | null
-    signal?: string | null
-    error?: string
-    outputCount?: number
-}
-
-export interface RuntimeReconnectResponse extends ReconnectResponse {
-    output: ProcessOutputChunk[]
-}
-
-export interface KillResponse {
-    ok: boolean
-    error?: string
-}
-
-export interface ListResponse {
-    processes: {
-        processId: string
-        completed: boolean
-        exitCode: number | null
-        signal: string | null
-        error?: string
-        pid?: number
-    }[]
-}
-
-export type ProcessLifecycleEvent =
-    | { type: "started"; processId: string; pid?: number; cwd: string; label: string }
-    | { type: "output"; processId: string; chunk: ProcessOutputChunk }
-    | { type: "exit"; processId: string; exitCode: number | null; signal: string | null }
-    | { type: "error"; processId: string; error: string }
+export type ReconnectResponse = Omit<RuntimeNodeProcessReconnectResult, "output">
+export type RuntimeReconnectResponse = RuntimeNodeProcessReconnectResult
+export type KillResponse = RuntimeNodeProcessKillResult
+export type ProcessInfo = RuntimeNodeProcessInfo
+export type ListResponse = RuntimeNodeProcessListResult
+export type ProcessLifecycleEvent = RuntimeNodeProcessLifecycleEvent
 
 // ============================================================================
 // Constants

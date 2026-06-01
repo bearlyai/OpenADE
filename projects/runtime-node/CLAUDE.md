@@ -10,7 +10,7 @@ Target package for Node host adapters.
 - localFiles.ts owns the default headless Node filesystem adapter used by `runtime-node serve`.
 - git.ts owns runtime `git/*` registration through an adapter.
 - localGit.ts owns the default headless Node Git adapter used by `runtime-node serve`.
-- process.ts owns runtime `process/*` registration and lifecycle projection through an adapter.
+- process.ts owns runtime `process/*` registration, lifecycle projection, and generic process DTO types through an adapter. Electron and renderer process bridges should import those DTOs instead of duplicating start/output/reconnect/list shapes.
 - localProcess.ts owns the default headless Node process adapter used by `runtime-node serve`.
 - pty.ts owns runtime `pty/*` registration and lifecycle projection through an adapter.
 - localPty.ts owns the default headless shell-backed PTY adapter used by `runtime-node serve`. It provides PTY lifecycle semantics without depending on Electron or native `node-pty`; embedders can inject a richer native PTY adapter later.

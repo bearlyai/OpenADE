@@ -1176,6 +1176,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - This keeps raw filesystem powers as trusted/local host primitives while removing another "keep in sync" bridge type pair between Electron main and the renderer.
 - Focused verification passed: runtime-node typecheck, Electron typecheck, web typecheck, Biome lint for the touched filesystem files, and web `FileBrowserManager`/`SmartEditorManager` tests.
 
+### 2026-06-01: Generic Process Bridge DTOs Consolidated
+
+- Generic `process/command/start`, `process/script/start`, `process/list`, `process/reconnect`, `process/kill`, process output chunks, and process lifecycle DTOs now live in `projects/runtime-node/src/process.ts`.
+- `projects/electron/src/modules/code/process.ts`, `projects/web/src/electronAPI/process.ts`, and `projects/runtime-node/src/localProcess.ts` import those runtime-node DTOs instead of maintaining separate `StartProcessResponse`, `ProcessOutputChunk`, reconnect, kill, and list shapes.
+- Desktop `ProcessHandle` still uses the trusted local runtime process methods, but reconnect now consumes the exact runtime reconnect result rather than a partial local interface plus cast.
+- Focused verification passed: runtime-node typecheck, Electron typecheck, web typecheck, Biome lint for the touched process files, `runtimeHost.integration`, and the process-covered `runtimeNodeServer.integration` path.
+
 ## Remaining Work Under Corrected Direction
 
 The remaining work is not a desktop UI rewrite. It is a boundary migration: keep the old desktop app experience and replace its direct renderer storage/host assumptions with runtime/OpenADE APIs.

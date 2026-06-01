@@ -26,14 +26,57 @@ export interface RuntimeNodeProcessStartResult {
     processId: string
 }
 
+export interface RuntimeNodeProcessStartResponse extends RuntimeNodeProcessStartResult {
+    runtimeId: string
+}
+
+export interface RuntimeNodeProcessOutputChunk {
+    type: "stdout" | "stderr"
+    data: string
+    timestamp: number
+}
+
+export interface RuntimeNodeProcessExitEvent {
+    exitCode: number | null
+    signal: string | null
+}
+
 export interface RuntimeNodeProcessKillResult {
     ok: boolean
     error?: string
 }
 
+export interface RuntimeNodeProcessInfo {
+    processId: string
+    completed: boolean
+    exitCode: number | null
+    signal: string | null
+    error?: string
+    pid?: number
+}
+
+export interface RuntimeNodeProcessListResult {
+    processes: RuntimeNodeProcessInfo[]
+}
+
+export interface RuntimeNodeProcessReconnectResult {
+    ok: boolean
+    found: boolean
+    completed?: boolean
+    exitCode?: number | null
+    signal?: string | null
+    error?: string
+    outputCount?: number
+    output: RuntimeNodeProcessOutputChunk[]
+}
+
+export interface RuntimeNodeProcessKillAllResult {
+    ok: boolean
+}
+
 export type RuntimeNodeProcessLifecycleEvent =
     | { type: "started"; processId: string; pid?: number; pgid?: number; cwd: string; label: string; processStartedAt?: string }
-    | { type: "output"; processId: string; chunk: unknown }
+    | { type: "output"; processId: string; chunk: RuntimeNodeProcessOutputChunk }
     | { type: "exit"; processId: string; exitCode: number | null; signal: string | null }
     | { type: "error"; processId: string; error: string }
 
@@ -41,10 +84,10 @@ export interface RuntimeNodeProcessAdapter {
     addLifecycleListener(listener: (event: RuntimeNodeProcessLifecycleEvent) => void): () => void
     startCommand(params: RuntimeNodeCommandStartParams): Promise<RuntimeNodeProcessStartResult>
     startScript(params: RuntimeNodeScriptStartParams): Promise<RuntimeNodeProcessStartResult>
-    list(): Promise<unknown>
-    reconnect(processId: string): Promise<unknown>
+    list(): Promise<RuntimeNodeProcessListResult>
+    reconnect(processId: string): Promise<RuntimeNodeProcessReconnectResult>
     kill(processId: string): Promise<RuntimeNodeProcessKillResult>
-    killAll(): Promise<unknown>
+    killAll(): Promise<RuntimeNodeProcessKillAllResult>
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

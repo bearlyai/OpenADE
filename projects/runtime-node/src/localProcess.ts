@@ -7,15 +7,14 @@ import type {
     RuntimeNodeCommandStartParams,
     RuntimeNodeProcessAdapter,
     RuntimeNodeProcessLifecycleEvent,
+    RuntimeNodeProcessOutputChunk,
     RuntimeNodeProcessStartResult,
     RuntimeNodeScriptStartParams,
 } from "./process"
 
-type ProcessOutputChunk = { type: "stdout" | "stderr"; data: string; timestamp: number }
-
 interface ActiveProcess {
     process: ChildProcess
-    output: ProcessOutputChunk[]
+    output: RuntimeNodeProcessOutputChunk[]
     completed: boolean
     exitCode: number | null
     signal: string | null
@@ -46,7 +45,7 @@ async function assertDirectory(cwd: string): Promise<void> {
     if (!stat.isDirectory()) throw new Error(`cwd is not a directory: ${cwd}`)
 }
 
-function bufferOutput(state: ActiveProcess, chunk: ProcessOutputChunk): void {
+function bufferOutput(state: ActiveProcess, chunk: RuntimeNodeProcessOutputChunk): void {
     state.output.push(chunk)
     while (state.output.length > MAX_BUFFERED_CHUNKS) state.output.shift()
 }
@@ -194,7 +193,7 @@ export function createRuntimeNodeLocalProcessAdapter(): RuntimeNodeProcessAdapte
         },
         async reconnect(id: string) {
             const state = local.active.get(id)
-            if (!state) return { ok: true, found: false }
+            if (!state) return { ok: true, found: false, output: [] }
             return {
                 ok: true,
                 found: true,
