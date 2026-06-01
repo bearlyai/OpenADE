@@ -446,6 +446,7 @@ describe("companion runtime API integration", () => {
                     methods: expect.arrayContaining([
                         "openade/snapshot/read",
                         "openade/project/files/tree",
+                        "openade/project/files/fuzzySearch",
                         "openade/project/file/read",
                         "openade/project/search",
                         "openade/project/process/list",
@@ -627,6 +628,12 @@ describe("companion runtime API integration", () => {
         ).toMatchObject({
             matches: expect.arrayContaining([expect.objectContaining({ path: "README.md", line: 1, content: "hello from scoped project search" })]),
         })
+        expect(
+            runtimeResult<{ results: string[] }>(
+                await runtimeRequest(socket, 221, "openade/project/files/fuzzySearch", { repoId: "repo-1", query: "readme", limit: 5 }),
+                221
+            )
+        ).toMatchObject({ results: expect.arrayContaining(["README.md"]) })
         expect(
             runtimeResult<{ processes: Array<{ id: string; name: string; cwd: string }> }>(
                 await runtimeRequest(socket, 32, "openade/project/process/list", { repoId: "repo-1" }),

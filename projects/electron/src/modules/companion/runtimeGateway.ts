@@ -19,6 +19,7 @@ import {
     decodeOpenADETaskTerminalOutputChunk,
     encodeOpenADETaskTerminalInput,
     extractOpenADEPlanText,
+    fuzzySearchOpenADEProjectFiles,
     groupOpenADEHyperPlanByDepth,
     isStandardOpenADEHyperPlanStrategy,
     listOpenADEProjectFiles,
@@ -35,6 +36,7 @@ import {
     readOpenADETaskSnapshotIndex,
     readOpenADETaskSnapshotPatch,
     readOpenADETaskSnapshotPatchSlice,
+    resolveOpenADETaskWorkDir,
     resolveOpenADEHyperPlanStrategy,
     searchOpenADEProject,
     validateOpenADEHyperPlanStrategy,
@@ -974,20 +976,7 @@ function latestScopedTaskEnvironment(task: OpenADETask): OpenADETaskDeviceEnviro
 }
 
 async function scopedTaskWorkDir(repo: OpenADEProject, task: OpenADETask): Promise<string> {
-    const isolationStrategy = task.isolationStrategy ?? { type: "head" }
-    if (isolationStrategy.type === "head") return path.resolve(repo.path)
-
-    const environment = latestScopedTaskEnvironment(task)
-    if (!environment?.worktreeDir) throw new Error("task worktree is not available")
-
-    const gitInfo = await isRuntimeGitDirectory({ directory: repo.path }).catch(() => null)
-    const relativePath = gitInfo?.isGitDirectory ? gitInfo.relativePath : ""
-    const root = path.resolve(environment.worktreeDir)
-    const workDir = path.resolve(root, relativePath)
-    if (workDir !== root && !workDir.startsWith(`${root}${path.sep}`)) {
-        throw new Error("task worktree path is invalid")
-    }
-    return workDir
+    return resolveOpenADETaskWorkDir(repo, task)
 }
 
 function scopedTaskFromTreeish(task: OpenADETask, fromTreeish?: string): string {
@@ -2112,6 +2101,7 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                 listProjectFiles: listOpenADEProjectFiles,
                 readProjectFile: readOpenADEProjectFile,
                 writeProjectFile: writeOpenADEProjectFile,
+                fuzzySearchProjectFiles: fuzzySearchOpenADEProjectFiles,
                 searchProject: searchOpenADEProject,
                 readTaskChanges: readScopedTaskChanges,
                 readTaskDiff: readScopedTaskDiff,

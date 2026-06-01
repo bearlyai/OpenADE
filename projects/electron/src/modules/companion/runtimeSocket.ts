@@ -96,6 +96,7 @@ export const COMPANION_RUNTIME_PERMISSIONS = [
     "openade/snapshot/read",
     "openade/project/list",
     "openade/project/files/tree",
+    "openade/project/files/fuzzySearch",
     "openade/project/file/read",
     "openade/project/search",
     "openade/project/process/list",

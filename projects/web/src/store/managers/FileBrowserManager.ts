@@ -1,4 +1,11 @@
 import { makeAutoObservable, runInAction } from "mobx"
+import type {
+    OpenADEProjectFileReadResult,
+    OpenADEProjectFilesFuzzySearchRequest,
+    OpenADEProjectFilesFuzzySearchResult,
+    OpenADEProjectFilesTreeRequest,
+    OpenADEProjectFilesTreeResult,
+} from "../../../../openade-module/src"
 import { getFileName, getRelativePath, splitPath } from "../../components/utils/paths"
 import { type DescribePathResponse, type PathEntry, filesApi } from "../../electronAPI/files"
 import { getPathSeparator } from "../../electronAPI/platform"
@@ -9,6 +16,18 @@ const FILE_REFERENCE_SEARCH_LIMIT = 12
 
 // Infrastructure directories to always hide in tree view (not searchable either via gitignore)
 const HIDDEN_INFRA_DIRS = new Set([".git"])
+
+interface ProductFileBrowserContext {
+    repoId: string
+    taskId?: string
+}
+
+interface ProductFileBrowserAccess {
+    getContext(workingDir: string): ProductFileBrowserContext | null
+    listProjectFiles(args: OpenADEProjectFilesTreeRequest): Promise<OpenADEProjectFilesTreeResult>
+    readProjectFile(args: { repoId: string; taskId?: string; path: string; maxBytes: number }): Promise<OpenADEProjectFileReadResult>
+    fuzzySearchProjectFiles(args: OpenADEProjectFilesFuzzySearchRequest): Promise<OpenADEProjectFilesFuzzySearchResult>
+}
 
 function normalizePathForMatch(path: string): string {
     return path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/").toLowerCase()
@@ -91,8 +110,104 @@ export class FileBrowserManager {
 
     private searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
-    constructor() {
+    constructor(private readonly productAccess: ProductFileBrowserAccess | null = null) {
         makeAutoObservable(this)
+    }
+
+    private get productContext(): ProductFileBrowserContext | null {
+        return this.productAccess?.getContext(this.workingDir) ?? null
+    }
+
+    private relativePathForProduct(absolutePath: string): string | null {
+        if (!this.workingDir) return null
+        const relativePath = getRelativePath(this.workingDir, absolutePath)
+        if (relativePath === absolutePath || isAbsolutePath(relativePath) || splitPath(relativePath).some((part) => part === "..")) return null
+        return relativePath.replace(/\\/g, "/")
+    }
+
+    private absolutePathFromProduct(relativePath: string): string {
+        if (!relativePath) return this.workingDir
+        return joinPath(this.workingDir, relativePath)
+    }
+
+    private productEntryToPathEntry(entry: OpenADEProjectFilesTreeResult["entries"][number]): PathEntry {
+        return {
+            name: entry.name,
+            path: this.absolutePathFromProduct(entry.path),
+            isDir: entry.type === "directory",
+            isSymlink: false,
+            size: entry.size ?? 0,
+            mode: 0,
+        }
+    }
+
+    private productFileReadToDescribePath(path: string, result: OpenADEProjectFileReadResult): DescribePathResponse {
+        return {
+            type: "file",
+            path,
+            size: result.size,
+            mode: 0,
+            content: result.content,
+            tooLarge: result.tooLarge,
+            isReadable: result.isReadable ?? true,
+            isBinary: result.isBinary,
+            mediaType: result.mediaType,
+            previewKind: result.previewKind,
+        }
+    }
+
+    private async listDirectoryViaProduct(dirPath: string): Promise<DescribePathResponse | null> {
+        const productAccess = this.productAccess
+        const productContext = this.productContext
+        const relativePath = this.relativePathForProduct(dirPath)
+        if (!productAccess || !productContext || relativePath === null) return null
+
+        const result = await productAccess.listProjectFiles({
+            repoId: productContext.repoId,
+            taskId: productContext.taskId,
+            path: relativePath,
+            maxDepth: 0,
+            maxEntries: 1000,
+            includeHidden: true,
+            includeGenerated: true,
+        })
+        return {
+            type: "dir",
+            path: dirPath,
+            mode: 0,
+            entries: result.entries.map((entry) => this.productEntryToPathEntry(entry)),
+        }
+    }
+
+    private async fuzzySearchViaProduct(params: { query: string; matchDirs: boolean; limit: number }): Promise<OpenADEProjectFilesFuzzySearchResult | null> {
+        const productAccess = this.productAccess
+        const productContext = this.productContext
+        if (!productAccess || !productContext) return null
+
+        return productAccess.fuzzySearchProjectFiles({
+            repoId: productContext.repoId,
+            taskId: productContext.taskId,
+            query: params.query,
+            matchDirs: params.matchDirs,
+            limit: params.limit,
+            includeHidden: true,
+            includeGenerated: true,
+        })
+    }
+
+    private async readFileViaProduct(absolutePath: string): Promise<DescribePathResponse | null> {
+        const productAccess = this.productAccess
+        const productContext = this.productContext
+        const relativePath = this.relativePathForProduct(absolutePath)
+        if (!productAccess || !productContext || relativePath === null) return null
+
+        const result = await productAccess.readProjectFile({
+            repoId: productContext.repoId,
+            taskId: productContext.taskId,
+            path: relativePath,
+            maxBytes: MAX_FILE_READ_SIZE,
+        })
+        return this.productFileReadToDescribePath(absolutePath, result)
     }
 
     setWorkingDir(path: string): void {
@@ -129,10 +244,12 @@ export class FileBrowserManager {
         try {
             // Always request hidden files, we filter infra dirs (like .git) on frontend
             // The showHidden toggle controls whether user sees dotfiles like .env
-            const result = await filesApi.describePath({
-                path: dirPath,
-                showHidden: true,
-            })
+            const result =
+                (await this.listDirectoryViaProduct(dirPath)) ??
+                (await filesApi.describePath({
+                    path: dirPath,
+                    showHidden: true,
+                }))
             runInAction(() => {
                 if (result.type === "dir") {
                     // Filter out infrastructure directories (always hidden)
@@ -225,12 +342,18 @@ export class FileBrowserManager {
                 this.searchLoading = true
             })
             try {
-                const result = await filesApi.fuzzySearch({
-                    dir: this.workingDir,
-                    query,
-                    matchDirs: false,
-                    limit: 50,
-                })
+                const result =
+                    (await this.fuzzySearchViaProduct({
+                        query,
+                        matchDirs: false,
+                        limit: 50,
+                    })) ??
+                    (await filesApi.fuzzySearch({
+                        dir: this.workingDir,
+                        query,
+                        matchDirs: false,
+                        limit: 50,
+                    }))
                 runInAction(() => {
                     // Filter out paths inside infra dirs like .git/
                     this.searchResults = result.results.filter((path) => {
@@ -273,8 +396,8 @@ export class FileBrowserManager {
 
     private async fileExists(path: string): Promise<boolean> {
         try {
-            const result = await filesApi.describePath({ path })
-            return result.type === "file"
+            const result = await this.describePath(path)
+            return result?.type === "file"
         } catch {
             return false
         }
@@ -287,12 +410,18 @@ export class FileBrowserManager {
         if (!query) return null
 
         try {
-            const result = await filesApi.fuzzySearch({
-                dir: this.workingDir,
-                query,
-                matchDirs,
-                limit: FILE_REFERENCE_SEARCH_LIMIT,
-            })
+            const result =
+                (await this.fuzzySearchViaProduct({
+                    query,
+                    matchDirs,
+                    limit: FILE_REFERENCE_SEARCH_LIMIT,
+                })) ??
+                (await filesApi.fuzzySearch({
+                    dir: this.workingDir,
+                    query,
+                    matchDirs,
+                    limit: FILE_REFERENCE_SEARCH_LIMIT,
+                }))
             const match = chooseBestFuzzyReferenceMatch(result.results, query)
             return match ? joinPath(this.workingDir, match) : null
         } catch {
@@ -301,6 +430,14 @@ export class FileBrowserManager {
     }
 
     private async describePath(path: string): Promise<DescribePathResponse | null> {
+        const hasProductContext = this.productAccess !== null && this.productContext !== null && this.relativePathForProduct(path) !== null
+        const productFile = await this.readFileViaProduct(path).catch(() => null)
+        if (productFile) return productFile
+
+        const productDirectory = await this.listDirectoryViaProduct(path).catch(() => null)
+        if (productDirectory) return productDirectory
+        if (hasProductContext) return null
+
         try {
             return await filesApi.describePath({ path })
         } catch {
@@ -379,11 +516,13 @@ export class FileBrowserManager {
         this.fileError = null
 
         try {
-            const result = await filesApi.describePath({
-                path: absolutePath,
-                readContents: true,
-                maxReadSize: MAX_FILE_READ_SIZE,
-            })
+            const result =
+                (await this.readFileViaProduct(absolutePath)) ??
+                (await filesApi.describePath({
+                    path: absolutePath,
+                    readContents: true,
+                    maxReadSize: MAX_FILE_READ_SIZE,
+                }))
             runInAction(() => {
                 if (this.activeFile !== absolutePath) return
                 if (result.type === "file") {

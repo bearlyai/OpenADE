@@ -7,12 +7,13 @@ const CONTENT_RESULTS_LIMIT = 100 // Max content matches to show
 
 interface ProductProjectSearchContext {
     repoId: string
+    taskId?: string
 }
 
 interface ProductProjectSearchAccess {
     getContext(workingDir: string): ProductProjectSearchContext | null
-    searchProject(args: { repoId: string; query: string; limit: number; caseSensitive: boolean }): Promise<OpenADEProjectSearchResult>
-    readProjectFile(args: { repoId: string; path: string; maxBytes: number }): Promise<OpenADEProjectFileReadResult>
+    searchProject(args: { repoId: string; taskId?: string; query: string; limit: number; caseSensitive: boolean }): Promise<OpenADEProjectSearchResult>
+    readProjectFile(args: { repoId: string; taskId?: string; path: string; maxBytes: number }): Promise<OpenADEProjectFileReadResult>
 }
 
 /**
@@ -60,6 +61,7 @@ export class ContentSearchManager {
         if (productAccess && productContext) {
             const result = await productAccess.searchProject({
                 repoId: productContext.repoId,
+                taskId: productContext.taskId,
                 query,
                 limit: CONTENT_RESULTS_LIMIT,
                 caseSensitive: false,
@@ -84,7 +86,12 @@ export class ContentSearchManager {
         const productAccess = this.productAccess
         const productContext = this.productContext
         if (productAccess && productContext) {
-            const result = await productAccess.readProjectFile({ repoId: productContext.repoId, path: relativePath, maxBytes: MAX_FILE_READ_SIZE })
+            const result = await productAccess.readProjectFile({
+                repoId: productContext.repoId,
+                taskId: productContext.taskId,
+                path: relativePath,
+                maxBytes: MAX_FILE_READ_SIZE,
+            })
             return productFileReadToDescribePath(absolutePath, result)
         }
 
@@ -282,6 +289,9 @@ function productFileReadToDescribePath(path: string, result: OpenADEProjectFileR
         mode: 0,
         content: result.content,
         tooLarge: result.tooLarge,
-        isReadable: true,
+        isReadable: result.isReadable ?? true,
+        isBinary: result.isBinary,
+        mediaType: result.mediaType,
+        previewKind: result.previewKind,
     }
 }

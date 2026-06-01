@@ -24,7 +24,7 @@ Renderer-side remote control surface shared by the desktop-hosted mobile view an
 - The desktop renderer is not a companion command adapter. Product commands from remote clients go through runtime WebSocket methods.
 - Remote clients read snapshots, projects, task detail, and runtime updates over the `/v1/runtime` WebSocket.
 - Remote product mutations include turn start/interrupt, review start, queued-turn cancel, comment create/edit/delete, task metadata update, and task delete. Keep them high-level OpenADE methods; never replace them with raw Yjs or host calls.
-- Remote project files and search use scoped `openade/project/files/tree`, `openade/project/file/read`, and `openade/project/search` methods through `client.ts` and `OpenADEProductStore`; do not call raw `fs/*`, `host/*`, or direct repo paths from `RemoteApp`.
+- Remote project files and search use scoped `openade/project/files/tree`, `openade/project/files/fuzzySearch`, `openade/project/file/read`, and `openade/project/search` methods through `client.ts` and `OpenADEProductStore`; do not call raw `fs/*`, `host/*`, or direct repo paths from `RemoteApp`.
 - Remote task change views use scoped `openade/task/changes/read`, `openade/task/diff/read`, and `openade/task/git/log` through `client.ts` and `OpenADEProductStore`; do not call raw `git/*` or `fs/*` from `RemoteApp`.
 - Remote project process controls and output viewing use scoped `openade/project/process/*` methods through `client.ts` and `OpenADEProductStore`; do not call raw `process/*` or `host/procs/*` from `RemoteApp`.
 - Remote settings may call `remote/device/selfRevoke` for the current paired token only. Do not add other device-management methods to the remote shell without explicit admin-role permissions and integration tests.

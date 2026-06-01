@@ -176,6 +176,13 @@ function createRuntimeBackedConstructors(state: {
             content: params.path === "README.md" ? "remote project file" : "",
         }),
         writeProjectFile: async (params) => ({ repoId: params.repoId, path: params.path, size: params.content.length }),
+        fuzzySearchProjectFiles: async (params) => ({
+            repoId: params.repoId,
+            taskId: params.taskId,
+            results: params.query === "remote" ? ["README.md"] : [],
+            truncated: false,
+            source: "filesystem",
+        }),
         searchProject: async (params) => ({
             repoId: params.repoId,
             matches: params.query === "remote" ? [{ path: "README.md", line: 1, content: "remote project file search hit", matchStart: 0, matchEnd: 6 }] : [],

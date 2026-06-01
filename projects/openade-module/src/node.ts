@@ -17,7 +17,14 @@ import { createOpenADEModule, publishOpenADECompanionEvent, type OpenADEModuleAd
 import { buildOpenADEPrompt } from "./promptBuilder"
 import { parseProcsFile } from "./procs"
 import { buildOpenADEPlanReviewPrompt, buildOpenADEReviewHandoffPrompt, buildOpenADEWorkReviewPrompt } from "./review"
-import { listOpenADEProjectFiles, readOpenADEProjectFile, searchOpenADEProject, writeOpenADEProjectFile } from "./scopedProjectHost"
+import {
+    fuzzySearchOpenADEProjectFiles,
+    listOpenADEProjectFiles,
+    readOpenADEProjectFile,
+    resolveOpenADETaskWorkDir,
+    searchOpenADEProject,
+    writeOpenADEProjectFile,
+} from "./scopedProjectHost"
 import {
     buildOpenADEProjectProcessDefinitions,
     openADEProjectProcessInstanceFromUnknown,
@@ -195,14 +202,6 @@ function parseScopedNameStatusOutput(stdout: string): OpenADETaskGitChangedFile[
     return files
 }
 
-function latestTaskWorktreeDir(task: OpenADETask): string | undefined {
-    for (let index = task.deviceEnvironments.length - 1; index >= 0; index--) {
-        const environment = task.deviceEnvironments[index]
-        if (environment.setupComplete && environment.worktreeDir) return environment.worktreeDir
-    }
-    return undefined
-}
-
 function latestTaskMergeBase(task: OpenADETask): string | undefined {
     for (let index = task.deviceEnvironments.length - 1; index >= 0; index--) {
         const environment = task.deviceEnvironments[index]
@@ -217,35 +216,8 @@ function latestTaskMergeBase(task: OpenADETask): string | undefined {
     return undefined
 }
 
-function normalizeGitPrefix(prefix: string): string {
-    const normalized = prefix.trim().replace(/\\/g, "/").replace(/\/$/, "")
-    if (!normalized) return ""
-    if (normalized.startsWith("/") || normalized.split("/").some((segment) => segment === "..")) {
-        throw new Error("repository relative path is invalid")
-    }
-    return normalized
-}
-
-async function scopedRepoPrefix(repoPath: string): Promise<string> {
-    const result = await scopedGit(["rev-parse", "--show-prefix"], repoPath)
-    if (!result.success) return ""
-    return normalizeGitPrefix(result.stdout)
-}
-
 async function scopedTaskWorkDir(repo: OpenADEProject, task: OpenADETask): Promise<string> {
-    const isolationStrategy = task.isolationStrategy ?? { type: "head" }
-    if (isolationStrategy.type === "head") return path.resolve(repo.path)
-
-    const worktreeDir = latestTaskWorktreeDir(task)
-    if (!worktreeDir) throw new Error("task worktree is not available")
-
-    const root = path.resolve(worktreeDir)
-    const prefix = await scopedRepoPrefix(repo.path)
-    const workDir = path.resolve(root, prefix)
-    if (workDir !== root && !workDir.startsWith(`${root}${path.sep}`)) {
-        throw new Error("task worktree path is invalid")
-    }
-    return workDir
+    return resolveOpenADETaskWorkDir(repo, task)
 }
 
 function scopedTaskFromTreeish(task: OpenADETask, fromTreeish?: string): string {
@@ -1657,6 +1629,7 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
             listProjectFiles: listOpenADEProjectFiles,
             readProjectFile: readOpenADEProjectFile,
             writeProjectFile: writeOpenADEProjectFile,
+            fuzzySearchProjectFiles: fuzzySearchOpenADEProjectFiles,
             searchProject: searchOpenADEProject,
             readTaskChanges: scopedTaskChanges,
             readTaskDiff: scopedTaskDiff,

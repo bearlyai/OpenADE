@@ -7,6 +7,8 @@ import type {
     OpenADEProject,
     OpenADEProjectFileReadRequest,
     OpenADEProjectFileReadResult,
+    OpenADEProjectFilesFuzzySearchRequest,
+    OpenADEProjectFilesFuzzySearchResult,
     OpenADEProjectFileWriteRequest,
     OpenADEProjectFileWriteResult,
     OpenADEProjectFilesTreeRequest,
@@ -1144,6 +1146,14 @@ export class CodeStore {
         }
 
         return localOpenADEClient.readProjectFile(params)
+    }
+
+    async fuzzySearchProductProjectFiles(params: OpenADEProjectFilesFuzzySearchRequest): Promise<OpenADEProjectFilesFuzzySearchResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.fuzzySearchProjectFiles(params)
+        }
+
+        return localOpenADEClient.fuzzySearchProjectFiles(params)
     }
 
     async writeProductProjectFile(params: OpenADEProjectFileWriteRequest): Promise<OpenADEProjectFileWriteResult> {

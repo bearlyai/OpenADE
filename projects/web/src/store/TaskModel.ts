@@ -138,7 +138,18 @@ export class TaskModel {
 
     get fileBrowser(): FileBrowserManager {
         if (!this._fileBrowser) {
-            this._fileBrowser = new FileBrowserManager()
+            this._fileBrowser = new FileBrowserManager({
+                getContext: (workingDir) => {
+                    if (!this.usesRuntimeProductReads || !this.repoId) return null
+                    const repo = this.store.repos.getRepo(this.repoId)
+                    const dir = this.environment?.taskWorkingDir ?? repo?.path
+                    if (!dir || normalizedDirectoryPath(dir) !== normalizedDirectoryPath(workingDir)) return null
+                    return { repoId: this.repoId, taskId: this.taskId }
+                },
+                listProjectFiles: (args) => this.store.listProductProjectFiles(args),
+                readProjectFile: (args) => this.store.readProductProjectFile(args),
+                fuzzySearchProjectFiles: (args) => this.store.fuzzySearchProductProjectFiles(args),
+            })
             const dir = this.environment?.taskWorkingDir
             if (dir) this._fileBrowser.setWorkingDir(dir)
         }
@@ -153,8 +164,9 @@ export class TaskModel {
                 getContext: (workingDir) => {
                     if (!this.usesRuntimeProductReads || !this.repoId) return null
                     const repo = this.store.repos.getRepo(this.repoId)
-                    if (!repo || normalizedDirectoryPath(repo.path) !== normalizedDirectoryPath(workingDir)) return null
-                    return { repoId: this.repoId }
+                    const dir = this.environment?.taskWorkingDir ?? repo?.path
+                    if (!dir || normalizedDirectoryPath(dir) !== normalizedDirectoryPath(workingDir)) return null
+                    return { repoId: this.repoId, taskId: this.taskId }
                 },
                 searchProject: (args) => this.store.searchProductProject(args),
                 readProjectFile: (args) => this.store.readProductProjectFile(args),

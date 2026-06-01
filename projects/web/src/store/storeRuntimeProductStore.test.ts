@@ -465,6 +465,16 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
                 }
             },
             writeProjectFile: unsupportedMutation("writeProjectFile"),
+            fuzzySearchProjectFiles: async (params) => {
+                requireStateProject(state, params.repoId)
+                return {
+                    repoId: params.repoId,
+                    taskId: params.taskId,
+                    results: [runtimeSearchFixture.path],
+                    truncated: false,
+                    source: "filesystem",
+                }
+            },
             searchProject: async (params) => {
                 requireStateProject(state, params.repoId)
                 const line = runtimeSearchFixture.content.trimEnd()
@@ -957,7 +967,7 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
-    it("routes classic content search and preview through runtime project methods for repo-root tasks", async () => {
+    it("routes classic file browsing, content search, and previews through task-scoped runtime project methods", async () => {
         const { client, runtime } = createRuntimeBackedClient({
             project: { ...project, path: "/tmp/runtime-repo" },
             task: { ...task, isolationStrategy: { type: "head" } },
@@ -971,8 +981,11 @@ describe("CodeStore runtime product store bridge", () => {
         })
         const legacyContentSearch = vi.spyOn(filesApi, "contentSearch").mockRejectedValue(new Error("legacy content search should not be used"))
         const legacyDescribePath = vi.spyOn(filesApi, "describePath").mockRejectedValue(new Error("legacy file preview should not be used"))
+        const legacyFuzzySearch = vi.spyOn(filesApi, "fuzzySearch").mockRejectedValue(new Error("legacy fuzzy search should not be used"))
         const runtimeSearch = vi.spyOn(codeStore, "searchProductProject")
         const runtimeFileRead = vi.spyOn(codeStore, "readProductProjectFile")
+        const runtimeFileList = vi.spyOn(codeStore, "listProductProjectFiles")
+        const runtimeFuzzySearch = vi.spyOn(codeStore, "fuzzySearchProductProjectFiles")
 
         try {
             await codeStore.initializeRuntimeProductStore()
@@ -982,6 +995,8 @@ describe("CodeStore runtime product store bridge", () => {
             if (!taskModel) throw new Error("Expected runtime task model")
             taskModel.contentSearch.setWorkingDir("/tmp/runtime-repo")
             taskModel.contentSearch.setQuery("needle")
+            taskModel.fileBrowser.setWorkingDir("/tmp/runtime-repo")
+            await taskModel.fileBrowser.openFileReference("runtime-search.ts", { line: 2 })
 
             await vi.waitFor(() => {
                 expect(taskModel.contentSearch.contentResults).toEqual([
@@ -995,16 +1010,46 @@ describe("CodeStore runtime product store bridge", () => {
             await vi.waitFor(() => {
                 expect(taskModel.contentSearch.previewData?.content).toBe(runtimeSearchFixture.content)
             })
+            await vi.waitFor(() => {
+                expect(taskModel.fileBrowser.activeFileData?.content).toBe(runtimeSearchFixture.content)
+            })
 
-            expect(runtimeSearch).toHaveBeenCalledWith({ repoId: "repo-1", query: "needle", limit: 100, caseSensitive: false })
-            expect(runtimeFileRead).toHaveBeenCalledWith({ repoId: "repo-1", path: "src/runtime-search.ts", maxBytes: 5 * 1024 * 1024 })
+            expect(runtimeSearch).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1", query: "needle", limit: 100, caseSensitive: false })
+            expect(runtimeFileRead).toHaveBeenCalledWith({
+                repoId: "repo-1",
+                taskId: "task-1",
+                path: "src/runtime-search.ts",
+                maxBytes: 5 * 1024 * 1024,
+            })
+            expect(runtimeFileList).toHaveBeenCalledWith({
+                repoId: "repo-1",
+                taskId: "task-1",
+                path: "",
+                maxDepth: 0,
+                maxEntries: 1000,
+                includeHidden: true,
+                includeGenerated: true,
+            })
+            expect(runtimeFuzzySearch).toHaveBeenCalledWith({
+                repoId: "repo-1",
+                taskId: "task-1",
+                query: "runtime-search.ts",
+                matchDirs: false,
+                limit: 12,
+                includeHidden: true,
+                includeGenerated: true,
+            })
             expect(legacyContentSearch).not.toHaveBeenCalled()
             expect(legacyDescribePath).not.toHaveBeenCalled()
+            expect(legacyFuzzySearch).not.toHaveBeenCalled()
         } finally {
             runtimeSearch.mockRestore()
             runtimeFileRead.mockRestore()
+            runtimeFileList.mockRestore()
+            runtimeFuzzySearch.mockRestore()
             legacyContentSearch.mockRestore()
             legacyDescribePath.mockRestore()
+            legacyFuzzySearch.mockRestore()
             codeStore.disconnectAllStores()
             await runtime.close()
         }

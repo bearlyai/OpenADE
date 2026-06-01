@@ -62,6 +62,7 @@ class OpenADEClient {
     startTurn = vi.fn(async (): Promise<OpenADETurnStartResult> => startTurnResult)
     listProjectFiles = vi.fn(async () => ({ repoId: "repo-1", path: "", entries: [], truncated: false }))
     readProjectFile = vi.fn(async () => ({ repoId: "repo-1", path: "README.md", encoding: "utf8" as const, size: 0, tooLarge: false, content: "" }))
+    fuzzySearchProjectFiles = vi.fn(async () => ({ repoId: "repo-1", results: [], truncated: false, source: "filesystem" as const }))
     writeProjectFile = vi.fn(async (args: { repoId: string; path: string; content: string }) => ({
         repoId: args.repoId,
         path: args.path,

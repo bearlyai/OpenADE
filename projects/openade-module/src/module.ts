@@ -20,6 +20,8 @@ import type {
     OpenADEHyperPlanSubExecutionUpdateRequest,
     OpenADEProjectFileReadRequest,
     OpenADEProjectFileReadResult,
+    OpenADEProjectFilesFuzzySearchRequest,
+    OpenADEProjectFilesFuzzySearchResult,
     OpenADEProjectFilesTreeRequest,
     OpenADEProjectFilesTreeResult,
     OpenADEProjectFileWriteRequest,
@@ -140,10 +142,13 @@ export interface OpenADEWriteAdapter {
 }
 
 export interface OpenADEScopedHostAdapter {
-    listProjectFiles(params: OpenADEProjectFilesTreeRequest & { repo: OpenADEProject }): Promise<OpenADEProjectFilesTreeResult>
-    readProjectFile(params: OpenADEProjectFileReadRequest & { repo: OpenADEProject }): Promise<OpenADEProjectFileReadResult>
-    writeProjectFile(params: OpenADEProjectFileWriteRequest & { repo: OpenADEProject }): Promise<OpenADEProjectFileWriteResult>
-    searchProject(params: OpenADEProjectSearchRequest & { repo: OpenADEProject }): Promise<OpenADEProjectSearchResult>
+    listProjectFiles(params: OpenADEProjectFilesTreeRequest & { repo: OpenADEProject; task?: OpenADETask }): Promise<OpenADEProjectFilesTreeResult>
+    readProjectFile(params: OpenADEProjectFileReadRequest & { repo: OpenADEProject; task?: OpenADETask }): Promise<OpenADEProjectFileReadResult>
+    writeProjectFile(params: OpenADEProjectFileWriteRequest & { repo: OpenADEProject; task?: OpenADETask }): Promise<OpenADEProjectFileWriteResult>
+    fuzzySearchProjectFiles(
+        params: OpenADEProjectFilesFuzzySearchRequest & { repo: OpenADEProject; task?: OpenADETask }
+    ): Promise<OpenADEProjectFilesFuzzySearchResult>
+    searchProject(params: OpenADEProjectSearchRequest & { repo: OpenADEProject; task?: OpenADETask }): Promise<OpenADEProjectSearchResult>
     listProjectProcesses(params: OpenADEProjectProcessListRequest & { repo: OpenADEProject; task?: OpenADETask }): Promise<OpenADEProjectProcessListResult>
     startProjectProcess(params: OpenADEProjectProcessStartRequest & { repo: OpenADEProject; task?: OpenADETask }): Promise<OpenADEProjectProcessStartResult>
     reconnectProjectProcess(
@@ -303,10 +308,12 @@ function projectFilesTreeParams(params: unknown): OpenADEProjectFilesTreeRequest
     const record = asRecord(params)
     return {
         repoId: stringParam(record, "repoId"),
+        taskId: optionalStringParam(record, "taskId"),
         path: optionalScopedRelativePathParam(record, "path"),
         maxDepth: optionalPositiveIntegerParam(record, "maxDepth"),
         maxEntries: optionalPositiveIntegerParam(record, "maxEntries"),
         includeHidden: booleanParam(record, "includeHidden"),
+        includeGenerated: booleanParam(record, "includeGenerated"),
     }
 }
 
@@ -315,6 +322,7 @@ function projectFileReadParams(params: unknown): OpenADEProjectFileReadRequest {
     const encoding = record.encoding === "base64" ? "base64" : "utf8"
     return {
         repoId: stringParam(record, "repoId"),
+        taskId: optionalStringParam(record, "taskId"),
         path: scopedRelativePathParam(record, "path"),
         encoding,
         maxBytes: optionalPositiveIntegerParam(record, "maxBytes"),
@@ -326,6 +334,7 @@ function projectFileWriteParams(params: unknown): OpenADEProjectFileWriteRequest
     const encoding = record.encoding === "base64" ? "base64" : "utf8"
     return {
         repoId: stringParam(record, "repoId"),
+        taskId: optionalStringParam(record, "taskId"),
         path: scopedRelativePathParam(record, "path"),
         encoding,
         content: stringParamAllowEmpty(record, "content"),
@@ -334,10 +343,24 @@ function projectFileWriteParams(params: unknown): OpenADEProjectFileWriteRequest
     }
 }
 
+function projectFilesFuzzySearchParams(params: unknown): OpenADEProjectFilesFuzzySearchRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: optionalStringParam(record, "taskId"),
+        query: stringParamAllowEmpty(record, "query"),
+        matchDirs: booleanParam(record, "matchDirs"),
+        limit: optionalPositiveIntegerParam(record, "limit", 100),
+        includeHidden: booleanParam(record, "includeHidden"),
+        includeGenerated: booleanParam(record, "includeGenerated"),
+    }
+}
+
 function projectSearchParams(params: unknown): OpenADEProjectSearchRequest {
     const record = asRecord(params)
     return {
         repoId: stringParam(record, "repoId"),
+        taskId: optionalStringParam(record, "taskId"),
         query: stringParam(record, "query"),
         limit: optionalPositiveIntegerParam(record, "limit", 100),
         caseSensitive: booleanParam(record, "caseSensitive"),
@@ -1323,23 +1346,28 @@ export function createOpenADEModule(adapters: OpenADEModuleAdapters): RuntimeMod
                 }
                 server.register("openade/project/files/tree", async (params) => {
                     const request = projectFilesTreeParams(params)
-                    const repo = await readScopedProject(request.repoId)
-                    return scopedHost.listProjectFiles({ ...request, repo })
+                    const { repo, task } = await readScopedProjectOptionalTask(request.repoId, request.taskId)
+                    return scopedHost.listProjectFiles({ ...request, repo, task })
                 }, { validateParams: validateWith(projectFilesTreeParams) })
                 server.register("openade/project/file/read", async (params) => {
                     const request = projectFileReadParams(params)
-                    const repo = await readScopedProject(request.repoId)
-                    return scopedHost.readProjectFile({ ...request, repo })
+                    const { repo, task } = await readScopedProjectOptionalTask(request.repoId, request.taskId)
+                    return scopedHost.readProjectFile({ ...request, repo, task })
                 }, { validateParams: validateWith(projectFileReadParams) })
                 server.register("openade/project/file/write", async (params) => {
                     const request = projectFileWriteParams(params)
-                    const repo = await readScopedProject(request.repoId)
-                    return runIdempotentMutation("openade/project/file/write", params, () => scopedHost.writeProjectFile({ ...request, repo }))
+                    const { repo, task } = await readScopedProjectOptionalTask(request.repoId, request.taskId)
+                    return runIdempotentMutation("openade/project/file/write", params, () => scopedHost.writeProjectFile({ ...request, repo, task }))
                 }, { validateParams: validateWith(projectFileWriteParams) })
+                server.register("openade/project/files/fuzzySearch", async (params) => {
+                    const request = projectFilesFuzzySearchParams(params)
+                    const { repo, task } = await readScopedProjectOptionalTask(request.repoId, request.taskId)
+                    return scopedHost.fuzzySearchProjectFiles({ ...request, repo, task })
+                }, { validateParams: validateWith(projectFilesFuzzySearchParams) })
                 server.register("openade/project/search", async (params) => {
                     const request = projectSearchParams(params)
-                    const repo = await readScopedProject(request.repoId)
-                    return scopedHost.searchProject({ ...request, repo })
+                    const { repo, task } = await readScopedProjectOptionalTask(request.repoId, request.taskId)
+                    return scopedHost.searchProject({ ...request, repo, task })
                 }, { validateParams: validateWith(projectSearchParams) })
                 server.register("openade/project/process/list", async (params) => {
                     const request = projectProcessListParams(params)

@@ -303,6 +303,13 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
                 content: "Runtime route readme\nshared shell\n",
             }),
             writeProjectFile: unsupportedMutation("writeProjectFile"),
+            fuzzySearchProjectFiles: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                results: params.query.toLowerCase().includes("readme") ? ["README.md"] : [],
+                truncated: false,
+                source: "filesystem",
+            }),
             searchProject: async (params) => ({
                 repoId: params.repoId,
                 matches: params.query.toLowerCase().includes("readme")

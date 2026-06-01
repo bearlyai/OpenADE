@@ -18,6 +18,8 @@ import type {
     OpenADEHyperPlanSubExecutionUpdateRequest,
     OpenADEProjectFileReadRequest,
     OpenADEProjectFileReadResult,
+    OpenADEProjectFilesFuzzySearchRequest,
+    OpenADEProjectFilesFuzzySearchResult,
     OpenADEProjectFilesTreeRequest,
     OpenADEProjectFilesTreeResult,
     OpenADEProjectFileWriteRequest,
@@ -142,6 +144,10 @@ export class OpenADEClient {
 
     async listProjectFiles(args: OpenADEProjectFilesTreeRequest): Promise<OpenADEProjectFilesTreeResult> {
         return this.request("openade/project/files/tree", args)
+    }
+
+    async fuzzySearchProjectFiles(args: OpenADEProjectFilesFuzzySearchRequest): Promise<OpenADEProjectFilesFuzzySearchResult> {
+        return this.request("openade/project/files/fuzzySearch", args)
     }
 
     async writeProjectFile(args: OpenADEProjectFileWriteRequest, options: OpenADERequestOptions = {}): Promise<OpenADEProjectFileWriteResult> {

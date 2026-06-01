@@ -189,6 +189,7 @@ function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: Runt
                 content: "",
             }),
             writeProjectFile: async (params) => ({ repoId: params.repoId, path: params.path, size: params.content.length }),
+            fuzzySearchProjectFiles: async (params) => ({ repoId: params.repoId, taskId: params.taskId, results: [], truncated: false, source: "filesystem" }),
             searchProject: async (params) => ({ repoId: params.repoId, matches: [], truncated: false }),
             listProjectProcesses: async (params) => ({
                 repoId: params.repoId,

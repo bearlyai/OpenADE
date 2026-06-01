@@ -401,6 +401,7 @@ export interface OpenADECommentDeleteRequest extends OpenADEClientRequest {
 
 export interface OpenADEProjectFileReadRequest {
     repoId: string
+    taskId?: string
     path: string
     encoding?: "utf8" | "base64"
     maxBytes?: number
@@ -408,15 +409,21 @@ export interface OpenADEProjectFileReadRequest {
 
 export interface OpenADEProjectFileReadResult {
     repoId: string
+    taskId?: string
     path: string
     encoding: "utf8" | "base64"
     size: number
     tooLarge: boolean
     content: string | null
+    isReadable?: boolean
+    isBinary?: boolean
+    mediaType?: string | null
+    previewKind?: "image" | null
 }
 
 export interface OpenADEProjectFileWriteRequest extends OpenADEClientRequest {
     repoId: string
+    taskId?: string
     path: string
     encoding?: "utf8" | "base64"
     content: string
@@ -425,16 +432,19 @@ export interface OpenADEProjectFileWriteRequest extends OpenADEClientRequest {
 
 export interface OpenADEProjectFileWriteResult {
     repoId: string
+    taskId?: string
     path: string
     size: number
 }
 
 export interface OpenADEProjectFilesTreeRequest {
     repoId: string
+    taskId?: string
     path?: string
     maxDepth?: number
     maxEntries?: number
     includeHidden?: boolean
+    includeGenerated?: boolean
 }
 
 export interface OpenADEProjectFilesTreeEntry {
@@ -447,13 +457,33 @@ export interface OpenADEProjectFilesTreeEntry {
 
 export interface OpenADEProjectFilesTreeResult {
     repoId: string
+    taskId?: string
     path: string
     entries: OpenADEProjectFilesTreeEntry[]
     truncated: boolean
 }
 
+export interface OpenADEProjectFilesFuzzySearchRequest {
+    repoId: string
+    taskId?: string
+    query: string
+    matchDirs?: boolean
+    limit?: number
+    includeHidden?: boolean
+    includeGenerated?: boolean
+}
+
+export interface OpenADEProjectFilesFuzzySearchResult {
+    repoId: string
+    taskId?: string
+    results: string[]
+    truncated: boolean
+    source: "filesystem"
+}
+
 export interface OpenADEProjectSearchRequest {
     repoId: string
+    taskId?: string
     query: string
     limit?: number
     caseSensitive?: boolean
@@ -469,6 +499,7 @@ export interface OpenADEProjectSearchMatch {
 
 export interface OpenADEProjectSearchResult {
     repoId: string
+    taskId?: string
     matches: OpenADEProjectSearchMatch[]
     truncated: boolean
 }

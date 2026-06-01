@@ -6,6 +6,8 @@ import type {
     OpenADECommentEditRequest,
     OpenADEProjectFileReadRequest,
     OpenADEProjectFileReadResult,
+    OpenADEProjectFilesFuzzySearchRequest,
+    OpenADEProjectFilesFuzzySearchResult,
     OpenADEProjectFileWriteRequest,
     OpenADEProjectFileWriteResult,
     OpenADEProjectFilesTreeRequest,
@@ -116,6 +118,10 @@ export class OpenADEProductStore {
 
     async readProjectFile(args: OpenADEProjectFileReadRequest): Promise<OpenADEProjectFileReadResult> {
         return this.client.readProjectFile(args)
+    }
+
+    async fuzzySearchProjectFiles(args: OpenADEProjectFilesFuzzySearchRequest): Promise<OpenADEProjectFilesFuzzySearchResult> {
+        return this.client.fuzzySearchProjectFiles(args)
     }
 
     async writeProjectFile(args: OpenADEProjectFileWriteRequest, options: OpenADERequestOptions = {}): Promise<OpenADEProjectFileWriteResult> {
@@ -340,6 +346,7 @@ export interface OpenADEProductClient {
     getTask(repoId: string, taskId: string, options?: OpenADETaskReadOptions): Promise<OpenADETask>
     listProjectFiles(args: OpenADEProjectFilesTreeRequest): Promise<OpenADEProjectFilesTreeResult>
     readProjectFile(args: OpenADEProjectFileReadRequest): Promise<OpenADEProjectFileReadResult>
+    fuzzySearchProjectFiles(args: OpenADEProjectFilesFuzzySearchRequest): Promise<OpenADEProjectFilesFuzzySearchResult>
     writeProjectFile(args: OpenADEProjectFileWriteRequest, options?: OpenADERequestOptions): Promise<OpenADEProjectFileWriteResult>
     searchProject(args: OpenADEProjectSearchRequest): Promise<OpenADEProjectSearchResult>
     listProjectProcesses(args: OpenADEProjectProcessListRequest): Promise<OpenADEProjectProcessListResult>
