@@ -13,7 +13,7 @@ export type DesktopTaskShellProps = ComponentProps<typeof TaskScreen> & {
 
 export function DesktopTaskShell({ error, notice, isDragOver = false, dragHandlers, ...taskScreenProps }: DesktopTaskShellProps) {
     return (
-        <div className="relative flex h-full min-h-0 w-full flex-col overflow-hidden" {...dragHandlers}>
+        <div className="relative flex h-full min-h-0 w-full flex-col overflow-hidden" data-openade-surface="desktop-shared-task" {...dragHandlers}>
             {isDragOver && <ImageDropOverlay />}
             {error && <div className="mx-3 mt-3 shrink-0 border border-error/30 bg-error/10 p-2 text-xs text-error">{error}</div>}
             {notice && <div className="mx-3 mt-3 shrink-0 border border-info/30 bg-info/10 p-2 text-xs text-info">{notice}</div>}

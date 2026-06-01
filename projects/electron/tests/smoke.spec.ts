@@ -372,6 +372,23 @@ test("packaged app launches and loads the bundled web UI", async () => {
 
         expect(reloadedWorkflow.closed).toBe(false)
         expect(reloadedWorkflow.completedSources).toEqual(expect.arrayContaining(["plan", "revise", "run_plan", "ask"]))
+
+        await relaunched.page.evaluate(({ smokeRepoId }) => {
+            window.location.hash = `/dashboard/code/workspace/${smokeRepoId}`
+        }, { smokeRepoId: repoId })
+        const sharedProject = relaunched.page.locator('[data-openade-surface="desktop-shared-project"]')
+        await expect(sharedProject).toBeVisible({ timeout: 30_000 })
+        await expect(sharedProject).toContainText("Packaged Smoke Repo")
+        await expect(sharedProject).toContainText("Packaged Echo")
+        await expect(sharedProject).toContainText("README.md")
+
+        await relaunched.page.evaluate(({ smokeRepoId, smokeTaskId }) => {
+            window.location.hash = `/dashboard/code/workspace/${smokeRepoId}/task/${smokeTaskId}`
+        }, { smokeRepoId: repoId, smokeTaskId: runtimeSmoke.workflow.taskId })
+        const sharedTask = relaunched.page.locator('[data-openade-surface="desktop-shared-task"]')
+        await expect(sharedTask).toBeVisible({ timeout: 30_000 })
+        await expect(sharedTask).toContainText("Create a packaged workflow smoke plan")
+        await expect(sharedTask).toContainText("Summarize the packaged workflow smoke state")
         passed = true
     } finally {
         if (app) {

@@ -210,7 +210,7 @@ export const DesktopSharedProjectPage = observer(({ workspaceId }: DesktopShared
     )
 
     return (
-        <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
+        <div className="flex h-full min-h-0 w-full flex-col overflow-hidden" data-openade-surface="desktop-shared-project">
             {error && <div className="border-b border-border bg-error/10 px-3 py-2 text-sm text-error">{error}</div>}
             <ProjectTasksScreen
                 repo={project}
