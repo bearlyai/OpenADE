@@ -55,6 +55,10 @@ Repo, task, comment, plan-cancel, turn, review, queued-turn, environment-setup, 
 
 The classic desktop changes tray stays on `TaskPage`/`ChangesManager`, but runtime-backed reads should use `CodeStore.readProductTaskChanges()`, `readProductTaskDiff()`, and `readProductTaskFilePair()` through `TaskModel`. Raw `gitApi` calls remain the trusted-local fallback when runtime product reads are disabled.
 
+### Task Snapshot Reads
+
+The classic desktop snapshot event UI stays on `SnapshotEventItem` and `ViewPatch`, but external patch, index, and slice reads should use `CodeStore.readProductTaskSnapshotPatch()`, `readProductTaskSnapshotIndex()`, and `readProductTaskSnapshotPatchSlice()` when runtime product reads are active. Raw `snapshotsApi` reads are the trusted-local fallback only.
+
 ## Environment Classes
 
 **RepoEnvironment** - Repo-level git operations. Cached in RepoManager.

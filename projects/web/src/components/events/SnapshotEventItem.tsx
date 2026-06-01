@@ -33,13 +33,26 @@ export const SnapshotEventItem = observer(({ event, expanded, onToggle, taskId }
     const patchIndex = eventModel?.patchIndex ?? null
     const isLoading = eventModel?.isIndexLoading ?? false
 
+    const readFullPatch = async (): Promise<string> => {
+        if (event.fullPatch) return event.fullPatch
+
+        if (eventModel) {
+            if (!eventModel.isPatchLoaded) {
+                await eventModel.loadPatch()
+            }
+            return eventModel.fullPatch
+        }
+
+        if (event.patchFileId && snapshotsApi.isAvailable()) {
+            return (await snapshotsApi.loadPatch(event.patchFileId)) ?? ""
+        }
+
+        return ""
+    }
+
     const handleCopy = async () => {
         try {
-            const fullPatch =
-                event.fullPatch ||
-                eventModel?.fullPatch ||
-                (event.patchFileId && snapshotsApi.isAvailable() ? await snapshotsApi.loadPatch(event.patchFileId) : "") ||
-                ""
+            const fullPatch = await readFullPatch()
             if (!fullPatch) {
                 return
             }
@@ -52,11 +65,7 @@ export const SnapshotEventItem = observer(({ event, expanded, onToggle, taskId }
     }
 
     const handleDownload = async () => {
-        const fullPatch =
-            event.fullPatch ||
-            eventModel?.fullPatch ||
-            (event.patchFileId && snapshotsApi.isAvailable() ? await snapshotsApi.loadPatch(event.patchFileId) : "") ||
-            ""
+        const fullPatch = await readFullPatch()
         if (!fullPatch) {
             return
         }

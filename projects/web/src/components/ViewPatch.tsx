@@ -257,9 +257,15 @@ export const ViewPatch = observer(function ViewPatch({
 
     const selectedIndex = allFiles.findIndex((file) => file.id === selectedFileId)
     const selectedFile = selectedIndex >= 0 ? allFiles[selectedIndex] : allFiles[0]
+    const selectedPatchCacheId = selectedFile?.id
+    const selectedFileName = selectedFile?.name ?? null
+    const selectedPatchStart = selectedFile?.patchStart
+    const selectedPatchEnd = selectedFile?.patchEnd
     const showSidebar = allFiles.length > 5
     const largeDiffKey = selectedFile ? `${selectedFile.id}:${selectedFile.changedLines}:${selectedFile.hunkCount}` : null
     const deferLargeDiff = patchFileId !== undefined && isHeavyFile(selectedFile) && renderLargeDiffKey !== largeDiffKey
+    const repoId = codeStore.tasks.getTask(taskId)?.repoId ?? codeStore.findRuntimeProductRepoIdForTask(taskId)
+    const useRuntimeSnapshotReads = repoId !== null && codeStore.shouldUseRuntimeProductReads()
 
     useEffect(() => {
         setRenderLargeDiffKey(null)
@@ -280,7 +286,7 @@ export const ViewPatch = observer(function ViewPatch({
     }, [selectedIndex, showSidebar])
 
     useEffect(() => {
-        if (!patchFileId || !selectedFile || selectedFile.patchStart === undefined || selectedFile.patchEnd === undefined) {
+        if (!patchFileId || !selectedPatchCacheId || selectedPatchStart === undefined || selectedPatchEnd === undefined) {
             setSelectedPatch("")
             setSelectedPatchLoading(false)
             setSelectedPatchError(false)
@@ -294,7 +300,8 @@ export const ViewPatch = observer(function ViewPatch({
             return
         }
 
-        const cachedPatch = patchCacheRef.current.get(selectedFile.id)
+        const cacheKey = `${snapshotEventId}:${selectedPatchCacheId}`
+        const cachedPatch = patchCacheRef.current.get(cacheKey)
         if (cachedPatch !== undefined) {
             setSelectedPatch(cachedPatch)
             setSelectedPatchLoading(false)
@@ -306,12 +313,24 @@ export const ViewPatch = observer(function ViewPatch({
         setSelectedPatchLoading(true)
         setSelectedPatchError(false)
 
-        void snapshotsApi
-            .loadPatchSlice(patchFileId, selectedFile.patchStart, selectedFile.patchEnd)
+        const patchSlicePromise =
+            useRuntimeSnapshotReads && repoId
+                ? codeStore
+                      .readProductTaskSnapshotPatchSlice({
+                          repoId,
+                          taskId,
+                          eventId: snapshotEventId,
+                          start: selectedPatchStart,
+                          end: selectedPatchEnd,
+                      })
+                      .then((result) => result.patch)
+                : snapshotsApi.loadPatchSlice(patchFileId, selectedPatchStart, selectedPatchEnd)
+
+        void patchSlicePromise
             .then((patchSlice) => {
                 if (cancelled) return
                 const nextPatch = patchSlice ?? ""
-                patchCacheRef.current.set(selectedFile.id, nextPatch)
+                patchCacheRef.current.set(cacheKey, nextPatch)
                 setSelectedPatch(nextPatch)
                 setSelectedPatchLoading(false)
             })
@@ -326,7 +345,18 @@ export const ViewPatch = observer(function ViewPatch({
         return () => {
             cancelled = true
         }
-    }, [deferLargeDiff, patchFileId, selectedFile])
+    }, [
+        codeStore,
+        deferLargeDiff,
+        patchFileId,
+        repoId,
+        selectedPatchCacheId,
+        selectedPatchEnd,
+        selectedPatchStart,
+        snapshotEventId,
+        taskId,
+        useRuntimeSnapshotReads,
+    ])
 
     const selectedFileDiff = useMemo(() => {
         if (!selectedFile) return { fileDiff: null as ParsedPatch["files"][number] | null, parseError: false }
@@ -357,8 +387,8 @@ export const ViewPatch = observer(function ViewPatch({
     }, [patchFileId, selectedFile, selectedPatch])
 
     const commentHandlers: CommentHandlers | null = useMemo(() => {
-        if (!selectedFile) return null
-        const filePath = selectedFile.name
+        if (!selectedFileName) return null
+        const filePath = selectedFileName
 
         const sourceMatch = (c: { source: { type: string; snapshotEventId?: string; filePath?: string } }) =>
             c.source.type === "patch" && c.source.snapshotEventId === snapshotEventId && c.source.filePath === filePath
@@ -373,7 +403,7 @@ export const ViewPatch = observer(function ViewPatch({
         })
 
         return { taskId, sourceMatch, createSource }
-    }, [taskId, snapshotEventId, selectedFile?.name])
+    }, [taskId, snapshotEventId, selectedFileName])
 
     const handlePrev = () => setSelectedFileId((currentId) => allFiles[Math.max(0, (selectedIndex >= 0 ? selectedIndex : 0) - 1)]?.id ?? currentId)
     const handleNext = () =>
@@ -448,7 +478,7 @@ export const ViewPatch = observer(function ViewPatch({
 
                 <div className="flex-1 overflow-auto">
                     {selectedFile?.binary ? (
-                        <div className="px-4 py-6 text-muted text-sm text-center">Binary file — patch preview unavailable</div>
+                        <div className="px-4 py-6 text-muted text-sm text-center">Binary file: patch preview unavailable</div>
                     ) : deferLargeDiff ? (
                         <div className="px-4 py-6 flex flex-col items-center gap-3 text-sm">
                             <div className="text-base-content font-medium">Large diff deferred</div>

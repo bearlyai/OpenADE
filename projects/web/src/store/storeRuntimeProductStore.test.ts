@@ -1,12 +1,18 @@
 import { describe, expect, it, vi } from "vitest"
 import { OpenADEClient } from "../../../openade-client/src"
 import { type OpenADEModuleAdapters, createOpenADEModule } from "../../../openade-module/src/module"
-import type { OpenADEProject, OpenADETask, OpenADETaskPreview } from "../../../openade-module/src/types"
+import type { OpenADEProject, OpenADESnapshotPatchIndex, OpenADETask, OpenADETaskPreview } from "../../../openade-module/src/types"
+import { act, createElement } from "react"
+import { createRoot } from "react-dom/client"
 import { RuntimeLocalClient, type RuntimeLocalTransport } from "../../../runtime-client/src"
 import type { RuntimeMessage, RuntimeRecord, RuntimeRequest } from "../../../runtime-protocol/src"
 import { type RuntimeConnection, RuntimeServer } from "../../../runtime/src"
 import { analytics } from "../analytics"
+import { ViewPatch } from "../components/ViewPatch"
+import { snapshotsApi } from "../electronAPI/snapshots"
 import { OpenADEProductStore } from "../kernel/productStore"
+import { CodeStoreProvider } from "./context"
+import type { SnapshotEventModel } from "./EventModel"
 import { CodeStore } from "./store"
 
 const now = "2026-05-31T00:00:00.000Z"
@@ -67,6 +73,37 @@ const task: OpenADETask = {
     ],
 }
 
+const snapshotPatch = [
+    "diff --git a/README.md b/README.md",
+    "index 1111111..2222222 100644",
+    "--- a/README.md",
+    "+++ b/README.md",
+    "@@ -1 +1,2 @@",
+    "-old runtime",
+    "+new runtime",
+    "+snapshot product store",
+    "",
+].join("\n")
+
+const snapshotPatchIndex: OpenADESnapshotPatchIndex = {
+    version: 1,
+    patchSize: snapshotPatch.length,
+    files: [
+        {
+            id: "README.md",
+            path: "README.md",
+            status: "modified",
+            binary: false,
+            insertions: 2,
+            deletions: 1,
+            changedLines: 3,
+            hunkCount: 1,
+            patchStart: 0,
+            patchEnd: snapshotPatch.length,
+        },
+    ],
+}
+
 interface RuntimeBridgeState {
     project: OpenADEProject | null
     task: OpenADETask | null
@@ -115,6 +152,22 @@ function createBridgeState(): RuntimeBridgeState {
 function unsupportedMutation(method: string): () => Promise<never> {
     return async () => {
         throw new Error(`${method} is not available in the read-only bridge test runtime`)
+    }
+}
+
+function snapshotPatchForEvent(snapshotEvent: Record<string, unknown>): { patchFileId?: string; patch: string | null } {
+    const patchFileId = typeof snapshotEvent.patchFileId === "string" ? snapshotEvent.patchFileId : undefined
+    const inlinePatch = typeof snapshotEvent.fullPatch === "string" && snapshotEvent.fullPatch.length > 0 ? snapshotEvent.fullPatch : null
+    if (inlinePatch) return { patchFileId, patch: inlinePatch }
+    return { patchFileId, patch: patchFileId === "patch-1" ? snapshotPatch : null }
+}
+
+function snapshotIndexForPatch(patch: string | null): OpenADESnapshotPatchIndex | null {
+    if (patch === null) return null
+    return {
+        ...snapshotPatchIndex,
+        patchSize: patch.length,
+        files: snapshotPatchIndex.files.map((file) => ({ ...file, patchEnd: patch.length })),
     }
 }
 
@@ -343,6 +396,45 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
                 queuedTurns: params.queuedTurns ?? current.queuedTurns,
                 updatedAt: params.updatedAt ?? now,
             }
+        },
+        scopedHost: {
+            listProjectFiles: unsupportedMutation("listProjectFiles"),
+            readProjectFile: unsupportedMutation("readProjectFile"),
+            writeProjectFile: unsupportedMutation("writeProjectFile"),
+            searchProject: unsupportedMutation("searchProject"),
+            listProjectProcesses: unsupportedMutation("listProjectProcesses"),
+            startProjectProcess: unsupportedMutation("startProjectProcess"),
+            reconnectProjectProcess: unsupportedMutation("reconnectProjectProcess"),
+            stopProjectProcess: unsupportedMutation("stopProjectProcess"),
+            startTaskTerminal: unsupportedMutation("startTaskTerminal"),
+            reconnectTaskTerminal: unsupportedMutation("reconnectTaskTerminal"),
+            writeTaskTerminal: unsupportedMutation("writeTaskTerminal"),
+            resizeTaskTerminal: unsupportedMutation("resizeTaskTerminal"),
+            stopTaskTerminal: unsupportedMutation("stopTaskTerminal"),
+            readTaskImage: unsupportedMutation("readTaskImage"),
+            readTaskChanges: unsupportedMutation("readTaskChanges"),
+            readTaskDiff: unsupportedMutation("readTaskDiff"),
+            readTaskFilePair: unsupportedMutation("readTaskFilePair"),
+            readTaskGitLog: unsupportedMutation("readTaskGitLog"),
+            commitTaskGit: unsupportedMutation("commitTaskGit"),
+            readTaskSnapshotPatch: async (params) => {
+                const { patchFileId, patch } = snapshotPatchForEvent(params.snapshotEvent)
+                return { repoId: params.repoId, taskId: params.taskId, eventId: params.eventId, patchFileId, patch }
+            },
+            readTaskSnapshotIndex: async (params) => {
+                const { patchFileId, patch } = snapshotPatchForEvent(params.snapshotEvent)
+                return { repoId: params.repoId, taskId: params.taskId, eventId: params.eventId, patchFileId, index: snapshotIndexForPatch(patch) }
+            },
+            readTaskSnapshotPatchSlice: async (params) => {
+                const { patchFileId, patch } = snapshotPatchForEvent(params.snapshotEvent)
+                return {
+                    repoId: params.repoId,
+                    taskId: params.taskId,
+                    eventId: params.eventId,
+                    patchFileId,
+                    patch: patch === null ? null : patch.slice(params.start, params.end),
+                }
+            },
         },
     }
 }
@@ -699,6 +791,116 @@ describe("CodeStore runtime product store bridge", () => {
             ])
             expect(legacyTaskStoreRead).not.toHaveBeenCalled()
         } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("routes classic snapshot patch reads through the runtime product store", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient()
+        if (!state.task) throw new Error("Expected runtime task fixture")
+        state.task = {
+            ...state.task,
+            events: [
+                ...state.task.events,
+                {
+                    id: "snapshot-1",
+                    type: "snapshot",
+                    status: "completed",
+                    createdAt: now,
+                    completedAt: now,
+                    userInput: "",
+                    actionEventId: "event-1",
+                    referenceBranch: "main",
+                    mergeBaseCommit: "merge-base",
+                    fullPatch: "",
+                    patchFileId: "patch-1",
+                    stats: { filesChanged: 1, insertions: 2, deletions: 1 },
+                    files: [],
+                },
+            ],
+        }
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const legacyPatchRead = vi.spyOn(snapshotsApi, "loadPatch").mockRejectedValue(new Error("legacy snapshot patch read should not be used"))
+        const legacyIndexRead = vi.spyOn(snapshotsApi, "loadIndex").mockRejectedValue(new Error("legacy snapshot index read should not be used"))
+        const legacySliceRead = vi.spyOn(snapshotsApi, "loadPatchSlice").mockRejectedValue(new Error("legacy snapshot slice read should not be used"))
+        const runtimeSliceRead = vi.spyOn(codeStore, "readProductTaskSnapshotPatchSlice")
+        ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+        const container = document.createElement("div")
+        document.body.appendChild(container)
+        const root = createRoot(container)
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+
+            const snapshotModel = codeStore.tasks.getTaskModel("task-1")?.events.find((event) => event.id === "snapshot-1") as SnapshotEventModel | undefined
+            if (!snapshotModel) throw new Error("Expected snapshot event model")
+
+            await snapshotModel.loadIndex()
+            expect(snapshotModel.patchIndex).toEqual(
+                expect.objectContaining({
+                    files: [expect.objectContaining({ path: "README.md", insertions: 2, deletions: 1 })],
+                })
+            )
+
+            await snapshotModel.loadPatch()
+            expect(snapshotModel.fullPatch).toContain("+snapshot product store")
+
+            await expect(
+                codeStore.readProductTaskSnapshotPatchSlice({
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    eventId: "snapshot-1",
+                    start: 0,
+                    end: snapshotPatch.length,
+                })
+            ).resolves.toMatchObject({ patch: expect.stringContaining("+snapshot product store") })
+            runtimeSliceRead.mockClear()
+
+            await act(async () => {
+                root.render(
+                    createElement(
+                        CodeStoreProvider,
+                        { store: codeStore },
+                        createElement(ViewPatch, {
+                            patchFileId: "patch-1",
+                            patchIndex: snapshotModel.patchIndex,
+                            taskId: "task-1",
+                            snapshotEventId: "snapshot-1",
+                        })
+                    )
+                )
+            })
+
+            await vi.waitFor(() => {
+                expect(container.textContent).toContain("README.md")
+                expect(runtimeSliceRead).toHaveBeenCalledWith({
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    eventId: "snapshot-1",
+                    start: 0,
+                    end: snapshotPatch.length,
+                })
+                expect(container.textContent).not.toContain("Could not load patch preview")
+                expect(container.textContent).not.toContain("Loading file diff")
+            })
+            expect(legacyPatchRead).not.toHaveBeenCalled()
+            expect(legacyIndexRead).not.toHaveBeenCalled()
+            expect(legacySliceRead).not.toHaveBeenCalled()
+        } finally {
+            act(() => root.unmount())
+            container.remove()
+            legacyPatchRead.mockRestore()
+            legacyIndexRead.mockRestore()
+            legacySliceRead.mockRestore()
+            runtimeSliceRead.mockRestore()
             codeStore.disconnectAllStores()
             await runtime.close()
         }

@@ -26,6 +26,12 @@ import type {
     OpenADETaskMetadataUpdateRequest,
     OpenADETaskPreview,
     OpenADETaskReadOptions,
+    OpenADETaskSnapshotIndexReadRequest,
+    OpenADETaskSnapshotIndexReadResult,
+    OpenADETaskSnapshotPatchReadRequest,
+    OpenADETaskSnapshotPatchReadResult,
+    OpenADETaskSnapshotPatchSliceReadRequest,
+    OpenADETaskSnapshotPatchSliceReadResult,
     OpenADETurnStartRequest,
     OpenADETurnStartResult,
 } from "../../../openade-module/src"
@@ -1076,6 +1082,30 @@ export class CodeStore {
         }
 
         return localOpenADEClient.readTaskFilePair(params)
+    }
+
+    async readProductTaskSnapshotPatch(params: OpenADETaskSnapshotPatchReadRequest): Promise<OpenADETaskSnapshotPatchReadResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readTaskSnapshotPatch(params)
+        }
+
+        return localOpenADEClient.readTaskSnapshotPatch(params)
+    }
+
+    async readProductTaskSnapshotIndex(params: OpenADETaskSnapshotIndexReadRequest): Promise<OpenADETaskSnapshotIndexReadResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readTaskSnapshotIndex(params)
+        }
+
+        return localOpenADEClient.readTaskSnapshotIndex(params)
+    }
+
+    async readProductTaskSnapshotPatchSlice(params: OpenADETaskSnapshotPatchSliceReadRequest): Promise<OpenADETaskSnapshotPatchSliceReadResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readTaskSnapshotPatchSlice(params)
+        }
+
+        return localOpenADEClient.readTaskSnapshotPatchSlice(params)
     }
 
     async loadProductTaskForRead(repoId: string, taskId: string): Promise<Task | null> {

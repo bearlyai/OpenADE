@@ -213,6 +213,15 @@ export class SnapshotEventModel extends EventModel {
         return this.event as SnapshotEvent | undefined
     }
 
+    private runtimeSnapshotRequest(): { repoId: string; taskId: string; eventId: string } | null {
+        if (!this.store.shouldUseRuntimeProductReads()) return null
+
+        const repoId = this.store.tasks.getTask(this.taskId)?.repoId ?? this.store.findRuntimeProductRepoIdForTask(this.taskId)
+        if (!repoId) return null
+
+        return { repoId, taskId: this.taskId, eventId: this.eventId }
+    }
+
     @computed
     get actionEventId(): string {
         return this.snapshotEvent?.actionEventId ?? ""
@@ -286,14 +295,16 @@ export class SnapshotEventModel extends EventModel {
         const fileId = this.patchFileId
         if (!fileId) return
 
-        if (!snapshotsApi.isAvailable()) {
+        const runtimeRequest = this.runtimeSnapshotRequest()
+        const legacySnapshotsAvailable = !runtimeRequest && snapshotsApi.isAvailable()
+        if (!runtimeRequest && !legacySnapshotsAvailable) {
             console.warn("[SnapshotEventModel] Snapshots API not available, cannot load patch index")
             return
         }
 
         this._loadingIndex = true
         try {
-            const index = await snapshotsApi.loadIndex(fileId)
+            const index = runtimeRequest ? (await this.store.readProductTaskSnapshotIndex(runtimeRequest)).index : await snapshotsApi.loadIndex(fileId)
             runInAction(() => {
                 this._patchIndex = index
             })
@@ -325,15 +336,16 @@ export class SnapshotEventModel extends EventModel {
         // Has inline patch, no need to load
         if (this.snapshotEvent?.fullPatch) return
 
-        // Check if API is available
-        if (!snapshotsApi.isAvailable()) {
+        const runtimeRequest = this.runtimeSnapshotRequest()
+        const legacySnapshotsAvailable = !runtimeRequest && snapshotsApi.isAvailable()
+        if (!runtimeRequest && !legacySnapshotsAvailable) {
             console.warn("[SnapshotEventModel] Snapshots API not available, cannot load patch")
             return
         }
 
         this._loadingPatch = true
         try {
-            const patch = await snapshotsApi.loadPatch(fileId)
+            const patch = runtimeRequest ? (await this.store.readProductTaskSnapshotPatch(runtimeRequest)).patch : await snapshotsApi.loadPatch(fileId)
             runInAction(() => {
                 this._loadedPatch = patch ?? ""
                 if (!patch) {
