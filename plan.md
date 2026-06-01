@@ -1222,6 +1222,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - Kernel verification covers a real `openade.toml` with comments, single-quoted values, cron blocks, arrays, `work_dir`, and URL fragments through `OpenADEClient.listProjectProcesses()`, proving the production runtime path is not using a duplicate hand parser.
 - Focused verification passed: OpenADE module typecheck, Electron typecheck, web typecheck, OpenADE procs parser tests, Electron procs parse/discovery tests, OpenADE kernel integration, Biome lint for touched files, and `git diff --check`.
 
+### 2026-06-01: Scoped Project Host Helpers Consolidated
+
+- `projects/openade-module/src/scopedProjectHost.ts` now owns the shared Node implementation for scoped OpenADE project file tree, file read, file write, and project search methods.
+- `projects/openade-module/src/node.ts` and `projects/electron/src/modules/companion/runtimeGateway.ts` both wire their `OpenADEScopedHostAdapter` project file/search methods to that single product-owned implementation instead of keeping duplicate path containment, hidden/generated filtering, size-limit, and search code.
+- This preserves the classic desktop UI and remote/headless runtime behavior while removing another "two ways to do the same host read/write" path at the OpenADE API boundary.
+- Focused verification passed: OpenADE module typecheck, Electron typecheck, shared scoped project host real-filesystem tests, OpenADE kernel integration, Electron companion runtime API integration, Biome lint for touched files, and `git diff --check`.
+
 ### 2026-06-01: Preload API Contract Consolidated
 
 - `projects/electron/src/preload-api.ts` now owns the browser-safe `OpenADEAPI` shape for the Electron contextBridge surface.

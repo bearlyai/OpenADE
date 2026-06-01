@@ -11,6 +11,7 @@
 - `src/modules/code/gitBridgeTypes.ts` owns browser-safe DTOs for raw trusted-local `git/*` bridge methods. Product-scoped task git DTOs still come from `projects/openade-module/src/types.ts`.
 - `src/modules/deviceConfigTypes.ts` owns browser-safe device config result DTOs, and `src/modules/code/snapshotsIndex.ts` owns snapshot patch index DTOs.
 - `openade.toml` process/cron DTOs and parser/serializer live in `projects/openade-module/src/types.ts` and `projects/openade-module/src/procs.ts`. Electron procs modules should alias or re-export those product-owned contracts, not keep a second parser or type set.
+- Scoped OpenADE project file tree/read/write/search behavior lives in `projects/openade-module/src/scopedProjectHost.ts`. The companion runtime gateway should import those product-owned helpers instead of carrying Electron-only copies of path containment, hidden/generated filtering, file-size limits, or search behavior.
 - Low-level harness IPC event/query DTOs live in `projects/harness/src/types.ts` as `HarnessIpc*`. Electron harness bridge code should import those types from `@openade/harness` instead of declaring renderer-matching copies.
 - Renderer wrappers under `projects/web/src/electronAPI` should alias those types instead of re-declaring matching Electron main-process interfaces.
 
