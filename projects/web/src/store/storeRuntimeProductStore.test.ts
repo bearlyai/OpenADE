@@ -516,6 +516,9 @@ describe("CodeStore runtime product store bridge", () => {
             await codeStore.initializeRuntimeProductStore()
             await codeStore.loadRuntimeProductTask("repo-1", "task-1")
 
+            const legacyTaskRefresh = vi.spyOn(codeStore, "refreshTaskStoreFromStorage")
+            const legacyRepoRefresh = vi.spyOn(codeStore, "refreshRepoStoreFromStorage")
+
             server.notify("runtime/updated", runtimeRecord("running", "2026-05-31T00:01:00.000Z"))
             await waitForRuntimeBridge(() => {
                 expect(codeStore.runtimes.isTaskRunning("task-1")).toBe(true)
@@ -552,6 +555,8 @@ describe("CodeStore runtime product store bridge", () => {
                 expect(codeStore.runtimes.isTaskRunning("task-1")).toBe(false)
                 expect(codeStore.tasks.getTask("task-1")?.events.map((event) => event.id)).toEqual(["event-1", "event-run-plan"])
             })
+            expect(legacyTaskRefresh).not.toHaveBeenCalled()
+            expect(legacyRepoRefresh).not.toHaveBeenCalled()
         } finally {
             unsubscribe()
             codeStore.disconnectAllStores()
@@ -572,6 +577,9 @@ describe("CodeStore runtime product store bridge", () => {
         try {
             await codeStore.initializeRuntimeProductStore()
             await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+
+            const legacyTaskRefresh = vi.spyOn(codeStore, "refreshTaskStoreFromStorage")
+            const legacyRepoRefresh = vi.spyOn(codeStore, "refreshRepoStoreFromStorage")
 
             state.task = {
                 ...cloneTask(task),
@@ -657,6 +665,8 @@ describe("CodeStore runtime product store bridge", () => {
                 expect(codeStore.tasks.getTask("task-1")).toBeNull()
                 expect(codeStore.tasks.getTaskModel("task-1")).toBeNull()
             })
+            expect(legacyTaskRefresh).not.toHaveBeenCalled()
+            expect(legacyRepoRefresh).not.toHaveBeenCalled()
         } finally {
             codeStore.disconnectAllStores()
             await runtime.close()

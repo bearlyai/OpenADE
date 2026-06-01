@@ -356,21 +356,21 @@ export class CodeStore {
 
         const queuedTurnTaskId = this.queuedTurns.applyNotification(notification)
         if (queuedTurnTaskId) {
-            await this.refreshTaskStoreFromStorage(queuedTurnTaskId)
+            await this.refreshProductTaskAfterRuntimeNotification(queuedTurnTaskId)
             this.queuedTurns.reconcileTaskWithStorage(queuedTurnTaskId, this.tasks.getTaskModel(queuedTurnTaskId)?.queuedTurns ?? [])
             return
         }
 
         if (notification.method === "openade/task/updated" || notification.method === "openade/task/previewChanged") {
-            await this.refreshRepoStoreFromStorage()
+            await this.refreshProductSnapshotAfterRuntimeNotification()
             if (typeof params.taskId === "string") {
-                await this.refreshTaskStoreFromStorage(params.taskId)
+                await this.refreshProductTaskAfterRuntimeNotification(params.taskId)
             }
             return
         }
 
         if (notification.method === "openade/task/deleted") {
-            await this.refreshRepoStoreFromStorage()
+            await this.refreshProductSnapshotAfterRuntimeNotification()
             if (typeof params.taskId === "string") {
                 this.disconnectTaskStore(params.taskId)
                 this.runtimes.removeTask(params.taskId)
@@ -383,7 +383,7 @@ export class CodeStore {
             notification.method === "openade/repo/updated" ||
             notification.method === "openade/repo/deleted"
         ) {
-            await this.refreshRepoStoreFromStorage()
+            await this.refreshProductSnapshotAfterRuntimeNotification()
         }
     }
 
@@ -647,7 +647,7 @@ export class CodeStore {
     }
 
     private async notifyRuntimeTaskSettled(taskId: string): Promise<void> {
-        await this.refreshTaskStoreFromStorage(taskId)
+        await this.refreshProductTaskAfterRuntimeNotification(taskId)
         const events = this.tasks.getTask(taskId)?.events ?? []
         for (let index = events.length - 1; index >= 0; index--) {
             const event = events[index]
@@ -656,6 +656,24 @@ export class CodeStore {
             this.execution.notifyAfterEvent(taskId, event.source.type, event.status === "completed" && event.result?.success !== false)
             return
         }
+    }
+
+    private async refreshProductSnapshotAfterRuntimeNotification(): Promise<void> {
+        if (this.shouldUseRuntimeProductReads()) {
+            await this.refreshRuntimeProductSnapshot()
+            return
+        }
+
+        await this.refreshRepoStoreFromStorage()
+    }
+
+    private async refreshProductTaskAfterRuntimeNotification(taskId: string): Promise<void> {
+        if (this.shouldUseRuntimeProductReads()) {
+            await this.refreshRuntimeProductTaskForTaskId(taskId)
+            return
+        }
+
+        await this.refreshTaskStoreFromStorage(taskId)
     }
 
     private async initializeAnalytics(personalSettings: PersonalSettingsStore): Promise<void> {
