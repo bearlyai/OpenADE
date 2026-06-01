@@ -8,7 +8,6 @@
 
 import { computed, makeAutoObservable } from "mobx"
 import { type BranchInfo, type GitSummaryResponse, gitApi } from "../../electronAPI/git"
-import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import type { Repo } from "../../types"
 import type { CodeStore } from "../store"
 
@@ -70,36 +69,36 @@ export class RepoManager {
     }
 
     async createRepo(params: { name: string; path: string }): Promise<Repo | null> {
-        if (!this.store.repoStore) return null
+        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductReads()) return null
 
-        const result = await localOpenADEClient.createRepo({
+        const result = await this.store.createProductRepo({
             name: params.name,
             path: params.path,
             createdBy: this.store.currentUser,
         })
-        await this.store.refreshRepoStoreFromStorage()
+        await this.store.refreshProductStateAfterRepoMutation()
 
         return this.getRepo(result.repoId) ?? null
     }
 
     async updateRepo(id: string, updates: Partial<Pick<Repo, "name" | "path">>): Promise<Repo | null> {
-        if (!this.store.repoStore) return null
+        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductReads()) return null
 
         // Clear git info cache if path changed
         if (updates.path !== undefined) {
             this.gitInfoCache.delete(id)
         }
 
-        await localOpenADEClient.updateRepo({ repoId: id, ...updates })
-        await this.store.refreshRepoStoreFromStorage()
+        await this.store.updateProductRepo({ repoId: id, ...updates })
+        await this.store.refreshProductStateAfterRepoMutation()
 
         return this.getRepo(id) ?? null
     }
 
     async setRepoArchived(id: string, archived: boolean): Promise<void> {
-        if (!this.store.repoStore) return
-        await localOpenADEClient.updateRepo({ repoId: id, archived })
-        await this.store.refreshRepoStoreFromStorage()
+        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductReads()) return
+        await this.store.updateProductRepo({ repoId: id, archived })
+        await this.store.refreshProductStateAfterRepoMutation()
     }
 
     async removeRepo(id: string): Promise<boolean> {
@@ -107,13 +106,13 @@ export class RepoManager {
     }
 
     async deleteRepo(id: string): Promise<boolean> {
-        if (!this.store.repoStore) return false
+        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductReads()) return false
 
         // Clean up cache
         this.gitInfoCache.delete(id)
 
-        await localOpenADEClient.deleteRepo({ repoId: id })
-        await this.store.refreshRepoStoreFromStorage()
+        await this.store.deleteProductRepo({ repoId: id })
+        await this.store.refreshProductStateAfterRepoMutation()
         return true
     }
 

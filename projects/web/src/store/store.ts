@@ -1,5 +1,15 @@
 import { makeAutoObservable, reaction, runInAction } from "mobx"
-import type { OpenADEProject, OpenADESnapshot, OpenADETask, OpenADETaskPreview, OpenADETaskReadOptions } from "../../../openade-module/src"
+import type {
+    OpenADEProject,
+    OpenADERepoCreateRequest,
+    OpenADERepoCreateResult,
+    OpenADERepoDeleteRequest,
+    OpenADERepoUpdateRequest,
+    OpenADESnapshot,
+    OpenADETask,
+    OpenADETaskPreview,
+    OpenADETaskReadOptions,
+} from "../../../openade-module/src"
 import type { RuntimeNotification } from "../../../runtime-protocol/src"
 import { analytics, track } from "../analytics"
 import { DEFAULT_HARNESS_ID, DEFAULT_MODEL, MODEL_REGISTRY, getDefaultModelForHarness } from "../constants"
@@ -903,6 +913,41 @@ export class CodeStore {
         }
 
         await this.refreshRepoStoreFromStorage()
+    }
+
+    async refreshProductStateAfterRepoMutation(): Promise<void> {
+        if (this.shouldUseRuntimeProductReads()) {
+            await this.refreshRuntimeProductSnapshot()
+            return
+        }
+
+        await this.refreshRepoStoreFromStorage()
+    }
+
+    async createProductRepo(params: OpenADERepoCreateRequest): Promise<OpenADERepoCreateResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.createRepo(params)
+        }
+
+        return localOpenADEClient.createRepo(params)
+    }
+
+    async updateProductRepo(params: OpenADERepoUpdateRequest): Promise<void> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            await this.runtimeProductStore.updateRepo(params)
+            return
+        }
+
+        await localOpenADEClient.updateRepo(params)
+    }
+
+    async deleteProductRepo(params: OpenADERepoDeleteRequest): Promise<void> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            await this.runtimeProductStore.deleteRepo(params)
+            return
+        }
+
+        await localOpenADEClient.deleteRepo(params)
     }
 
     async loadProductTaskForRead(repoId: string, taskId: string): Promise<Task | null> {

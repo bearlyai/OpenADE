@@ -140,9 +140,27 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
         readDataDocumentBase64: async () => null,
         saveDataDocumentBase64: unsupportedMutation("saveDataDocumentBase64"),
         deleteDataDocument: unsupportedMutation("deleteDataDocument"),
-        createRepo: unsupportedMutation("createRepo"),
-        updateRepo: unsupportedMutation("updateRepo"),
-        deleteRepo: unsupportedMutation("deleteRepo"),
+        createRepo: async (params) => {
+            const repoId = params.repoId ?? "repo-created"
+            const createdAt = params.createdAt ?? now
+            state.project = { id: repoId, name: params.name, path: params.path, tasks: [] }
+            state.task = null
+            return { repoId, createdAt }
+        },
+        updateRepo: async (params) => {
+            if (!state.project || state.project.id !== params.repoId) throw new Error(`Repo ${params.repoId} not found`)
+            state.project = {
+                ...state.project,
+                name: params.name ?? state.project.name,
+                path: params.path ?? state.project.path,
+                archived: params.archived ?? state.project.archived,
+            }
+        },
+        deleteRepo: async (params) => {
+            if (!state.project || state.project.id !== params.repoId) throw new Error(`Repo ${params.repoId} not found`)
+            state.project = null
+            if (state.task?.repoId === params.repoId) state.task = null
+        },
         startTurn: unsupportedMutation("startTurn"),
         startReview: unsupportedMutation("startReview"),
         interruptTurn: unsupportedMutation("interruptTurn"),
@@ -315,6 +333,42 @@ describe("CodeStore runtime product store bridge", () => {
             expect(legacyRepoRefresh).not.toHaveBeenCalled()
             expect(codeStore.tasks.getTask("task-1")?.title).toBe("Runtime mutation title")
             expect(codeStore.getTaskPreviewsForRepo("repo-1")[0]?.title).toBe("Runtime mutation title")
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("refreshes runtime repo state after repo mutations without using legacy store refreshes", async () => {
+        const { client, runtime } = createRuntimeBackedClient({ project: null, task: null })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            const legacyRepoRefresh = vi.spyOn(codeStore, "refreshRepoStoreFromStorage")
+
+            const created = await codeStore.repos.createRepo({ name: "New Runtime Repo", path: "/tmp/new-runtime-repo" })
+            expect(created).toEqual(expect.objectContaining({ id: "repo-created", name: "New Runtime Repo", path: "/tmp/new-runtime-repo" }))
+            expect(codeStore.runtimeProductSnapshot?.repos).toEqual([
+                expect.objectContaining({ id: "repo-created", name: "New Runtime Repo", path: "/tmp/new-runtime-repo" }),
+            ])
+
+            const updated = await codeStore.repos.updateRepo("repo-created", { name: "Renamed Runtime Repo", path: "/tmp/renamed-runtime-repo" })
+            expect(updated).toEqual(expect.objectContaining({ id: "repo-created", name: "Renamed Runtime Repo", path: "/tmp/renamed-runtime-repo" }))
+
+            await codeStore.repos.setRepoArchived("repo-created", true)
+            expect(codeStore.repos.getRepo("repo-created")).toEqual(expect.objectContaining({ archived: true }))
+
+            await expect(codeStore.repos.deleteRepo("repo-created")).resolves.toBe(true)
+            expect(codeStore.runtimeProductSnapshot?.repos).toEqual([])
+            expect(codeStore.repos.repos).toEqual([])
+            expect(legacyRepoRefresh).not.toHaveBeenCalled()
         } finally {
             codeStore.disconnectAllStores()
             await runtime.close()
