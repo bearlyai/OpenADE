@@ -4,6 +4,7 @@ import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
 import {
     buildOpenADEHyperPlanStepPrompt,
+    buildOpenADEProjectProcessDefinitions,
     buildOpenADEReconcileStepPrompt,
     buildOpenADEReviewHandoffPrompt,
     buildOpenADEPlanReviewPrompt,
@@ -143,9 +144,7 @@ import {
     serializeRuntimeEditableProcs,
     writeRuntimeProcsFile,
     type CronInput,
-    type ProcessDef,
     type ProcessInput,
-    type ProcsConfig,
     type ReadProcsResult,
 } from "../code/procs"
 import { killRuntimeProcess, listRuntimeProcesses, reconnectRuntimeProcess, startRuntimeScript } from "../code/process"
@@ -1221,52 +1220,12 @@ async function scopedProjectProcessSearchRoot(params: { repo: OpenADEProject; ta
     return params.task ? scopedTaskWorkDir(params.repo, params.task) : path.resolve(params.repo.path)
 }
 
-function scopedProjectProcessCwd(root: string, config: ProcsConfig, processDef: ProcessDef): string {
-    const resolvedRoot = path.resolve(root)
-    const configPath = path.resolve(resolvedRoot, config.relativePath)
-    if (configPath !== resolvedRoot && !configPath.startsWith(`${resolvedRoot}${path.sep}`)) {
-        throw new Error("process config path is outside the repository")
-    }
-    const cwd = path.resolve(path.dirname(configPath), processDef.workDir ?? "")
-    if (cwd !== resolvedRoot && !cwd.startsWith(`${resolvedRoot}${path.sep}`)) {
-        throw new Error("process cwd is outside the repository")
-    }
-    return cwd
-}
-
-function processDefinitionFromConfig(root: string, config: ProcsConfig, processDef: ProcessDef): OpenADEProjectProcessDefinition {
-    return {
-        id: processDef.id,
-        name: processDef.name,
-        command: processDef.command,
-        workDir: processDef.workDir,
-        url: processDef.url,
-        type: processDef.type,
-        configPath: config.relativePath,
-        cwd: scopedProjectProcessCwd(root, config, processDef),
-    }
-}
-
 function projectProcessDefinitionsFromProcs(result: ReadProcsResult): {
     processes: OpenADEProjectProcessDefinition[]
     errors: OpenADEProjectProcessConfigError[]
 } {
     const root = result.isWorktree && result.worktreeRoot ? result.worktreeRoot : result.repoRoot
-    const processes: OpenADEProjectProcessDefinition[] = []
-    const errors: OpenADEProjectProcessConfigError[] = []
-    for (const config of result.configs) {
-        for (const processDef of config.processes) {
-            try {
-                processes.push(processDefinitionFromConfig(root, config, processDef))
-            } catch (error) {
-                errors.push({
-                    relativePath: config.relativePath,
-                    error: error instanceof Error ? error.message : "Process cwd is invalid",
-                })
-            }
-        }
-    }
-    return { processes, errors }
+    return buildOpenADEProjectProcessDefinitions({ root, configs: result.configs })
 }
 
 function scopedProjectProcessScopeMatches(registration: ScopedProjectProcessRegistration, params: { repoId: string; taskId?: string }): boolean {

@@ -1229,6 +1229,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - This preserves the classic desktop UI and remote/headless runtime behavior while removing another "two ways to do the same host read/write" path at the OpenADE API boundary.
 - Focused verification passed: OpenADE module typecheck, Electron typecheck, shared scoped project host real-filesystem tests, OpenADE kernel integration, Electron companion runtime API integration, Biome lint for touched files, and `git diff --check`.
 
+### 2026-06-01: Scoped Project Process Definition Builder Consolidated
+
+- `projects/openade-module/src/scopedProjectProcesses.ts` now owns conversion from parsed `openade.toml` configs to `OpenADEProjectProcessDefinition` records, including config-path containment and process cwd containment.
+- `projects/openade-module/src/node.ts` and `projects/electron/src/modules/companion/runtimeGateway.ts` both use that builder while keeping host-specific process lifecycle plumbing in their respective runtime adapters.
+- This removes another duplicated OpenADE API-boundary implementation without changing classic desktop process tray behavior or remote process permissions.
+- Focused verification passed: OpenADE module typecheck, Electron typecheck, scoped project process helper tests, OpenADE kernel integration, Electron companion runtime API integration, Biome lint for touched files, and `git diff --check`.
+
 ### 2026-06-01: Preload API Contract Consolidated
 
 - `projects/electron/src/preload-api.ts` now owns the browser-safe `OpenADEAPI` shape for the Electron contextBridge surface.

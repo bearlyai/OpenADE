@@ -18,11 +18,13 @@ import { buildOpenADEPrompt } from "./promptBuilder"
 import { parseProcsFile } from "./procs"
 import { buildOpenADEPlanReviewPrompt, buildOpenADEReviewHandoffPrompt, buildOpenADEWorkReviewPrompt } from "./review"
 import { listOpenADEProjectFiles, readOpenADEProjectFile, searchOpenADEProject, writeOpenADEProjectFile } from "./scopedProjectHost"
+import { buildOpenADEProjectProcessDefinitions } from "./scopedProjectProcesses"
 import type {
     OpenADEActionEventCreateRequest,
     OpenADEActionEventSource,
     OpenADEHyperPlanStep,
     OpenADEHyperPlanStrategy,
+    OpenADEProcsConfig,
     OpenADEProject,
     OpenADEProjectProcessConfigError,
     OpenADEProjectProcessDefinition,
@@ -957,28 +959,12 @@ async function findNodeOpenADEProcsFiles(searchRoot: string, repoRoot: string, h
     return walkNodeOpenADEProcsFiles(repoRoot || searchRoot)
 }
 
-function ensurePathInsideRoot(root: string, target: string, message: string): void {
-    const resolvedRoot = path.resolve(root)
-    const resolvedTarget = path.resolve(target)
-    if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`)) {
-        throw new Error(message)
-    }
-}
-
-function nodeProjectProcessCwd(repoRoot: string, processDef: Omit<OpenADEProjectProcessDefinition, "cwd">): string {
-    const configPath = path.resolve(repoRoot, processDef.configPath)
-    ensurePathInsideRoot(repoRoot, configPath, "process config path is outside the repository")
-    const cwd = path.resolve(path.dirname(configPath), processDef.workDir ?? "")
-    ensurePathInsideRoot(repoRoot, cwd, "process cwd is outside the repository")
-    return cwd
-}
-
 async function readNodeProjectProcessDefinitions(searchRoot: string): Promise<NodeProjectProcessProcsResult> {
     const resolvedSearchRoot = path.resolve(searchRoot)
     const gitInfo = await nodeProjectProcessGitInfo(resolvedSearchRoot)
     const repoRoot = path.resolve(gitInfo?.repoRoot ?? resolvedSearchRoot)
     const configFiles = await findNodeOpenADEProcsFiles(resolvedSearchRoot, repoRoot, gitInfo !== null)
-    const processes: OpenADEProjectProcessDefinition[] = []
+    const configs: OpenADEProcsConfig[] = []
     const errors: OpenADEProjectProcessConfigError[] = []
 
     for (const configFile of configFiles) {
@@ -993,25 +979,17 @@ async function readNodeProjectProcessDefinitions(searchRoot: string): Promise<No
             errors.push(parsed.error)
             continue
         }
-        for (const processDef of parsed.config.processes.map((process) => ({ ...process, configPath: relativePath }))) {
-            try {
-                processes.push({ ...processDef, cwd: nodeProjectProcessCwd(repoRoot, processDef) })
-            } catch (error) {
-                errors.push({
-                    relativePath,
-                    error: error instanceof Error ? error.message : "Process cwd is invalid",
-                })
-            }
-        }
+        configs.push(parsed.config)
     }
+    const definitions = buildOpenADEProjectProcessDefinitions({ root: repoRoot, configs })
 
     return {
         repoRoot,
         searchRoot: resolvedSearchRoot,
         isWorktree: gitInfo?.isWorktree ?? false,
         worktreeRoot: gitInfo?.worktreeRoot,
-        processes,
-        errors,
+        processes: definitions.processes,
+        errors: [...errors, ...definitions.errors],
     }
 }
 
