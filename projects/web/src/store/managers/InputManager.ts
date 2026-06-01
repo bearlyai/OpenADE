@@ -27,6 +27,7 @@ import {
     X,
 } from "lucide-react"
 import { makeAutoObservable } from "mobx"
+import type { OpenADETurnStartRequest, OpenADETurnStartResult } from "../../../../openade-module/src"
 import { track } from "../../analytics"
 import { ReviewPickerModal } from "../../components/ReviewPickerModal"
 import { ACTION_PROMPTS } from "../../prompts/prompts"
@@ -34,16 +35,15 @@ import { localOpenADEClient } from "../../runtime/localOpenADEClient"
 import {
     COMMIT_AND_PUSH_COMMAND_LABEL,
     TRACKABLE_TASK_COMMAND_IDS,
-    buildTaskShellCommandDescriptors,
     type TaskShellCommandDescriptor,
     type TaskShellCommandId,
     type TaskShellCommandStyle,
+    buildTaskShellCommandDescriptors,
 } from "../../shell/task/taskCommandModel"
 import { taskCommandLabel } from "../../shell/task/taskCommands"
 import type { ActionEvent, QueuedTurn, UserInputContext } from "../../types"
-import type { OpenADETurnStartRequest, OpenADETurnStartResult } from "../../../../openade-module/src"
-import type { EditorSnapshot } from "./SmartEditorManager"
 import type { CodeStore } from "../store"
+import type { EditorSnapshot } from "./SmartEditorManager"
 import type { SmartEditorManager } from "./SmartEditorManager"
 
 const INTERRUPT_IDLE_TIMEOUT_MS = 30_000
@@ -196,7 +196,10 @@ export class InputManager {
         const taskModel = this.taskModel
         if (!taskModel?.repoId) return
 
-        await this.store.getTaskStore(taskModel.repoId, this.taskId)
+        const useRuntimeProductReads = this.store.shouldUseRuntimeProductReads()
+        if (!useRuntimeProductReads) {
+            await this.store.getTaskStore(taskModel.repoId, this.taskId)
+        }
         const result = await localOpenADEClient.startTurn({
             repoId: taskModel.repoId,
             type,
@@ -213,7 +216,11 @@ export class InputManager {
         lifecycle.onAccepted?.()
         this.rememberQueuedTurn(type, result, input, taskModel, options)
         try {
-            await this.store.refreshTaskStoreFromStorage(this.taskId)
+            if (useRuntimeProductReads) {
+                await Promise.all([this.store.refreshRuntimeProductSnapshot(), this.store.refreshRuntimeProductTaskForTaskId(this.taskId)])
+            } else {
+                await this.store.refreshTaskStoreFromStorage(this.taskId)
+            }
         } finally {
             this.store.queuedTurns.reconcileTaskWithStorage(this.taskId, taskModel.queuedTurns)
         }
@@ -482,7 +489,6 @@ export class InputManager {
 
     async runCommand(id: string): Promise<void> {
         const cmd = this.commands.find((c) => c.id === id)
-        console.debug("[InputManager] runCommand", { id, found: !!cmd, enabled: cmd?.enabled })
         if (!cmd || !cmd.enabled) return
 
         if (TRACKABLE_TASK_COMMAND_IDS.has(cmd.id)) {

@@ -636,7 +636,9 @@ describe("Code routes with runtime product reads", () => {
     })
 
     it("renders the classic desktop task route by default after loading task detail through the real local runtime product store", async () => {
-        cleanupOpenADEApi = installOpenADEApiRuntimeBridge(createRouteRuntimeServer())
+        const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
+        const startedTurns: OpenADETurnStartRequest[] = []
+        cleanupOpenADEApi = installOpenADEApiRuntimeBridge(createRouteRuntimeServer({ onStartTurn: (params) => startedTurns.push(params) }))
         const codeStore = new CodeStore({
             getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
             navigateToTask: () => undefined,
@@ -663,7 +665,27 @@ describe("Code routes with runtime product reads", () => {
             await waitForText(container, "Runtime route task")
             await waitForText(container, "Do the runtime-backed work")
             expect(findButtonByTitle(container, "Attach image")).toBeInstanceOf(HTMLButtonElement)
+
+            codeStore.smartEditors.getManager("task-task-1", "repo-1").setValue("Classic desktop runtime turn")
+            const doButton = findButtonByTitlePrefix(container, "Do")
+            await vi.waitFor(() => expect(doButton.disabled).toBe(false), { timeout: 1000, interval: 10 })
+            clickElement(doButton)
+
+            await vi.waitFor(() => expect(startedTurns).toHaveLength(1), { timeout: 1000, interval: 10 })
+            expect(startedTurns[0]).toMatchObject({
+                repoId: "repo-1",
+                inTaskId: "task-1",
+                type: "do",
+                input: "Classic desktop runtime turn",
+                harnessId: "codex",
+                modelId: routeModelId,
+                thinking: "max",
+                fastMode: false,
+            })
+            await waitForText(container, "Classic desktop runtime turn")
+            expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
         } finally {
+            trackSpy.mockRestore()
             codeStore.disconnectAllStores()
         }
     })

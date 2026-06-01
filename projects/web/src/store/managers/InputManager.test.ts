@@ -68,6 +68,9 @@ function createManager({
     const queuedTurnManager = new QueuedTurnManager()
     const store = {
         isTaskRunning: vi.fn((taskId: string) => taskId === "task-1" && isTaskRunning(taskId)),
+        shouldUseRuntimeProductReads: vi.fn(() => false),
+        refreshRuntimeProductSnapshot: vi.fn(async () => null),
+        refreshRuntimeProductTaskForTaskId: vi.fn(async () => null),
         getTaskStore: vi.fn(async () => undefined),
         refreshTaskStoreFromStorage,
         queuedTurns: queuedTurnManager,
@@ -185,6 +188,18 @@ describe("InputManager queueable desktop commands", () => {
                 status: "queued",
             }),
         ])
+    })
+
+    it("refreshes runtime DTOs instead of opening a direct task store when runtime product reads are active", async () => {
+        const { manager, store } = createManager()
+        store.shouldUseRuntimeProductReads.mockReturnValue(true)
+
+        await manager.runCommand("do")
+
+        expect(store.getTaskStore).not.toHaveBeenCalled()
+        expect(store.refreshTaskStoreFromStorage).not.toHaveBeenCalled()
+        expect(store.refreshRuntimeProductSnapshot).toHaveBeenCalledTimes(1)
+        expect(store.refreshRuntimeProductTaskForTaskId).toHaveBeenCalledWith("task-1")
     })
 
     it("hides the accepted queued row once storage knows that queued turn is no longer queued", async () => {
