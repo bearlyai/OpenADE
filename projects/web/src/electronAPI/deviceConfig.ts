@@ -5,16 +5,13 @@
  * Communicates with Electron main process via openadeAPI.
  */
 
+import type { DeviceConfigResult as ElectronDeviceConfigResult } from "../../../electron/src/modules/deviceConfigTypes"
+
 // ============================================================================
 // Type Definitions
 // ============================================================================
 
-export interface DeviceConfig {
-    deviceId: string
-    telemetryDisabled?: boolean
-    wasGenerated?: boolean
-    readFailed?: boolean
-}
+export type DeviceConfig = ElectronDeviceConfigResult
 
 // ============================================================================
 // Device Config API Functions

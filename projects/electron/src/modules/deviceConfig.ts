@@ -10,6 +10,7 @@ import * as fs from "fs"
 import * as path from "path"
 import * as os from "os"
 import { randomUUID } from "crypto"
+import type { DeviceConfig, DeviceConfigResult } from "./deviceConfigTypes"
 
 const OPENADE_DIR = ".openade"
 const CONFIG_FILE = "device.json"
@@ -18,17 +19,7 @@ function getConfigPath(): string {
 	return path.join(os.homedir(), OPENADE_DIR, CONFIG_FILE)
 }
 
-export interface DeviceConfig {
-	deviceId: string
-	telemetryDisabled?: boolean
-}
-
-export interface DeviceConfigResult extends DeviceConfig {
-	/** True when this process had to generate a device ID because no valid config was found. */
-	wasGenerated: boolean
-	/** True when the config file existed but could not be parsed or read. */
-	readFailed: boolean
-}
+export type { DeviceConfig, DeviceConfigResult } from "./deviceConfigTypes"
 
 let wasGeneratedThisRun = false
 let readFailedThisRun = false

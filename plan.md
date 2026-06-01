@@ -1226,6 +1226,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - Product-scoped task git DTOs remain OpenADE-owned; raw git task-equivalent payload types in `gitBridgeTypes.ts` still derive from `projects/openade-module/src/types.ts` where they overlap.
 - Focused verification passed: Electron typecheck, web typecheck, Electron `git.test.ts`, full `runtimeNodeServer.integration`, web `ChangesManager` and classic route runtime-product tests, and Biome lint for the touched git bridge files.
 
+### 2026-06-01: Desktop Storage/Config DTOs Consolidated
+
+- `projects/electron/src/modules/deviceConfigTypes.ts` now owns the browser-safe device config/result DTO used by Electron main and the renderer device-config wrapper.
+- `projects/electron/src/modules/code/snapshotsIndex.ts` remains the owner for snapshot patch index DTOs; `projects/web/src/electronAPI/snapshots.ts` now aliases those types instead of copying the patch-index shape.
+- This removes two more small duplicate renderer/main-process type pairs without changing device config persistence or snapshot bundle storage.
+- Focused verification passed: Electron typecheck, web typecheck, Electron `deviceConfig.test.ts`, web `store.test.ts` and `Routes.runtimeProductStore.test.ts`, and Biome lint for the touched storage/config files.
+
 ## Remaining Work Under Corrected Direction
 
 The remaining work is not a desktop UI rewrite. It is a boundary migration: keep the old desktop app experience and replace its direct renderer storage/host assumptions with runtime/OpenADE APIs.

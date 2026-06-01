@@ -1,25 +1,8 @@
 import { isCodeModuleAvailable } from "./capabilities"
 import { localRuntimeClient } from "../runtime/localRuntimeClient"
+import type { SnapshotPatchFile, SnapshotPatchIndex } from "../../../electron/src/modules/code/snapshotsIndex"
 
-export interface SnapshotPatchFile {
-    id: string
-    path: string
-    oldPath?: string
-    status: "added" | "deleted" | "modified" | "renamed"
-    binary: boolean
-    insertions: number
-    deletions: number
-    changedLines: number
-    hunkCount: number
-    patchStart: number
-    patchEnd: number
-}
-
-export interface SnapshotPatchIndex {
-    version: 1
-    patchSize: number
-    files: SnapshotPatchFile[]
-}
+export type { SnapshotPatchFile, SnapshotPatchIndex }
 
 async function saveBundle(id: string, patch: string, index: SnapshotPatchIndex): Promise<void> {
     await localRuntimeClient.request("snapshot/bundle/save", { id, patch, index })
