@@ -5,14 +5,26 @@
  * Uses git ls-files for git repos, ripgrep for non-git directories.
  */
 
-import * as path from "path"
-import * as fs from "fs"
+import * as path from "node:path"
+import * as fs from "node:fs"
 import logger from "electron-log"
 import fuzzysort from "fuzzysort"
 import { getHotFiles } from "./git"
 import { execCommand } from "./subprocess"
 import { resolve as resolveBinary } from "./binaries"
 import { classifyFileMetadata, FILE_SIGNATURE_SAMPLE_BYTES, type FileMetadata } from "../../../../runtime-node/src/fileMetadata"
+import type {
+    RuntimeNodeContentSearchMatch,
+    RuntimeNodeContentSearchParams,
+    RuntimeNodeContentSearchResponse,
+    RuntimeNodeDescribePathParams,
+    RuntimeNodeDescribePathResponse,
+    RuntimeNodeFuzzySearchParams,
+    RuntimeNodeFuzzySearchResponse,
+    RuntimeNodePathEntry,
+    RuntimeNodeTreeChild,
+    RuntimeNodeTreeMatch,
+} from "../../../../runtime-node/src/files"
 
 // Cache file lists by directory (key: `${dir}:${matchDirs}`)
 const FILE_LIST_CACHE_TTL_MS = 20 * 1000 // 20 seconds
@@ -33,87 +45,16 @@ interface FileListCacheEntry {
 }
 const fileListCache = new Map<string, FileListCacheEntry>()
 
-// ============================================================================
-// Type Definitions
-// IMPORTANT: Keep in sync with projects/dashboard/src/pages/code/electronAPI/files.ts
-// ============================================================================
-
-export interface FuzzySearchParams {
-    dir: string
-    query: string
-    matchDirs: boolean
-    limit?: number
-}
-
-export interface TreeChild {
-    name: string
-    isDir: boolean
-    fullPath: string
-}
-
-export interface TreeMatch {
-    path: string
-    children: TreeChild[]
-}
-
-export interface FuzzySearchResponse {
-    results: string[]
-    truncated: boolean
-    source: "git" | "ripgrep" | "fs"
-    treeMatch?: TreeMatch
-}
-
-// ============================================================================
-// Content Search Types
-// ============================================================================
-
-export interface ContentSearchParams {
-    dir: string
-    query: string
-    limit?: number // default 100
-    caseSensitive?: boolean
-    regex?: boolean
-    rankByHotFiles?: boolean // if true, rank results by git commit frequency
-}
-
-export interface ContentSearchMatch {
-    file: string // relative path from dir
-    line: number // 1-indexed
-    content: string // full line content
-    matchStart: number // character offset in content where match starts
-    matchEnd: number // character offset in content where match ends
-}
-
-export interface ContentSearchResponse {
-    matches: ContentSearchMatch[]
-    truncated: boolean
-}
-
-// ============================================================================
-// describePath Types
-// ============================================================================
-
-export interface DescribePathParams {
-    path: string
-    readContents?: boolean   // If true and path is a file, include content
-    maxReadSize?: number     // Max file size to read (caller decides limit)
-    showHidden?: boolean     // If true and path is a dir, include dotfiles
-}
-
-export interface PathEntry {
-    name: string
-    path: string  // Absolute path
-    isDir: boolean
-    isSymlink: boolean
-    size: number
-    mode: number
-}
-
-export type DescribePathResponse =
-    | { type: "dir"; path: string; mode: number; entries: PathEntry[] }
-    | { type: "file"; path: string; size: number; mode: number; content: string | null; tooLarge: boolean; isReadable: boolean; isBinary?: boolean; mediaType?: string | null; previewKind?: "image" | null }
-    | { type: "not_found"; path: string }
-    | { type: "error"; path: string; message: string }
+export type FuzzySearchParams = RuntimeNodeFuzzySearchParams
+export type TreeChild = RuntimeNodeTreeChild
+export type TreeMatch = RuntimeNodeTreeMatch
+export type FuzzySearchResponse = RuntimeNodeFuzzySearchResponse
+export type ContentSearchParams = RuntimeNodeContentSearchParams
+export type ContentSearchMatch = RuntimeNodeContentSearchMatch
+export type ContentSearchResponse = RuntimeNodeContentSearchResponse
+export type DescribePathParams = RuntimeNodeDescribePathParams
+export type PathEntry = RuntimeNodePathEntry
+export type DescribePathResponse = RuntimeNodeDescribePathResponse
 
 // ============================================================================
 // Helper Functions
@@ -248,7 +189,7 @@ async function listFilesWithRipgrep({
         return []
     }
 
-    let files = result.stdout
+    const files = result.stdout
         .split("\n")
         .map((f) => f.trim())
         .filter((f) => f.length > 0)
@@ -491,7 +432,7 @@ async function handleFuzzySearch(params: FuzzySearchParams): Promise<FuzzySearch
     } else {
         // Check if query matches a directory exactly
         const node = lookupTree(tree, trimmedQuery)
-        if (node && node.isDir) {
+        if (node?.isDir) {
             treeMatch = {
                 path: trimmedQuery,
                 children: getChildrenFromTree(tree, trimmedQuery),
@@ -833,7 +774,7 @@ async function handleContentSearch(params: ContentSearchParams): Promise<Content
     }
 
     // Check truncation
-    let truncated = matches.length > limit
+    const truncated = matches.length > limit
     if (truncated) {
         matches.pop() // Remove the extra one we fetched
     }

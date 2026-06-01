@@ -1169,6 +1169,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - The packaged smoke also sets `OPENADE_YJS_STORAGE_DIR` under its temp user-data directory. This avoids false `Task <id> not found` read-after-write failures caused by the packaged app reading the developer's normal `~/.openade/data/yjs/code_repos` during workflow verification.
 - `projects/electron/tests/smoke.spec.ts` now waits for both task-event completion and `runtime/list` idle state before issuing the next turn. Its task-read polling retries only the exact transient `Task <id> not found` window after turn start, which verifies the real runtime lifecycle instead of racing active-execution cleanup.
 
+### 2026-06-01: Generic File/Search Bridge DTOs Consolidated
+
+- Generic `fs/path/describe`, `fs/search/fuzzy`, and `fs/search/content` request/result DTOs now live in `projects/runtime-node/src/files.ts`, which owns the runtime-node filesystem method boundary.
+- `projects/electron/src/modules/code/files.ts`, `projects/web/src/electronAPI/files.ts`, and `projects/runtime-node/src/localFiles.ts` import those runtime-node DTOs instead of maintaining mirrored `FuzzySearchResponse`, `ContentSearchMatch`, `PathEntry`, and `DescribePathResponse` shapes.
+- This keeps raw filesystem powers as trusted/local host primitives while removing another "keep in sync" bridge type pair between Electron main and the renderer.
+- Focused verification passed: runtime-node typecheck, Electron typecheck, web typecheck, Biome lint for the touched filesystem files, and web `FileBrowserManager`/`SmartEditorManager` tests.
+
 ## Remaining Work Under Corrected Direction
 
 The remaining work is not a desktop UI rewrite. It is a boundary migration: keep the old desktop app experience and replace its direct renderer storage/host assumptions with runtime/OpenADE APIs.

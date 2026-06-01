@@ -12,6 +12,86 @@ export interface RuntimeNodeFilesAdapter {
     searchContent(params: unknown): Promise<unknown> | unknown
 }
 
+export interface RuntimeNodeFuzzySearchParams {
+    dir: string
+    query: string
+    matchDirs: boolean
+    limit?: number
+}
+
+export interface RuntimeNodeTreeChild {
+    name: string
+    isDir: boolean
+    fullPath: string
+}
+
+export interface RuntimeNodeTreeMatch {
+    path: string
+    children: RuntimeNodeTreeChild[]
+}
+
+export interface RuntimeNodeFuzzySearchResponse {
+    results: string[]
+    truncated: boolean
+    source: "git" | "ripgrep" | "fs"
+    treeMatch?: RuntimeNodeTreeMatch
+}
+
+export interface RuntimeNodeDescribePathParams {
+    path: string
+    readContents?: boolean
+    maxReadSize?: number
+    showHidden?: boolean
+}
+
+export interface RuntimeNodePathEntry {
+    name: string
+    path: string
+    isDir: boolean
+    isSymlink: boolean
+    size: number
+    mode: number
+}
+
+export type RuntimeNodeDescribePathResponse =
+    | { type: "dir"; path: string; mode: number; entries: RuntimeNodePathEntry[] }
+    | {
+          type: "file"
+          path: string
+          size: number
+          mode: number
+          content: string | null
+          tooLarge: boolean
+          isReadable: boolean
+          isBinary?: boolean
+          mediaType?: string | null
+          previewKind?: "image" | null
+      }
+    | { type: "not_found"; path: string }
+    | { type: "error"; path: string; message: string }
+
+export interface RuntimeNodeContentSearchParams {
+    dir: string
+    query: string
+    limit?: number
+    caseSensitive?: boolean
+    regex?: boolean
+    rankByHotFiles?: boolean
+}
+
+export interface RuntimeNodeContentSearchMatch {
+    file: string
+    line: number
+    content: string
+    matchStart: number
+    matchEnd: number
+}
+
+export interface RuntimeNodeContentSearchResponse {
+    matches: RuntimeNodeContentSearchMatch[]
+    truncated: boolean
+}
+
 const fileEncoding = optionalStringEnum("encoding", ["utf8", "base64"])
 
 export function registerRuntimeNodeFilesModule(server: RuntimeServer, adapter: RuntimeNodeFilesAdapter): void {

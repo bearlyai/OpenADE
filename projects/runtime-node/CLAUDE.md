@@ -6,7 +6,7 @@ Target package for Node host adapters.
 - Do not import React or Electron UI code.
 - Electron may use this package, but host powers should stay behind adapter interfaces.
 - fsWatch.ts owns runtime `fs/watch/*` registration and watcher cleanup.
-- files.ts owns runtime `fs/path/*`, `fs/file/*`, `fs/directory/*`, and `fs/search/*` registration through an adapter.
+- files.ts owns runtime `fs/path/*`, `fs/file/*`, `fs/directory/*`, and `fs/search/*` registration plus the generic browser-safe DTO types for those methods. Electron and renderer bridge code should import those types instead of duplicating them.
 - localFiles.ts owns the default headless Node filesystem adapter used by `runtime-node serve`.
 - git.ts owns runtime `git/*` registration through an adapter.
 - localGit.ts owns the default headless Node Git adapter used by `runtime-node serve`.

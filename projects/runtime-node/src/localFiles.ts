@@ -1,16 +1,7 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import { classifyFileMetadata, FILE_SIGNATURE_SAMPLE_BYTES, type FileMetadata } from "./fileMetadata"
-import type { RuntimeNodeFilesAdapter } from "./files"
-
-interface PathEntry {
-    name: string
-    path: string
-    isDir: boolean
-    isSymlink: boolean
-    size: number
-    mode: number
-}
+import type { RuntimeNodeFilesAdapter, RuntimeNodePathEntry } from "./files"
 
 const DEFAULT_MAX_READ_SIZE = 256 * 1024
 const DEFAULT_SEARCH_LIMIT = 100
@@ -40,7 +31,7 @@ function positiveInt(value: unknown, fallback: number): number {
     return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
 }
 
-async function entryFor(dir: string, name: string): Promise<PathEntry | null> {
+async function entryFor(dir: string, name: string): Promise<RuntimeNodePathEntry | null> {
     const fullPath = path.join(dir, name)
     try {
         const stat = await fs.lstat(fullPath)
@@ -125,7 +116,7 @@ export function createRuntimeNodeLocalFilesAdapter(): RuntimeNodeFilesAdapter {
                 if (stat.isDirectory()) {
                     const names = await fs.readdir(targetPath)
                     const entries = (await Promise.all(names.filter((name) => showHidden || !name.startsWith(".")).map((name) => entryFor(targetPath, name))))
-                        .filter((entry): entry is PathEntry => entry !== null)
+                        .filter((entry): entry is RuntimeNodePathEntry => entry !== null)
                         .sort((a, b) => Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name))
                     return { type: "dir", path: targetPath, mode: stat.mode, entries }
                 }
