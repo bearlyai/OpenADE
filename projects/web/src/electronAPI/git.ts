@@ -6,286 +6,74 @@
  */
 
 import type {
-    OpenADETaskChangesReadResult,
-    OpenADETaskDiffContextLines,
-    OpenADETaskDiffReadResult,
-    OpenADETaskFilePairReadResult,
-    OpenADETaskGitCommitFilesResult,
-    OpenADETaskGitFileAtTreeishResult,
-    OpenADETaskGitLogResult,
-} from "../../../openade-module/src"
+    BranchInfo as HostBranchInfo,
+    CheckGhCliResponse as HostCheckGhCliResponse,
+    CommitWorkTreeParams,
+    CommitWorkTreeResponse,
+    DeleteBranchParams,
+    DeleteWorkTreeParams,
+    DeleteWorkTreeResponse,
+    GetChangedFilesParams,
+    GetChangedFilesResponse,
+    GetCommitFilePatchParams,
+    GetCommitFilesParams,
+    GetCommitFilesResponse,
+    GetFileAtTreeishParams,
+    GetFileAtTreeishResponse,
+    GetFilePairParams,
+    GetFilePairResponse as HostGetFilePairResponse,
+    GetFilePatchResponse as HostGetFilePatchResponse,
+    GetGitLogParams,
+    GetGitLogResponse,
+    GetMergeBaseParams,
+    GetMergeBaseResponse,
+    GetOrCreateWorkTreeParams,
+    GetOrCreateWorkTreeResponse,
+    GetWorktreeFilePatchParams,
+    GitFileInfo as HostGitFileInfo,
+    GitStatusParams as HostGitStatusParams,
+    GitStatusResponse as HostGitStatusResponse,
+    GitSummaryResponse as HostGitSummaryResponse,
+    InitGitParams as HostInitGitParams,
+    InitGitResponse as HostInitGitResponse,
+    IsBranchMergedParams,
+    IsGitDirectoryParams as HostIsGitDirectoryParams,
+    IsGitDirectoryResponse as HostIsGitDirectoryResponse,
+    IsGitInstalledResponse,
+    ListBranchesParams,
+    ListBranchesResponse,
+    ListFilesParams,
+    ListFilesResponse,
+    ListWorkTreesParams,
+    ListWorkTreesResponse,
+    ResolvePathParams as HostResolvePathParams,
+    ResolvePathResponse as HostResolvePathResponse,
+    UncommittedChangesStats as HostUncommittedChangesStats,
+    WorkTreeDiffPatchParams,
+    WorkTreeDiffPatchResponse,
+    WorkTreeInfo as HostWorkTreeInfo,
+} from "../../../electron/src/modules/code/gitBridgeTypes"
 
 // ============================================================================
 // Type Definitions
-// Product-equivalent git payloads derive from OpenADE DTOs; only bridge params stay local.
 // ============================================================================
 
-interface IsGitInstalledResponse {
-    installed: boolean
-    version?: string
-}
-
-export interface IsGitDirectoryParams {
-    directory: string
-}
-
-export type IsGitDirectoryResponse =
-    | {
-          isGitDirectory: true
-          repoRoot: string
-          relativePath: string
-          mainBranch: string
-          hasGhCli: boolean
-      }
-    | {
-          isGitDirectory: false
-          error?: string
-      }
-
-export interface CheckGhCliResponse {
-    hasGhCli: boolean
-}
-
-interface GetOrCreateWorkTreeParams {
-    repoDir: string
-    id: string
-    sourceTreeish?: string
-}
-
-interface GetOrCreateWorkTreeResponse {
-    worktreeDir: string
-    matchingDir: string
-    created: boolean
-}
-
-interface WorkTreeDiffPatchParams {
-    repoDir: string
-    workTreeId: string
-    compareToCommit: string // Commit SHA to diff against (e.g., merge-base)
-}
-
-interface WorkTreeDiffPatchResponse {
-    patch: string
-}
-
-interface GetMergeBaseParams {
-    repoDir: string
-    workTreeId: string
-    targetBranch: string // Branch to find merge-base with (e.g., "main")
-}
-
-interface GetMergeBaseResponse {
-    mergeBaseCommit: string
-}
-
-export interface GitStatusParams {
-    repoDir: string
-    workTreeId?: string // Optional - if not provided, checks the main repo directly
-}
-
-export interface UncommittedChangesStats {
-    filesChanged: number
-    insertions: number
-    deletions: number
-}
-
-/** File info returned from git status with binary detection */
-export interface GitFileInfo {
-    path: string
-    binary: boolean
-    status?: "added" | "deleted" | "modified" | "renamed"
-}
-
-export interface GitSummaryResponse {
-    // Git ref info
-    branch: string | null // Current branch name (null if detached HEAD)
-    headCommit: string // Short SHA of HEAD commit
-
-    // Remote tracking
-    ahead: number | null // Commits ahead of upstream (null if no upstream)
-
-    // Working tree status
-    hasChanges: boolean
-    staged: {
-        files: GitFileInfo[]
-        stats: UncommittedChangesStats
-    }
-    unstaged: {
-        files: GitFileInfo[]
-        stats: UncommittedChangesStats
-    }
-    untracked: GitFileInfo[]
-}
-
-export interface GitStatusResponse extends GitSummaryResponse {
-    staged: {
-        files: GitFileInfo[]
-        patch: string
-        stats: UncommittedChangesStats
-    }
-    unstaged: {
-        files: GitFileInfo[]
-        patch: string
-        stats: UncommittedChangesStats
-    }
-}
-
-interface ListFilesParams {
-    repoDir: string
-    workTreeId?: string
-    query?: string
-    limit?: number
-}
-
-interface ListFilesResponse {
-    files: string[]
-    truncated: boolean
-}
-
-interface DeleteWorkTreeParams {
-    repoDir: string
-    id: string
-}
-
-interface DeleteWorkTreeResponse {
-    deleted: boolean
-    error?: string
-}
-
-interface IsBranchMergedParams {
-    repoDir: string
-    branchName: string
-    targetBranch: string
-}
-
-interface DeleteBranchParams {
-    repoDir: string
-    branchName: string
-}
-
-interface ListWorkTreesParams {
-    repoDir: string
-}
-
-export interface WorkTreeInfo {
-    id: string
-    path: string
-    branch: string
-    head: string
-}
-
-interface ListWorkTreesResponse {
-    worktrees: WorkTreeInfo[]
-}
-
-interface CommitWorkTreeParams {
-    repoDir: string
-    workTreeId: string
-    message: string
-}
-
-interface CommitWorkTreeResponse {
-    committed: boolean
-    sha?: string
-    error?: string
-}
-
-interface ListBranchesParams {
-    repoDir: string
-    includeRemote?: boolean
-}
-
-export interface BranchInfo {
-    name: string
-    isDefault: boolean
-    isRemote: boolean
-}
-
-interface ListBranchesResponse {
-    branches: BranchInfo[]
-    defaultBranch: string
-}
-
-export interface ResolvePathParams {
-    path: string
-}
-
-export interface ResolvePathResponse {
-    resolvedPath: string
-    exists: boolean
-    isDirectory: boolean
-}
-
-export interface InitGitParams {
-    directory: string
-}
-
-export interface InitGitResponse {
-    success: boolean
-    error?: string
-}
-
-interface GetChangedFilesParams {
-    workDir: string
-    fromTreeish: string
-    toTreeish: string
-}
-
-type GetChangedFilesResponse = Pick<OpenADETaskChangesReadResult, "files" | "fromTreeish" | "toTreeish">
-
-interface GetFileAtTreeishParams {
-    workDir: string
-    treeish: string
-    filePath: string
-}
-
-type GetFileAtTreeishResponse = Pick<OpenADETaskGitFileAtTreeishResult, "content" | "exists" | "tooLarge">
-
-interface GetFilePairParams {
-    workDir: string
-    fromTreeish: string
-    toTreeish: string
-    filePath: string
-    oldPath?: string
-}
-
-export type GetFilePairResponse = Pick<OpenADETaskFilePairReadResult, "before" | "after" | "tooLarge">
-
-interface GetWorktreeFilePatchParams {
-    workDir: string
-    fromTreeish: string
-    filePath: string
-    oldPath?: string
-    contextLines: OpenADETaskDiffContextLines
-    allowTruncation?: boolean
-}
-
-interface GetCommitFilePatchParams {
-    workDir: string
-    commit: string
-    filePath: string
-    oldPath?: string
-    contextLines: OpenADETaskDiffContextLines
-    allowTruncation?: boolean
-}
-
-export type GetFilePatchResponse = Pick<OpenADETaskDiffReadResult, "patch" | "truncated" | "heavy" | "stats">
-
-interface GetGitLogParams {
-    workDir: string
-    ref?: string
-    limit?: number
-    skip?: number
-}
-
-type GetGitLogResponse = Pick<OpenADETaskGitLogResult, "commits" | "hasMore">
-
-interface GetCommitFilesParams {
-    workDir: string
-    commit: string
-}
-
-type GetCommitFilesResponse = Pick<OpenADETaskGitCommitFilesResult, "files">
+export type IsGitDirectoryParams = HostIsGitDirectoryParams
+export type IsGitDirectoryResponse = HostIsGitDirectoryResponse
+export type CheckGhCliResponse = HostCheckGhCliResponse
+export type GitStatusParams = HostGitStatusParams
+export type GitFileInfo = HostGitFileInfo
+export type GitSummaryResponse = HostGitSummaryResponse
+export type GitStatusResponse = HostGitStatusResponse
+export type UncommittedChangesStats = HostUncommittedChangesStats
+export type WorkTreeInfo = HostWorkTreeInfo
+export type BranchInfo = HostBranchInfo
+export type ResolvePathParams = HostResolvePathParams
+export type ResolvePathResponse = HostResolvePathResponse
+export type InitGitParams = HostInitGitParams
+export type InitGitResponse = HostInitGitResponse
+export type GetFilePairResponse = HostGetFilePairResponse
+export type GetFilePatchResponse = HostGetFilePatchResponse
 
 // ============================================================================
 // API Check

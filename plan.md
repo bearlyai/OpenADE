@@ -1219,6 +1219,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - This keeps desktop-specific host utility contracts in the Electron code module boundary while preserving the existing trusted local runtime methods and classic desktop settings/process wrappers.
 - Focused verification passed: Electron typecheck, web typecheck, Electron `runtimeData.integration` host utility method, web `Routes.runtimeProductStore.test.ts`, and Biome lint for the touched host bridge files.
 
+### 2026-06-01: Raw Git Bridge DTOs Consolidated
+
+- `projects/electron/src/modules/code/gitBridgeTypes.ts` now owns browser-safe DTOs for raw trusted-local `git/*` methods: install/directory checks, worktrees, branch lists, status/summary, file listings, commits, path resolution, raw git log reads, file-pair reads, and patch reads.
+- `projects/electron/src/modules/code/git.ts` and `projects/web/src/electronAPI/git.ts` alias that shared bridge contract instead of carrying parallel renderer/main-process interfaces.
+- Product-scoped task git DTOs remain OpenADE-owned; raw git task-equivalent payload types in `gitBridgeTypes.ts` still derive from `projects/openade-module/src/types.ts` where they overlap.
+- Focused verification passed: Electron typecheck, web typecheck, Electron `git.test.ts`, full `runtimeNodeServer.integration`, web `ChangesManager` and classic route runtime-product tests, and Biome lint for the touched git bridge files.
+
 ## Remaining Work Under Corrected Direction
 
 The remaining work is not a desktop UI rewrite. It is a boundary migration: keep the old desktop app experience and replace its direct renderer storage/host assumptions with runtime/OpenADE APIs.
