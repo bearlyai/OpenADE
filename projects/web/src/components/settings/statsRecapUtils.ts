@@ -1,4 +1,10 @@
-import type { RepoItem, TaskPreview, TaskPreviewUsage } from "../../persistence/repoStore"
+import type { TaskPreview, TaskPreviewUsage } from "../../persistence/repoStore"
+
+export interface StatsRecapRepoInput {
+    id: string
+    name: string
+    tasks: TaskPreview[]
+}
 import { formatDuration } from "../../persistence/taskStatsUtils"
 
 export interface StatsRecapPeriod {
@@ -99,7 +105,7 @@ function compareTasks(a: StatsRecapTask, b: StatsRecapTask): number {
     return parseTime(b.activityAt) - parseTime(a.activityAt) || a.title.localeCompare(b.title)
 }
 
-export function buildStatsRecap(repos: RepoItem[], period: StatsRecapPeriod): StatsRecapSummary {
+export function buildStatsRecap(repos: StatsRecapRepoInput[], period: StatsRecapPeriod): StatsRecapSummary {
     const tasks: StatsRecapTask[] = []
     let completedCount = 0
     let totalCostUsd = 0

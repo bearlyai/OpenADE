@@ -3,12 +3,12 @@ import { Check, Copy, Loader2 } from "lucide-react"
 import { observer } from "mobx-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { normalizeModelClass } from "../../constants"
-import type { RepoItem, TaskPreviewUsage } from "../../persistence/repoStore"
+import type { TaskPreviewUsage } from "../../persistence/repoStore"
 import { formatDuration, needsTaskUsageBackfill } from "../../persistence/taskStatsUtils"
 import type { CodeStore } from "../../store/store"
 import { StatsShareCard } from "./StatsShareCard"
 import { type RelativePeriodKey, getRelativePeriodRanges } from "./statsPeriodUtils"
-import { type StatsRecapPeriod, type StatsRecapTone, buildStatsRecap, buildStatsRecapText } from "./statsRecapUtils"
+import { type StatsRecapPeriod, type StatsRecapRepoInput, type StatsRecapTone, buildStatsRecap, buildStatsRecapText } from "./statsRecapUtils"
 import { copyCardToClipboard } from "./statsShare"
 
 /** The earliest real month in the project — legacy "Unknown" dates get folded into this. */
@@ -175,13 +175,12 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     const [copyState, setCopyState] = useState<"idle" | "copying" | "copied" | "error">("idle")
     const [copyRecapState, setCopyRecapState] = useState<"idle" | "copying" | "copied" | "error">("idle")
     const [selectedPeriod, setSelectedPeriod] = useState<string | null>(null)
+    const repos = store.getTaskPreviewReposForStats()
 
     // Backfill task stores missing usage data (or missing newer fields like durationMs)
     useEffect(() => {
-        if (!store.repoStore) return
-
         const tasksToBackfill: Array<{ repoId: string; taskId: string }> = []
-        for (const repo of store.repoStore.repos.all()) {
+        for (const repo of store.getTaskPreviewReposForStats()) {
             for (const task of repo.tasks) {
                 if (needsTaskUsageBackfill(task.usage)) {
                     tasksToBackfill.push({ repoId: repo.id, taskId: task.id })
@@ -209,7 +208,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
                 }
             }
             try {
-                await store.syncRepoStore()
+                if (!store.shouldUseRuntimeProductReads()) await store.syncRepoStore()
             } catch (err) {
                 console.warn("[StatsTab] Failed to sync stats backfill:", err)
             }
@@ -220,7 +219,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
         return () => {
             cancelled = true
         }
-    }, [store, store.repoStore])
+    }, [store, store.repoStore, store.runtimeProductSnapshot])
 
     const handleCopy = useCallback(async () => {
         if (!cardRef.current || copyState === "copying") return
@@ -237,7 +236,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     }, [copyState])
 
     // Aggregate stats across all workspaces
-    const repos: RepoItem[] = store.repoStore?.repos.all() ?? []
+    const statRepos: StatsRecapRepoInput[] = repos
     const monthsMap = new Map<string, MonthStats>()
     let totalTasks = 0
     let totalIn = 0
@@ -250,7 +249,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     const relativePeriods = getRelativePeriodRanges()
     const relativeStats = new Map<RelativePeriodKey, MonthStats>(relativePeriods.map(({ key, label }) => [key, createEmptyStats(label, key)]))
 
-    for (const repo of repos) {
+    for (const repo of statRepos) {
         for (const task of repo.tasks) {
             totalTasks++
             const u: TaskPreviewUsage = task.usage ?? { inputTokens: 0, outputTokens: 0, totalCostUsd: 0, eventCount: 0, costByModel: {}, durationMs: 0 }
@@ -310,7 +309,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
 
     const featuredTokens = featured.inputTokens + featured.outputTokens
     const recapPeriod = getRecapPeriod(effectiveSelected, relativePeriods, monthsMap)
-    const recap = buildStatsRecap(repos, recapPeriod)
+    const recap = buildStatsRecap(statRepos, recapPeriod)
     const visibleRecapTaskIds = new Set(recap.tasks.slice(0, MAX_VISIBLE_RECAP_TASKS).map((task) => task.taskId))
     const visibleRecapRepos = recap.repos
         .map((repo) => ({

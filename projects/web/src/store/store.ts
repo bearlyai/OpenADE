@@ -652,6 +652,17 @@ export class CodeStore {
         return legacyPreviews
     }
 
+    getTaskPreviewReposForStats(): Array<{ id: string; name: string; tasks: TaskPreview[] }> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductSnapshot) {
+            return this.runtimeProductSnapshot.repos.map((repo) => ({
+                id: repo.id,
+                name: repo.name,
+                tasks: repo.tasks.map(toRuntimeTaskPreview),
+            }))
+        }
+        return this.repoStore?.repos.all().map((repo) => ({ id: repo.id, name: repo.name, tasks: repo.tasks })) ?? []
+    }
+
     private async handleRuntimeProductStoreNotification(notification: RuntimeNotification): Promise<void> {
         if (!this.runtimeProductStore) return
 
@@ -838,6 +849,17 @@ export class CodeStore {
     }
 
     async backfillTaskUsagePreview(repoId: string, taskId: string): Promise<void> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            const preview = this.runtimeProductTaskPreview(repoId, taskId)
+            if (!preview || !needsTaskUsageBackfill(preview.usage)) return
+
+            const task = await this.loadRuntimeProductTask(repoId, taskId)
+            const usage = task ? computeTaskUsage(task.events) : normalizeTaskPreviewUsage(preview.usage)
+            await this.updateProductTaskMetadata({ taskId, usage })
+            await this.refreshProductStateAfterTaskMutation(taskId)
+            return
+        }
+
         if (!this.repoStore) {
             throw new Error("RepoStore not initialized")
         }

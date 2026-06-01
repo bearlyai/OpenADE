@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { OpenADEClient } from "../../../openade-client/src"
 import { type OpenADEModuleAdapters, createOpenADEModule } from "../../../openade-module/src/module"
-import type { OpenADEProject, OpenADESnapshotPatchIndex, OpenADETask, OpenADETaskPreview } from "../../../openade-module/src/types"
+import type { OpenADEProject, OpenADESnapshotPatchIndex, OpenADETask, OpenADETaskPreview, OpenADETaskPreviewUsage } from "../../../openade-module/src/types"
 import { act, createElement } from "react"
 import { createRoot } from "react-dom/client"
 import { RuntimeLocalClient, type RuntimeLocalTransport } from "../../../runtime-client/src"
@@ -130,6 +130,7 @@ const gitLogCommits = [
 interface RuntimeBridgeState {
     project: OpenADEProject | null
     task: OpenADETask | null
+    taskUsage?: OpenADETaskPreviewUsage
 }
 
 function cloneProject(value: OpenADEProject): OpenADEProject {
@@ -140,7 +141,7 @@ function cloneTask(value: OpenADETask): OpenADETask {
     return structuredClone(value)
 }
 
-function taskPreviewFromTask(value: OpenADETask): OpenADETaskPreview {
+function taskPreviewFromTask(value: OpenADETask, usage?: OpenADETaskPreviewUsage): OpenADETaskPreview {
     return {
         id: value.id,
         slug: value.slug,
@@ -149,6 +150,7 @@ function taskPreviewFromTask(value: OpenADETask): OpenADETaskPreview {
         createdAt: value.createdAt ?? now,
         lastEventAt: value.lastEventAt,
         lastViewedAt: value.lastViewedAt,
+        usage,
     }
 }
 
@@ -156,7 +158,7 @@ function projectFromState(state: RuntimeBridgeState): OpenADEProject | null {
     if (!state.project) return null
     return {
         ...cloneProject(state.project),
-        tasks: state.task ? [taskPreviewFromTask(state.task)] : [],
+        tasks: state.task ? [taskPreviewFromTask(state.task, state.taskUsage)] : [],
     }
 }
 
@@ -226,6 +228,7 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
             const createdAt = params.createdAt ?? now
             state.project = { id: repoId, name: params.name, path: params.path, tasks: [] }
             state.task = null
+            state.taskUsage = undefined
             return { repoId, createdAt }
         },
         updateRepo: async (params) => {
@@ -241,6 +244,7 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
             if (!state.project || state.project.id !== params.repoId) throw new Error(`Repo ${params.repoId} not found`)
             state.project = null
             if (state.task?.repoId === params.repoId) state.task = null
+            if (!state.task) state.taskUsage = undefined
         },
         startTurn: async (params) => {
             const existingTaskId = params.inTaskId ?? state.task?.id
@@ -290,6 +294,7 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
                     events: [actionEvent],
                     comments: [],
                 }
+                state.taskUsage = undefined
             }
             return { taskId, eventId }
         },
@@ -340,6 +345,7 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
         deleteTask: async (params) => {
             requireStateTask(state, params.taskId)
             state.task = null
+            state.taskUsage = undefined
             return { repoId: params.repoId, taskId: params.taskId, deleted: true }
         },
         setupTaskEnvironment: async (params) => {
@@ -419,6 +425,7 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
                 queuedTurns: params.queuedTurns ?? current.queuedTurns,
                 updatedAt: params.updatedAt ?? now,
             }
+            state.taskUsage = params.usage ?? state.taskUsage
         },
         scopedHost: {
             listProjectFiles: unsupportedMutation("listProjectFiles"),
@@ -643,6 +650,47 @@ describe("CodeStore runtime product store bridge", () => {
             expect(legacyRepoRefresh).not.toHaveBeenCalled()
             expect(codeStore.tasks.getTask("task-1")?.title).toBe("Runtime mutation title")
             expect(codeStore.getTaskPreviewsForRepo("repo-1")[0]?.title).toBe("Runtime mutation title")
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("backs stats previews with runtime snapshot and backfills usage without legacy task stores", async () => {
+        const { client, runtime } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            const legacyTaskRead = vi.spyOn(codeStore, "getTaskStore")
+            const legacyRepoRefresh = vi.spyOn(codeStore, "refreshRepoStoreFromStorage")
+
+            expect(codeStore.getTaskPreviewReposForStats()).toEqual([
+                expect.objectContaining({
+                    id: "repo-1",
+                    name: "Runtime Repo",
+                    tasks: [expect.objectContaining({ id: "task-1", title: "Runtime task", usage: undefined })],
+                }),
+            ])
+
+            await codeStore.backfillTaskUsagePreview("repo-1", "task-1")
+
+            expect(legacyTaskRead).not.toHaveBeenCalled()
+            expect(legacyRepoRefresh).not.toHaveBeenCalled()
+            expect(codeStore.runtimeProductSnapshot?.repos[0]?.tasks[0]?.usage).toMatchObject({
+                usageVersion: 2,
+                eventCount: 1,
+            })
+            expect(codeStore.getTaskPreviewReposForStats()[0]?.tasks[0]?.usage).toMatchObject({
+                usageVersion: 2,
+                eventCount: 1,
+            })
         } finally {
             codeStore.disconnectAllStores()
             await runtime.close()
