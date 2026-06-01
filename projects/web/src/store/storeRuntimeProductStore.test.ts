@@ -8,7 +8,9 @@ import { RuntimeLocalClient, type RuntimeLocalTransport } from "../../../runtime
 import type { RuntimeMessage, RuntimeRecord, RuntimeRequest } from "../../../runtime-protocol/src"
 import { type RuntimeConnection, RuntimeServer } from "../../../runtime/src"
 import { analytics } from "../analytics"
+import { GitLogTray } from "../components/GitLogTray"
 import { ViewPatch } from "../components/ViewPatch"
+import { gitApi } from "../electronAPI/git"
 import { snapshotsApi } from "../electronAPI/snapshots"
 import { OpenADEProductStore } from "../kernel/productStore"
 import { CodeStoreProvider } from "./context"
@@ -103,6 +105,27 @@ const snapshotPatchIndex: OpenADESnapshotPatchIndex = {
         },
     ],
 }
+
+const gitLogCommits = [
+    {
+        sha: "abc123456789",
+        shortSha: "abc1234",
+        message: "Runtime product store commit",
+        author: "Runtime Author",
+        date: now,
+        relativeDate: "1 minute ago",
+        parentCount: 1,
+    },
+    {
+        sha: "def123456789",
+        shortSha: "def1234",
+        message: "Previous runtime commit",
+        author: "Runtime Author",
+        date: now,
+        relativeDate: "2 minutes ago",
+        parentCount: 1,
+    },
+]
 
 interface RuntimeBridgeState {
     project: OpenADEProject | null
@@ -415,7 +438,16 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
             readTaskChanges: unsupportedMutation("readTaskChanges"),
             readTaskDiff: unsupportedMutation("readTaskDiff"),
             readTaskFilePair: unsupportedMutation("readTaskFilePair"),
-            readTaskGitLog: unsupportedMutation("readTaskGitLog"),
+            readTaskGitLog: async (params) => {
+                const skip = params.skip ?? 0
+                const limit = params.limit ?? gitLogCommits.length
+                return {
+                    repoId: params.repoId,
+                    taskId: params.taskId,
+                    commits: gitLogCommits.slice(skip, skip + limit),
+                    hasMore: gitLogCommits.length > skip + limit,
+                }
+            },
             commitTaskGit: unsupportedMutation("commitTaskGit"),
             readTaskSnapshotPatch: async (params) => {
                 const { patchFileId, patch } = snapshotPatchForEvent(params.snapshotEvent)
@@ -791,6 +823,68 @@ describe("CodeStore runtime product store bridge", () => {
             ])
             expect(legacyTaskStoreRead).not.toHaveBeenCalled()
         } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("routes classic git log commit reads through the runtime product store", async () => {
+        const { client, runtime } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const branchRead = vi.spyOn(gitApi, "listBranches").mockResolvedValue({
+            branches: [{ name: "main", isDefault: true, isRemote: false }],
+            defaultBranch: "main",
+        })
+        const worktreeRead = vi.spyOn(gitApi, "listWorkTrees").mockResolvedValue({ worktrees: [] })
+        const legacyLogRead = vi.spyOn(gitApi, "getLog").mockRejectedValue(new Error("legacy git log read should not be used"))
+        const legacyCommitFilesRead = vi.spyOn(gitApi, "getCommitFiles").mockResolvedValue({ files: [] })
+        const runtimeGitLogRead = vi.spyOn(codeStore, "readProductTaskGitLog")
+        ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+        const container = document.createElement("div")
+        document.body.appendChild(container)
+        const root = createRoot(container)
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+
+            await act(async () => {
+                root.render(
+                    createElement(
+                        CodeStoreProvider,
+                        { store: codeStore },
+                        createElement(GitLogTray, {
+                            taskId: "task-1",
+                            workDir: "/tmp/runtime-repo",
+                            currentBranch: "main",
+                            className: "h-full",
+                        })
+                    )
+                )
+            })
+
+            await vi.waitFor(() => {
+                expect(container.textContent).toContain("Runtime product store commit")
+                expect(runtimeGitLogRead).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1", ref: "HEAD", limit: 50, skip: 0 })
+            })
+            expect(branchRead).toHaveBeenCalled()
+            expect(worktreeRead).toHaveBeenCalled()
+            expect(legacyCommitFilesRead).toHaveBeenCalled()
+            expect(legacyLogRead).not.toHaveBeenCalled()
+        } finally {
+            act(() => root.unmount())
+            container.remove()
+            runtimeGitLogRead.mockRestore()
+            branchRead.mockRestore()
+            worktreeRead.mockRestore()
+            legacyLogRead.mockRestore()
+            legacyCommitFilesRead.mockRestore()
             codeStore.disconnectAllStores()
             await runtime.close()
         }

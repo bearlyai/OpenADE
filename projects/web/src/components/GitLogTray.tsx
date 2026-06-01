@@ -31,6 +31,7 @@ const GENERATED_FILE_BASENAMES = new Set([
 ])
 
 interface GitLogTrayProps {
+    taskId: string
     workDir: string
     currentBranch: string | null
     className?: string
@@ -100,7 +101,7 @@ function buildScopeOptions(workDir: string, branches: { name: string }[], worktr
     return [...branchOptions, ...worktreeOptions]
 }
 
-export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch, className }: GitLogTrayProps) {
+export const GitLogTray = observer(function GitLogTray({ taskId, workDir, currentBranch, className }: GitLogTrayProps) {
     const codeStore = useCodeStore()
 
     const [renderLargeDiffKey, setRenderLargeDiffKey] = useState<string | null>(null)
@@ -132,6 +133,8 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
     const patchContextLines = getPatchContextLines(diffContext)
     const patchDiffStyle = viewMode === "split" ? "split" : "unified"
     const shouldLoadFilePair = viewMode === "current"
+    const runtimeRepoId = codeStore.tasks.getTask(taskId)?.repoId ?? codeStore.findRuntimeProductRepoIdForTask(taskId)
+    const runtimeProductReadsActive = codeStore.shouldUseRuntimeProductReads()
     const setDiffContext = (context: typeof diffContext) => {
         if (viewMode !== "current") {
             setPatchLoading(true)
@@ -285,12 +288,21 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
 
         async function loadLog(scopeValue: ScopeOption) {
             try {
-                const result = await gitApi.getLog({
-                    workDir: scopeValue.workDir,
-                    ref: scopeValue.ref,
-                    limit: PAGE_SIZE,
-                    skip: 0,
-                })
+                const result =
+                    runtimeProductReadsActive && runtimeRepoId && scopeValue.workDir === workDir
+                        ? await codeStore.readProductTaskGitLog({
+                              repoId: runtimeRepoId,
+                              taskId,
+                              ref: scopeValue.ref,
+                              limit: PAGE_SIZE,
+                              skip: 0,
+                          })
+                        : await gitApi.getLog({
+                              workDir: scopeValue.workDir,
+                              ref: scopeValue.ref,
+                              limit: PAGE_SIZE,
+                              skip: 0,
+                          })
                 if (cancelled) return
                 setCommits(result.commits)
                 setHasMore(result.hasMore)
@@ -318,7 +330,7 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
         return () => {
             cancelled = true
         }
-    }, [selectedScope])
+    }, [codeStore, runtimeProductReadsActive, runtimeRepoId, selectedScope, taskId, workDir])
 
     useEffect(() => {
         const scope = selectedScope
@@ -516,12 +528,21 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
 
         setLoadingMore(true)
         try {
-            const result = await gitApi.getLog({
-                workDir: selectedScope.workDir,
-                ref: selectedScope.ref,
-                limit: PAGE_SIZE,
-                skip: commits.length,
-            })
+            const result =
+                runtimeProductReadsActive && runtimeRepoId && selectedScope.workDir === workDir
+                    ? await codeStore.readProductTaskGitLog({
+                          repoId: runtimeRepoId,
+                          taskId,
+                          ref: selectedScope.ref,
+                          limit: PAGE_SIZE,
+                          skip: commits.length,
+                      })
+                    : await gitApi.getLog({
+                          workDir: selectedScope.workDir,
+                          ref: selectedScope.ref,
+                          limit: PAGE_SIZE,
+                          skip: commits.length,
+                      })
             setCommits((previous) => [...previous, ...result.commits])
             setHasMore(result.hasMore)
         } catch (error) {
@@ -542,7 +563,7 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
                 return <div className="flex items-center justify-center py-12 text-muted text-sm">Loading file...</div>
             }
             if (selectedFile.binary) {
-                return <div className="flex items-center justify-center py-12 text-muted text-sm">Binary file — cannot display diff</div>
+                return <div className="flex items-center justify-center py-12 text-muted text-sm">Binary file: cannot display diff</div>
             }
             if (deferLargeDiff && filePatch) {
                 return (
@@ -571,7 +592,7 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
                             <div className="px-3 py-2 border-b border-border bg-base-200 text-xs text-muted">
                                 {filePatch.truncated
                                     ? `Large diff preview truncated to keep rendering responsive (${filePatch.stats.changedLines} changed lines)`
-                                    : `Large diff — simplified rendering enabled (${filePatch.stats.changedLines} changed lines)`}
+                                    : `Large diff: simplified rendering enabled (${filePatch.stats.changedLines} changed lines)`}
                             </div>
                         )}
                         <FileDiffViewer
@@ -594,7 +615,7 @@ export const GitLogTray = observer(function GitLogTray({ workDir, currentBranch,
             return <div className="flex items-center justify-center py-12 text-muted text-sm">Loading file...</div>
         }
         if (selectedFile.binary) {
-            return <div className="flex items-center justify-center py-12 text-muted text-sm">Binary file — cannot display diff</div>
+            return <div className="flex items-center justify-center py-12 text-muted text-sm">Binary file: cannot display diff</div>
         }
         if (filePair?.tooLarge) {
             return <div className="flex items-center justify-center py-12 text-muted text-sm">File too large to diff</div>

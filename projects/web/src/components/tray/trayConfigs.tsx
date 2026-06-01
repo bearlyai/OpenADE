@@ -100,7 +100,7 @@ export const TRAY_CONFIGS: TrayConfig[] = [
             if (!env?.taskWorkingDir) {
                 return <NoEnvironment />
             }
-            return <GitLogTray workDir={env.taskWorkingDir} currentBranch={tray.taskModel.gitStatus?.branch ?? null} className="h-full" />
+            return <GitLogTray taskId={tray.taskId} workDir={env.taskWorkingDir} currentBranch={tray.taskModel.gitStatus?.branch ?? null} className="h-full" />
         },
     },
     {
