@@ -4,6 +4,8 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { _electron as electron, expect, test } from "@playwright/test"
 
+const SMOKE_ANALYTICS_STORAGE_KEY = "openade-smoke-analytics-events"
+
 const candidateBinaryPaths = () => {
     const dist = resolve(__dirname, "..", "dist", "electron")
     if (process.platform === "darwin") {
@@ -30,6 +32,17 @@ const resolveBinary = (): string => {
     throw new Error(
         `Could not find a packaged OpenADE binary. Run electron-builder first, or set OPENADE_SMOKE_BINARY. Looked in: ${candidateBinaryPaths().join(", ")}`
     )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function parseSmokeTelemetryEvents(raw: string): Array<Record<string, unknown>> {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) throw new Error("Smoke telemetry is not an array")
+    if (!parsed.every(isRecord)) throw new Error("Smoke telemetry contains a non-object event")
+    return parsed
 }
 
 test("packaged app launches and loads the bundled web UI", async () => {
@@ -382,6 +395,20 @@ test("packaged app launches and loads the bundled web UI", async () => {
         await expect(classicTask).toContainText("Summarize the packaged workflow smoke state")
         await expect(relaunched.page.locator('[data-openade-surface="desktop-shared-project"]')).toHaveCount(0)
         await expect(relaunched.page.locator('[data-openade-surface="desktop-shared-task"]')).toHaveCount(0)
+
+        const rawSmokeTelemetry = await relaunched.page.evaluate((storageKey) => window.localStorage.getItem(storageKey), SMOKE_ANALYTICS_STORAGE_KEY)
+        if (!rawSmokeTelemetry) throw new Error("Packaged smoke did not capture renderer analytics telemetry")
+        const smokeTelemetry = parseSmokeTelemetryEvents(rawSmokeTelemetry)
+        expect(smokeTelemetry.some((event) => event.event_type === "app_opened")).toBe(true)
+        const telemetryPath = join(userDataDir, "runtime-product-smoke-telemetry.ndjson")
+        writeFileSync(telemetryPath, `${smokeTelemetry.map((event) => JSON.stringify(event)).join("\n")}\n`)
+        const reviewOutput = execFileSync("npm", ["run", "review:runtime-product-rollout", "--", telemetryPath], {
+            cwd: resolve(__dirname, "..", "..", "web"),
+            encoding: "utf8",
+        })
+        expect(reviewOutput).toContain("Runtime product rollout review: PASS")
+        await test.info().attach("runtime-product-smoke-telemetry.ndjson", { path: telemetryPath, contentType: "application/x-ndjson" })
+        await test.info().attach("runtime-product-rollout-review.txt", { body: Buffer.from(reviewOutput), contentType: "text/plain" })
         passed = true
     } finally {
         if (app) {

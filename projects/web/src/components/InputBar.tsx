@@ -3,14 +3,14 @@ import { Tooltip } from "@base-ui-components/react/tooltip"
 import cx from "classnames"
 import { ExternalLink, GitBranch, ImagePlus, Plug, X } from "lucide-react"
 import { observer } from "mobx-react"
-import { useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react"
+import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef } from "react"
 import { Z_INDEX } from "../constants"
 import { onFocusInputShortcut } from "../electronAPI/app"
 import type { GitSummaryResponse } from "../electronAPI/git"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { openUrlInNativeBrowser } from "../electronAPI/shell"
-import { usePortalContainer } from "../hooks/usePortalContainer"
 import { resetMetaKeyPressed } from "../hooks/useMetaKeyPressed"
+import { usePortalContainer } from "../hooks/usePortalContainer"
 import { useShortcutHintsVisible } from "../hooks/useShortcutHintsVisible"
 import type { ThinkingLevel } from "../store/TaskModel"
 import type { Command, InputManager } from "../store/managers/InputManager"
@@ -25,15 +25,15 @@ import {
     onKeyboardNavigationSettled,
     shouldSuppressEditorAutoFocusForKeyboardNavigation,
 } from "../utils/keyboardShortcuts"
+import { FastModeToggle } from "./FastModeToggle"
 import { HarnessPicker } from "./HarnessPicker"
 import { ModelPicker } from "./ModelPicker"
 import { SmartEditor, type SmartEditorRef } from "./SmartEditor"
 import { ThinkingPicker } from "./ThinkingPicker"
 import { CommentsSection } from "./events/CommentsSection"
-import { FastModeToggle } from "./FastModeToggle"
 import { TaskMcpSelector } from "./mcp/TaskMcpSelector"
-import { ShortcutBadge } from "./ui"
 import { TrayButtons, TraySlideOut, getTrayConfig } from "./tray"
+import { ShortcutBadge } from "./ui"
 
 // Button variant styles
 const BUTTON_BASE = "btn flex items-center justify-center h-9 text-sm font-medium transition-all duration-100 whitespace-nowrap shrink-0"
@@ -161,7 +161,6 @@ export const InputBar = observer(function InputBar({
     hideTray = false,
     enabledMcpServerIds,
     onMcpServerIdsChange,
-    onCommandExecute,
     autoFocusKey,
 }: {
     input: InputManager
@@ -190,7 +189,6 @@ export const InputBar = observer(function InputBar({
     hideTray?: boolean
     enabledMcpServerIds?: string[]
     onMcpServerIdsChange?: (serverIds: string[]) => void
-    onCommandExecute?: (commandId: string) => Promise<boolean> | boolean
     autoFocusKey?: string
 }) {
     const portalContainer = usePortalContainer()
@@ -206,11 +204,9 @@ export const InputBar = observer(function InputBar({
     const executeCommand = useCallback(
         async (id: string) => {
             tray.close()
-            const handled = await onCommandExecute?.(id)
-            if (handled === true) return
             await input.runCommand(id)
         },
-        [input, onCommandExecute, tray]
+        [input, tray]
     )
     const focusEditorAtEnd = useCallback(() => {
         if (input.isDisabled) return

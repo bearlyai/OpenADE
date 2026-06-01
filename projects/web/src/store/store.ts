@@ -6,7 +6,7 @@ import { DEFAULT_HARNESS_ID, DEFAULT_MODEL, MODEL_REGISTRY, getDefaultModelForHa
 import { getDeviceConfig, setDeviceId as setDeviceConfigDeviceId, setTelemetryDisabled } from "../electronAPI/deviceConfig"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { setGlobalEnv } from "../electronAPI/subprocess"
-import { isDesktopSharedTaskScreenEnabled, isRuntimeBackedProductStoreEnabled } from "../featureFlags"
+import { isRuntimeBackedProductStoreEnabled } from "../featureFlags"
 import { crossReviewStrategy, ensembleStrategy, peerReviewStrategy, standardStrategy } from "../hyperplan/strategies"
 import type { AgentCouplet, HyperPlanStrategy } from "../hyperplan/types"
 import { OpenADEProductStore } from "../kernel/productStore"
@@ -49,7 +49,6 @@ export interface CodeStoreConfig {
     getCurrentUser: () => User
     navigateToTask: (workspaceId: string, taskId: string) => void
     enableRuntimeProductStore?: boolean
-    enableDesktopSharedTaskScreen?: boolean
     runtimeProductStoreFactory?: () => OpenADEProductStore
     runtimeNotificationSource?: RuntimeNotificationSource
 }
@@ -404,7 +403,7 @@ export class CodeStore {
         return {
             source,
             enabled: this.shouldEnableRuntimeProductStore(),
-            desktopSharedTaskScreenEnabled: this.config.enableDesktopSharedTaskScreen ?? isDesktopSharedTaskScreenEnabled,
+            desktopSharedTaskScreenEnabled: false,
             status: this.runtimeProductStoreStatus,
             hasSnapshot: snapshot !== null,
             repoCount: snapshot?.repos.length ?? 0,
@@ -586,11 +585,6 @@ export class CodeStore {
         return this.runtimeProductSnapshot !== null
     }
 
-    shouldUseDesktopSharedTaskScreen(): boolean {
-        const enabled = this.config.enableDesktopSharedTaskScreen ?? isDesktopSharedTaskScreenEnabled
-        return enabled && this.shouldUseRuntimeProductReads()
-    }
-
     getRuntimeProductProject(repoId: string): OpenADEProject | null {
         return this.runtimeProductSnapshot?.repos.find((repo) => repo.id === repoId) ?? null
     }
@@ -728,7 +722,7 @@ export class CodeStore {
             runtimeProductStoreEnabled: this.shouldEnableRuntimeProductStore(),
             runtimeProductStoreStatus: this.runtimeProductStoreStatus,
             runtimeProductStoreHasSnapshot: this.runtimeProductSnapshot !== null,
-            desktopSharedTaskScreenEnabled: this.config.enableDesktopSharedTaskScreen ?? isDesktopSharedTaskScreenEnabled,
+            desktopSharedTaskScreenEnabled: false,
         })
 
         this.telemetryReactionDisposer = reaction(

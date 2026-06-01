@@ -4,9 +4,11 @@
 
 - `tests/smoke.spec.ts` drives the packaged app artifact, not the dev server. Rebuild with `npm run build`, `npm run build:web`, and `NONOTARY=1 CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir` before trusting smoke results after main/preload/web changes.
 - Packaged smoke is expected to cover bundled UI boot, runtime IPC initialization, repo creation, task workflow/reload, scoped file operations, and scoped project process list/start/reconnect-output/stop through the built Electron host.
+- Packaged desktop smoke must keep proving the classic desktop UI path. The migration target is classic desktop look/functionality over runtime APIs, not rendering the compact remote/mobile shell in Electron.
 - Smoke tests may set `OPENADE_SMOKE_TEST=1` and `OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER=1` so active-work quit/beforeunload prompts do not block Playwright teardown. Do not disable those blockers in normal app launches.
 - Packaged smoke must set `OPENADE_YJS_STORAGE_DIR` to its temp user-data directory. `HOME`/`USERPROFILE` isolation alone is not enough to prove the packaged app is avoiding the developer's normal `~/.openade/data/yjs` documents.
 - The smoke harness may use `OPENADE_SMOKE_DETERMINISTIC_HARNESS=1`; keep it guarded by `OPENADE_SMOKE_TEST=1` and limit it to deterministic packaged workflow coverage.
+- In smoke mode, the preload exposes `openadeAPI.app.smokeTest` so the renderer records real analytics `track()` calls to local storage. `tests/smoke.spec.ts` must run `projects/web`'s `review:runtime-product-rollout` command against that export, proving the packaged classic desktop route emits a ready default-on `app_opened` and no runtime product fallback/error telemetry.
 
 ## Linux Startup Stability
 

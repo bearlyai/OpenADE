@@ -13,6 +13,30 @@ const AMPLITUDE_API_KEY = "5d0f1a208211c73ed80e48f89f4d9b5a"
 // Sentry DSN - safe to expose (only allows sending events, not reading)
 const SENTRY_DSN = "https://b4bc0904eefb535e3f528d7722b3e7f8@o4510828830720000.ingest.us.sentry.io/4510828832227328"
 
+const SMOKE_ANALYTICS_STORAGE_KEY = "openade-smoke-analytics-events"
+
+function smokeTelemetryEvents(raw: string | null): unknown[] {
+    if (!raw) return []
+
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+}
+
+function recordSmokeAnalyticsEvent(event: string, properties: Record<string, unknown> | undefined): void {
+    if (typeof window === "undefined" || !window.openadeAPI?.app.smokeTest) return
+
+    try {
+        const events = smokeTelemetryEvents(window.localStorage.getItem(SMOKE_ANALYTICS_STORAGE_KEY))
+        events.push({
+            event_type: event,
+            event_properties: properties ?? {},
+        })
+        window.localStorage.setItem(SMOKE_ANALYTICS_STORAGE_KEY, JSON.stringify(events))
+    } catch (err) {
+        console.warn("[Analytics] Failed to record smoke telemetry:", err)
+    }
+}
+
 export class AnalyticsProviderImpl implements AnalyticsProvider {
     private enabled = true
     private initialized = false
@@ -53,6 +77,7 @@ export class AnalyticsProviderImpl implements AnalyticsProvider {
         if (!this.enabled || !this.initialized) return
 
         amplitude.track(event, properties)
+        recordSmokeAnalyticsEvent(event, properties)
         console.debug("[Analytics] Track:", event, properties)
     }
 

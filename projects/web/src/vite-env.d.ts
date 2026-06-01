@@ -5,6 +5,7 @@
 interface OpenADEAPI {
     app: {
         activeWorkUnloadBlockerDisabled?: boolean
+        smokeTest?: boolean
         quit: () => Promise<void>
         openUrl: (url: string) => Promise<void>
         applyUpdate: () => Promise<void>

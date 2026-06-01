@@ -8,7 +8,7 @@
  * All IPC communication MUST go through the exposed openadeAPI.
  */
 
-import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron"
+import { type IpcRendererEvent, contextBridge, ipcRenderer } from "electron"
 
 // Helper to create event listener with cleanup
 const createListener = (channel: string, callback: (...args: unknown[]) => void) => {
@@ -21,8 +21,8 @@ function envFlag(value: string | undefined): boolean {
     return value === "1" || value === "true" || value === "yes" || value === "on"
 }
 
-const activeWorkUnloadBlockerDisabled =
-    envFlag(process.env.OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER) || envFlag(process.env.OPENADE_SMOKE_TEST)
+const activeWorkUnloadBlockerDisabled = envFlag(process.env.OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER) || envFlag(process.env.OPENADE_SMOKE_TEST)
+const smokeTest = envFlag(process.env.OPENADE_SMOKE_TEST)
 
 const openadeAPI = {
     // ========================================================================
@@ -30,18 +30,16 @@ const openadeAPI = {
     // ========================================================================
     app: {
         activeWorkUnloadBlockerDisabled,
+        smokeTest,
         quit: () => ipcRenderer.invoke("quit-app"),
         openUrl: (url: string) => ipcRenderer.invoke("open-url", url),
         applyUpdate: () => ipcRenderer.invoke("apply-update"),
         forceEnableDevTools: () => ipcRenderer.invoke("force-enable-dev-tools"),
         isWindowedWithFrame: () => ipcRenderer.invoke("is-windowed-with-frame"),
         setTerminalKeyboardCapture: (captured: boolean) => ipcRenderer.invoke("app:set-terminal-keyboard-capture", captured),
-        onUpdateAvailable: (cb: () => void) =>
-            createListener("app:update-available", cb as (...args: unknown[]) => void),
-        onUpdateError: (cb: () => void) =>
-            createListener("app:update-error", cb as (...args: unknown[]) => void),
-        onFocusInputShortcut: (cb: () => void) =>
-            createListener("app:focus-input-shortcut", cb as (...args: unknown[]) => void),
+        onUpdateAvailable: (cb: () => void) => createListener("app:update-available", cb as (...args: unknown[]) => void),
+        onUpdateError: (cb: () => void) => createListener("app:update-error", cb as (...args: unknown[]) => void),
+        onFocusInputShortcut: (cb: () => void) => createListener("app:focus-input-shortcut", cb as (...args: unknown[]) => void),
         retryUpdateCheck: () => ipcRenderer.invoke("retry-update-check"),
     },
 
@@ -108,10 +106,8 @@ const openadeAPI = {
         connect: () => ipcRenderer.invoke("runtime:connect"),
         disconnect: () => ipcRenderer.invoke("runtime:disconnect"),
         request: (request: unknown) => ipcRenderer.invoke("runtime:request", request),
-        onMessage: (cb: (message: unknown) => void) =>
-            createListener("runtime:message", cb as (...args: unknown[]) => void),
+        onMessage: (cb: (message: unknown) => void) => createListener("runtime:message", cb as (...args: unknown[]) => void),
     },
-
 }
 
 // Expose the API to the renderer

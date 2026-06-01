@@ -515,20 +515,6 @@ async function waitForText(container: HTMLElement, expected: string): Promise<vo
     )
 }
 
-function setTextareaValue(textarea: HTMLTextAreaElement, value: string): void {
-    const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set
-    if (!valueSetter) throw new Error("HTMLTextAreaElement value setter is unavailable")
-    valueSetter.call(textarea, value)
-    textarea.dispatchEvent(new Event("input", { bubbles: true }))
-}
-
-function setInputValue(input: HTMLInputElement, value: string): void {
-    const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set
-    if (!valueSetter) throw new Error("HTMLInputElement value setter is unavailable")
-    valueSetter.call(input, value)
-    input.dispatchEvent(new Event("input", { bubbles: true }))
-}
-
 function clickElement(element: HTMLElement): void {
     element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }))
 }
@@ -719,96 +705,7 @@ describe("Code routes with runtime product reads", () => {
         }
     })
 
-    it("renders the shared task shell on the desktop route when the runtime shared-screen gate is enabled", async () => {
-        const startedTurns: OpenADETurnStartRequest[] = []
-        cleanupOpenADEApi = installOpenADEApiRuntimeBridge(createRouteRuntimeServer({ onStartTurn: (params) => startedTurns.push(params) }))
-        const codeStore = new CodeStore({
-            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
-            navigateToTask: () => undefined,
-            enableRuntimeProductStore: true,
-            enableDesktopSharedTaskScreen: true,
-        })
-        try {
-            await codeStore.initializeRuntimeProductStore()
-            codeStore.storeInitialized = true
-            codeStore.tasks.ensureTasksLoaded("repo-1")
-
-            const router = createElement(
-                MemoryRouter,
-                { initialEntries: ["/dashboard/code/workspace/repo-1/task/task-1"] },
-                createElement(
-                    Routes,
-                    null,
-                    createElement(Route, { path: "/dashboard/code/workspace/:workspaceId/task/:taskId", element: createElement(CodeWorkspaceTaskRoute) })
-                )
-            )
-            root.render(createElement(CodeStoreProvider, { store: codeStore }, router))
-            await new Promise((resolve) => window.setTimeout(resolve, 50))
-
-            await waitForText(container, "Runtime route task")
-            await waitForText(container, "Do the runtime-backed work")
-            await waitForText(container, "Review Plan")
-            await waitForText(container, "No changes.")
-            expect(findButtonByTitle(container, "Attach image")).toBeInstanceOf(HTMLButtonElement)
-            clickElement(findButtonByTitlePrefix(container, "Files"))
-            await vi.waitFor(() => {
-                const filesSearch = Array.from(container.querySelectorAll("input")).find((input) => input.placeholder === "Search files...")
-                expect(filesSearch).toBeInstanceOf(HTMLInputElement)
-            })
-            clickElement(findButtonByTitle(container, "MCP connectors"))
-            await waitForText(container, "No connectors")
-
-            const titleInput = Array.from(container.querySelectorAll("input")).find((input) => input.value === "Runtime route task")
-            if (!(titleInput instanceof HTMLInputElement)) throw new Error("Shared task title input was not rendered")
-            setInputValue(titleInput, "Shared shell title")
-            const saveTitleButton = findButtonByText(container, "Save")
-            await vi.waitFor(() => expect(saveTitleButton.disabled).toBe(false), { timeout: 1000, interval: 10 })
-            clickElement(saveTitleButton)
-            await waitForText(container, "Shared shell title")
-
-            clickElement(findButtonByText(container, "Close"))
-            await waitForText(container, "Reopen")
-            clickElement(findButtonByText(container, "Reopen"))
-            await vi.waitFor(() => expect(findButtonByText(container, "Close")).toBeInstanceOf(HTMLButtonElement), { timeout: 1000, interval: 10 })
-
-            const commentInput = Array.from(container.querySelectorAll("input")).find((input) => input.placeholder === "Add a comment")
-            if (!(commentInput instanceof HTMLInputElement)) throw new Error("Shared task comment input was not rendered")
-            setInputValue(commentInput, "Shared shell comment")
-            const addCommentButton = findButtonByText(container, "Add")
-            await vi.waitFor(() => expect(addCommentButton.disabled).toBe(false), { timeout: 1000, interval: 10 })
-            clickElement(addCommentButton)
-            await waitForText(container, "Shared shell comment")
-
-            const reviewInput = Array.from(container.querySelectorAll("textarea")).find((textarea) => textarea.placeholder === "Optional review notes")
-            if (!(reviewInput instanceof HTMLTextAreaElement)) throw new Error("Shared task review textarea was not rendered")
-            setTextareaValue(reviewInput, "Shared shell review notes")
-            clickElement(findButtonByText(container, "Review Plan"))
-            await waitForText(container, "Shared shell review notes")
-
-            clickElement(findButtonByTitle(container, "Fast mode"))
-            codeStore.smartEditors.getManager("task-task-1", "repo-1").setValue("Shared shell turn")
-            const doButton = findButtonByTitlePrefix(container, "Do")
-            await vi.waitFor(() => expect(doButton.disabled).toBe(false), { timeout: 1000, interval: 10 })
-            clickElement(doButton)
-
-            await vi.waitFor(() => expect(startedTurns).toHaveLength(1), { timeout: 1000, interval: 10 })
-            expect(startedTurns[0]).toMatchObject({
-                repoId: "repo-1",
-                inTaskId: "task-1",
-                input: "Shared shell turn",
-                harnessId: "codex",
-                modelId: routeModelId,
-                thinking: "max",
-                fastMode: true,
-                enabledMcpServerIds: [],
-            })
-            await waitForText(container, "Shared shell turn")
-        } finally {
-            codeStore.disconnectAllStores()
-        }
-    })
-
-    it("runs the shared desktop workflow through runtime commands and reloads the runtime-backed state", async () => {
+    it("runs the classic desktop workflow through runtime commands and reloads the runtime-backed state", async () => {
         const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
         const startedTurns: OpenADETurnStartRequest[] = []
         const server = createRouteRuntimeServer({ onStartTurn: (params) => startedTurns.push(params) })
@@ -820,7 +717,6 @@ describe("Code routes with runtime product reads", () => {
                 getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
                 navigateToTask: () => undefined,
                 enableRuntimeProductStore: true,
-                enableDesktopSharedTaskScreen: true,
             })
             stores.push(codeStore)
             await codeStore.initializeRuntimeProductStore()
@@ -861,9 +757,11 @@ describe("Code routes with runtime product reads", () => {
             renderTaskRoute(codeStore)
             await new Promise((resolve) => window.setTimeout(resolve, 50))
             await waitForText(container, "Runtime route task")
+            expect(container.querySelector('[data-openade-surface="desktop-classic-task"]')).toBeInstanceOf(HTMLElement)
+            expect(container.querySelector('[data-openade-surface="desktop-shared-task"]')).toBeNull()
 
-            await runRichCommand(codeStore, "Plan", "Shared workflow plan")
-            await waitForText(container, "Shared workflow plan")
+            await runRichCommand(codeStore, "Plan", "Classic workflow plan")
+            await waitForText(container, "Classic workflow plan")
             await vi.waitFor(() => {
                 expect(codeStore.runtimeProductSnapshot?.repos.map((repo) => repo.id)).toEqual(["repo-1"])
                 expect(codeStore.repos.getRepo("repo-1")).toBeDefined()
@@ -871,14 +769,14 @@ describe("Code routes with runtime product reads", () => {
                 expect(codeStore.tasks.getTaskModel("task-1")?.hasActivePlan).toBe(true)
             })
 
-            await runRichCommand(codeStore, "Revise Plan", "Shared workflow revision")
-            await waitForText(container, "Shared workflow revision")
+            await runRichCommand(codeStore, "Revise Plan", "Classic workflow revision")
+            await waitForText(container, "Classic workflow revision")
 
             await runRichCommand(codeStore, "Run Plan")
             await waitForText(container, "Run Plan")
 
-            await runRichCommand(codeStore, "Ask", "Shared workflow question")
-            await waitForText(container, "Shared workflow question")
+            await runRichCommand(codeStore, "Ask", "Classic workflow question")
+            await waitForText(container, "Classic workflow question")
 
             clickElement(findButtonByText(container, "Close"))
             await waitForText(container, "Reopen")
@@ -893,9 +791,9 @@ describe("Code routes with runtime product reads", () => {
 
             const reloadedStore = await createStore()
             renderTaskRoute(reloadedStore)
-            await waitForText(container, "Shared workflow plan")
-            await waitForText(container, "Shared workflow revision")
-            await waitForText(container, "Shared workflow question")
+            await waitForText(container, "Classic workflow plan")
+            await waitForText(container, "Classic workflow revision")
+            await waitForText(container, "Classic workflow question")
             expect(reloadedStore.tasks.getTask("task-1")?.closed).toBe(false)
             expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
             expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_error", expect.anything())

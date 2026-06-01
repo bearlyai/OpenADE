@@ -8,7 +8,6 @@ import { getLastViewed } from "./constants"
 import { isCodeModuleAvailable } from "./electronAPI/capabilities"
 import { isCompanionFeatureEnabled } from "./featureFlags"
 import { CodeLayout, type CodeLayoutProps } from "./layout/CodeLayout"
-import { DesktopSharedTaskPage } from "./pages/DesktopSharedTaskPage"
 import { OnboardingPage } from "./pages/OnboardingPage"
 import { TaskCreateDraftsMenu, TaskCreatePage } from "./pages/TaskCreatePage"
 import { TaskCreationPage } from "./pages/TaskCreationPage"
@@ -310,7 +309,6 @@ export const CodeWorkspaceTaskRoute = observer(() => {
     )
     const navbarIcon = <ListTodo size="1.25rem" className="text-muted" />
     const navbarRight = taskModel ? <TaskStatsBar taskModel={taskModel} /> : undefined
-    const useSharedTaskScreen = codeStore.shouldUseDesktopSharedTaskScreen()
 
     // Workspace not found
     if (!repo) {
@@ -339,11 +337,7 @@ export const CodeWorkspaceTaskRoute = observer(() => {
 
     return (
         <Layout workspaceId={workspaceId} taskId={taskId} title={navbarTitle} icon={navbarIcon} navbarRight={navbarRight}>
-            {useSharedTaskScreen ? (
-                <DesktopSharedTaskPage workspaceId={workspaceId} taskId={taskId} />
-            ) : (
-                <TaskPage workspaceId={workspaceId} taskId={taskId} taskModel={taskModel} />
-            )}
+            <TaskPage workspaceId={workspaceId} taskId={taskId} taskModel={taskModel} />
         </Layout>
     )
 })

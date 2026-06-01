@@ -6,7 +6,8 @@ Thin Capacitor shell for the OpenADE remote-control surface.
 
 - Ship iOS first; keep the code path Android-capable where possible.
 - The mobile app does not run OpenADE. It pairs to a desktop host and renders the shared remote shell from `projects/web/src/remote`.
-- Mobile is not a separate product UI. Keep it as a thin Capacitor host for QR scanning, secure storage, OTA readiness, safe-area constraints, and the same remote/shared OpenADE shell used by browser remote surfaces.
+- Mobile is not a separate product UI and is not the product design source. Keep it as a thin Capacitor host for QR scanning, secure storage, OTA readiness, safe-area constraints, and the same remote/shared OpenADE shell used by browser remote surfaces.
+- The classic desktop UI is canonical. Because mobile is not production-critical yet, mobile/remote screens may be removed or rebuilt around desktop-derived shared components when that is cleaner than preserving the current companion UI.
 - Support multiple paired OpenADE sessions on one device.
 - Pairing is QR or paste of a normal HTTP URL. Do not use custom app deep links for pairing.
 - Store paired host config and device tokens through capacitor-secure-storage-plugin so iOS uses Keychain.
@@ -16,6 +17,7 @@ Thin Capacitor shell for the OpenADE remote-control surface.
 - Follow projects/web/src/_docs/design.md and projects/web/src/tw.css.
 - The visual language should match the desktop code module: flat, square, clean, spacious.
 - Do not add rounded corners. Avoid mobile card aesthetics that diverge from desktop.
+- Do not introduce mobile-first visual patterns that would be inappropriate on desktop; adapt desktop-derived components to mobile constraints instead.
 - Use semantic theme tokens from the code module only.
 - Buttons must use the btn class. Inputs and textareas must use the input class.
 - The default shell theme setting is "desktop", which follows snapshot.server.theme.className from the connected host.
