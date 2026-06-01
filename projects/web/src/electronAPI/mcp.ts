@@ -5,59 +5,34 @@
  * Communicates with the local runtime protocol bridge.
  */
 
-import type { McpOAuthTokens, McpServerItem } from "../persistence/mcpServerStore"
+import type {
+    McpCancelOAuthParams,
+    McpCancelOAuthResponse,
+    McpHttpServerConfig,
+    McpInitiateOAuthParams,
+    McpInitiateOAuthResponse,
+    McpOAuthCompleteResult,
+    McpOAuthTokens,
+    McpRefreshOAuthParams,
+    McpRefreshOAuthResponse,
+    McpServerConfig,
+    McpStdioServerConfig,
+    McpTestConnectionResponse,
+} from "@openade/harness/browser"
+import type { McpServerItem } from "../persistence/mcpServerStore"
 import { localRuntimeClient } from "../runtime/localRuntimeClient"
-import type { McpHttpServerConfig, McpServerConfig, McpStdioServerConfig } from "./harnessEventTypes"
 
 // Re-export types for convenience
 export type { McpServerConfig, McpStdioServerConfig, McpHttpServerConfig }
 
-// ============================================================================
-// Type Definitions
-// IMPORTANT: Keep in sync with projects/electron/src/modules/code/mcp.ts
-// ============================================================================
-
-export interface TestMcpConnectionResponse {
-    success: boolean
-    error?: string
-    requiresAuth?: boolean
-    authDetails?: {
-        resourceMetadataUrl?: string
-        scope?: string
-    }
-}
-
-export interface InitiateMcpOAuthParams {
-    serverId: string
-    serverUrl: string // MCP server URL - OAuth endpoints are discovered automatically
-}
-
-export interface InitiateMcpOAuthResponse {
-    success: boolean
-    error?: string
-}
-
-export interface CancelMcpOAuthParams {
-    serverId: string
-}
-
-export interface CancelMcpOAuthResponse {
-    success: boolean
-}
-
-export interface RefreshMcpOAuthParams {
-    serverId: string
-    serverUrl: string
-    refreshToken: string
-}
-
-export interface RefreshMcpOAuthResponse {
-    success: boolean
-    tokens?: McpOAuthTokens
-    error?: string
-}
-
-export type OnMcpOAuthCompleteCallback = (result: { serverId: string; tokens: McpOAuthTokens } | { serverId: string; error: string }) => void
+export type TestMcpConnectionResponse = McpTestConnectionResponse
+export type InitiateMcpOAuthParams = McpInitiateOAuthParams
+export type InitiateMcpOAuthResponse = McpInitiateOAuthResponse
+export type CancelMcpOAuthParams = McpCancelOAuthParams
+export type CancelMcpOAuthResponse = McpCancelOAuthResponse
+export type RefreshMcpOAuthParams = McpRefreshOAuthParams
+export type RefreshMcpOAuthResponse = McpRefreshOAuthResponse
+export type OnMcpOAuthCompleteCallback = (result: McpOAuthCompleteResult) => void
 
 // ============================================================================
 // API Check

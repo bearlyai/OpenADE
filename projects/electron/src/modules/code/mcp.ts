@@ -12,66 +12,29 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { URL } from "url"
 import { randomBytes, createHash } from "crypto"
 import logger from "electron-log"
+import type {
+    McpCancelOAuthParams,
+    McpCancelOAuthResponse,
+    McpInitiateOAuthParams,
+    McpInitiateOAuthResponse,
+    McpOAuthCompleteResult,
+    McpOAuthTokens,
+    McpRefreshOAuthParams,
+    McpRefreshOAuthResponse,
+    McpServerConfig,
+    McpTestConnectionParams,
+    McpTestConnectionResponse,
+} from "@openade/harness"
 
-// ============================================================================
-// Type Definitions
-// IMPORTANT: Keep in sync with projects/dashboard/src/pages/code/electronAPI/mcp.ts
-// ============================================================================
-
-export interface McpServerConfig {
-    type: "http" | "stdio"
-    // HTTP config
-    url?: string
-    headers?: Record<string, string>
-    // Stdio config (not used for connection testing here)
-    command?: string
-    args?: string[]
-    env?: Record<string, string>
-}
-
-export interface TestMcpConnectionParams {
-    config: McpServerConfig
-}
-
-export interface TestMcpConnectionResponse {
-    success: boolean
-    error?: string
-    requiresAuth?: boolean
-    authDetails?: {
-        resourceMetadataUrl?: string
-        scope?: string
-    }
-}
-
-export interface InitiateMcpOAuthParams {
-    serverId: string
-    serverUrl: string // MCP server URL - we discover OAuth endpoints from this
-}
-
-export interface InitiateMcpOAuthResponse {
-    success: boolean
-    error?: string
-}
-
-export interface CancelMcpOAuthParams {
-    serverId: string
-}
-
-export interface CancelMcpOAuthResponse {
-    success: boolean
-}
-
-export interface RefreshMcpOAuthParams {
-    serverId: string
-    serverUrl: string
-    refreshToken: string
-}
-
-export interface RefreshMcpOAuthResponse {
-    success: boolean
-    tokens?: McpOAuthTokens
-    error?: string
-}
+export type { McpServerConfig }
+export type TestMcpConnectionParams = McpTestConnectionParams
+export type TestMcpConnectionResponse = McpTestConnectionResponse
+export type InitiateMcpOAuthParams = McpInitiateOAuthParams
+export type InitiateMcpOAuthResponse = McpInitiateOAuthResponse
+export type CancelMcpOAuthParams = McpCancelOAuthParams
+export type CancelMcpOAuthResponse = McpCancelOAuthResponse
+export type RefreshMcpOAuthParams = McpRefreshOAuthParams
+export type RefreshMcpOAuthResponse = McpRefreshOAuthResponse
 
 // OAuth flow timeout (30 minutes)
 const OAUTH_TIMEOUT_MS = 30 * 60 * 1000
@@ -92,18 +55,7 @@ interface DynamicClientRegistrationResponse {
     client_secret_expires_at?: number
 }
 
-export interface McpOAuthTokens {
-    accessToken: string
-    refreshToken?: string
-    expiresAt?: string
-    tokenType: string
-}
-
-export interface OAuthCompleteResult {
-    serverId: string
-    tokens?: McpOAuthTokens
-    error?: string
-}
+export type OAuthCompleteResult = McpOAuthCompleteResult
 
 // ============================================================================
 // State

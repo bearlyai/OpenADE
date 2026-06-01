@@ -1191,6 +1191,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - OpenADE task-terminal methods remain product-level plain text: `projects/openade-module/src/node.ts` encodes plain text before raw `pty/write` and decodes raw PTY output before returning `OpenADETaskTerminalOutputChunk`.
 - Focused verification passed: runtime-node typecheck, Electron typecheck, web typecheck, OpenADE module typecheck, Biome lint for the touched PTY/terminal files, full `runtimeNodeServer.integration`, and `openade-module` kernel integration tests.
 
+### 2026-06-01: MCP Host Bridge DTOs Consolidated
+
+- Browser-safe MCP config, test-connection, OAuth token, OAuth initiation/cancel/refresh, and OAuth completion DTOs now live in `projects/harness/src/types.ts`, next to the harness MCP server config contract that already owned the CLI-facing shape.
+- `projects/electron/src/modules/code/mcp.ts`, `projects/web/src/electronAPI/mcp.ts`, and `projects/web/src/persistence/mcpServerStore.ts` alias those harness DTOs instead of maintaining separate renderer/main-process copies.
+- `projects/shared/companion` remains limited to actual companion pairing/device contracts; MCP host control is still trusted-local desktop capability, not a companion DTO namespace.
+- Focused verification passed: harness typecheck/build, Electron typecheck, web typecheck, Biome lint for the touched MCP/docs files, web `mcp.test.ts`, and Electron `runtimeApi.integration`.
+
 ## Remaining Work Under Corrected Direction
 
 The remaining work is not a desktop UI rewrite. It is a boundary migration: keep the old desktop app experience and replace its direct renderer storage/host assumptions with runtime/OpenADE APIs.

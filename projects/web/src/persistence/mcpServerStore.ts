@@ -6,6 +6,7 @@
  */
 
 import type * as Y from "yjs"
+import type { McpOAuthTokens as HarnessMcpOAuthTokens } from "@openade/harness/browser"
 import { type YArrayHandle, arrayOfType } from "./storage"
 
 // ============================================================================
@@ -16,12 +17,7 @@ import { type YArrayHandle, arrayOfType } from "./storage"
  * OAuth tokens received after successful authentication.
  * Obtained automatically via OAuth discovery and dynamic client registration.
  */
-export interface McpOAuthTokens {
-    accessToken: string
-    refreshToken?: string
-    expiresAt?: string // ISO timestamp
-    tokenType: string
-}
+export type McpOAuthTokens = HarnessMcpOAuthTokens
 
 /**
  * Health status for MCP servers.

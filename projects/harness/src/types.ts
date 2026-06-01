@@ -32,6 +32,59 @@ export interface McpHttpServerConfig {
     headers?: Record<string, string>
 }
 
+export interface McpOAuthTokens {
+    accessToken: string
+    refreshToken?: string
+    expiresAt?: string
+    tokenType: string
+}
+
+export interface McpTestConnectionParams {
+    config: McpServerConfig
+}
+
+export interface McpTestConnectionResponse {
+    success: boolean
+    error?: string
+    requiresAuth?: boolean
+    authDetails?: {
+        resourceMetadataUrl?: string
+        scope?: string
+    }
+}
+
+export interface McpInitiateOAuthParams {
+    serverId: string
+    serverUrl: string
+}
+
+export interface McpInitiateOAuthResponse {
+    success: boolean
+    error?: string
+}
+
+export interface McpCancelOAuthParams {
+    serverId: string
+}
+
+export interface McpCancelOAuthResponse {
+    success: boolean
+}
+
+export interface McpRefreshOAuthParams {
+    serverId: string
+    serverUrl: string
+    refreshToken: string
+}
+
+export interface McpRefreshOAuthResponse {
+    success: boolean
+    tokens?: McpOAuthTokens
+    error?: string
+}
+
+export type McpOAuthCompleteResult = { serverId: string; tokens: McpOAuthTokens } | { serverId: string; error: string }
+
 // ============================================================================
 // Client Tool Definitions
 // ============================================================================

@@ -38,7 +38,7 @@ npx @biomejs/biome lint --write --diagnostic-level=error src/  # lint
 
 ```
 src/
-├── types.ts                    # All shared types (HarnessQuery, HarnessEvent, ModelEntry, etc.)
+├── types.ts                    # All shared types (HarnessQuery, HarnessEvent, ModelEntry, MCP config/OAuth bridge DTOs, etc.)
 ├── harness.ts                  # Harness<M> interface — the unified contract
 ├── structured.ts               # runStructuredQuery() — shared structured output orchestration
 ├── models.ts                   # Model catalog — pure data, browser-safe (MODEL_REGISTRY, helpers, single source of truth for model version bumps)
@@ -93,6 +93,10 @@ src/
 | Client tools | `ClientToolDefinition[]` → spun up as a local MCP HTTP server, injected via config |
 
 When vendor model versions change, update `src/models.ts` first. Harness implementations should return the shared model config from that file rather than re-declaring model metadata inline.
+
+`src/types.ts` is also the browser-safe owner for MCP server config and OAuth host-bridge DTOs used by the desktop renderer and Electron main process. Do not mirror those shapes in `projects/web/src/electronAPI/*` or `projects/electron/src/modules/code/*`; export aliases from `@openade/harness` or `@openade/harness/browser` instead.
+
+Before changing MCP config/OAuth DTO ownership or harness-host bridge contracts, consult the shared-shell migration plan at [../../plan.md](../../plan.md).
 
 ## How Query Execution Works
 
