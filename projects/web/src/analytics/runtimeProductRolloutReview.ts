@@ -37,14 +37,12 @@ const APP_OPENED_ALLOWED_KEYS = new Set([
     "runtimeProductStoreEnabled",
     "runtimeProductStoreStatus",
     "runtimeProductStoreHasSnapshot",
-    "desktopSharedTaskScreenEnabled",
 ])
 
 const RUNTIME_PRODUCT_ALLOWED_KEYS = new Set([
     "source",
     "reason",
     "enabled",
-    "desktopSharedTaskScreenEnabled",
     "status",
     "hasSnapshot",
     "repoCount",
@@ -163,8 +161,7 @@ function isReadyDefaultOnAppOpened(event: TelemetryEvent): boolean {
         event.name === APP_OPENED_EVENT &&
         properties.runtimeProductStoreEnabled === true &&
         properties.runtimeProductStoreStatus === "ready" &&
-        properties.runtimeProductStoreHasSnapshot === true &&
-        properties.desktopSharedTaskScreenEnabled === false
+        properties.runtimeProductStoreHasSnapshot === true
     )
 }
 
@@ -180,9 +177,6 @@ function validateAppOpened(event: TelemetryEvent, failures: RolloutReviewFailure
     }
     if (properties.runtimeProductStoreHasSnapshot !== true) {
         addFailure(failures, event, "runtime_product_store_missing_snapshot", "app_opened did not report a runtime product snapshot")
-    }
-    if (properties.desktopSharedTaskScreenEnabled !== false) {
-        addFailure(failures, event, "desktop_shared_task_screen_enabled", "app_opened did not report the compact shared task screen disabled")
     }
 }
 

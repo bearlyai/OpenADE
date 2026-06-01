@@ -506,7 +506,6 @@ export class CodeStore {
         return {
             source,
             enabled: this.shouldEnableRuntimeProductStore(),
-            desktopSharedTaskScreenEnabled: false,
             status: this.runtimeProductStoreStatus,
             hasSnapshot: snapshot !== null,
             repoCount: snapshot?.repos.length ?? 0,
@@ -836,7 +835,6 @@ export class CodeStore {
             runtimeProductStoreEnabled: this.shouldEnableRuntimeProductStore(),
             runtimeProductStoreStatus: this.runtimeProductStoreStatus,
             runtimeProductStoreHasSnapshot: this.runtimeProductSnapshot !== null,
-            desktopSharedTaskScreenEnabled: false,
         })
 
         this.telemetryReactionDisposer = reaction(

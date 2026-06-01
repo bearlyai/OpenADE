@@ -10,7 +10,6 @@ const readyAppOpened = {
         runtimeProductStoreEnabled: true,
         runtimeProductStoreStatus: "ready",
         runtimeProductStoreHasSnapshot: true,
-        desktopSharedTaskScreenEnabled: false,
     },
 }
 
@@ -46,7 +45,6 @@ describe("runtime product rollout review", () => {
                                 source: "task_store",
                                 reason: "direct_task_store_read",
                                 enabled: true,
-                                desktopSharedTaskScreenEnabled: false,
                                 status: "ready",
                                 hasSnapshot: true,
                                 repoCount: 1,
@@ -59,7 +57,6 @@ describe("runtime product rollout review", () => {
                             event_properties: {
                                 source: "notification",
                                 enabled: true,
-                                desktopSharedTaskScreenEnabled: false,
                                 status: "error",
                                 hasSnapshot: true,
                                 repoCount: 1,
@@ -79,7 +76,7 @@ describe("runtime product rollout review", () => {
         expect(result.failures.map((failure) => failure.code)).toEqual(["runtime_product_store_fallback", "runtime_product_store_error"])
     })
 
-    it("fails when app_opened does not prove the default classic desktop runtime path", () => {
+    it("fails when app_opened does not prove the default runtime product path", () => {
         const result = reviewRuntimeProductRollout(
             parseTelemetryEvents(
                 JSON.stringify([
@@ -92,7 +89,6 @@ describe("runtime product rollout review", () => {
                             runtimeProductStoreEnabled: true,
                             runtimeProductStoreStatus: "loading",
                             runtimeProductStoreHasSnapshot: false,
-                            desktopSharedTaskScreenEnabled: true,
                         },
                     },
                 ])
@@ -103,9 +99,32 @@ describe("runtime product rollout review", () => {
         expect(result.failures.map((failure) => failure.code)).toEqual([
             "runtime_product_store_not_ready",
             "runtime_product_store_missing_snapshot",
-            "desktop_shared_task_screen_enabled",
             "missing_ready_default_on_app_opened",
         ])
+    })
+
+    it("rejects stale desktop shared-screen rollout properties", () => {
+        const result = reviewRuntimeProductRollout(
+            parseTelemetryEvents(
+                JSON.stringify([
+                    {
+                        event: "app_opened",
+                        properties: {
+                            ...readyAppOpened.event_properties,
+                            desktopSharedTaskScreenEnabled: false,
+                        },
+                    },
+                ])
+            )
+        )
+
+        expect(result.passed).toBe(false)
+        expect(result.summary.hygieneViolations).toBe(1)
+        expect(result.failures[0]).toMatchObject({
+            code: "event_property_hygiene",
+            eventName: "app_opened",
+        })
+        expect(result.failures[0]?.message).toContain("desktopSharedTaskScreenEnabled")
     })
 
     it("fails rollout event property hygiene when sensitive or unreviewed fields are present", () => {
@@ -119,7 +138,6 @@ describe("runtime product rollout review", () => {
                             source: "task_store",
                             reason: "direct_task_store_read",
                             enabled: true,
-                            desktopSharedTaskScreenEnabled: false,
                             status: "ready",
                             hasSnapshot: true,
                             repoCount: 1,
