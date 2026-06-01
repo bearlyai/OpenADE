@@ -8,7 +8,6 @@ import { getLastViewed } from "./constants"
 import { isCodeModuleAvailable } from "./electronAPI/capabilities"
 import { isCompanionFeatureEnabled } from "./featureFlags"
 import { CodeLayout, type CodeLayoutProps } from "./layout/CodeLayout"
-import { DesktopSharedProjectPage } from "./pages/DesktopSharedProjectPage"
 import { DesktopSharedTaskPage } from "./pages/DesktopSharedTaskPage"
 import { OnboardingPage } from "./pages/OnboardingPage"
 import { TaskCreateDraftsMenu, TaskCreatePage } from "./pages/TaskCreatePage"
@@ -125,14 +124,18 @@ export const CodeWorkspaceRoute = observer(() => {
     }
 
     const repo = codeStore.repos.getRepo(workspaceId)
+    const mostRecentTaskId = getMostRecentTaskId(codeStore.getTaskPreviewsForRepo(workspaceId))
 
     return (
         <Layout workspaceId={workspaceId} title={repo?.name ?? "Workspace"} icon={<Code size="1.25rem" className="text-muted" />}>
-            {codeStore.shouldUseRuntimeProductReads() ? (
-                <DesktopSharedProjectPage workspaceId={workspaceId} />
-            ) : (
-                <Navigate to={navigate.path("CodeWorkspaceTaskCreate", { workspaceId })} replace />
-            )}
+            <Navigate
+                to={
+                    mostRecentTaskId
+                        ? navigate.path("CodeWorkspaceTask", { workspaceId, taskId: mostRecentTaskId })
+                        : navigate.path("CodeWorkspaceTaskCreate", { workspaceId })
+                }
+                replace
+            />
         </Layout>
     )
 })

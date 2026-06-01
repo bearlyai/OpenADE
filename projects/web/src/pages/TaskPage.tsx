@@ -145,7 +145,7 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
     }
 
     return (
-        <div className="h-full relative" {...dragHandlers}>
+        <div className="h-full relative" data-openade-surface="desktop-classic-task" {...dragHandlers}>
             {isDragOver && <ImageDropOverlay />}
             <InputWrapper trayOpen={tray.isOpen} onClose={() => tray.close()}>
                 <ScrollArea viewportRef={scrollViewportRef} viewportClassName="pb-56">

@@ -526,12 +526,6 @@ function findButtonByText(container: HTMLElement, text: string): HTMLButtonEleme
     return button
 }
 
-function findButtonContainingText(container: HTMLElement, text: string): HTMLButtonElement {
-    const button = Array.from(container.querySelectorAll("button")).find((candidate) => candidate.textContent?.includes(text) === true)
-    if (!(button instanceof HTMLButtonElement)) throw new Error(`Button containing "${text}" was not rendered`)
-    return button
-}
-
 function findButtonByTitle(container: HTMLElement, title: string): HTMLButtonElement {
     const button = Array.from(container.querySelectorAll("button")).find((candidate) => candidate.title === title)
     if (!(button instanceof HTMLButtonElement)) throw new Error(`Button titled "${title}" was not rendered`)
@@ -606,7 +600,7 @@ describe("Code routes with runtime product reads", () => {
         }
     })
 
-    it("renders the shared desktop workspace route by default from runtime project DTOs and scoped host methods", async () => {
+    it("keeps the desktop workspace route on the classic task redirect while using runtime project DTOs", async () => {
         const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
         cleanupOpenADEApi = installOpenADEApiRuntimeBridge(createRouteRuntimeServer())
         const codeStore = new CodeStore({
@@ -632,12 +626,6 @@ describe("Code routes with runtime product reads", () => {
             )
             root.render(createElement(CodeStoreProvider, { store: codeStore }, router))
 
-            await waitForText(container, "Runtime Route Repo")
-            await waitForText(container, "Runtime route task")
-            await waitForText(container, "README.md")
-            await waitForText(container, "Dev Server")
-
-            clickElement(findButtonContainingText(container, "Runtime route task"))
             await waitForPath(paths, "/dashboard/code/workspace/repo-1/task/task-1")
             expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
             expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_error", expect.anything())
@@ -647,7 +635,7 @@ describe("Code routes with runtime product reads", () => {
         }
     })
 
-    it("renders the shared desktop task route by default after loading task detail through the real local runtime product store", async () => {
+    it("renders the classic desktop task route by default after loading task detail through the real local runtime product store", async () => {
         cleanupOpenADEApi = installOpenADEApiRuntimeBridge(createRouteRuntimeServer())
         const codeStore = new CodeStore({
             getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
@@ -670,9 +658,11 @@ describe("Code routes with runtime product reads", () => {
             root.render(createElement(CodeStoreProvider, { store: codeStore }, router))
             await new Promise((resolve) => window.setTimeout(resolve, 50))
 
+            expect(container.querySelector('[data-openade-surface="desktop-classic-task"]')).toBeInstanceOf(HTMLElement)
+            expect(container.querySelector('[data-openade-surface="desktop-shared-task"]')).toBeNull()
             await waitForText(container, "Runtime route task")
             await waitForText(container, "Do the runtime-backed work")
-            await waitForText(container, "No changes.")
+            expect(findButtonByTitle(container, "Attach image")).toBeInstanceOf(HTMLButtonElement)
         } finally {
             codeStore.disconnectAllStores()
         }
