@@ -8,18 +8,18 @@ import {
     type OpenADEModuleAdapters,
     type OpenADEScopedHostAdapter,
 } from "../../../openade-module/src/module"
-import {
-    type OpenADECommentCreateRequest,
-    type OpenADECommentDeleteRequest,
-    type OpenADECommentEditRequest,
-    type OpenADEProject,
-    type OpenADEProjectProcessInstance,
-    type OpenADEQueuedTurn,
-    type OpenADESnapshot,
-    type OpenADETask,
-    type OpenADETaskDeleteRequest,
-    type OpenADETaskMetadataUpdateRequest,
-    type OpenADETaskPreview,
+import type {
+    OpenADECommentCreateRequest,
+    OpenADECommentDeleteRequest,
+    OpenADECommentEditRequest,
+    OpenADEProject,
+    OpenADEProjectProcessInstance,
+    OpenADEQueuedTurn,
+    OpenADESnapshot,
+    OpenADETask,
+    OpenADETaskDeleteRequest,
+    OpenADETaskMetadataUpdateRequest,
+    OpenADETaskPreview,
 } from "../../../openade-module/src/types"
 import { type RuntimeClientOptions, RuntimeLocalClient, type RuntimeLocalTransport } from "../../../runtime-client/src"
 import type { RuntimeMessage, RuntimeRequest } from "../../../runtime-protocol/src"
@@ -226,10 +226,27 @@ function createRuntimeBackedConstructors(state: {
             return { repoId: params.repoId, taskId: params.taskId, processId: params.processId, ok: true }
         },
         startTaskTerminal: async (params) => ({ repoId: params.repoId, taskId: params.taskId, terminalId: "terminal-test", ok: true }),
-        reconnectTaskTerminal: async (params) => ({ repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId ?? "terminal-test", found: false, output: [] }),
+        reconnectTaskTerminal: async (params) => ({
+            repoId: params.repoId,
+            taskId: params.taskId,
+            terminalId: params.terminalId ?? "terminal-test",
+            found: false,
+            output: [],
+        }),
         writeTaskTerminal: async (params) => ({ repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: true }),
         resizeTaskTerminal: async (params) => ({ repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: true }),
         stopTaskTerminal: async (params) => ({ repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: true }),
+        readTaskGitSummary: async (params) => ({
+            repoId: params.repoId,
+            taskId: params.taskId,
+            branch: "main",
+            headCommit: "abc123",
+            ahead: 0,
+            hasChanges: true,
+            staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+            unstaged: { files: [{ path: "src/app.ts", status: "modified" }], stats: { filesChanged: 1, insertions: 1, deletions: 0 } },
+            untracked: [],
+        }),
         readTaskChanges: async (params) => ({
             repoId: params.repoId,
             taskId: params.taskId,

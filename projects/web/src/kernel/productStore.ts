@@ -50,6 +50,8 @@ import type {
     OpenADETaskGitFileAtTreeishResult,
     OpenADETaskGitLogRequest,
     OpenADETaskGitLogResult,
+    OpenADETaskGitSummaryRequest,
+    OpenADETaskGitSummaryResult,
     OpenADETaskImageReadRequest,
     OpenADETaskImageReadResult,
     OpenADETaskMetadataUpdateRequest,
@@ -150,6 +152,10 @@ export class OpenADEProductStore {
 
     async readTaskChanges(args: OpenADETaskChangesReadRequest): Promise<OpenADETaskChangesReadResult> {
         return this.client.readTaskChanges(args)
+    }
+
+    async readTaskGitSummary(args: OpenADETaskGitSummaryRequest): Promise<OpenADETaskGitSummaryResult> {
+        return this.client.readTaskGitSummary(args)
     }
 
     async readTaskDiff(args: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult> {
@@ -354,6 +360,7 @@ export interface OpenADEProductClient {
     reconnectProjectProcess(args: OpenADEProjectProcessReconnectRequest): Promise<OpenADEProjectProcessReconnectResult>
     stopProjectProcess(args: OpenADEProjectProcessStopRequest, options?: OpenADERequestOptions): Promise<OpenADEProjectProcessStopResult>
     readTaskChanges(args: OpenADETaskChangesReadRequest): Promise<OpenADETaskChangesReadResult>
+    readTaskGitSummary(args: OpenADETaskGitSummaryRequest): Promise<OpenADETaskGitSummaryResult>
     readTaskDiff(args: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult>
     readTaskFilePair(args: OpenADETaskFilePairReadRequest): Promise<OpenADETaskFilePairReadResult>
     readTaskGitLog(args: OpenADETaskGitLogRequest): Promise<OpenADETaskGitLogResult>

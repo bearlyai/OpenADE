@@ -19,6 +19,7 @@ export function useTaskThreadScroll({
 }) {
     const viewportRef = useRef<HTMLDivElement>(null)
     const shouldFollowRef = useRef(true)
+    const resetScrollScheduledRef = useRef(false)
     const [showJump, setShowJump] = useState(false)
 
     const scrollToBottom = useCallback(() => {
@@ -33,11 +34,16 @@ export function useTaskThreadScroll({
 
     useEffect(() => {
         shouldFollowRef.current = true
+        resetScrollScheduledRef.current = true
         setShowJump(false)
         scrollToBottom()
     }, [resetKey, scrollToBottom])
 
     useEffect(() => {
+        if (resetScrollScheduledRef.current) {
+            resetScrollScheduledRef.current = false
+            return
+        }
         if (mode === "always" || shouldFollowRef.current) {
             scrollToBottom()
             return

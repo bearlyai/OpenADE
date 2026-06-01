@@ -81,6 +81,8 @@ import {
     type OpenADETaskGitFileAtTreeishResult,
     type OpenADETaskGitLogRequest,
     type OpenADETaskGitLogResult,
+    type OpenADETaskGitSummaryRequest,
+    type OpenADETaskGitSummaryResult,
     type OpenADETaskImageReadRequest,
     type OpenADETaskImageReadResult,
     type OpenADETaskImageReference,
@@ -982,6 +984,47 @@ async function scopedTaskWorkDir(repo: OpenADEProject, task: OpenADETask): Promi
 function scopedTaskFromTreeish(task: OpenADETask, fromTreeish?: string): string {
     if (fromTreeish) return fromTreeish
     return snapshotBaseForTask(task, latestScopedTaskEnvironment(task))?.fromTreeish ?? "HEAD"
+}
+
+type RuntimeGitSummary = Awaited<ReturnType<typeof getRuntimeGitSummary>>
+
+function scopedTaskSummaryFile(
+    file: RuntimeGitSummary["staged"]["files"][number],
+    fallbackStatus: OpenADETaskGitChangedFile["status"]
+): OpenADETaskGitChangedFile {
+    return {
+        path: file.path,
+        status: file.status ?? fallbackStatus,
+        binary: file.binary,
+    }
+}
+
+async function readScopedTaskGitSummary(
+    params: OpenADETaskGitSummaryRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskGitSummaryResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const summary = await getRuntimeGitSummary({ repoDir: workDir })
+    const stagedFiles = summary.staged.files.map((file) => scopedTaskSummaryFile(file, "modified"))
+    const unstagedFiles = summary.unstaged.files.map((file) => scopedTaskSummaryFile(file, "modified"))
+    const untracked = summary.untracked.map((file) => scopedTaskSummaryFile(file, "added"))
+
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        branch: summary.branch,
+        headCommit: summary.headCommit,
+        ahead: summary.ahead,
+        hasChanges: summary.hasChanges,
+        staged: {
+            files: stagedFiles,
+            stats: summary.staged.stats,
+        },
+        unstaged: {
+            files: unstagedFiles,
+            stats: summary.unstaged.stats,
+        },
+        untracked,
+    }
 }
 
 async function readScopedTaskChanges(
@@ -2104,6 +2147,7 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                 writeProjectFile: writeOpenADEProjectFile,
                 fuzzySearchProjectFiles: fuzzySearchOpenADEProjectFiles,
                 searchProject: searchOpenADEProject,
+                readTaskGitSummary: readScopedTaskGitSummary,
                 readTaskChanges: readScopedTaskChanges,
                 readTaskDiff: readScopedTaskDiff,
                 readTaskFilePair: readScopedTaskFilePair,

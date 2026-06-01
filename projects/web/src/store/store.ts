@@ -49,6 +49,8 @@ import type {
     OpenADETaskGitFileAtTreeishResult,
     OpenADETaskGitLogRequest,
     OpenADETaskGitLogResult,
+    OpenADETaskGitSummaryRequest,
+    OpenADETaskGitSummaryResult,
     OpenADETaskMetadataUpdateRequest,
     OpenADETaskPreview,
     OpenADETaskReadOptions,
@@ -1154,6 +1156,14 @@ export class CodeStore {
         }
 
         return localOpenADEClient.readTaskChanges(params)
+    }
+
+    async readProductTaskGitSummary(params: OpenADETaskGitSummaryRequest): Promise<OpenADETaskGitSummaryResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readTaskGitSummary(params)
+        }
+
+        return localOpenADEClient.readTaskGitSummary(params)
     }
 
     async readProductTaskDiff(params: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult> {

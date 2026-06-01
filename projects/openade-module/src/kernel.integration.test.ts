@@ -434,6 +434,19 @@ describe("OpenADE kernel composition", () => {
             fs.mkdirSync(path.join(repoPath, "src"), { recursive: true })
             fs.writeFileSync(path.join(repoPath, "src", "new.ts"), "export const created = true\n")
 
+            const summary = await client.readTaskGitSummary({ repoId: repo.repoId, taskId: started.taskId })
+            expect(summary).toMatchObject({
+                repoId: repo.repoId,
+                taskId: started.taskId,
+                branch: "main",
+                hasChanges: true,
+                unstaged: { files: expect.arrayContaining([expect.objectContaining({ path: "README.md", status: "modified" })]) },
+                untracked: expect.arrayContaining([
+                    expect.objectContaining({ path: "notes/out.txt", status: "added" }),
+                    expect.objectContaining({ path: "src/new.ts", status: "added" }),
+                ]),
+            })
+
             const changes = await client.readTaskChanges({ repoId: repo.repoId, taskId: started.taskId })
             expect(changes).toMatchObject({
                 repoId: repo.repoId,

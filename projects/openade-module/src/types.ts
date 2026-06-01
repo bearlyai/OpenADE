@@ -775,6 +775,35 @@ export interface OpenADETaskGitChangedFile {
     binary?: boolean
 }
 
+export interface OpenADETaskGitChangeStats {
+    filesChanged: number
+    insertions: number
+    deletions: number
+}
+
+export interface OpenADETaskGitSummaryRequest {
+    repoId: string
+    taskId: string
+}
+
+export interface OpenADETaskGitSummaryResult {
+    repoId: string
+    taskId: string
+    branch: string | null
+    headCommit: string
+    ahead: number | null
+    hasChanges: boolean
+    staged: {
+        files: OpenADETaskGitChangedFile[]
+        stats: OpenADETaskGitChangeStats
+    }
+    unstaged: {
+        files: OpenADETaskGitChangedFile[]
+        stats: OpenADETaskGitChangeStats
+    }
+    untracked: OpenADETaskGitChangedFile[]
+}
+
 export interface OpenADETaskChangesReadRequest {
     repoId: string
     taskId: string

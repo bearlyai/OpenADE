@@ -65,6 +65,8 @@ import type {
     OpenADETaskGitFileAtTreeishResult,
     OpenADETaskGitLogRequest,
     OpenADETaskGitLogResult,
+    OpenADETaskGitSummaryRequest,
+    OpenADETaskGitSummaryResult,
     OpenADETaskImageReadRequest,
     OpenADETaskImageReadResult,
     OpenADETaskImageReference,
@@ -163,6 +165,7 @@ export interface OpenADEScopedHostAdapter {
     resizeTaskTerminal(params: OpenADETaskTerminalResizeRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskTerminalMutationResult>
     stopTaskTerminal(params: OpenADETaskTerminalStopRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskTerminalMutationResult>
     readTaskImage(params: OpenADETaskImageReadRequest & { repo: OpenADEProject; task: OpenADETask; image: OpenADETaskImageReference }): Promise<OpenADETaskImageReadResult>
+    readTaskGitSummary(params: OpenADETaskGitSummaryRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitSummaryResult>
     readTaskChanges(params: OpenADETaskChangesReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskChangesReadResult>
     readTaskDiff(params: OpenADETaskDiffReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskDiffReadResult>
     readTaskFilePair(params: OpenADETaskFilePairReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskFilePairReadResult>
@@ -488,6 +491,14 @@ function taskChangesReadParams(params: unknown): OpenADETaskChangesReadRequest {
         repoId: stringParam(record, "repoId"),
         taskId: stringParam(record, "taskId"),
         fromTreeish: optionalStringParam(record, "fromTreeish"),
+    }
+}
+
+function taskGitSummaryParams(params: unknown): OpenADETaskGitSummaryRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
     }
 }
 
@@ -1428,6 +1439,11 @@ export function createOpenADEModule(adapters: OpenADEModuleAdapters): RuntimeMod
                     const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
                     return scopedHost.readTaskChanges({ ...request, repo, task })
                 }, { validateParams: validateWith(taskChangesReadParams) })
+                server.register("openade/task/git/summary/read", async (params) => {
+                    const request = taskGitSummaryParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return scopedHost.readTaskGitSummary({ ...request, repo, task })
+                }, { validateParams: validateWith(taskGitSummaryParams) })
                 server.register("openade/task/diff/read", async (params) => {
                     const request = taskDiffReadParams(params)
                     const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)

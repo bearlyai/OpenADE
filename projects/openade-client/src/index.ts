@@ -64,6 +64,8 @@ import type {
     OpenADETaskGitFileAtTreeishResult,
     OpenADETaskGitLogRequest,
     OpenADETaskGitLogResult,
+    OpenADETaskGitSummaryRequest,
+    OpenADETaskGitSummaryResult,
     OpenADETaskImageReadRequest,
     OpenADETaskImageReadResult,
     OpenADETaskTerminalMutationResult,
@@ -179,6 +181,10 @@ export class OpenADEClient {
 
     async readTaskChanges(args: OpenADETaskChangesReadRequest): Promise<OpenADETaskChangesReadResult> {
         return this.request("openade/task/changes/read", args)
+    }
+
+    async readTaskGitSummary(args: OpenADETaskGitSummaryRequest): Promise<OpenADETaskGitSummaryResult> {
+        return this.request("openade/task/git/summary/read", args)
     }
 
     async readTaskDiff(args: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult> {

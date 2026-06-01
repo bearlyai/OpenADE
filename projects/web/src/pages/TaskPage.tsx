@@ -17,6 +17,19 @@ import type { TaskModel } from "../store/TaskModel"
 import { useCodeStore } from "../store/context"
 import { isEventFromTerminal } from "../utils/keyboardShortcuts"
 
+const TASK_OPEN_GIT_REFRESH_DELAY_MS = 500
+
+function scheduleTaskGitRefresh(refresh: () => void): () => void {
+    let timeoutId: number | null = window.setTimeout(() => {
+        timeoutId = null
+        refresh()
+    }, TASK_OPEN_GIT_REFRESH_DELAY_MS)
+
+    return () => {
+        if (timeoutId !== null) window.clearTimeout(timeoutId)
+    }
+}
+
 function InputWrapper({ trayOpen, onClose, children }: { trayOpen: boolean; onClose: () => void; children: ReactNode }) {
     return (
         <>
@@ -99,16 +112,28 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
         codeStore.tasks.markTaskViewed(taskId)
     }, [taskId])
 
-    // Initial load of git state
+    // Keep task open responsive; Changes tray open/refresh still loads immediately.
     useEffect(() => {
-        taskModel.refreshGitState()
+        return scheduleTaskGitRefresh(() => {
+            void taskModel.refreshGitState()
+        })
     }, [taskModel])
 
     // Refresh git state on window focus
     useEffect(() => {
-        const handleFocus = () => taskModel.refreshGitState()
+        let cancelScheduledRefresh: (() => void) | null = null
+        const handleFocus = () => {
+            cancelScheduledRefresh?.()
+            cancelScheduledRefresh = scheduleTaskGitRefresh(() => {
+                void taskModel.refreshGitState()
+                cancelScheduledRefresh = null
+            })
+        }
         window.addEventListener("focus", handleFocus)
-        return () => window.removeEventListener("focus", handleFocus)
+        return () => {
+            window.removeEventListener("focus", handleFocus)
+            cancelScheduledRefresh?.()
+        }
     }, [taskModel])
 
     // Poll git status every 20s while task is working

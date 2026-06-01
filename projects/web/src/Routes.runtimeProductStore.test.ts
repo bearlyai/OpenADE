@@ -3,13 +3,13 @@ import { type Root, createRoot } from "react-dom/client"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createOpenADEModule, type OpenADEModuleAdapters } from "../../openade-module/src/module"
-import {
-    type OpenADEProject,
-    type OpenADESnapshot,
-    type OpenADETask,
-    type OpenADETaskMetadataUpdateRequest,
-    type OpenADETaskPreview,
-    type OpenADETurnStartRequest,
+import type {
+    OpenADEProject,
+    OpenADESnapshot,
+    OpenADETask,
+    OpenADETaskMetadataUpdateRequest,
+    OpenADETaskPreview,
+    OpenADETurnStartRequest,
 } from "../../openade-module/src/types"
 import { type RuntimeMessage, validateRuntimeRequest } from "../../runtime-protocol/src"
 import { type RuntimeConnection, RuntimeServer } from "../../runtime/src"
@@ -122,6 +122,8 @@ function unsupportedMutation(method: string): () => Promise<never> {
 interface RouteRuntimeServerHooks {
     onStartTurn?: (params: OpenADETurnStartRequest) => void
     onUpdateTaskMetadata?: (params: OpenADETaskMetadataUpdateRequest) => void
+    onReadTaskGitSummary?: () => void
+    onReadTaskChanges?: () => void
 }
 
 function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeServer {
@@ -367,13 +369,30 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
             resizeTaskTerminal: unsupportedMutation("resizeTaskTerminal"),
             stopTaskTerminal: unsupportedMutation("stopTaskTerminal"),
             readTaskImage: async (params) => ({ repoId: params.repoId, taskId: params.taskId, imageId: params.imageId, ext: params.ext, data: null }),
-            readTaskChanges: async (params) => ({
-                repoId: params.repoId,
-                taskId: params.taskId,
-                files: [],
-                fromTreeish: "HEAD",
-                toTreeish: "HEAD",
-            }),
+            readTaskGitSummary: async (params) => {
+                hooks.onReadTaskGitSummary?.()
+                return {
+                    repoId: params.repoId,
+                    taskId: params.taskId,
+                    branch: "main",
+                    headCommit: "abc123",
+                    ahead: 0,
+                    hasChanges: true,
+                    staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                    unstaged: { files: [{ path: "README.md", status: "modified" }], stats: { filesChanged: 1, insertions: 1, deletions: 0 } },
+                    untracked: [],
+                }
+            },
+            readTaskChanges: async (params) => {
+                hooks.onReadTaskChanges?.()
+                return {
+                    repoId: params.repoId,
+                    taskId: params.taskId,
+                    files: [],
+                    fromTreeish: "HEAD",
+                    toTreeish: "HEAD",
+                }
+            },
             readTaskDiff: async (params) => ({
                 repoId: params.repoId,
                 taskId: params.taskId,
@@ -657,10 +676,18 @@ describe("Code routes with runtime product reads", () => {
         const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
         const startedTurns: OpenADETurnStartRequest[] = []
         const metadataUpdates: OpenADETaskMetadataUpdateRequest[] = []
+        let taskGitSummaryReadCount = 0
+        let taskChangesReadCount = 0
         cleanupOpenADEApi = installOpenADEApiRuntimeBridge(
             createRouteRuntimeServer({
                 onStartTurn: (params) => startedTurns.push(params),
                 onUpdateTaskMetadata: (params) => metadataUpdates.push(params),
+                onReadTaskGitSummary: () => {
+                    taskGitSummaryReadCount += 1
+                },
+                onReadTaskChanges: () => {
+                    taskChangesReadCount += 1
+                },
             })
         )
         const codeStore = new CodeStore({
@@ -682,10 +709,11 @@ describe("Code routes with runtime product reads", () => {
                 )
             )
             root.render(createElement(CodeStoreProvider, { store: codeStore }, router))
-            await new Promise((resolve) => window.setTimeout(resolve, 50))
+            await vi.waitFor(() => expect(taskGitSummaryReadCount).toBeGreaterThan(0), { timeout: 1000, interval: 10 })
 
             expect(container.querySelector('[data-openade-surface="desktop-classic-task"]')).toBeInstanceOf(HTMLElement)
             expect(container.querySelector('[data-openade-surface="desktop-shared-task"]')).toBeNull()
+            expect(taskChangesReadCount).toBe(0)
             await waitForText(container, "Runtime route task")
             await waitForText(container, "Do the runtime-backed work")
             await waitForText(container, "1 comment")

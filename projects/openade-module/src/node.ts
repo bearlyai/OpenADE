@@ -84,6 +84,9 @@ import type {
     OpenADETaskGitLogEntry,
     OpenADETaskGitLogRequest,
     OpenADETaskGitLogResult,
+    OpenADETaskGitChangeStats,
+    OpenADETaskGitSummaryRequest,
+    OpenADETaskGitSummaryResult,
     OpenADETaskImageReadRequest,
     OpenADETaskImageReadResult,
     OpenADETaskImageReference,
@@ -158,6 +161,51 @@ const SCOPED_TASK_GENERATED_FILE_BASENAMES = new Set([
     "bun.lockb",
 ])
 
+const SCOPED_TASK_BINARY_EXTENSIONS = new Set([
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".ico",
+    ".bmp",
+    ".tiff",
+    ".tif",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".eot",
+    ".otf",
+    ".mp3",
+    ".mp4",
+    ".wav",
+    ".ogg",
+    ".webm",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".rar",
+    ".7z",
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".ppt",
+    ".pptx",
+    ".exe",
+    ".dll",
+    ".so",
+    ".dylib",
+    ".bin",
+    ".sqlite",
+    ".db",
+])
+
+function isScopedTaskBinaryPath(filePath: string): boolean {
+    return SCOPED_TASK_BINARY_EXTENSIONS.has(path.extname(filePath).toLowerCase())
+}
+
 function scopedGit(args: string[], cwd: string): Promise<ScopedGitResult> {
     return new Promise((resolve) => {
         execFile("git", args, { cwd, maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
@@ -200,6 +248,80 @@ function parseScopedNameStatusOutput(stdout: string): OpenADETaskGitChangedFile[
         }
     }
     return files
+}
+
+function parseScopedNumstatStats(stdout: string): OpenADETaskGitChangeStats {
+    let filesChanged = 0
+    let insertions = 0
+    let deletions = 0
+
+    for (const line of stdout.trim().split("\n").filter(Boolean)) {
+        const parts = line.split("\t")
+        if (parts.length < 3) continue
+        filesChanged += 1
+
+        const additions = parts[0]
+        const removals = parts[1]
+        if (additions !== "-") insertions += Number.parseInt(additions ?? "0", 10) || 0
+        if (removals !== "-") deletions += Number.parseInt(removals ?? "0", 10) || 0
+    }
+
+    return { filesChanged, insertions, deletions }
+}
+
+function scopedTaskSummaryFiles(stdout: string): OpenADETaskGitChangedFile[] {
+    return parseScopedNameStatusOutput(stdout).map((file) => ({ ...file, binary: isScopedTaskBinaryPath(file.path) }))
+}
+
+async function scopedTaskGitSummary(
+    params: OpenADETaskGitSummaryRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskGitSummaryResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const branchResult = await scopedGit(["rev-parse", "--abbrev-ref", "HEAD"], workDir)
+    const branchName = branchResult.success ? branchResult.stdout.trim() : ""
+    const branch = branchName && branchName !== "HEAD" ? branchName : null
+    const headResult = await scopedGit(["rev-parse", "--short", "HEAD"], workDir)
+    const headCommit = headResult.success ? headResult.stdout.trim() : ""
+
+    let ahead: number | null = null
+    if (branch) {
+        const upstreamAhead = await scopedGit(["rev-list", "--count", "@{upstream}..HEAD"], workDir)
+        const fallbackAhead = upstreamAhead.success ? upstreamAhead : await scopedGit(["rev-list", "--count", "origin/HEAD..HEAD"], workDir)
+        if (fallbackAhead.success) ahead = Number.parseInt(fallbackAhead.stdout.trim(), 10) || 0
+    }
+
+    const stagedNameStatus = await scopedGit(["diff", "--cached", "--name-status", "-M"], workDir)
+    const unstagedNameStatus = await scopedGit(["diff", "--name-status", "-M"], workDir)
+    const stagedNumstat = await scopedGit(["diff", "--cached", "--numstat", "-M"], workDir)
+    const unstagedNumstat = await scopedGit(["diff", "--numstat", "-M"], workDir)
+    const untrackedResult = await scopedGit(["ls-files", "--others", "--exclude-standard"], workDir)
+    const stagedFiles = stagedNameStatus.success ? scopedTaskSummaryFiles(stagedNameStatus.stdout) : []
+    const unstagedFiles = unstagedNameStatus.success ? scopedTaskSummaryFiles(unstagedNameStatus.stdout) : []
+    const untracked = untrackedResult.success
+        ? untrackedResult.stdout
+              .trim()
+              .split("\n")
+              .filter(Boolean)
+              .map((filePath) => ({ path: filePath, status: "added" as const, binary: isScopedTaskBinaryPath(filePath) }))
+        : []
+
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        branch,
+        headCommit,
+        ahead,
+        hasChanges: stagedFiles.length > 0 || unstagedFiles.length > 0 || untracked.length > 0,
+        staged: {
+            files: stagedFiles,
+            stats: stagedNumstat.success ? parseScopedNumstatStats(stagedNumstat.stdout) : { filesChanged: 0, insertions: 0, deletions: 0 },
+        },
+        unstaged: {
+            files: unstagedFiles,
+            stats: unstagedNumstat.success ? parseScopedNumstatStats(unstagedNumstat.stdout) : { filesChanged: 0, insertions: 0, deletions: 0 },
+        },
+        untracked,
+    }
 }
 
 function latestTaskMergeBase(task: OpenADETask): string | undefined {
@@ -1632,6 +1754,7 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
             writeProjectFile: writeOpenADEProjectFile,
             fuzzySearchProjectFiles: fuzzySearchOpenADEProjectFiles,
             searchProject: searchOpenADEProject,
+            readTaskGitSummary: scopedTaskGitSummary,
             readTaskChanges: scopedTaskChanges,
             readTaskDiff: scopedTaskDiff,
             readTaskFilePair: scopedTaskFilePair,

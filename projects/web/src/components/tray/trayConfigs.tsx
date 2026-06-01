@@ -136,7 +136,15 @@ export const TRAY_CONFIGS: TrayConfig[] = [
             if (!env?.taskWorkingDir) {
                 return <NoEnvironment />
             }
-            return <Terminal ptyId={tray.taskId} cwd={env.taskWorkingDir} productAccess={getTaskTerminalProductAccess(tray)} className="h-full" onClose={() => tray.close()} />
+            return (
+                <Terminal
+                    ptyId={tray.taskId}
+                    cwd={env.taskWorkingDir}
+                    productAccess={getTaskTerminalProductAccess(tray)}
+                    className="h-full"
+                    onClose={() => tray.close()}
+                />
+            )
         },
     },
     {

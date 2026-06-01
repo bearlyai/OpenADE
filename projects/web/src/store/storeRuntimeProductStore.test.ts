@@ -543,24 +543,38 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
             },
             writeTaskTerminal: async (params) => {
                 requireStateTask(state, params.taskId)
-                if (!state.terminal || params.terminalId !== state.terminal.terminalId) return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: false }
+                if (!state.terminal || params.terminalId !== state.terminal.terminalId)
+                    return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: false }
                 state.terminal.writes.push(params.data)
                 state.terminal.output.push(`runtime terminal wrote: ${params.data}`)
                 return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: true }
             },
             resizeTaskTerminal: async (params) => {
                 requireStateTask(state, params.taskId)
-                if (!state.terminal || params.terminalId !== state.terminal.terminalId) return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: false }
+                if (!state.terminal || params.terminalId !== state.terminal.terminalId)
+                    return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: false }
                 state.terminal.resizedTo = { cols: params.cols, rows: params.rows }
                 return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: true }
             },
             stopTaskTerminal: async (params) => {
                 requireStateTask(state, params.taskId)
-                if (!state.terminal || params.terminalId !== state.terminal.terminalId) return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: false }
+                if (!state.terminal || params.terminalId !== state.terminal.terminalId)
+                    return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: false }
                 state.terminal.exited = true
                 return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: true }
             },
             readTaskImage: unsupportedMutation("readTaskImage"),
+            readTaskGitSummary: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                branch: "main",
+                headCommit: "abc123",
+                ahead: 0,
+                hasChanges: true,
+                staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                unstaged: { files: [{ path: "README.md", status: "modified" }], stats: { filesChanged: 1, insertions: 1, deletions: 1 } },
+                untracked: [],
+            }),
             readTaskChanges: unsupportedMutation("readTaskChanges"),
             readTaskDiff: unsupportedMutation("readTaskDiff"),
             readTaskFilePair: unsupportedMutation("readTaskFilePair"),
@@ -1243,12 +1257,12 @@ describe("CodeStore runtime product store bridge", () => {
             await expect(
                 codeStore.writeProductTaskTerminal({ repoId: "repo-1", taskId: "task-1", terminalId: started.terminalId, data: "pwd\n" })
             ).resolves.toMatchObject({ ok: true })
-            await expect(
-                codeStore.reconnectProductTaskTerminal({ repoId: "repo-1", taskId: "task-1", terminalId: started.terminalId })
-            ).resolves.toMatchObject({
-                output: [expect.objectContaining({ data: "runtime terminal wrote: pwd\n" })],
-                outputCount: 1,
-            })
+            await expect(codeStore.reconnectProductTaskTerminal({ repoId: "repo-1", taskId: "task-1", terminalId: started.terminalId })).resolves.toMatchObject(
+                {
+                    output: [expect.objectContaining({ data: "runtime terminal wrote: pwd\n" })],
+                    outputCount: 1,
+                }
+            )
             await expect(
                 codeStore.resizeProductTaskTerminal({ repoId: "repo-1", taskId: "task-1", terminalId: started.terminalId, cols: 100, rows: 30 })
             ).resolves.toMatchObject({ ok: true })

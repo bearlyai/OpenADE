@@ -97,6 +97,17 @@ class OpenADEClient {
     writeTaskTerminal = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", terminalId: "openade-task-terminal-test", ok: true }))
     resizeTaskTerminal = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", terminalId: "openade-task-terminal-test", ok: true }))
     stopTaskTerminal = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", terminalId: "openade-task-terminal-test", ok: true }))
+    readTaskGitSummary = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        branch: "main",
+        headCommit: "abc123",
+        ahead: 0,
+        hasChanges: false,
+        staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+        unstaged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+        untracked: [],
+    }))
     readTaskChanges = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", files: [], fromTreeish: "HEAD", toTreeish: "" }))
     readTaskDiff = vi.fn(async () => ({
         repoId: "repo-1",

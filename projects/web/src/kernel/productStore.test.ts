@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest"
 import { OpenADEClient } from "../../../openade-client/src"
 import { createOpenADEModule, publishOpenADECompanionEvent, type OpenADEModuleAdapters } from "../../../openade-module/src/module"
-import {
-    type OpenADECommentCreateRequest,
-    type OpenADEProject,
-    type OpenADESnapshot,
-    type OpenADETask,
-    type OpenADETaskMetadataUpdateRequest,
-    type OpenADETaskPreview,
-    type OpenADETurnStartRequest,
+import type {
+    OpenADECommentCreateRequest,
+    OpenADEProject,
+    OpenADESnapshot,
+    OpenADETask,
+    OpenADETaskMetadataUpdateRequest,
+    OpenADETaskPreview,
+    OpenADETurnStartRequest,
 } from "../../../openade-module/src/types"
 import type { RuntimeConnection } from "../../../runtime/src"
 import { RuntimeServer } from "../../../runtime/src"
@@ -259,6 +259,17 @@ function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: Runt
                 toTreeish: "",
                 files: [{ path: "README.md", status: "modified" }],
             }),
+            readTaskGitSummary: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                branch: "main",
+                headCommit: "abc123",
+                ahead: 1,
+                hasChanges: true,
+                staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                unstaged: { files: [{ path: "README.md", status: "modified" }], stats: { filesChanged: 1, insertions: 1, deletions: 0 } },
+                untracked: [],
+            }),
             readTaskDiff: async (params) => ({
                 repoId: params.repoId,
                 taskId: params.taskId,
@@ -428,6 +439,12 @@ describe("OpenADEProductStore", () => {
         await expect(store.getTask("repo-1", "task-1")).resolves.toMatchObject({ title: "Original task", comments: [] })
         await expect(store.readTaskChanges({ repoId: "repo-1", taskId: "task-1" })).resolves.toMatchObject({
             files: [expect.objectContaining({ path: "README.md", status: "modified" })],
+        })
+        await expect(store.readTaskGitSummary({ repoId: "repo-1", taskId: "task-1" })).resolves.toMatchObject({
+            branch: "main",
+            headCommit: "abc123",
+            hasChanges: true,
+            unstaged: { files: [expect.objectContaining({ path: "README.md", status: "modified" })] },
         })
         await expect(store.readTaskDiff({ repoId: "repo-1", taskId: "task-1", filePath: "README.md" })).resolves.toMatchObject({
             filePath: "README.md",

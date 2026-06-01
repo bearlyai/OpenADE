@@ -13,6 +13,7 @@ import type {
     OpenADETaskDiffReadResult,
     OpenADETaskFilePairReadRequest,
     OpenADETaskFilePairReadResult,
+    OpenADETaskGitSummaryResult,
 } from "../../../openade-module/src"
 import { DEFAULT_MODEL, getDefaultModelForHarness, resolveModelForHarness } from "../constants"
 import type { GitSummaryResponse } from "../electronAPI/git"
@@ -43,20 +44,22 @@ function legacyWorktreeDirFromSetupEvent(event: SetupEnvironmentEvent): string |
     return worktreeDir || event.workingDir || null
 }
 
-function gitSummaryFromProductChanges(files: OpenADETaskChangesReadResult["files"]): GitSummaryResponse {
-    const changedFiles = files.map((file) => ({
-        path: file.path,
-        binary: file.binary ?? false,
-        status: file.status,
-    }))
+function gitSummaryFromProductSummary(summary: OpenADETaskGitSummaryResult): GitSummaryResponse {
+    const toGitFiles = (files: OpenADETaskGitSummaryResult["unstaged"]["files"]) =>
+        files.map((file) => ({
+            path: file.path,
+            binary: file.binary ?? false,
+            status: file.status,
+        }))
+
     return {
-        branch: null,
-        headCommit: "",
-        ahead: null,
-        hasChanges: changedFiles.length > 0,
-        staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
-        unstaged: { files: changedFiles, stats: { filesChanged: changedFiles.length, insertions: 0, deletions: 0 } },
-        untracked: [],
+        branch: summary.branch,
+        headCommit: summary.headCommit,
+        ahead: summary.ahead,
+        hasChanges: summary.hasChanges,
+        staged: { files: toGitFiles(summary.staged.files), stats: summary.staged.stats },
+        unstaged: { files: toGitFiles(summary.unstaged.files), stats: summary.unstaged.stats },
+        untracked: toGitFiles(summary.untracked),
     }
 }
 
@@ -328,6 +331,10 @@ export class TaskModel {
 
     readProductTaskChanges(params: Omit<OpenADETaskChangesReadRequest, "repoId" | "taskId">): Promise<OpenADETaskChangesReadResult> {
         return this.store.readProductTaskChanges({ repoId: this.repoId, taskId: this.taskId, ...params })
+    }
+
+    readProductTaskGitSummary(): Promise<OpenADETaskGitSummaryResult> {
+        return this.store.readProductTaskGitSummary({ repoId: this.repoId, taskId: this.taskId })
     }
 
     readProductTaskDiff(params: Omit<OpenADETaskDiffReadRequest, "repoId" | "taskId">): Promise<OpenADETaskDiffReadResult> {
@@ -603,9 +610,9 @@ export class TaskModel {
 
         if (this.usesRuntimeProductReads && this.repoId) {
             try {
-                const result = await this.readProductTaskChanges({})
+                const result = await this.readProductTaskGitSummary()
                 runInAction(() => {
-                    this.gitStatus = gitSummaryFromProductChanges(result.files)
+                    this.gitStatus = gitSummaryFromProductSummary(result)
                 })
             } catch (err) {
                 console.error("[TaskModel] Failed to refresh runtime git state:", err)
