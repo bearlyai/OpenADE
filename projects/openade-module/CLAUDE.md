@@ -2,8 +2,8 @@
 
 Target package for OpenADE product semantics loaded into a runtime server.
 
-- Own projects, tasks, turns, comments, snapshots, and Yjs compatibility.
-- Own OpenADE product types in src/types.ts; companion shared types should only re-export them for compatibility.
+- Own projects, tasks, turns, comments, snapshots, openade.toml process config DTOs, and Yjs compatibility.
+- Own OpenADE product and openade.toml config types in src/types.ts; companion shared types and host bridges should only re-export or alias them for compatibility.
 - Register OpenADE methods under `openade/*` on the single runtime server.
 - Treat `openade/action/*` as trusted-local mutation methods unless remote permissions are intentionally narrowed and reviewed.
 - Do not start a second server.

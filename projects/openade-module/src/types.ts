@@ -473,24 +473,83 @@ export interface OpenADEProjectSearchResult {
     truncated: boolean
 }
 
-export type OpenADEProjectProcessType = "setup" | "daemon" | "task" | "check"
+export type OpenADEProcsProcessType = "setup" | "daemon" | "task" | "check"
 
-export interface OpenADEProjectProcessDefinition {
+export interface OpenADEProcsProcessDef {
     id: string
     name: string
     command: string
     workDir?: string
     url?: string
-    type: OpenADEProjectProcessType
-    configPath: string
-    cwd: string
+    type: OpenADEProcsProcessType
 }
 
-export interface OpenADEProjectProcessConfigError {
+export type OpenADEProcsProcessInput = Omit<OpenADEProcsProcessDef, "id">
+
+export type OpenADEProcsCronTaskType = "plan" | "do" | "ask" | "hyperplan"
+
+export interface OpenADEProcsCronDef {
+    id: string
+    name: string
+    schedule: string
+    type: OpenADEProcsCronTaskType
+    prompt: string
+    appendSystemPrompt?: string
+    images?: string[]
+    isolation?: "head" | "worktree"
+    harness?: string
+    inTaskId?: string
+    reuseTask?: boolean
+}
+
+export type OpenADEProcsCronInput = Omit<OpenADEProcsCronDef, "id">
+
+export interface OpenADEProcsConfig {
+    relativePath: string
+    processes: OpenADEProcsProcessDef[]
+    crons: OpenADEProcsCronDef[]
+}
+
+export interface OpenADEProcsConfigError {
     relativePath: string
     error: string
     line?: number
 }
+
+export interface OpenADEProcsReadResult {
+    repoRoot: string
+    searchRoot: string
+    isWorktree: boolean
+    worktreeRoot?: string
+    configs: OpenADEProcsConfig[]
+    errors: OpenADEProcsConfigError[]
+}
+
+export interface OpenADEEditableProcsFile {
+    filePath: string
+    relativePath: string
+    processes: OpenADEProcsProcessInput[]
+    crons: OpenADEProcsCronInput[]
+    rawContent: string
+}
+
+export interface OpenADESaveEditableProcsResult {
+    filePath: string
+    relativePath: string
+    rawContent: string
+    readResult?: OpenADEProcsReadResult
+}
+
+export type OpenADEProcsRunContext = { type: "repo"; root: string } | { type: "worktree"; root: string }
+
+export type OpenADEProjectProcessType = OpenADEProcsProcessType
+
+export interface OpenADEProjectProcessDefinition extends OpenADEProcsProcessDef {
+    configPath: string
+    cwd: string
+}
+
+export type OpenADEProjectProcessConfigError = OpenADEProcsConfigError
 
 export interface OpenADEProjectProcessOutputChunk {
     type: "stdout" | "stderr"

@@ -1198,6 +1198,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - `projects/shared/companion` remains limited to actual companion pairing/device contracts; MCP host control is still trusted-local desktop capability, not a companion DTO namespace.
 - Focused verification passed: harness typecheck/build, Electron typecheck, web typecheck, Biome lint for the touched MCP/docs files, web `mcp.test.ts`, and Electron `runtimeApi.integration`.
 
+### 2026-06-01: openade.toml Config DTOs Consolidated
+
+- Browser-safe `openade.toml` process, cron, editable-file, read-result, save-result, and run-context DTOs now live in `projects/openade-module/src/types.ts`, alongside the OpenADE project process DTOs that consume those config definitions.
+- `projects/electron/src/modules/code/procs/types.ts` and `projects/web/src/electronAPI/procs.ts` alias the OpenADE-owned config DTOs instead of carrying a copied renderer/main-process contract.
+- This removes another "keep in sync" type pair while preserving the existing trusted local procs parser, editor, and classic desktop process tray behavior.
+- Focused verification passed: OpenADE module typecheck, Electron typecheck, web typecheck, Electron procs parse/discovery tests, Electron `runtimeData.integration` host utility method, web `CronManager` tests, and Biome lint for the touched procs/docs files.
+
 ## Remaining Work Under Corrected Direction
 
 The remaining work is not a desktop UI rewrite. It is a boundary migration: keep the old desktop app experience and replace its direct renderer storage/host assumptions with runtime/OpenADE APIs.

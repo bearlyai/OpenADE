@@ -1,120 +1,54 @@
 /**
  * Types for openade.toml configuration
  *
- * These types are designed to be extractable to a standalone library.
+ * OpenADE module owns these browser-safe DTOs.
  * No Electron or Node-specific dependencies.
  */
+import type {
+    OpenADEEditableProcsFile,
+    OpenADEProcsConfig,
+    OpenADEProcsConfigError,
+    OpenADEProcsCronDef,
+    OpenADEProcsCronInput,
+    OpenADEProcsCronTaskType,
+    OpenADEProcsProcessDef,
+    OpenADEProcsProcessInput,
+    OpenADEProcsProcessType,
+    OpenADEProcsReadResult,
+    OpenADEProcsRunContext,
+    OpenADESaveEditableProcsResult,
+} from "../../../../../openade-module/src"
 
-/**
- * Process types:
- * - setup: Run once per session before other processes (e.g., npm install)
- * - daemon: Long-running background process (e.g., npm run dev)
- * - task: One-shot manual command (e.g., npm run build)
- * - check: Validation/linting, can be triggered by automation (e.g., npm run typecheck)
- */
-export type ProcessType = "setup" | "daemon" | "task" | "check"
+export type ProcessType = OpenADEProcsProcessType
 
-export interface ProcessDef {
-    /** Unique ID: "{relativePath}::{name}" e.g., "packages/api/openade.toml::Backend" */
-    id: string
-    /** Display name */
-    name: string
-    /** Shell command to run */
-    command: string
-    /** Working directory relative to config file location */
-    workDir?: string
-    /** Optional URL for web servers (shown as quick-open link) */
-    url?: string
-    /** Process type - defaults to "daemon" */
-    type: ProcessType
-}
+export type ProcessDef = OpenADEProcsProcessDef
 
 /** Editable process shape used by the config editor (id is derived from file + name) */
-export type ProcessInput = Omit<ProcessDef, "id">
+export type ProcessInput = OpenADEProcsProcessInput
 
 // ============================================================================
 // Cron Types
 // ============================================================================
 
-export type CronTaskType = "plan" | "do" | "ask" | "hyperplan"
+export type CronTaskType = OpenADEProcsCronTaskType
 
-export interface CronDef {
-    /** Unique ID: "{relativePath}::{name}" */
-    id: string
-    /** Display name */
-    name: string
-    /** 5-field cron expression (e.g., "0 9 * * 1") */
-    schedule: string
-    /** Execution type */
-    type: CronTaskType
-    /** The prompt to send to the agent */
-    prompt: string
-    /** Additional system prompt appended to execution */
-    appendSystemPrompt?: string
-    /** Image file paths relative to repo root */
-    images?: string[]
-    /** Isolation strategy: "head" (default) or "worktree" */
-    isolation?: "head" | "worktree"
-    /** Harness to use (e.g., "claude-code", "codex") */
-    harness?: string
-    /** If set, run in an existing task instead of creating a new one */
-    inTaskId?: string
-    /** If true, reuse the task from the last run instead of creating a new one */
-    reuseTask?: boolean
-}
+export type CronDef = OpenADEProcsCronDef
 
 /** Editable cron shape used by the config editor (id is derived from file + name) */
-export type CronInput = Omit<CronDef, "id">
+export type CronInput = OpenADEProcsCronInput
 
 // ============================================================================
 // Config Types
 // ============================================================================
 
-export interface ProcsConfig {
-    /** Path relative to repo root, e.g., "openade.toml" */
-    relativePath: string
-    /** Processes defined in this config file */
-    processes: ProcessDef[]
-    /** Cron jobs defined in this config file */
-    crons: CronDef[]
-}
+export type ProcsConfig = OpenADEProcsConfig
 
-export interface ProcsConfigError {
-    /** Which file had the problem */
-    relativePath: string
-    /** Human-readable error message */
-    error: string
-    /** Line number if available */
-    line?: number
-}
+export type ProcsConfigError = OpenADEProcsConfigError
 
-export interface ReadProcsResult {
-    /** Git repo root (main checkout, not worktree) */
-    repoRoot: string
-    /** Where we searched from (could be worktree) */
-    searchRoot: string
-    /** Whether searchRoot is a worktree */
-    isWorktree: boolean
-    /** If worktree, the worktree root path */
-    worktreeRoot?: string
+export type ReadProcsResult = OpenADEProcsReadResult
 
-    /** Successfully parsed configs */
-    configs: ProcsConfig[]
-    /** Files that failed to parse */
-    errors: ProcsConfigError[]
-}
+export type EditableProcsFile = OpenADEEditableProcsFile
 
-export interface EditableProcsFile {
-    filePath: string
-    relativePath: string
-    processes: ProcessInput[]
-    crons: CronInput[]
-    rawContent: string
-}
+export type SaveEditableProcsResult = OpenADESaveEditableProcsResult
 
-export interface SaveEditableProcsResult {
-    filePath: string
-    relativePath: string
-    rawContent: string
-    readResult?: ReadProcsResult
-}
+export type RunContext = OpenADEProcsRunContext
