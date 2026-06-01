@@ -1,8 +1,8 @@
-import { act, createElement, type ReactElement } from "react"
-import { createRoot, type Root } from "react-dom/client"
+import { type ReactElement, act, createElement } from "react"
+import { type Root, createRoot } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import type { OpenADESnapshot } from "../../../openade-module/src"
-import { isMobileThemeSetting, MobileSessionsScreen, MobileSettingsScreen } from "./MobileSessionScreens"
+import { OpenADESessionsScreen, OpenADESettingsScreen, isOpenADEThemeSetting } from "./OpenADESessionScreens"
 
 const snapshot: OpenADESnapshot = {
     server: {
@@ -26,7 +26,7 @@ function buttonByTitle(container: HTMLElement, title: string): HTMLButtonElement
     return button
 }
 
-describe("MobileSessionScreens", () => {
+describe("OpenADESessionScreens", () => {
     let container: HTMLDivElement
     let root: Root
 
@@ -51,7 +51,7 @@ describe("MobileSessionScreens", () => {
     it("routes saved session selection, removal, and add actions", () => {
         const actions: string[] = []
         render(
-            createElement(MobileSessionsScreen, {
+            createElement(OpenADESessionsScreen, {
                 configs: [
                     { id: "local", host: "Local Desktop", baseUrl: "http://127.0.0.1:1977" },
                     { id: "office", host: "Office Desktop", baseUrl: "http://10.0.0.5:1977" },
@@ -73,14 +73,14 @@ describe("MobileSessionScreens", () => {
         expect(actions).toEqual(["select:office", "remove:office", "add"])
     })
 
-    it("routes mobile settings actions and validates theme selections", () => {
+    it("routes session settings actions and validates theme selections", () => {
         const actions: string[] = []
         render(
-            createElement(MobileSettingsScreen, {
+            createElement(OpenADESettingsScreen, {
                 config: { id: "local", host: "Local Desktop", baseUrl: "http://127.0.0.1:1977" },
                 snapshot,
                 status: { label: "Connected", tone: "ok" },
-                mobileTheme: "desktop",
+                themeSetting: "desktop",
                 onRefresh: () => actions.push("refresh"),
                 onForget: () => actions.push("forget"),
                 onSelfRevoke: () => actions.push("self-revoke"),
@@ -110,10 +110,10 @@ describe("MobileSessionScreens", () => {
         expect(actions).toEqual(["refresh", "forget", "self-revoke", "sessions", "add", "theme:code-theme-light"])
     })
 
-    it("accepts only supported mobile theme settings", () => {
-        expect(isMobileThemeSetting("desktop")).toBe(true)
-        expect(isMobileThemeSetting("code-theme-clean")).toBe(true)
-        expect(isMobileThemeSetting("not-a-theme")).toBe(false)
-        expect(isMobileThemeSetting(null)).toBe(false)
+    it("accepts only supported shell theme settings", () => {
+        expect(isOpenADEThemeSetting("desktop")).toBe(true)
+        expect(isOpenADEThemeSetting("code-theme-clean")).toBe(true)
+        expect(isOpenADEThemeSetting("not-a-theme")).toBe(false)
+        expect(isOpenADEThemeSetting(null)).toBe(false)
     })
 })

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import type { RemoteSnapshot, RemoteTask, RemoteTurnStartRequest } from "../../../shared/companion/src"
 import type {
     OpenADEProjectFileReadResult,
     OpenADEProjectFilesTreeResult,
@@ -11,8 +10,18 @@ import type {
     OpenADETaskGitChangedFile,
     OpenADETaskGitLogResult,
 } from "../../../openade-module/src"
+import type { RemoteSnapshot, RemoteTask, RemoteTurnStartRequest } from "../../../shared/companion/src"
 import { DEFAULT_HARNESS_ID, getDefaultModelForHarness } from "../constants"
+import { type OpenADEThemeSetting, isOpenADEThemeSetting } from "../shell/OpenADESessionScreens"
+import { OpenADEShell, type OpenADEShellScreen } from "../shell/OpenADEShell"
+import { RemotePairingScreen } from "../shell/RemotePairingScreen"
+import type { TaskImageLoader } from "../shell/task/TaskEventThread"
+import type { OpenADETaskCommentView, TaskReviewType } from "../shell/task/TaskProductPanel"
+import type { TaskImageAttachment } from "../shell/task/taskEventPresentation"
 import {
+    type PairingTarget,
+    type RemoteConfig,
+    type RemoteRealtimeConnectionStatus,
     abortRemote,
     activateRemoteConfig,
     buildPairingTarget,
@@ -28,54 +37,45 @@ import {
     listRemoteProjectProcesses,
     loadRemoteConfig,
     loadRemoteConfigs,
-    parsePairingCode,
     pairRemote,
+    parsePairingCode,
     readRemoteProjectFile,
     readRemoteTaskChanges,
     readRemoteTaskDiff,
     readRemoteTaskGitLog,
     readRemoteTaskImage,
     reconnectRemoteProjectProcess,
-    removeRemoteConfig,
     remoteErrorMessage,
+    removeRemoteConfig,
+    saveRemoteConfig,
     searchRemoteProject,
     selfRevokeRemoteDevice,
-    startRemoteReview,
     startRemoteProjectProcess,
+    startRemoteReview,
     startRemoteTurn,
-    saveRemoteConfig,
     stopRemoteProjectProcess,
     subscribeRemoteChanges,
-    type PairingTarget,
-    type RemoteConfig,
-    type RemoteRealtimeConnectionStatus,
     updateRemoteTaskMetadata,
 } from "./client"
-import type { TaskImageLoader } from "../shell/task/TaskEventThread"
-import type { TaskImageAttachment } from "../shell/task/taskEventPresentation"
 import { remoteRefreshPlan } from "./refreshPolicy"
 import { nextRemoteRefreshDelay } from "./refreshQueue"
 import { REMOTE_STATUS_GRACE_MS, isRemoteRealtimeOnline, shouldDelayRemoteStatusDisplay, statusCopy } from "./status"
 import { beginRemoteSubmission, finishRemoteSubmission } from "./submission"
-import { MobileOpenADEShell, type MobileOpenADEShellScreen } from "../shell/MobileOpenADEShell"
-import { MobilePairingScreen } from "../shell/MobilePairingScreen"
-import { isMobileThemeSetting, type MobileThemeSetting } from "../shell/MobileSessionScreens"
-import type { OpenADETaskCommentView, TaskReviewType } from "../shell/task/TaskProductPanel"
 
 type CommandType = RemoteTurnStartRequest["type"]
 type PendingConnection = PairingTarget & { mode: "pair" | "manual" }
-type RemoteScreen = MobileOpenADEShellScreen
+type RemoteScreen = OpenADEShellScreen
 type SnapshotRefreshOptions = { repairNavigation?: boolean }
 
-export const MOBILE_THEME_STORAGE_KEY = "openade-companion-theme"
+export const REMOTE_THEME_STORAGE_KEY = "openade-companion-theme"
 
-function loadMobileThemeSetting(): MobileThemeSetting {
-    const value = window.localStorage.getItem(MOBILE_THEME_STORAGE_KEY)
-    return isMobileThemeSetting(value) ? value : "desktop"
+function loadOpenADEThemeSetting(): OpenADEThemeSetting {
+    const value = window.localStorage.getItem(REMOTE_THEME_STORAGE_KEY)
+    return isOpenADEThemeSetting(value) ? value : "desktop"
 }
 
-function saveMobileThemeSetting(value: MobileThemeSetting): void {
-    window.localStorage.setItem(MOBILE_THEME_STORAGE_KEY, value)
+function saveOpenADEThemeSetting(value: OpenADEThemeSetting): void {
+    window.localStorage.setItem(REMOTE_THEME_STORAGE_KEY, value)
 }
 
 interface RemoteAppProps {
@@ -167,7 +167,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const [taskDiff, setTaskDiff] = useState<OpenADETaskDiffReadResult | null>(null)
     const [taskDiffActionPath, setTaskDiffActionPath] = useState<string | null>(null)
     const [showArchivedProjects, setShowArchivedProjects] = useState(false)
-    const [mobileTheme, setMobileTheme] = useState<MobileThemeSetting>(() => loadMobileThemeSetting())
+    const [themeSetting, setThemeSetting] = useState<OpenADEThemeSetting>(() => loadOpenADEThemeSetting())
     const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null)
     const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
     const [task, setTask] = useState<RemoteTask | null>(null)
@@ -221,7 +221,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const selectedRepo = selectedRepoId ? (snapshot?.repos.find((repo) => repo.id === selectedRepoId) ?? null) : null
     const selectedTask = selectedRepo?.tasks.find((item) => item.id === selectedTaskId) ?? null
     const desktopThemeClass = snapshot?.server.theme?.className ?? "code-theme-black"
-    const themeClass = mobileTheme === "desktop" ? desktopThemeClass : mobileTheme
+    const themeClass = themeSetting === "desktop" ? desktopThemeClass : themeSetting
     const rootClass = `code-theme ${themeClass} flex bg-base-100 text-base-content flex-col overflow-hidden`
     const connectionStatus = useSmoothedRemoteStatus(rawConnectionStatus)
     const status = statusCopy(connectionStatus)
@@ -1082,14 +1082,14 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         setIsAddingHost(true)
     }
 
-    const handleMobileThemeChange = (value: MobileThemeSetting) => {
-        setMobileTheme(value)
-        saveMobileThemeSetting(value)
+    const handleThemeChange = (value: OpenADEThemeSetting) => {
+        setThemeSetting(value)
+        saveOpenADEThemeSetting(value)
     }
 
     if (!config || isAddingHost) {
         return (
-            <MobilePairingScreen
+            <RemotePairingScreen
                 canScan={Boolean(scanPairingCode)}
                 baseUrl={baseUrl}
                 pendingConnection={pendingConnection}
@@ -1122,7 +1122,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     }
 
     return (
-        <MobileOpenADEShell
+        <OpenADEShell
             className={rootClass}
             screen={screen}
             host={formatHost(config)}
@@ -1176,7 +1176,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             activeConfigId={config.id}
             settingsConfig={config}
             snapshot={snapshot}
-            mobileTheme={mobileTheme}
+            themeSetting={themeSetting}
             loadTaskImage={loadTaskImage}
             onBack={handleBack}
             onRefresh={refreshAll}
@@ -1229,7 +1229,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             onRemoveHost={handleRemoveHost}
             onForget={handleForget}
             onSelfRevoke={handleSelfRevoke}
-            onMobileThemeChange={handleMobileThemeChange}
+            onThemeChange={handleThemeChange}
         />
     )
 }

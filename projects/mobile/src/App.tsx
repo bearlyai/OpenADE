@@ -55,7 +55,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBounda
             >
                 <h1 style={{ fontSize: 20, marginBottom: 12 }}>OpenADE</h1>
                 <div style={{ border: "1px solid #7f1d1d", background: "#2a0505", color: "#ffb4b4", padding: 12, marginBottom: 12 }}>
-                    {this.state.error.message || "The mobile UI failed to load."}
+                    {this.state.error.message || "The remote shell failed to load."}
                 </div>
                 <button type="button" onClick={this.reset} style={{ background: "#f97316", color: "#fff", padding: "10px 14px", border: 0 }}>
                     Reset mobile connection

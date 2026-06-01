@@ -13,7 +13,7 @@ yarn install
 yarn ios
 ```
 
-The mobile shell mirrors paired device tokens into `capacitor-secure-storage-plugin`, which uses Keychain on iOS. One phone can keep multiple OpenADE hosts and switch between them from the sessions screen.
+The mobile host mirrors paired device tokens into `capacitor-secure-storage-plugin`, which uses Keychain on iOS. One phone can keep multiple OpenADE hosts and switch between them from the shared remote shell sessions screen.
 
 The iOS deployment target is 15.5 because the in-app QR scanner uses ML Kit Barcode Scanning.
 

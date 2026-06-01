@@ -14,26 +14,26 @@ import type {
     OpenADETaskGitLogResult,
     OpenADETaskPreview,
 } from "../../../openade-module/src"
-import { MobileChrome, type MobileChromeNavItem, type MobileChromeStatus } from "./MobileChrome"
-import { type MobileSessionConfig, MobileSessionsScreen, MobileSettingsScreen, type MobileThemeSetting } from "./MobileSessionScreens"
+import { OpenADEChrome, type OpenADEChromeNavItem, type OpenADEChromeStatus } from "./OpenADEChrome"
+import { type OpenADESessionConfig, OpenADESessionsScreen, OpenADESettingsScreen, type OpenADEThemeSetting } from "./OpenADESessionScreens"
 import { ProjectTasksScreen } from "./project/ProjectTasksScreen"
-import { ProjectsScreen, type ProjectSessionSummary } from "./project/ProjectsScreen"
+import { type ProjectSessionSummary, ProjectsScreen } from "./project/ProjectsScreen"
 import { NewTaskScreen } from "./task/NewTaskScreen"
 import type { TaskImageLoader } from "./task/TaskEventThread"
 import type { OpenADETaskCommentView, TaskReviewType } from "./task/TaskProductPanel"
 import { TaskScreen } from "./task/TaskScreen"
 import type { TaskCommandType } from "./task/taskCommands"
 
-export type MobileOpenADEShellScreen = "projects" | "project" | "task" | "new_task" | "sessions" | "settings"
+export type OpenADEShellScreen = "projects" | "project" | "task" | "new_task" | "sessions" | "settings"
 
-const mobileOpenADENavItems: Array<MobileChromeNavItem<MobileOpenADEShellScreen>> = [
+const openADENavItems: Array<OpenADEChromeNavItem<OpenADEShellScreen>> = [
     { screen: "projects", label: "Projects", icon: FolderOpen },
     { screen: "new_task", label: "New", icon: MessageSquarePlus },
     { screen: "sessions", label: "Sessions", icon: Server },
     { screen: "settings", label: "Settings", icon: Settings },
 ]
 
-function mobileShellTitle(screen: MobileOpenADEShellScreen, selectedRepo: OpenADEProject | null, selectedTask: OpenADETaskPreview | null): string {
+function openADEShellTitle(screen: OpenADEShellScreen, selectedRepo: OpenADEProject | null, selectedTask: OpenADETaskPreview | null): string {
     if (screen === "task") return selectedTask?.title ?? "Task"
     if (screen === "project") return selectedRepo?.name ?? "Tasks"
     if (screen === "new_task") return "New Task"
@@ -42,7 +42,7 @@ function mobileShellTitle(screen: MobileOpenADEShellScreen, selectedRepo: OpenAD
     return "Projects"
 }
 
-export function MobileOpenADEShell({
+export function OpenADEShell({
     className,
     screen,
     host,
@@ -91,7 +91,7 @@ export function MobileOpenADEShell({
     activeConfigId,
     settingsConfig,
     snapshot,
-    mobileTheme,
+    themeSetting,
     loadTaskImage,
     onBack,
     onRefresh,
@@ -138,12 +138,12 @@ export function MobileOpenADEShell({
     onRemoveHost,
     onForget,
     onSelfRevoke,
-    onMobileThemeChange,
+    onThemeChange,
 }: {
     className: string
-    screen: MobileOpenADEShellScreen
+    screen: OpenADEShellScreen
     host: string
-    status: MobileChromeStatus
+    status: OpenADEChromeStatus
     isLoading: boolean
     isSubmitting: boolean
     isOnline: boolean
@@ -184,15 +184,15 @@ export function MobileOpenADEShell({
     newTaskMode: TaskCommandType
     newTaskTitle: string
     newTaskPrompt: string
-    configs: MobileSessionConfig[]
+    configs: OpenADESessionConfig[]
     activeConfigId: string
-    settingsConfig: MobileSessionConfig
+    settingsConfig: OpenADESessionConfig
     snapshot: OpenADESnapshot | null
-    mobileTheme: MobileThemeSetting
+    themeSetting: OpenADEThemeSetting
     loadTaskImage?: TaskImageLoader
     onBack: () => void
     onRefresh: () => void
-    onNavigate: (screen: MobileOpenADEShellScreen) => void
+    onNavigate: (screen: OpenADEShellScreen) => void
     onToggleArchivedProjects: () => void
     onSelectProject: (configId: string, repoId: string) => void
     onAddHost: () => void
@@ -235,12 +235,12 @@ export function MobileOpenADEShell({
     onRemoveHost: (configId: string) => void
     onForget: () => void
     onSelfRevoke: () => void
-    onMobileThemeChange: (value: MobileThemeSetting) => void
+    onThemeChange: (value: OpenADEThemeSetting) => void
 }) {
     return (
-        <MobileChrome
+        <OpenADEChrome
             className={className}
-            title={mobileShellTitle(screen, selectedRepo, selectedTask)}
+            title={openADEShellTitle(screen, selectedRepo, selectedTask)}
             host={host}
             status={status}
             showBack={screen === "project" || screen === "task" || screen === "new_task" || screen === "sessions" || screen === "settings"}
@@ -249,7 +249,7 @@ export function MobileOpenADEShell({
             notice={notice}
             connectionWarning={connectionWarning}
             activeNav={screen === "project" ? "projects" : screen}
-            navItems={mobileOpenADENavItems}
+            navItems={openADENavItems}
             onBack={onBack}
             onRefresh={onRefresh}
             onNavigate={onNavigate}
@@ -351,22 +351,22 @@ export function MobileOpenADEShell({
                 />
             )}
             {screen === "sessions" && (
-                <MobileSessionsScreen configs={configs} activeConfigId={activeConfigId} onSelect={onSelectHost} onRemove={onRemoveHost} onAdd={onAddHost} />
+                <OpenADESessionsScreen configs={configs} activeConfigId={activeConfigId} onSelect={onSelectHost} onRemove={onRemoveHost} onAdd={onAddHost} />
             )}
             {screen === "settings" && (
-                <MobileSettingsScreen
+                <OpenADESettingsScreen
                     config={settingsConfig}
                     snapshot={snapshot}
                     status={status}
-                    mobileTheme={mobileTheme}
+                    themeSetting={themeSetting}
                     onRefresh={onRefresh}
                     onForget={onForget}
                     onSelfRevoke={onSelfRevoke}
                     onSessions={() => onNavigate("sessions")}
                     onAdd={onAddHost}
-                    onThemeChange={onMobileThemeChange}
+                    onThemeChange={onThemeChange}
                 />
             )}
-        </MobileChrome>
+        </OpenADEChrome>
     )
 }

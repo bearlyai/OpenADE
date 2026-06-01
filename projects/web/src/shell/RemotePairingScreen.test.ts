@@ -1,7 +1,7 @@
-import { act, createElement, type ReactElement } from "react"
-import { createRoot, type Root } from "react-dom/client"
+import { type ReactElement, act, createElement } from "react"
+import { type Root, createRoot } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { MobilePairingScreen } from "./MobilePairingScreen"
+import { RemotePairingScreen } from "./RemotePairingScreen"
 
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
     const button = Array.from(container.querySelectorAll("button")).find((item): item is HTMLButtonElement => item.textContent?.includes(text) === true)
@@ -9,7 +9,7 @@ function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
     return button
 }
 
-describe("MobilePairingScreen", () => {
+describe("RemotePairingScreen", () => {
     let container: HTMLDivElement
     let root: Root
 
@@ -34,7 +34,7 @@ describe("MobilePairingScreen", () => {
     it("routes manual pairing input, scan, submit, and cancel actions", () => {
         const actions: string[] = []
         render(
-            createElement(MobilePairingScreen, {
+            createElement(RemotePairingScreen, {
                 canScan: true,
                 baseUrl: "openade://pair?token=test-token",
                 pendingConnection: null,
@@ -73,7 +73,7 @@ describe("MobilePairingScreen", () => {
     it("routes pending connection confirmation and change actions", () => {
         const actions: string[] = []
         render(
-            createElement(MobilePairingScreen, {
+            createElement(RemotePairingScreen, {
                 canScan: false,
                 baseUrl: "",
                 pendingConnection: { host: "Office Desktop", baseUrl: "http://10.0.0.5:1977" },

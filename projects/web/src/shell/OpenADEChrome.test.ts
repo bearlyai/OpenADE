@@ -1,12 +1,12 @@
 import { FolderOpen, MessageSquarePlus, Settings } from "lucide-react"
-import { act, createElement, type ReactElement } from "react"
-import { createRoot, type Root } from "react-dom/client"
+import { type ReactElement, act, createElement } from "react"
+import { type Root, createRoot } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { MobileChrome, mobileStatusToneClass, type MobileChromeNavItem } from "./MobileChrome"
+import { OpenADEChrome, type OpenADEChromeNavItem, openADEStatusToneClass } from "./OpenADEChrome"
 
 type TestScreen = "projects" | "new_task" | "settings"
 
-const navItems: Array<MobileChromeNavItem<TestScreen>> = [
+const navItems: Array<OpenADEChromeNavItem<TestScreen>> = [
     { screen: "projects", label: "Projects", icon: FolderOpen },
     { screen: "new_task", label: "New", icon: MessageSquarePlus },
     { screen: "settings", label: "Settings", icon: Settings },
@@ -18,7 +18,7 @@ function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
     return button
 }
 
-describe("MobileChrome", () => {
+describe("OpenADEChrome", () => {
     let container: HTMLDivElement
     let root: Root
 
@@ -40,11 +40,11 @@ describe("MobileChrome", () => {
         })
     }
 
-    it("frames mobile shell content and routes chrome actions", () => {
+    it("frames shared shell content and routes chrome actions", () => {
         const actions: string[] = []
         render(
             createElement(
-                MobileChrome<TestScreen>,
+                OpenADEChrome<TestScreen>,
                 {
                     className: "code-theme code-theme-black flex bg-base-100 text-base-content flex-col overflow-hidden",
                     title: "Runtime task",
@@ -82,9 +82,9 @@ describe("MobileChrome", () => {
     })
 
     it("keeps status tone mapping available to medium settings panels", () => {
-        expect(mobileStatusToneClass("ok")).toBe("text-success")
-        expect(mobileStatusToneClass("warn")).toBe("text-warning")
-        expect(mobileStatusToneClass("bad")).toBe("text-error")
-        expect(mobileStatusToneClass("muted")).toBe("text-muted")
+        expect(openADEStatusToneClass("ok")).toBe("text-success")
+        expect(openADEStatusToneClass("warn")).toBe("text-warning")
+        expect(openADEStatusToneClass("bad")).toBe("text-error")
+        expect(openADEStatusToneClass("muted")).toBe("text-muted")
     })
 })

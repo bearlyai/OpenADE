@@ -5,5 +5,5 @@ function enabledFlag(value: string | boolean | undefined, fallback = false): boo
 }
 
 export const isCompanionFeatureEnabled = enabledFlag(import.meta.env.VITE_OPENADE_ENABLE_COMPANION, import.meta.env.DEV)
-export const isRuntimeBackedProductStoreEnabled = enabledFlag(import.meta.env.VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE, false)
-export const isDesktopSharedTaskScreenEnabled = enabledFlag(import.meta.env.VITE_OPENADE_ENABLE_DESKTOP_SHARED_TASK_SCREEN, false)
+export const isRuntimeBackedProductStoreEnabled = enabledFlag(import.meta.env.VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE, true)
+export const isDesktopSharedTaskScreenEnabled = enabledFlag(import.meta.env.VITE_OPENADE_ENABLE_DESKTOP_SHARED_TASK_SCREEN, true)

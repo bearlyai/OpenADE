@@ -5,7 +5,7 @@
 Move the Electron desktop app and the mobile companion toward one shared OpenADE application shell attached to a runtime kernel. The intended end state is not two separate products with duplicated UI and transport logic. It is one product surface that can run through different medium adapters:
 
 - Electron desktop shell
-- Capacitor mobile shell
+- Capacitor mobile host
 - Browser web shell
 - Future CLI/headless clients where applicable
 
@@ -40,19 +40,19 @@ Desktop is already partially runtime-backed, but it is still a privileged local 
 
 Desktop is therefore a hybrid: mutations and execution have moved toward the runtime, but read models and much of the view state still assume local trusted storage and host access.
 
-### Mobile Companion
+### Mobile Companion Host
 
-Mobile is already a thin shell:
+Mobile is now a thin host adapter rather than a separate product UI:
 
 - `projects/mobile/src/App.tsx` owns native QR scanning, secure storage mirroring, OTA readiness, and error reset.
-- The main mobile UI is imported from `projects/web/src/remote/RemoteApp.tsx`.
+- The main product shell is imported from `projects/web/src/remote/RemoteApp.tsx`, which delegates project/task/new-task/session/settings composition to `projects/web/src/shell/OpenADEShell.tsx`.
 - `projects/web/src/remote/client.ts` owns pairing URL parsing, host validation, config persistence, runtime WebSocket construction, reconnect status, and remote reads/actions.
 
 The current remote UI remains intentionally safer than desktop, but it now covers more product parity than the initial plan state. It reads snapshots/tasks, starts and interrupts turns, listens to runtime notifications, edits task metadata/comments, cancels queued turns, starts reviews, deletes tasks, renders task-owned images, and exposes scoped file/search/process/git-read panels. It still does not expose desktop parity for model/MCP controls, raw terminal access, arbitrary process control, file writes, commit/push, native desktop settings, or broad admin/device-management surfaces.
 
 ### Permission Boundary
 
-Paired mobile devices currently get a safe subset of runtime methods. Trusted desktop local IPC has full access. This must remain intentional. A shared shell cannot mean giving mobile raw `fs/*`, `git/*`, `pty/*`, `process/*`, `host/*`, or `data/yjs/*` access by default.
+Paired remote devices currently get a safe subset of runtime methods. Trusted desktop local IPC has full access. This must remain intentional. A shared shell cannot mean giving remote clients raw `fs/*`, `git/*`, `pty/*`, `process/*`, `host/*`, or `data/yjs/*` access by default.
 
 ## Target Architecture
 
@@ -562,7 +562,7 @@ Replace the split between full desktop app and narrow `RemoteApp` with one share
 - `projects/web/src/shell/SessionGate.tsx`
 - `projects/web/src/shell/ResponsiveLayout.tsx`
 - `projects/web/src/shell/DesktopChrome.tsx`
-- `projects/web/src/shell/MobileChrome.tsx`
+- `projects/web/src/shell/OpenADEChrome.tsx`
 - `projects/web/src/shell/routes.ts`
 - `projects/web/src/features/tasks/*`
 - `projects/web/src/features/projects/*`
@@ -628,7 +628,7 @@ Unify settings that should be kernel/product-owned while preserving medium-speci
 
 ### Medium Settings
 
-- Mobile theme override.
+- Shell theme override.
 - Mobile secure storage state.
 - Electron window frame.
 - Electron app updates.
@@ -819,7 +819,7 @@ Record major decisions here as the migration proceeds.
 
 ### 2026-05-31: Desktop Runtime Read Bridge Started
 
-- Desktop `CodeStore` now has a disabled-by-default runtime product read bridge behind `VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE` or `CodeStoreConfig.enableRuntimeProductStore`.
+- Desktop `CodeStore` added a runtime product read bridge behind `VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE` or `CodeStoreConfig.enableRuntimeProductStore`; later slices in this branch promote that bridge to default-on with explicit false overrides.
 - The bridge hydrates `runtimeProductSnapshot` through `OpenADEProductStore` and `OpenADEClient`; when ready, `RepoManager.repos` and `CodeStore.getTaskPreviewsForRepo()` may serve repo/task preview reads from runtime DTOs.
 - Desktop sidebar/navigation callers now use those accessors, but the flag remains off by default and legacy Yjs renderer stores remain the fallback.
 - `projects/web/src/store/storeRuntimeProductStore.test.ts` verifies the bridge through a real `RuntimeServer`, `RuntimeLocalClient`, and `OpenADEClient`.
@@ -841,34 +841,34 @@ Record major decisions here as the migration proceeds.
 - Runtime settlement now scans the unified `TaskManager` task view after refresh, so DTO-backed tasks fire the same after-event callbacks as legacy Yjs-backed tasks when a real `runtime/completed` notification removes a running task runtime.
 - The same real-notification suite now covers `openade/repo/deleted` cache repair: project lists, task previews, cached task DTOs, and `TaskModel` lookup all prune after the repo disappears from the runtime snapshot.
 - `projects/web/src/Routes.runtimeProductStore.test.ts` now installs a real `RuntimeServer` behind the production `runtime/localRuntimeClient.ts` path, then smoke-tests the desktop base route redirecting from runtime-backed project/task previews and the desktop task route rendering runtime-loaded task detail through `CodeLayout`/`TaskPage`.
-- Remaining Phase 3/4 work before enabling the runtime product bridge by default: review rollout fallback telemetry from an internal/default-on cohort. Legacy renderer Yjs initialization should remain available as fallback-only for at least one production release after any default-on runtime rollout, and removal should wait for telemetry/log review showing no meaningful fallback use.
+- The runtime product bridge now defaults on in this branch. Legacy renderer Yjs initialization remains available as fallback-only for at least one production release after the default-on runtime rollout, and removal must wait for telemetry/log review showing no meaningful fallback use.
 
 ### 2026-06-01: Desktop Shared Task Screen Gate Started
 
-- Desktop task routes can now render `projects/web/src/pages/DesktopSharedTaskPage.tsx` behind `VITE_OPENADE_ENABLE_DESKTOP_SHARED_TASK_SCREEN` or `CodeStoreConfig.enableDesktopSharedTaskScreen`.
-- The gated adapter composes the shared `projects/web/src/shell/task/TaskScreen.tsx` from cached OpenADE task/preview DTOs, while leaving the existing rich desktop `TaskPage` and `InputBar` as the default path.
+- Desktop task routes now default to `projects/web/src/pages/DesktopSharedTaskPage.tsx` when runtime product reads are available; `VITE_OPENADE_ENABLE_DESKTOP_SHARED_TASK_SCREEN=false` or `CodeStoreConfig.enableDesktopSharedTaskScreen=false` keeps the legacy desktop task page available as fallback.
+- The adapter composes the shared `projects/web/src/shell/task/TaskScreen.tsx` from cached OpenADE task/preview DTOs, while preserving the rich desktop `InputBar` through a desktop-supplied composer slot.
 - Desktop shared task actions use the same `runtime/localOpenADEClient.ts` product methods for turn start, interrupt, review, metadata, comments, queued-turn cancellation, delete, task image read, and scoped task git reads.
 - `projects/web/src/Routes.runtimeProductStore.test.ts` now verifies this route through a real `RuntimeServer` installed behind the production local runtime bridge, including rendering shared task controls, updating metadata/comments, starting a review, and submitting a turn through `openade/turn/start` before waiting for refreshed DTOs to render.
-- Keep the gate off by default until rollout fallback telemetry has been reviewed from an internal/default-on cohort.
+- Keep the legacy task page and renderer Yjs read path available until production default-on telemetry has been reviewed.
 
 ### 2026-06-01: Runtime Product Bridge Rollout Decision
 
-- The runtime product bridge can be shipped behind flags, but default-on desktop rollout must keep the renderer Yjs path as a fallback for at least one production release.
+- The runtime product bridge and shared desktop task screen default on in this branch, but production rollout must keep the renderer Yjs path as a fallback for at least one production release.
 - Do not remove renderer Yjs initialization or fallback reads until telemetry/logs show the runtime-backed path is healthy across normal navigation, task detail, notifications, and reloads.
 - If fallback use is observed after default-on rollout, treat it as a production migration bug and add a regression fixture before removing the fallback.
 - Rollout observability now comes from `CodeStore`: `app_opened` includes runtime-product gate/status fields, `runtime_product_store_error` records sanitized bridge error categories, and `runtime_product_store_fallback` records deduped legacy direct-read fallback sources/reasons without repo paths or task content.
-- Default-on promotion criteria for the runtime product bridge: packaged workflow smoke passes, no fallback events are seen in the internal/default-on cohort for normal navigation/task-detail/reload flows, and any observed fallback has a reproduction plus a regression fixture before removal of the legacy path.
+- Production rollout criteria for the default-on runtime product bridge: packaged workflow smoke passes, no fallback events are seen in the internal/default-on cohort for normal navigation/task-detail/reload flows, and any observed fallback has a reproduction plus a regression fixture before removal of the legacy path.
 
 ### Runtime Product Rollout Telemetry Review Runbook
 
-Run this review before changing `VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE` or `VITE_OPENADE_ENABLE_DESKTOP_SHARED_TASK_SCREEN` from internal/default-off to default-on.
+Run this review before shipping the default-on runtime/shared-shell branch broadly and again before removing renderer Yjs fallback reads.
 
-- Cohort setup: ship an internal desktop build with the runtime product bridge enabled (`VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE=1`) and the shared task screen enabled only for the cohort under review (`VITE_OPENADE_ENABLE_DESKTOP_SHARED_TASK_SCREEN=1` when validating shared shell parity).
+- Cohort setup: ship an internal desktop build with the default-on runtime product bridge and shared task screen enabled, and record any explicit env/config overrides. To compare fallback behavior, use explicit false values for `VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE` or `VITE_OPENADE_ENABLE_DESKTOP_SHARED_TASK_SCREEN`.
 - Required workflow coverage: desktop launch, repo/project list navigation, task preview navigation, task detail load, runtime notification refresh, Plan, Revise, Run Plan, Ask, comments, metadata edits, close/reopen, app close/relaunch reload, and scoped project file tree/read/write/search.
 - Required telemetry checks: `app_opened` must show the gate enabled and a ready runtime product store after normal startup; `runtime_product_store_error` must have no unexplained categories; `runtime_product_store_fallback` must be absent for normal workflows.
 - Data hygiene check: telemetry review must use only the sanitized fields emitted by `CodeStore` (`source`, `reason`, gate/status flags, snapshot presence, repo/task counts, and error kind). Do not add repo paths, task titles/content, prompt text, file contents, or user code to rollout events.
 - Failure handling: every fallback or unexplained bridge error blocks default-on promotion until the team captures a reproduction, adds a real regression fixture/test on the production bridge path, and reruns packaged workflow smoke.
-- Promotion rule: after the internal/default-on cohort has zero normal-flow fallback events and no unexplained bridge errors, the bridge may become default-on while keeping legacy Yjs direct reads as fallback for at least one production release. Removal of the fallback path requires another telemetry/log review for that release.
+- Rollout rule: the default-on build can ship broadly only after the internal/default-on cohort has zero normal-flow fallback events and no unexplained bridge errors. Removal of the fallback path requires another telemetry/log review for that release.
 
 ### 2026-06-01: Runtime Migration Verification Sweep
 
@@ -967,7 +967,7 @@ Run this review before changing `VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE` or `
 
 - `projects/web/src/shell/project/ProjectHostPanels.tsx` now renders process output from the scoped `openade/project/process/reconnect` result next to the shared project process start/stop controls.
 - `RemoteApp` routes the companion Output action through `reconnectRemoteProjectProcess`, so mobile can inspect output for reviewed `openade.toml` processes without raw `process/*`, `pty/*`, or arbitrary host command access.
-- `ProjectTasksScreen`, `MobileOpenADEShell`, and the remote client helper now carry the typed reconnect result through the shared shell boundary.
+- `ProjectTasksScreen`, `OpenADEShell`, and the remote client helper now carry the typed reconnect result through the shared shell boundary.
 - Focused component/client tests and `RemoteApp.integration.test.ts` cover the output action against a real `RuntimeServer`, `RuntimeLocalClient`, `OpenADEClient`, and OpenADE module route.
 - Packaged-app smoke now also writes a real `openade.toml`, calls `openade/project/process/list`, starts the scoped process in the packaged Electron host, reconnects until stdout contains `packaged scoped process ok`, and stops it.
 
@@ -1019,14 +1019,14 @@ Run this review before changing `VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE` or `
 
 ### 2026-06-01: Mobile Multi-Session Runtime Verification Added
 
-- `RemoteApp.integration.test.ts` now verifies the mobile shared shell against two separate real `RuntimeServer` instances selected by the production runtime socket URL builder.
-- The test covers saved-session activation, active config persistence, stale host removal, and local mobile theme persistence across unmount/remount without replacing `KernelSessionManager`, `RuntimeLocalClient`, or `OpenADEClient` with mocks.
-- `MobileSessionsScreen` remove controls now have stable labels/titles so integration tests and accessibility tooling can target the actual stale-host action instead of relying on icon-only button text.
-- Latest focused verification for this session-shell slice passed: `npx vitest --run src/shell/MobileSessionScreens.test.ts src/remote/RemoteApp.integration.test.ts`.
+- `RemoteApp.integration.test.ts` now verifies the remote shared shell against two separate real `RuntimeServer` instances selected by the production runtime socket URL builder.
+- The test covers saved-session activation, active config persistence, stale host removal, and local shell theme persistence across unmount/remount without replacing `KernelSessionManager`, `RuntimeLocalClient`, or `OpenADEClient` with mocks.
+- `OpenADESessionsScreen` remove controls now have stable labels/titles so integration tests and accessibility tooling can target the actual stale-host action instead of relying on icon-only button text.
+- Latest focused verification for this session-shell slice passed: `npx vitest --run src/shell/OpenADESessionScreens.test.ts src/remote/RemoteApp.integration.test.ts`.
 
 ### 2026-06-01: Production Verification Sweep Refreshed
 
-- The migration remains production-shippable behind the rollout flags documented above; desktop default-on promotion still requires the telemetry review runbook and keeps legacy Yjs direct reads as fallback for at least one production release.
+- The migration remains production-shippable with the default-on runtime/shared-shell branch, but broad production rollout still requires the telemetry review runbook and keeps legacy Yjs direct reads as fallback for at least one production release.
 - The active-work unload blocker is disabled only for explicit smoke/test surfaces (`OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER=1`, `OPENADE_SMOKE_TEST=1`, or fake preload test APIs), not for normal production launches.
 - Latest verification after the multi-session shell test passed: `projects/web` typecheck, full `npm test` with 79 files and 459 tests, production `npm run build`, and `git diff --check`.
 - Runtime package verification passed: `projects/runtime`, `projects/runtime-client`, `projects/runtime-node`, `projects/openade-module`, and `projects/openade-client` typechecks plus `projects/openade-module` tests with the real WebSocket kernel persistence path.
@@ -1058,9 +1058,9 @@ Run this review before changing `VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE` or `
 
 ### 2026-05-31: Shared Project Task And New-Task Screens Added
 
-- Mobile companion chrome now lives in `projects/web/src/shell/MobileChrome.tsx`, keeping header/status/notices/bottom navigation as a medium adapter instead of embedding it in `RemoteApp`.
-- Mobile pairing/connect UI now lives in `projects/web/src/shell/MobilePairingScreen.tsx`; `RemoteApp` still owns pairing parsing, validation, and token/session persistence.
-- Mobile session management and local companion settings now live in `projects/web/src/shell/MobileSessionScreens.tsx`, including saved-session selection/removal, self-revoke, and mobile theme selection.
+- Mobile companion chrome now lives in `projects/web/src/shell/OpenADEChrome.tsx`, keeping header/status/notices/bottom navigation as a medium adapter instead of embedding it in `RemoteApp`.
+- Mobile pairing/connect UI now lives in `projects/web/src/shell/RemotePairingScreen.tsx`; `RemoteApp` still owns pairing parsing, validation, and token/session persistence.
+- Mobile session management and local companion settings now live in `projects/web/src/shell/OpenADESessionScreens.tsx`, including saved-session selection/removal, self-revoke, and shell theme selection.
 - The project task list, scoped file/search/process panels, and task-row rendering now live in `projects/web/src/shell/project/ProjectTasksScreen.tsx`.
 - The project/session list now lives in `projects/web/src/shell/project/ProjectsScreen.tsx`, rendering OpenADE snapshots directly so mobile companion and future desktop/web shells do not need another project-list implementation.
 - The new-task form now lives in `projects/web/src/shell/task/NewTaskScreen.tsx` and uses the shared task command model for create-mode labels/order.
@@ -1071,14 +1071,28 @@ Run this review before changing `VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE` or `
 
 - `projects/web/src/shell/task/TaskScreen.tsx` now composes the shared task event thread, task product panel, and task composer around OpenADE task and preview DTOs.
 - `RemoteApp` delegates the task route to this shared task screen while continuing to own remote refresh, image loading, and product mutation handlers.
-- The desktop route can also delegate to this shared task screen through the default-off shared-screen gate while keeping desktop-specific task code at the adapter/action boundary instead of in task layout/presentation code.
+- The desktop route now defaults to this shared task screen when runtime product reads are available, while keeping desktop-specific task code at the adapter/action boundary instead of in task layout/presentation code.
 
-### 2026-06-01: Mobile Shared Shell Wrapper Added
+### 2026-06-01: Remote Shared Shell Wrapper Added
 
-- `projects/web/src/shell/MobileOpenADEShell.tsx` now owns mobile companion chrome plus project, task, new-task, session, and settings route composition.
-- `RemoteApp` now delegates those route screens to the shared mobile shell wrapper and keeps pairing, saved-session state, runtime refresh, realtime subscriptions, and action handlers at the remote adapter boundary.
-- `MobileOpenADEShell.test.ts` renders the wrapper with real OpenADE snapshot/project/task DTOs and verifies route-level actions flow through callbacks, while `RemoteApp.integration.test.ts` still covers the runtime-backed companion path through a real `RuntimeServer`, `RuntimeLocalClient`, and `OpenADEClient`.
-- Latest verification for this shell/session slice passed: focused `MobileOpenADEShell`, `RemoteApp.integration`, `sessionStore`, and `client` tests; `projects/web` `tsgo --noEmit`, full `npm test` with 76 files and 454 tests, and `npm run build`; `projects/mobile` typecheck and production build; and `git diff --check`.
+- `projects/web/src/shell/OpenADEShell.tsx` now owns remote project, task, new-task, session, and settings route composition.
+- `RemoteApp` now delegates those route screens to the shared remote shell wrapper and keeps pairing, saved-session state, runtime refresh, realtime subscriptions, and action handlers at the remote adapter boundary.
+- `OpenADEShell.test.ts` renders the wrapper with real OpenADE snapshot/project/task DTOs and verifies route-level actions flow through callbacks, while `RemoteApp.integration.test.ts` still covers the runtime-backed companion path through a real `RuntimeServer`, `RuntimeLocalClient`, and `OpenADEClient`.
+- Latest verification for this shell/session slice passed: focused `OpenADEShell`, `RemoteApp.integration`, `sessionStore`, and `client` tests; `projects/web` `tsgo --noEmit`, full `npm test` with 76 files and 454 tests, and `npm run build`; `projects/mobile` typecheck and production build; and `git diff --check`.
+
+### 2026-06-01: Separate Mobile Product UI Removed
+
+- The mobile companion no longer has a separately named product shell. `RemoteApp` uses `OpenADEShell`, `OpenADEChrome`, `OpenADESessionScreens`, and `RemotePairingScreen` from `projects/web/src/shell`.
+- `OpenADEChrome` renders the same route navigation as a compact bottom bar on narrow viewports and a side rail on wider viewports, so the remote shell is responsive rather than mobile-only.
+- Mobile remains a Capacitor/native host adapter for QR scanning, secure token storage, OTA readiness, and safe-area constraints. Pairing, session persistence, runtime transport, product DTOs, and product screens stay in the shared web shell.
+
+### 2026-06-01: Desktop Shared Project Route And Default-On Flags Added
+
+- `projects/web/src/featureFlags.ts` now defaults `VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE` and `VITE_OPENADE_ENABLE_DESKTOP_SHARED_TASK_SCREEN` to enabled; explicit false values remain the local fallback switches.
+- `projects/web/src/pages/DesktopSharedProjectPage.tsx` adapts the desktop workspace route to `projects/web/src/shell/project/ProjectTasksScreen.tsx`, wiring project files, search, process list/start/reconnect/stop, new-task navigation, and task navigation through `runtime/localOpenADEClient.ts`.
+- `CodeWorkspaceRoute` renders the shared project/task-list surface when runtime product reads have a snapshot, and preserves the legacy task-create redirect when the runtime bridge is disabled or unavailable.
+- `projects/web/src/Routes.runtimeProductStore.test.ts` now verifies the workspace route through a real `RuntimeServer` behind the production local runtime bridge, including scoped project file/process panels and task-row navigation.
+- Remaining production work is rollout evidence, not local implementation: run the telemetry review on a default-on cohort, keep legacy Yjs fallback reads for at least one production release, and only remove fallback paths after logs show no normal-flow fallback use.
 
 ### 2026-06-01: Desktop Shared Task Shell Frame Added
 
@@ -1096,10 +1110,10 @@ Run this review before changing `VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE` or `
 
 ### 2026-06-01: Shared Task Composer Agent Controls Added
 
-- `projects/web/src/shell/task/TaskComposer.tsx` now owns optional shared controls for harness, model, thinking level, and fast mode, plus an MCP-control slot supplied by the medium adapter so the mobile shell does not import desktop store/settings code.
+- `projects/web/src/shell/task/TaskComposer.tsx` now owns optional shared controls for harness, model, thinking level, and fast mode, plus an MCP-control slot supplied by the medium adapter so the Capacitor host does not import desktop store/settings code.
 - The gated desktop shared task route wires those controls to the same `TaskModel` state used by the legacy desktop `InputBar`, then sends the selected values through `runtime/localOpenADEClient.ts` on `openade/turn/start` and `openade/review/start`.
 - `projects/web/src/Routes.runtimeProductStore.test.ts` verifies this through a real `RuntimeServer` installed behind the production local runtime bridge: the shared desktop composer renders the agent/MCP controls, toggles fast mode, submits a turn, and asserts the actual runtime request includes harness id, model id, thinking, fast mode, and enabled MCP server ids.
-- Remaining default-on shared task blockers are now review of rollout fallback telemetry from an internal/default-on cohort.
+- Remaining shared task production evidence is review of rollout fallback telemetry from an internal/default-on cohort.
 
 ### 2026-06-01: Desktop Shared Rich Composer Slot Added
 
@@ -1111,7 +1125,7 @@ Run this review before changing `VITE_OPENADE_ENABLE_RUNTIME_PRODUCT_STORE` or `
 - `CodeStore` and `RepoManager` now keep serving an existing runtime snapshot while bridge status is transiently non-ready, preventing route fallback to legacy `RepoStore` during runtime refresh/error windows. `projects/web/src/store/storeRuntimeProductStore.test.ts` covers this with a real `RuntimeServer`, `RuntimeLocalClient`, and `OpenADEClient`.
 - `CodeStore` now emits rollout observability for the bridge: app-open runtime status, sanitized runtime bridge errors, and deduped legacy fallback events. `projects/web/src/store/storeRuntimeProductStore.test.ts` verifies the fallback signal after initializing a real runtime-backed bridge, then forcing a direct legacy task-store read.
 - Packaged-app smoke passed after `npm run build`, `npm run build:web`, and `electron-builder --mac --dir`, proving the bundled web UI, preload IPC runtime initialization, repo creation, Plan, Revise, Run Plan, Ask, close/reopen, app relaunch reload, scoped project file tree/read/write/search, and scoped project process list/start/reconnect-output/stop still work in the packaged desktop binary. The smoke harness isolates `HOME`/`USERPROFILE` and explicitly sets `OPENADE_YJS_STORAGE_DIR` so it does not read or mutate the developer's normal `~/.openade` data.
-- Remaining default-on blockers are review of rollout fallback telemetry from an internal/default-on cohort and later route/chrome cleanup before removing legacy desktop paths.
+- Remaining production blockers are review of rollout fallback telemetry from an internal/default-on cohort and later route/chrome cleanup before removing legacy desktop paths.
 
 ### 2026-06-01: Packaged Workflow Smoke And Storage Race Fixes
 

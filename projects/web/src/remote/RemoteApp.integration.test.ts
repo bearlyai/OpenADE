@@ -1,10 +1,8 @@
 import { act, createElement } from "react"
-import { createRoot, type Root } from "react-dom/client"
+import { type Root, createRoot } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { OpenADEClient } from "../../../openade-client/src"
 import {
-    createOpenADEModule,
-    publishOpenADECompanionEvent,
     type OpenADECommentCreateRequest,
     type OpenADECommentDeleteRequest,
     type OpenADECommentEditRequest,
@@ -18,14 +16,16 @@ import {
     type OpenADETaskDeleteRequest,
     type OpenADETaskMetadataUpdateRequest,
     type OpenADETaskPreview,
+    createOpenADEModule,
+    publishOpenADECompanionEvent,
 } from "../../../openade-module/src"
+import { type RuntimeClientOptions, RuntimeLocalClient, type RuntimeLocalTransport } from "../../../runtime-client/src"
+import type { RuntimeMessage, RuntimeRequest } from "../../../runtime-protocol/src"
 import type { RuntimeConnection } from "../../../runtime/src"
 import { RuntimeServer } from "../../../runtime/src"
-import { RuntimeLocalClient, type RuntimeClientOptions, type RuntimeLocalTransport } from "../../../runtime-client/src"
-import type { RuntimeMessage, RuntimeRequest } from "../../../runtime-protocol/src"
 import { runtimeSocketUrl } from "../kernel/session"
-import { __setRemoteClientConstructorsForTest, loadRemoteConfig, loadRemoteConfigs, REMOTE_CONFIG_STORAGE_KEY } from "./client"
-import { MOBILE_THEME_STORAGE_KEY, RemoteApp } from "./RemoteApp"
+import { REMOTE_THEME_STORAGE_KEY, RemoteApp } from "./RemoteApp"
+import { REMOTE_CONFIG_STORAGE_KEY, __setRemoteClientConstructorsForTest, loadRemoteConfig, loadRemoteConfigs } from "./client"
 
 const now = "2026-05-31T00:00:00.000Z"
 
@@ -235,7 +235,7 @@ function createRuntimeBackedConstructors(state: {
             oldPath: params.oldPath,
             fromTreeish: "HEAD",
             toTreeish: "",
-            patch: "diff --git a/src/app.ts b/src/app.ts\n+mobile task changes\n",
+            patch: "diff --git a/src/app.ts b/src/app.ts\n+remote task changes\n",
             truncated: false,
             heavy: false,
             stats: { insertions: 1, deletions: 0, changedLines: 1, hunkCount: 1 },
@@ -421,7 +421,7 @@ function seededTask(): { taskDeleted: boolean; processRunning: boolean; selfRevo
             repoId: "repo-1",
             slug: "task-1",
             title: "Original task",
-            description: "A task rendered by the mobile companion.",
+            description: "A task rendered by the shared remote shell.",
             isolationStrategy: { type: "head" },
             deviceEnvironments: [],
             queuedTurns: [queuedTurn],
@@ -570,7 +570,7 @@ describe("RemoteApp runtime-backed product controls", () => {
         vi.restoreAllMocks()
     })
 
-    it("switches saved sessions, removes stale hosts, and persists mobile theme through real runtime clients", async () => {
+    it("switches saved sessions, removes stale hosts, and persists shell theme through real runtime clients", async () => {
         const laptopBaseUrl = "http://100.64.1.10:7823"
         const studioBaseUrl = "http://100.64.1.11:7823"
         const laptopSnapshot = snapshotWithProject("Laptop Desktop", "laptop-repo", "Laptop Repo", "code-theme-light", "Light")
@@ -612,9 +612,9 @@ describe("RemoteApp runtime-backed product controls", () => {
         const themeSelect = await waitForElement(() => {
             const element = container.querySelector("select")
             return element instanceof HTMLSelectElement ? element : null
-        }, "mobile theme select")
+        }, "shell theme select")
         await selectValue(themeSelect, "code-theme-dracula")
-        expect(localStorage.getItem(MOBILE_THEME_STORAGE_KEY)).toBe("code-theme-dracula")
+        expect(localStorage.getItem(REMOTE_THEME_STORAGE_KEY)).toBe("code-theme-dracula")
         expect(shellRootClassName(container)).toContain("code-theme-dracula")
 
         await click(await waitForElement(() => buttonByText(container, "Manage Sessions"), "manage sessions button"))
@@ -646,7 +646,7 @@ describe("RemoteApp runtime-backed product controls", () => {
 
         await waitForElement(() => buttonByText(container, "Studio Repo"), "persisted active studio project")
         expect(loadRemoteConfig()?.id).toBe("session-2")
-        expect(localStorage.getItem(MOBILE_THEME_STORAGE_KEY)).toBe("code-theme-dracula")
+        expect(localStorage.getItem(REMOTE_THEME_STORAGE_KEY)).toBe("code-theme-dracula")
         expect(shellRootClassName(container)).toContain("code-theme-dracula")
     })
 
@@ -681,30 +681,30 @@ describe("RemoteApp runtime-backed product controls", () => {
         await waitForElement(() => (container.textContent?.includes("src/app.ts") ? container : null), "task changed file")
         await waitForElement(() => (container.textContent?.includes("Initial remote commit") ? container : null), "task git log")
         await click(await waitForElement(() => buttonByText(container, "src/app.ts"), "read task diff"))
-        await waitForElement(() => (container.textContent?.includes("+mobile task changes") ? container : null), "task diff content")
+        await waitForElement(() => (container.textContent?.includes("+remote task changes") ? container : null), "task diff content")
         await waitForElement(() => container.querySelector('img[src="data:image/png;base64,cmVtb3RlIGltYWdl"]'), "remote task image")
 
         const titleInput = await waitForElement(() => inputByValue(container, "Original task"), "task title input")
-        await typeInto(titleInput, "Mobile updated task")
-        await waitForElement(() => inputByValue(container, "Mobile updated task"), "edited task title draft")
+        await typeInto(titleInput, "Remote updated task")
+        await waitForElement(() => inputByValue(container, "Remote updated task"), "edited task title draft")
         await click(await waitForElement(() => buttonByText(container, "Save"), "save title button"))
-        await waitForElement(() => inputByValue(container, "Mobile updated task"), "updated task title")
-        expect(state.task.title).toBe("Mobile updated task")
+        await waitForElement(() => inputByValue(container, "Remote updated task"), "updated task title")
+        expect(state.task.title).toBe("Remote updated task")
 
         await click(await waitForElement(() => buttonByText(container, "Close"), "close task button"))
         await waitForElement(() => buttonByText(container, "Reopen"), "reopen task button")
         expect(state.task.closed).toBe(true)
 
         const commentInput = await waitForElement(() => inputByPlaceholder(container, "Add a comment"), "comment input")
-        await typeInto(commentInput, "Runtime-backed mobile comment")
-        await waitForElement(() => inputByValue(container, "Runtime-backed mobile comment"), "comment draft")
+        await typeInto(commentInput, "Runtime-backed remote comment")
+        await waitForElement(() => inputByValue(container, "Runtime-backed remote comment"), "comment draft")
         const addCommentButton = await waitForElement(
             () => Array.from(commentInput.parentElement?.querySelectorAll("button") ?? []).find((button) => button.textContent === "Add") ?? null,
             "add comment button"
         )
         await click(addCommentButton)
-        await waitForElement(() => (container.textContent?.includes("Runtime-backed mobile comment") ? container : null), "created comment")
-        expect(state.task.comments).toEqual([expect.objectContaining({ content: "Runtime-backed mobile comment" })])
+        await waitForElement(() => (container.textContent?.includes("Runtime-backed remote comment") ? container : null), "created comment")
+        expect(state.task.comments).toEqual([expect.objectContaining({ content: "Runtime-backed remote comment" })])
 
         await click(await waitForElement(() => buttonByText(container, "Cancel"), "cancel queued turn button"))
         await waitForElement(() => (container.textContent?.includes("cancelled") ? container : null), "cancelled queued turn")

@@ -81,7 +81,7 @@ describe("taskEventBlocks", () => {
         ])
     })
 
-    it("renders queued turn metadata so mobile users can see pending follow-ups", () => {
+    it("renders queued turn metadata so remote users can see pending follow-ups", () => {
         const blocks = taskEventBlocks(
             openADETask([], {
                 queuedTurns: [

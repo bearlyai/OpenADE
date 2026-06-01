@@ -1,8 +1,8 @@
-import { act, createElement, type ComponentProps, type ReactElement } from "react"
-import { createRoot, type Root } from "react-dom/client"
+import { type ComponentProps, type ReactElement, act, createElement } from "react"
+import { type Root, createRoot } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import type { OpenADEProject, OpenADESnapshot, OpenADETaskPreview } from "../../../openade-module/src"
-import { MobileOpenADEShell } from "./MobileOpenADEShell"
+import { OpenADEShell } from "./OpenADEShell"
 
 const taskPreview: OpenADETaskPreview = {
     id: "task-1",
@@ -34,7 +34,13 @@ function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
     return button
 }
 
-function createProps(actions: string[] = []): ComponentProps<typeof MobileOpenADEShell> {
+function buttonByExactText(container: HTMLElement, text: string): HTMLButtonElement {
+    const button = Array.from(container.querySelectorAll("button")).find((item): item is HTMLButtonElement => item.textContent?.trim() === text)
+    if (!button) throw new Error(`Missing button: ${text}`)
+    return button
+}
+
+function createProps(actions: string[] = []): ComponentProps<typeof OpenADEShell> {
     return {
         className: "code-theme code-theme-black flex bg-base-100 text-base-content flex-col overflow-hidden",
         screen: "projects",
@@ -84,7 +90,7 @@ function createProps(actions: string[] = []): ComponentProps<typeof MobileOpenAD
         activeConfigId: "session-1",
         settingsConfig: { id: "session-1", host: "Local Desktop", baseUrl: "http://127.0.0.1:17373" },
         snapshot,
-        mobileTheme: "desktop",
+        themeSetting: "desktop",
         onBack: () => actions.push("back"),
         onRefresh: () => actions.push("refresh"),
         onNavigate: (screen) => actions.push(`nav:${screen}`),
@@ -130,11 +136,11 @@ function createProps(actions: string[] = []): ComponentProps<typeof MobileOpenAD
         onRemoveHost: (configId) => actions.push(`remove-host:${configId}`),
         onForget: () => actions.push("forget"),
         onSelfRevoke: () => actions.push("self-revoke"),
-        onMobileThemeChange: (value) => actions.push(`theme:${value}`),
+        onThemeChange: (value) => actions.push(`theme:${value}`),
     }
 }
 
-describe("MobileOpenADEShell", () => {
+describe("OpenADEShell", () => {
     let container: HTMLDivElement
     let root: Root
 
@@ -156,9 +162,9 @@ describe("MobileOpenADEShell", () => {
         })
     }
 
-    it("composes mobile chrome with real project session DTOs", () => {
+    it("composes shared shell chrome with real project session DTOs", () => {
         const actions: string[] = []
-        render(createElement(MobileOpenADEShell, createProps(actions)))
+        render(createElement(OpenADEShell, createProps(actions)))
 
         expect(container.textContent).toContain("Projects")
         expect(container.textContent).toContain("Local Desktop")
@@ -167,15 +173,15 @@ describe("MobileOpenADEShell", () => {
         expect(container.textContent).toContain("1 running")
 
         act(() => buttonByText(container, "Settings").click())
-        act(() => buttonByText(container, "Session").click())
+        act(() => buttonByExactText(container, "Session").click())
         act(() => buttonByText(container, "Runtime Repo").click())
 
         expect(actions).toEqual(["nav:settings", "add-host", "select-project:session-1:repo-1"])
     })
 
-    it("keeps settings navigation and device actions inside the shared mobile shell", () => {
+    it("keeps settings navigation and device actions inside the shared shell", () => {
         const actions: string[] = []
-        render(createElement(MobileOpenADEShell, { ...createProps(actions), screen: "settings" }))
+        render(createElement(OpenADEShell, { ...createProps(actions), screen: "settings" }))
 
         expect(container.textContent).toContain("Settings")
         expect(container.textContent).toContain("Revoke This Device")

@@ -1,11 +1,11 @@
 import { CheckCircle2, CircleAlert, ScanLine, Wifi } from "lucide-react"
 
-export interface MobilePendingConnection {
+export interface RemotePendingConnection {
     host: string
     baseUrl: string
 }
 
-export function MobilePairingScreen({
+export function RemotePairingScreen({
     canScan,
     baseUrl,
     pendingConnection,
@@ -21,7 +21,7 @@ export function MobilePairingScreen({
 }: {
     canScan: boolean
     baseUrl: string
-    pendingConnection: MobilePendingConnection | null
+    pendingConnection: RemotePendingConnection | null
     isLoading: boolean
     error: string | null
     canCancel: boolean

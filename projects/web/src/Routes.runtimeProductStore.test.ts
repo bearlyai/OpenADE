@@ -1,22 +1,22 @@
 import { createElement, useEffect } from "react"
-import { createRoot, type Root } from "react-dom/client"
+import { type Root, createRoot } from "react-dom/client"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
-    createOpenADEModule,
     type OpenADEModuleAdapters,
     type OpenADEProject,
     type OpenADESnapshot,
     type OpenADETask,
     type OpenADETaskPreview,
     type OpenADETurnStartRequest,
+    createOpenADEModule,
 } from "../../openade-module/src"
-import { type RuntimeConnection, RuntimeServer } from "../../runtime/src"
 import { type RuntimeMessage, validateRuntimeRequest } from "../../runtime-protocol/src"
+import { type RuntimeConnection, RuntimeServer } from "../../runtime/src"
+import { CodeBaseRoute, CodeWorkspaceRoute, CodeWorkspaceTaskRoute } from "./Routes"
+import { getDefaultModelForHarness } from "./constants"
 import { resetCodeModuleCapabilitiesForTests } from "./electronAPI/capabilities"
 import { resetPlatformInfoForTests } from "./electronAPI/platform"
-import { getDefaultModelForHarness } from "./constants"
-import { CodeBaseRoute, CodeWorkspaceTaskRoute } from "./Routes"
 import { localRuntimeClient } from "./runtime/localRuntimeClient"
 import { CodeStoreProvider } from "./store/context"
 import { CodeStore } from "./store/store"
@@ -116,6 +116,7 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
     const server = new RuntimeServer({ serverName: "desktop-route-runtime", protocolVersion: 1 })
     const task = cloneTask(routeTask)
     const project = routeProject(task)
+    let projectProcessId: string | null = null
     const adapters: OpenADEModuleAdapters = {
         version: () => "route-smoke-test",
         readSnapshot: async () => runtimeSnapshot(task),
@@ -273,14 +274,73 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
             project.tasks = [routeTaskPreview(task)]
         },
         scopedHost: {
-            listProjectFiles: unsupportedMutation("listProjectFiles"),
-            readProjectFile: unsupportedMutation("readProjectFile"),
+            listProjectFiles: async (params) => ({
+                repoId: params.repoId,
+                path: params.path ?? "",
+                entries: [{ path: "README.md", name: "README.md", type: "file", size: 34 }],
+                truncated: false,
+            }),
+            readProjectFile: async (params) => ({
+                repoId: params.repoId,
+                path: params.path,
+                encoding: "utf8",
+                size: 34,
+                tooLarge: false,
+                content: "Runtime route readme\nshared shell\n",
+            }),
             writeProjectFile: unsupportedMutation("writeProjectFile"),
-            searchProject: unsupportedMutation("searchProject"),
-            listProjectProcesses: unsupportedMutation("listProjectProcesses"),
-            startProjectProcess: unsupportedMutation("startProjectProcess"),
-            reconnectProjectProcess: unsupportedMutation("reconnectProjectProcess"),
-            stopProjectProcess: unsupportedMutation("stopProjectProcess"),
+            searchProject: async (params) => ({
+                repoId: params.repoId,
+                matches: params.query.toLowerCase().includes("readme")
+                    ? [{ path: "README.md", line: 1, content: "Runtime route readme", matchStart: 14, matchEnd: 20 }]
+                    : [],
+                truncated: false,
+            }),
+            listProjectProcesses: async (params) => ({
+                repoId: params.repoId,
+                searchRoot: project.path,
+                repoRoot: project.path,
+                isWorktree: false,
+                processes: [
+                    {
+                        id: "dev-server",
+                        name: "Dev Server",
+                        command: "npm run dev",
+                        type: "daemon",
+                        configPath: "openade.toml",
+                        cwd: project.path,
+                    },
+                ],
+                instances: projectProcessId
+                    ? [
+                          {
+                              processId: projectProcessId,
+                              definitionId: "dev-server",
+                              repoId: params.repoId,
+                              cwd: project.path,
+                              completed: false,
+                              exitCode: null,
+                              signal: null,
+                          },
+                      ]
+                    : [],
+                errors: [],
+            }),
+            startProjectProcess: async (params) => {
+                projectProcessId = "process-1"
+                return { repoId: params.repoId, definitionId: params.definitionId, processId: projectProcessId }
+            },
+            reconnectProjectProcess: async (params) => ({
+                repoId: params.repoId,
+                processId: params.processId,
+                found: params.processId === projectProcessId,
+                completed: false,
+                output: [{ type: "stdout", data: "dev server ready\n", timestamp: 1 }],
+            }),
+            stopProjectProcess: async (params) => {
+                if (params.processId === projectProcessId) projectProcessId = null
+                return { repoId: params.repoId, processId: params.processId, ok: true }
+            },
             startTaskTerminal: unsupportedMutation("startTaskTerminal"),
             reconnectTaskTerminal: unsupportedMutation("reconnectTaskTerminal"),
             writeTaskTerminal: unsupportedMutation("writeTaskTerminal"),
@@ -465,6 +525,12 @@ function findButtonByText(container: HTMLElement, text: string): HTMLButtonEleme
     return button
 }
 
+function findButtonContainingText(container: HTMLElement, text: string): HTMLButtonElement {
+    const button = Array.from(container.querySelectorAll("button")).find((candidate) => candidate.textContent?.includes(text) === true)
+    if (!(button instanceof HTMLButtonElement)) throw new Error(`Button containing "${text}" was not rendered`)
+    return button
+}
+
 function findButtonByTitle(container: HTMLElement, title: string): HTMLButtonElement {
     const button = Array.from(container.querySelectorAll("button")).find((candidate) => candidate.title === title)
     if (!(button instanceof HTMLButtonElement)) throw new Error(`Button titled "${title}" was not rendered`)
@@ -510,12 +576,11 @@ describe("Code routes with runtime product reads", () => {
         ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = previousActEnvironment
     })
 
-    it("redirects the desktop base route to the latest runtime-backed task preview from the real local runtime path", async () => {
+    it("redirects the desktop base route to the latest runtime-backed task preview from the default-on real local runtime path", async () => {
         cleanupOpenADEApi = installOpenADEApiRuntimeBridge(createRouteRuntimeServer())
         const codeStore = new CodeStore({
             getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
             navigateToTask: () => undefined,
-            enableRuntimeProductStore: true,
         })
         try {
             await codeStore.initializeRuntimeProductStore()
@@ -540,12 +605,48 @@ describe("Code routes with runtime product reads", () => {
         }
     })
 
-    it("renders the desktop task route after loading task detail through the real local runtime product store", async () => {
+    it("renders the shared desktop workspace route by default from runtime project DTOs and scoped host methods", async () => {
         cleanupOpenADEApi = installOpenADEApiRuntimeBridge(createRouteRuntimeServer())
         const codeStore = new CodeStore({
             getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
             navigateToTask: () => undefined,
-            enableRuntimeProductStore: true,
+        })
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            codeStore.storeInitialized = true
+            codeStore.tasks.ensureTasksLoaded("repo-1")
+            const paths: string[] = []
+
+            const router = createElement(
+                MemoryRouter,
+                { initialEntries: ["/dashboard/code/workspace/repo-1"] },
+                createElement(LocationProbe, { onPath: (path) => paths.push(path) }),
+                createElement(
+                    Routes,
+                    null,
+                    createElement(Route, { path: "/dashboard/code/workspace/:workspaceId", element: createElement(CodeWorkspaceRoute) }),
+                    createElement(Route, { path: "/dashboard/code/workspace/:workspaceId/task/:taskId", element: createElement("div") })
+                )
+            )
+            root.render(createElement(CodeStoreProvider, { store: codeStore }, router))
+
+            await waitForText(container, "Runtime Route Repo")
+            await waitForText(container, "Runtime route task")
+            await waitForText(container, "README.md")
+            await waitForText(container, "Dev Server")
+
+            clickElement(findButtonContainingText(container, "Runtime route task"))
+            await waitForPath(paths, "/dashboard/code/workspace/repo-1/task/task-1")
+        } finally {
+            codeStore.disconnectAllStores()
+        }
+    })
+
+    it("renders the shared desktop task route by default after loading task detail through the real local runtime product store", async () => {
+        cleanupOpenADEApi = installOpenADEApiRuntimeBridge(createRouteRuntimeServer())
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
         })
         try {
             await codeStore.initializeRuntimeProductStore()
@@ -566,6 +667,7 @@ describe("Code routes with runtime product reads", () => {
 
             await waitForText(container, "Runtime route task")
             await waitForText(container, "Do the runtime-backed work")
+            await waitForText(container, "No changes.")
         } finally {
             codeStore.disconnectAllStores()
         }

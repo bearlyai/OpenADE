@@ -5,7 +5,8 @@ Thin Capacitor shell for the OpenADE remote-control surface.
 ## Product Shape
 
 - Ship iOS first; keep the code path Android-capable where possible.
-- The mobile app does not run OpenADE. It pairs to a desktop host and renders the remote UI from projects/web/src/remote.
+- The mobile app does not run OpenADE. It pairs to a desktop host and renders the shared remote shell from `projects/web/src/remote`.
+- Mobile is not a separate product UI. Keep it as a thin Capacitor host for QR scanning, secure storage, OTA readiness, safe-area constraints, and the same remote/shared OpenADE shell used by browser remote surfaces.
 - Support multiple paired OpenADE sessions on one device.
 - Pairing is QR or paste of a normal HTTP URL. Do not use custom app deep links for pairing.
 - Store paired host config and device tokens through capacitor-secure-storage-plugin so iOS uses Keychain.
@@ -17,8 +18,8 @@ Thin Capacitor shell for the OpenADE remote-control surface.
 - Do not add rounded corners. Avoid mobile card aesthetics that diverge from desktop.
 - Use semantic theme tokens from the code module only.
 - Buttons must use the btn class. Inputs and textareas must use the input class.
-- The default mobile theme setting is "desktop", which follows snapshot.server.theme.className from the connected host.
-- Keep the local mobile theme override so a user can choose a theme and switch back to matching desktop.
+- The default shell theme setting is "desktop", which follows snapshot.server.theme.className from the connected host.
+- Keep the local shell theme override so a user can choose a theme and switch back to matching desktop.
 - Keep mobile zoom disabled in index.html and src/index.css unless there is an accessibility-driven replacement plan.
 
 ## Runtime
@@ -27,7 +28,7 @@ Thin Capacitor shell for the OpenADE remote-control surface.
 - It owns QR scanning, Keychain mirroring, startup error reset, and storage hydration.
 - src/App.tsx calls CapacitorUpdater.notifyAppReady() on launch so downloaded OTA bundles do not roll back after a successful boot.
 - src/App.tsx performs the static OTA manifest check. Keep native Capgo autoUpdate disabled unless a real POST-capable update endpoint replaces the static R2 manifest.
-- The main app UI comes from projects/web/src/remote/RemoteApp.tsx.
+- The main app UI comes from `projects/web/src/remote/RemoteApp.tsx`, which delegates product screens to the shared `projects/web/src/shell/OpenADEShell.tsx`.
 - Do not duplicate companion state or remote API logic in projects/mobile if it can stay in projects/web/src/remote.
 - Remote reads, OpenADE turn starts, interrupts, and live updates use the runtime WebSocket at /v1/runtime.
 - HTTP is only for initial pairing and health checks; do not add REST/SSE companion command paths.
@@ -65,7 +66,7 @@ Thin Capacitor shell for the OpenADE remote-control surface.
 
 ## Verification
 
-- Run npm run typecheck from projects/mobile after changing the mobile shell, remote UI imports, or shared companion/runtime clients.
+- Run npm run typecheck from projects/mobile after changing the Capacitor host, remote UI imports, or shared companion/runtime clients.
 - Run npm run build from projects/mobile after UI or shell changes.
 - Run npx cap sync ios after a successful build.
 - For iOS verification, build and run the App workspace/scheme in the simulator and capture a screenshot.

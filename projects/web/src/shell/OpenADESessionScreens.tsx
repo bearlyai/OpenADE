@@ -1,8 +1,8 @@
 import { CheckCircle2, CircleAlert, Plus, Server, Trash2 } from "lucide-react"
 import type { OpenADESnapshot } from "../../../openade-module/src"
-import { mobileStatusToneClass, type MobileChromeStatus } from "./MobileChrome"
+import { type OpenADEChromeStatus, openADEStatusToneClass } from "./OpenADEChrome"
 
-export const mobileThemeClasses = {
+export const openADEThemeClasses = {
     "code-theme-light": { label: "Light" },
     "code-theme-bright": { label: "Bright" },
     "code-theme-clean": { label: "Clean" },
@@ -11,27 +11,27 @@ export const mobileThemeClasses = {
     "code-theme-dracula": { label: "Dracula" },
 } as const
 
-export type MobileThemeClass = keyof typeof mobileThemeClasses
-export type MobileThemeSetting = "desktop" | MobileThemeClass
+export type OpenADEThemeClass = keyof typeof openADEThemeClasses
+export type OpenADEThemeSetting = "desktop" | OpenADEThemeClass
 
-export interface MobileSessionConfig {
+export interface OpenADESessionConfig {
     id: string
     host: string
     baseUrl: string
 }
 
-export function isMobileThemeSetting(value: string | null): value is MobileThemeSetting {
-    return value === "desktop" || (value !== null && value in mobileThemeClasses)
+export function isOpenADEThemeSetting(value: string | null): value is OpenADEThemeSetting {
+    return value === "desktop" || (value !== null && value in openADEThemeClasses)
 }
 
-export function MobileSessionsScreen({
+export function OpenADESessionsScreen({
     configs,
     activeConfigId,
     onSelect,
     onRemove,
     onAdd,
 }: {
-    configs: MobileSessionConfig[]
+    configs: OpenADESessionConfig[]
     activeConfigId: string
     onSelect: (configId: string) => void
     onRemove: (configId: string) => void
@@ -76,11 +76,11 @@ export function MobileSessionsScreen({
     )
 }
 
-export function MobileSettingsScreen({
+export function OpenADESettingsScreen({
     config,
     snapshot,
     status,
-    mobileTheme,
+    themeSetting,
     onRefresh,
     onForget,
     onSelfRevoke,
@@ -88,16 +88,16 @@ export function MobileSettingsScreen({
     onAdd,
     onThemeChange,
 }: {
-    config: MobileSessionConfig
+    config: OpenADESessionConfig
     snapshot: OpenADESnapshot | null
-    status: MobileChromeStatus
-    mobileTheme: MobileThemeSetting
+    status: OpenADEChromeStatus
+    themeSetting: OpenADEThemeSetting
     onRefresh: () => void
     onForget: () => void
     onSelfRevoke: () => void
     onSessions: () => void
     onAdd: () => void
-    onThemeChange: (value: MobileThemeSetting) => void
+    onThemeChange: (value: OpenADEThemeSetting) => void
 }) {
     return (
         <div className="h-full w-full max-w-full overflow-y-auto overflow-x-hidden p-3">
@@ -108,7 +108,7 @@ export function MobileSettingsScreen({
                             <div className="truncate text-sm font-medium">{config.host}</div>
                             <div className="truncate text-xs text-muted">{config.baseUrl}</div>
                         </div>
-                        <span className={`flex shrink-0 items-center gap-1 text-xs ${mobileStatusToneClass(status.tone)}`}>
+                        <span className={`flex shrink-0 items-center gap-1 text-xs ${openADEStatusToneClass(status.tone)}`}>
                             {status.tone === "ok" ? <CheckCircle2 size={13} /> : <CircleAlert size={13} />}
                             {status.label}
                         </span>
@@ -128,25 +128,25 @@ export function MobileSettingsScreen({
                 <div className="border border-border bg-base-200/40 p-3">
                     <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
                         <div className="min-w-0">
-                            <div className="text-xs font-medium uppercase tracking-wide text-muted">Mobile theme</div>
+                            <div className="text-xs font-medium uppercase tracking-wide text-muted">Theme</div>
                             <div className="mt-1 truncate text-sm">
-                                {mobileTheme === "desktop"
+                                {themeSetting === "desktop"
                                     ? `Matching desktop: ${snapshot?.server.theme?.label ?? "Desktop"}`
-                                    : mobileThemeClasses[mobileTheme].label}
+                                    : openADEThemeClasses[themeSetting].label}
                             </div>
                         </div>
                     </div>
                     <select
-                        value={mobileTheme}
+                        value={themeSetting}
                         onChange={(event) => {
-                            if (isMobileThemeSetting(event.target.value)) onThemeChange(event.target.value)
+                            if (isOpenADEThemeSetting(event.target.value)) onThemeChange(event.target.value)
                         }}
                         className="input h-11 w-full border border-border bg-base-100 px-3 text-sm"
                     >
                         <option value="desktop">Match desktop</option>
-                        {(Object.keys(mobileThemeClasses) as MobileThemeClass[]).map((key) => (
+                        {(Object.keys(openADEThemeClasses) as OpenADEThemeClass[]).map((key) => (
                             <option key={key} value={key}>
-                                {mobileThemeClasses[key].label}
+                                {openADEThemeClasses[key].label}
                             </option>
                         ))}
                     </select>

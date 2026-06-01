@@ -22,7 +22,7 @@
 | `projects/runtime-client` | Typed client helpers for runtime WebSocket and local transports, reconnect, notifications, and runtime record caches. | [projects/runtime-client/CLAUDE.md](projects/runtime-client/CLAUDE.md) |
 | `projects/openade-module` | OpenADE product semantics loaded into a runtime server: projects, tasks, turns, comments, snapshots, HyperPlan, and Yjs compatibility. | [projects/openade-module/CLAUDE.md](projects/openade-module/CLAUDE.md) |
 | `projects/openade-client` | Typed OpenADE project/task/turn client APIs layered on top of runtime-client transports. | [projects/openade-client/CLAUDE.md](projects/openade-client/CLAUDE.md) |
-| `projects/shared/companion` | Browser-safe shared DTOs for desktop companion service, web remote UI, and mobile shell. | [projects/shared/companion/CLAUDE.md](projects/shared/companion/CLAUDE.md) |
+| `projects/shared/companion` | Browser-safe shared DTOs for desktop companion service, web remote UI, and mobile host adapter. | [projects/shared/companion/CLAUDE.md](projects/shared/companion/CLAUDE.md) |
 
 ## Durable Migration Plans
 
