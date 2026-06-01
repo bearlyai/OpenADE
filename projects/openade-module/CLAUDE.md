@@ -10,6 +10,7 @@ Target package for OpenADE product semantics loaded into a runtime server.
 - `src/scopedProjectProcesses.ts` owns scoped OpenADE project process definition building and cwd containment from parsed `openade.toml` configs. Hosts may keep their own process lifecycle plumbing, but they should not duplicate config-to-definition logic.
 - `src/scopedTaskTerminal.ts` owns scoped OpenADE task terminal id derivation and raw PTY base64/plain-text conversion helpers. Electron companion runtime and headless Node runtime should import these helpers instead of maintaining host-specific terminal hash or encoding logic.
 - `src/snapshotPatchIndex.ts` owns OpenADE snapshot patch indexing and byte slicing. Electron may re-export compatibility names, but should not maintain a second index builder.
+- `src/taskSnapshotPatchReads.ts` owns inline-vs-external task snapshot patch, index, and slice read semantics. Host adapters should provide storage callbacks rather than duplicating patch-file id validation or inline/external read rules.
 - Register OpenADE methods under `openade/*` on the single runtime server.
 - Treat `openade/action/*` as trusted-local mutation methods unless remote permissions are intentionally narrowed and reviewed.
 - Do not start a second server.

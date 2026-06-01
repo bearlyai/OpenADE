@@ -1264,6 +1264,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - This removes duplicate snapshot patch parsers while preserving classic desktop snapshot storage/read APIs and runtime-backed snapshot reads.
 - Focused verification passed: OpenADE module typecheck, Electron typecheck, OpenADE snapshot patch index tests, Electron snapshot index compatibility tests, OpenADE kernel integration, Electron companion runtime API integration, web typecheck, Biome lint for touched files, and `git diff --check`.
 
+### 2026-06-01: Task Snapshot Patch Read Semantics Consolidated
+
+- `projects/openade-module/src/taskSnapshotPatchReads.ts` now owns task snapshot patch-file id validation plus inline-vs-external patch, index, and slice read behavior.
+- `projects/openade-module/src/node.ts` and `projects/electron/src/modules/companion/runtimeGateway.ts` now pass their existing real snapshot storage loaders into that shared product reader instead of duplicating snapshot read rules.
+- This keeps classic desktop snapshot storage and runtime-backed snapshot reads intact while removing another host-specific OpenADE API-boundary implementation.
+- Focused verification passed: OpenADE module typecheck, Electron typecheck, task snapshot patch read helper tests, OpenADE kernel integration, Electron companion runtime API integration, Biome lint for touched files, and `git diff --check`.
+
 ### 2026-06-01: Preload API Contract Consolidated
 
 - `projects/electron/src/preload-api.ts` now owns the browser-safe `OpenADEAPI` shape for the Electron contextBridge surface.

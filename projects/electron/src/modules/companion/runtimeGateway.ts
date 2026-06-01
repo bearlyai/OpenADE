@@ -27,6 +27,9 @@ import {
     openADETaskTerminalId,
     publishOpenADECompanionEvent,
     readOpenADEProjectFile,
+    readOpenADETaskSnapshotIndex,
+    readOpenADETaskSnapshotPatch,
+    readOpenADETaskSnapshotPatchSlice,
     resolveOpenADEHyperPlanStrategy,
     searchOpenADEProject,
     validateOpenADEHyperPlanStrategy,
@@ -128,7 +131,7 @@ import {
     loadRuntimeSnapshotPatchSlice,
     saveRuntimeSnapshotBundle,
 } from "../code/snapshots"
-import { buildSnapshotPatchIndex, sliceSnapshotPatchBytes, type SnapshotPatchFile, type SnapshotPatchIndex } from "../code/snapshotsIndex"
+import { type SnapshotPatchFile, type SnapshotPatchIndex } from "../code/snapshotsIndex"
 import { killRuntimePty, reconnectRuntimePty, resizeRuntimePty, spawnRuntimePty, writeRuntimePty } from "../code/pty"
 import { getDeviceConfig } from "../deviceConfig"
 import { getRuntimeCodeCapabilities, getRuntimeSdkCapabilities, invalidateRuntimeSdkCapabilities } from "../code/capabilities"
@@ -1146,47 +1149,28 @@ async function commitScopedTaskGit(params: OpenADETaskGitCommitRequest & { repo:
     }
 }
 
-function scopedSnapshotPatchFileId(snapshotEvent: OpenADESnapshotEventRecord): string | undefined {
-    const value = snapshotEvent.patchFileId
-    if (typeof value !== "string" || value.length < 1) return undefined
-    if (!/^[a-zA-Z0-9_-]+$/.test(value)) throw new Error("snapshot patch file id is invalid")
-    return value
-}
-
-function scopedSnapshotInlinePatch(snapshotEvent: OpenADESnapshotEventRecord): string | null {
-    return typeof snapshotEvent.fullPatch === "string" && snapshotEvent.fullPatch.length > 0 ? snapshotEvent.fullPatch : null
+const runtimeSnapshotPatchStore = {
+    loadPatch: (patchFileId: string) => loadRuntimeSnapshotPatch({ id: patchFileId }),
+    loadIndex: (patchFileId: string) => loadRuntimeSnapshotIndex({ id: patchFileId }),
+    loadPatchSlice: (patchFileId: string, start: number, end: number) => loadRuntimeSnapshotPatchSlice({ id: patchFileId, start, end }),
 }
 
 async function readScopedTaskSnapshotPatch(
     params: OpenADETaskSnapshotPatchReadRequest & { repo: OpenADEProject; task: OpenADETask; snapshotEvent: OpenADESnapshotEventRecord }
 ): Promise<OpenADETaskSnapshotPatchReadResult> {
-    const patchFileId = scopedSnapshotPatchFileId(params.snapshotEvent)
-    const inlinePatch = scopedSnapshotInlinePatch(params.snapshotEvent)
-    const patch = inlinePatch ?? (patchFileId ? await loadRuntimeSnapshotPatch({ id: patchFileId }) : null)
-    return { repoId: params.repoId, taskId: params.taskId, eventId: params.eventId, patchFileId, patch }
+    return readOpenADETaskSnapshotPatch({ ...params, store: runtimeSnapshotPatchStore })
 }
 
 async function readScopedTaskSnapshotIndex(
     params: OpenADETaskSnapshotIndexReadRequest & { repo: OpenADEProject; task: OpenADETask; snapshotEvent: OpenADESnapshotEventRecord }
 ): Promise<OpenADETaskSnapshotIndexReadResult> {
-    const patchFileId = scopedSnapshotPatchFileId(params.snapshotEvent)
-    const inlinePatch = scopedSnapshotInlinePatch(params.snapshotEvent)
-    const index = inlinePatch !== null ? buildSnapshotPatchIndex(inlinePatch) : patchFileId ? await loadRuntimeSnapshotIndex({ id: patchFileId }) : null
-    return { repoId: params.repoId, taskId: params.taskId, eventId: params.eventId, patchFileId, index }
+    return readOpenADETaskSnapshotIndex({ ...params, store: runtimeSnapshotPatchStore })
 }
 
 async function readScopedTaskSnapshotPatchSlice(
     params: OpenADETaskSnapshotPatchSliceReadRequest & { repo: OpenADEProject; task: OpenADETask; snapshotEvent: OpenADESnapshotEventRecord }
 ): Promise<OpenADETaskSnapshotPatchSliceReadResult> {
-    const patchFileId = scopedSnapshotPatchFileId(params.snapshotEvent)
-    const inlinePatch = scopedSnapshotInlinePatch(params.snapshotEvent)
-    const patch =
-        inlinePatch !== null
-            ? sliceSnapshotPatchBytes(inlinePatch, params.start, params.end)
-            : patchFileId
-              ? await loadRuntimeSnapshotPatchSlice({ id: patchFileId, start: params.start, end: params.end })
-              : null
-    return { repoId: params.repoId, taskId: params.taskId, eventId: params.eventId, patchFileId, patch }
+    return readOpenADETaskSnapshotPatchSlice({ ...params, store: runtimeSnapshotPatchStore })
 }
 
 async function readScopedTaskImage(

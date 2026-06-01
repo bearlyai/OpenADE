@@ -25,7 +25,8 @@ import {
     openADETaskTerminalId,
     openADETaskTerminalOutputChunkFromUnknown,
 } from "./scopedTaskTerminal"
-import { buildOpenADESnapshotPatchIndex, sliceOpenADESnapshotPatchBytes } from "./snapshotPatchIndex"
+import { buildOpenADESnapshotPatchIndex } from "./snapshotPatchIndex"
+import { readOpenADETaskSnapshotIndex, readOpenADETaskSnapshotPatch, readOpenADETaskSnapshotPatchSlice } from "./taskSnapshotPatchReads"
 import type {
     OpenADEActionEventCreateRequest,
     OpenADEActionEventSource,
@@ -46,7 +47,6 @@ import type {
     OpenADEProjectProcessStopRequest,
     OpenADEProjectProcessStopResult,
     OpenADEReviewStartRequest,
-    OpenADESnapshotEventRecord,
     OpenADESnapshotPatchIndex,
     OpenADETask,
     OpenADETaskChangesReadRequest,
@@ -81,12 +81,6 @@ import type {
     OpenADETaskTerminalStartResult,
     OpenADETaskTerminalStopRequest,
     OpenADETaskTerminalWriteRequest,
-    OpenADETaskSnapshotIndexReadRequest,
-    OpenADETaskSnapshotIndexReadResult,
-    OpenADETaskSnapshotPatchReadRequest,
-    OpenADETaskSnapshotPatchReadResult,
-    OpenADETaskSnapshotPatchSliceReadRequest,
-    OpenADETaskSnapshotPatchSliceReadResult,
     OpenADETurnStartRequest,
 } from "./types"
 import { createOpenADEYjsWriter } from "./yjsMutation"
@@ -715,17 +709,6 @@ async function scopedTaskGitCommit(
     }
 }
 
-function snapshotPatchFileId(snapshotEvent: OpenADESnapshotEventRecord): string | undefined {
-    const value = snapshotEvent.patchFileId
-    if (typeof value !== "string" || value.length < 1) return undefined
-    if (!/^[a-zA-Z0-9_-]+$/.test(value)) throw new Error("snapshot patch file id is invalid")
-    return value
-}
-
-function snapshotInlinePatch(snapshotEvent: OpenADESnapshotEventRecord): string | null {
-    return typeof snapshotEvent.fullPatch === "string" && snapshotEvent.fullPatch.length > 0 ? snapshotEvent.fullPatch : null
-}
-
 async function loadNodeSnapshotPatch(snapshotDir: string, patchFileId: string): Promise<string | null> {
     return fs.readFile(path.join(snapshotDir, `${patchFileId}.patch`), "utf8").catch(() => null)
 }
@@ -765,39 +748,6 @@ async function readNodeTaskImage(
         ext: params.ext,
         mediaType: params.image.mediaType,
         data: data ? data.toString("base64") : null,
-    }
-}
-
-async function readNodeTaskSnapshotPatch(
-    params: OpenADETaskSnapshotPatchReadRequest & { snapshotEvent: OpenADESnapshotEventRecord; snapshotDir: string }
-): Promise<OpenADETaskSnapshotPatchReadResult> {
-    const patchFileId = snapshotPatchFileId(params.snapshotEvent)
-    const inlinePatch = snapshotInlinePatch(params.snapshotEvent)
-    const patch = inlinePatch ?? (patchFileId ? await loadNodeSnapshotPatch(params.snapshotDir, patchFileId) : null)
-    return { repoId: params.repoId, taskId: params.taskId, eventId: params.eventId, patchFileId, patch }
-}
-
-async function readNodeTaskSnapshotIndex(
-    params: OpenADETaskSnapshotIndexReadRequest & { snapshotEvent: OpenADESnapshotEventRecord; snapshotDir: string }
-): Promise<OpenADETaskSnapshotIndexReadResult> {
-    const patchFileId = snapshotPatchFileId(params.snapshotEvent)
-    const inlinePatch = snapshotInlinePatch(params.snapshotEvent)
-    const index = inlinePatch !== null ? buildOpenADESnapshotPatchIndex(inlinePatch) : patchFileId ? await loadNodeSnapshotIndex(params.snapshotDir, patchFileId) : null
-    return { repoId: params.repoId, taskId: params.taskId, eventId: params.eventId, patchFileId, index }
-}
-
-async function readNodeTaskSnapshotPatchSlice(
-    params: OpenADETaskSnapshotPatchSliceReadRequest & { snapshotEvent: OpenADESnapshotEventRecord; snapshotDir: string }
-): Promise<OpenADETaskSnapshotPatchSliceReadResult> {
-    const patchFileId = snapshotPatchFileId(params.snapshotEvent)
-    const inlinePatch = snapshotInlinePatch(params.snapshotEvent)
-    const patch = inlinePatch ?? (patchFileId ? await loadNodeSnapshotPatch(params.snapshotDir, patchFileId) : null)
-    return {
-        repoId: params.repoId,
-        taskId: params.taskId,
-        eventId: params.eventId,
-        patchFileId,
-        patch: patch === null ? null : sliceOpenADESnapshotPatchBytes(patch, params.start, params.end),
     }
 }
 
@@ -1776,6 +1726,11 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
         return { taskId: task.id, eventId: action.eventId }
     }
 
+    const snapshotPatchStore = {
+        loadPatch: (patchFileId: string) => loadNodeSnapshotPatch(snapshotDir, patchFileId),
+        loadIndex: (patchFileId: string) => loadNodeSnapshotIndex(snapshotDir, patchFileId),
+    }
+
     return {
         version: () => options.version ?? "headless",
         readSnapshot: (params) => projection.readSnapshot(params),
@@ -1807,9 +1762,21 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
             resizeTaskTerminal: (params) => resizeNodeTaskTerminal({ ...params, server }),
             stopTaskTerminal: (params) => stopNodeTaskTerminal({ ...params, server }),
             readTaskImage: (params) => readNodeTaskImage({ ...params, imageDir }),
-            readTaskSnapshotPatch: (params) => readNodeTaskSnapshotPatch({ ...params, snapshotDir }),
-            readTaskSnapshotIndex: (params) => readNodeTaskSnapshotIndex({ ...params, snapshotDir }),
-            readTaskSnapshotPatchSlice: (params) => readNodeTaskSnapshotPatchSlice({ ...params, snapshotDir }),
+            readTaskSnapshotPatch: (params) =>
+                readOpenADETaskSnapshotPatch({
+                    ...params,
+                    store: snapshotPatchStore,
+                }),
+            readTaskSnapshotIndex: (params) =>
+                readOpenADETaskSnapshotIndex({
+                    ...params,
+                    store: snapshotPatchStore,
+                }),
+            readTaskSnapshotPatchSlice: (params) =>
+                readOpenADETaskSnapshotPatchSlice({
+                    ...params,
+                    store: snapshotPatchStore,
+                }),
         },
         saveDataDocumentBase64: (id, data) => storage.saveDocumentUpdate(id, Buffer.from(data, "base64")),
         deleteDataDocument: (id) => storage.deleteDocument(id),
