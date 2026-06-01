@@ -9,6 +9,7 @@
  */
 
 import { type IpcRendererEvent, contextBridge, ipcRenderer } from "electron"
+import type { OpenADEAPI as OpenADEPreloadAPI } from "./preload-api"
 
 // Helper to create event listener with cleanup
 const createListener = (channel: string, callback: (...args: unknown[]) => void) => {
@@ -108,10 +109,10 @@ const openadeAPI = {
         request: (request: unknown) => ipcRenderer.invoke("runtime:request", request),
         onMessage: (cb: (message: unknown) => void) => createListener("runtime:message", cb as (...args: unknown[]) => void),
     },
-}
+} satisfies OpenADEPreloadAPI
 
 // Expose the API to the renderer
 contextBridge.exposeInMainWorld("openadeAPI", openadeAPI)
 
 // Export type for TypeScript consumers
-export type OpenADEAPI = typeof openadeAPI
+export type { OpenADEAPI } from "./preload-api"

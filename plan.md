@@ -1205,6 +1205,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - This removes another "keep in sync" type pair while preserving the existing trusted local procs parser, editor, and classic desktop process tray behavior.
 - Focused verification passed: OpenADE module typecheck, Electron typecheck, web typecheck, Electron procs parse/discovery tests, Electron `runtimeData.integration` host utility method, web `CronManager` tests, and Biome lint for the touched procs/docs files.
 
+### 2026-06-01: Preload API Contract Consolidated
+
+- `projects/electron/src/preload-api.ts` now owns the browser-safe `OpenADEAPI` shape for the Electron contextBridge surface.
+- `projects/electron/src/preload.ts` uses `satisfies OpenADEAPI`, and `projects/web/src/vite-env.d.ts` imports the same type instead of maintaining a second renderer-global interface.
+- This removes the duplicate preload/web global contract while preserving the existing Electron IPC runtime bridge and classic desktop wrappers.
+- Focused verification passed: Electron typecheck, web typecheck, web Electron API wrapper tests for companion/MCP/harness status, and Biome lint for the touched preload/global/docs files.
+
 ## Remaining Work Under Corrected Direction
 
 The remaining work is not a desktop UI rewrite. It is a boundary migration: keep the old desktop app experience and replace its direct renderer storage/host assumptions with runtime/OpenADE APIs.
