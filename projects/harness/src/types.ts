@@ -1,3 +1,6 @@
+import type { ClaudeEvent } from "./harnesses/claude-code/types.js"
+import type { CodexEvent } from "./harnesses/codex/types.js"
+
 // ============================================================================
 // Identifiers
 // ============================================================================
@@ -196,6 +199,87 @@ export interface HarnessUsage {
 }
 
 export type HarnessErrorCode = "auth_failed" | "not_installed" | "rate_limited" | "context_overflow" | "process_crashed" | "aborted" | "timeout" | "unknown"
+
+// ============================================================================
+// Harness IPC — browser-safe bridge contract between Electron/runtime hosts and UI
+// ============================================================================
+
+export type HarnessIpcContentBlock =
+    | { type: "text"; text: string }
+    | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
+
+export interface HarnessIpcSerializedToolDefinition {
+    name: string
+    description: string
+    inputSchema: JsonSchema
+}
+
+export interface HarnessIpcToolResult {
+    content: Array<{ type: "text"; text: string }>
+    isError?: boolean
+}
+
+export interface HarnessIpcQueryOptions {
+    harnessId: HarnessId
+    cwd: string
+    mode?: "read-only" | "yolo"
+    model?: string
+    thinking?: "low" | "med" | "high" | "max"
+    fastMode?: boolean
+    appendSystemPrompt?: string
+    resumeSessionId?: string
+    forkSession?: boolean
+    processLabel?: string
+    additionalDirectories?: string[]
+    env?: Record<string, string>
+    disablePlanningTools?: boolean
+    mcpServerConfigs?: Record<string, McpServerConfig>
+    clientTools?: HarnessIpcSerializedToolDefinition[]
+}
+
+export type HarnessIpcRawMessageEventBase =
+    | { type: "raw_message"; executionId: string; harnessId: "claude-code"; message: ClaudeEvent }
+    | { type: "raw_message"; executionId: string; harnessId: "codex"; message: CodexEvent }
+
+export type HarnessIpcExecutionEventBase =
+    | HarnessIpcRawMessageEventBase
+    | { type: "stderr"; executionId: string; harnessId: HarnessId; data: string }
+    | { type: "complete"; executionId: string; harnessId: HarnessId; usage?: HarnessUsage }
+    | { type: "error"; executionId: string; harnessId: HarnessId; error: string; code?: HarnessErrorCode }
+    | { type: "tool_call"; executionId: string; harnessId: HarnessId; callId: string; toolName: string; args: unknown }
+    | { type: "session_started"; executionId: string; harnessId: HarnessId; sessionId: string }
+
+export type HarnessIpcRawMessageEvent = HarnessIpcRawMessageEventBase & { id: string }
+export type HarnessIpcExecutionEvent = HarnessIpcExecutionEventBase & { id: string }
+
+export type HarnessIpcCommandEvent =
+    | { id: string; type: "start_query"; executionId: string; prompt: string | HarnessIpcContentBlock[]; options: HarnessIpcQueryOptions }
+    | {
+          id: string
+          type: "structured_query"
+          executionId: string
+          prompt: string | HarnessIpcContentBlock[]
+          options: HarnessIpcQueryOptions
+          outputSchema: JsonSchema
+      }
+    | { id: string; type: "tool_response"; executionId: string; callId: string; result?: HarnessIpcToolResult; error?: string }
+    | { id: string; type: "abort"; executionId: string }
+    | { id: string; type: "reconnect"; executionId: string }
+    | { id: string; type: "clear_buffer"; executionId: string }
+
+export type HarnessIpcStreamEvent =
+    | (HarnessIpcExecutionEvent & { direction: "execution" })
+    | (HarnessIpcCommandEvent & { direction: "command" })
+
+export interface HarnessIpcExecutionState {
+    executionId: string
+    harnessId: HarnessId
+    status: "in_progress" | "completed" | "error" | "aborted"
+    sessionId?: string
+    events: HarnessIpcStreamEvent[]
+    createdAt: string
+    completedAt?: string
+}
 
 // ============================================================================
 // Structured query

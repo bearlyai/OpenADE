@@ -1,8 +1,8 @@
 /**
  * Harness Event Stream Types
  *
- * This file defines the shared event types used for communication between
- * the Electron main process and the Dashboard renderer process.
+ * This file aliases shared event types owned by @openade/harness/browser and
+ * keeps renderer helpers for persisted-event compatibility and event inspection.
  *
  * Replaces claudeEventTypes.ts with harness-agnostic types.
  *
@@ -13,117 +13,30 @@
 
 import type {
     HarnessId,
-    HarnessUsage,
-    HarnessErrorCode,
     McpServerConfig as HarnessMcpServerConfig,
     McpStdioServerConfig,
     McpHttpServerConfig,
-    ClaudeEvent,
-    CodexEvent,
+    HarnessIpcContentBlock,
+    HarnessIpcSerializedToolDefinition,
+    HarnessIpcToolResult,
+    HarnessIpcQueryOptions,
+    HarnessIpcRawMessageEvent,
+    HarnessIpcExecutionEvent,
+    HarnessIpcCommandEvent,
+    HarnessIpcStreamEvent,
+    HarnessIpcExecutionState,
 } from "@openade/harness/browser"
 
 export type { HarnessId, HarnessMcpServerConfig as McpServerConfig, McpStdioServerConfig, McpHttpServerConfig }
-
-// ============================================================================
-// Prompt Content
-// ============================================================================
-
-/** Content block for Vision API support — text or base64 image */
-export type ContentBlock = { type: "text"; text: string } | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
-
-// ============================================================================
-// Query Options (renderer → Electron)
-// ============================================================================
-
-/** Serialized tool definition for IPC (no handler, JSON Schema) */
-export interface SerializedToolDefinition {
-    name: string
-    description: string
-    inputSchema: Record<string, unknown>
-}
-
-/** Tool result from renderer */
-export interface ToolResult {
-    content: Array<{ type: "text"; text: string }>
-    isError?: boolean
-}
-
-export interface HarnessQueryOptions {
-    harnessId: HarnessId
-    cwd: string
-    mode?: "read-only" | "yolo"
-    model?: string
-    thinking?: "low" | "med" | "high" | "max"
-    fastMode?: boolean
-    appendSystemPrompt?: string
-    resumeSessionId?: string
-    forkSession?: boolean
-    processLabel?: string
-    additionalDirectories?: string[]
-    env?: Record<string, string>
-    disablePlanningTools?: boolean
-    mcpServerConfigs?: Record<string, HarnessMcpServerConfig>
-    clientTools?: SerializedToolDefinition[]
-}
-
-// ============================================================================
-// Raw Message — discriminated union keyed on harnessId
-// ============================================================================
-
-export type HarnessRawMessageEvent =
-    | { id: string; type: "raw_message"; executionId: string; harnessId: "claude-code"; message: ClaudeEvent }
-    | { id: string; type: "raw_message"; executionId: string; harnessId: "codex"; message: CodexEvent }
-
-// ============================================================================
-// Execution Events (Electron → Dashboard)
-// ============================================================================
-
-export type HarnessExecutionEvent =
-    | HarnessRawMessageEvent
-    | { id: string; type: "stderr"; executionId: string; harnessId: HarnessId; data: string }
-    | { id: string; type: "complete"; executionId: string; harnessId: HarnessId; usage?: HarnessUsage }
-    | { id: string; type: "error"; executionId: string; harnessId: HarnessId; error: string; code?: HarnessErrorCode }
-    | { id: string; type: "tool_call"; executionId: string; harnessId: HarnessId; callId: string; toolName: string; args: unknown }
-    | { id: string; type: "session_started"; executionId: string; harnessId: HarnessId; sessionId: string }
-
-// ============================================================================
-// Command Events (Dashboard → Electron)
-// ============================================================================
-
-export type HarnessCommandEvent =
-    | { id: string; type: "start_query"; executionId: string; prompt: string | ContentBlock[]; options: HarnessQueryOptions }
-    | {
-          id: string
-          type: "structured_query"
-          executionId: string
-          prompt: string | ContentBlock[]
-          options: HarnessQueryOptions
-          outputSchema: Record<string, unknown>
-      }
-    | { id: string; type: "tool_response"; executionId: string; callId: string; result?: ToolResult; error?: string }
-    | { id: string; type: "abort"; executionId: string }
-    | { id: string; type: "reconnect"; executionId: string }
-    | { id: string; type: "clear_buffer"; executionId: string }
-
-// ============================================================================
-// Combined Event Type
-// ============================================================================
-
-export type HarnessStreamEvent = (HarnessExecutionEvent & { direction: "execution" }) | (HarnessCommandEvent & { direction: "command" })
-
-// ============================================================================
-// Execution State (used by both sides for buffering)
-// ============================================================================
-
-export interface ExecutionState {
-    executionId: string
-    harnessId: HarnessId
-    status: "in_progress" | "completed" | "error" | "aborted"
-    sessionId?: string
-    events: HarnessStreamEvent[]
-    createdAt: string
-    completedAt?: string
-}
+export type ContentBlock = HarnessIpcContentBlock
+export type SerializedToolDefinition = HarnessIpcSerializedToolDefinition
+export type ToolResult = HarnessIpcToolResult
+export type HarnessQueryOptions = HarnessIpcQueryOptions
+export type HarnessRawMessageEvent = HarnessIpcRawMessageEvent
+export type HarnessExecutionEvent = HarnessIpcExecutionEvent
+export type HarnessCommandEvent = HarnessIpcCommandEvent
+export type HarnessStreamEvent = HarnessIpcStreamEvent
+export type ExecutionState = HarnessIpcExecutionState
 
 // ============================================================================
 // Helper Functions

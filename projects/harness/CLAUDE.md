@@ -94,7 +94,7 @@ src/
 
 When vendor model versions change, update `src/models.ts` first. Harness implementations should return the shared model config from that file rather than re-declaring model metadata inline.
 
-`src/types.ts` is also the browser-safe owner for MCP server config and OAuth host-bridge DTOs used by the desktop renderer and Electron main process. Do not mirror those shapes in `projects/web/src/electronAPI/*` or `projects/electron/src/modules/code/*`; export aliases from `@openade/harness` or `@openade/harness/browser` instead.
+`src/types.ts` is also the browser-safe owner for MCP server config, OAuth host-bridge DTOs, and low-level harness IPC event/query contracts (`HarnessIpc*`) used by the desktop renderer and Electron main process. Do not mirror those shapes in `projects/web/src/electronAPI/*` or `projects/electron/src/modules/code/*`; export aliases from `@openade/harness` or `@openade/harness/browser` instead.
 
 Before changing MCP config/OAuth DTO ownership or harness-host bridge contracts, consult the shared-shell migration plan at [../../plan.md](../../plan.md).
 

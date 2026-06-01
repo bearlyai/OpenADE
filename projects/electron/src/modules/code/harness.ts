@@ -22,9 +22,17 @@ import {
     type HarnessEvent,
     type HarnessQuery,
     type HarnessId,
-    type McpServerConfig,
     type ClientToolDefinition,
     type ClientToolResult,
+    type ClaudeEvent,
+    type CodexEvent,
+    type HarnessIpcContentBlock as ContentBlock,
+    type HarnessIpcSerializedToolDefinition as SerializedToolDefinition,
+    type HarnessIpcToolResult as ToolResult,
+    type HarnessIpcQueryOptions as HarnessQueryOptions,
+    type HarnessIpcExecutionEventBase as HarnessExecutionEventBase,
+    type HarnessIpcCommandEvent as HarnessCommandEvent,
+    type HarnessIpcStreamEvent as HarnessStreamEvent,
 } from "@openade/harness"
 import { setSdkCache } from "./capabilities.js"
 
@@ -40,86 +48,6 @@ export const registry = new HarnessRegistry()
 // but claude/codex CLI resolution is done by each harness.
 registry.register(new ClaudeCodeHarness())
 registry.register(new CodexHarness())
-
-// ============================================================================
-// Shared Types (mirrors claudeEventTypes.ts in dashboard)
-// ============================================================================
-
-/** Serialized tool definition received from renderer (with JSON Schema) */
-interface SerializedToolDefinition {
-    name: string
-    description: string
-    inputSchema: Record<string, unknown>
-}
-
-/** Tool result from renderer */
-interface ToolResult {
-    content: Array<{ type: "text"; text: string }>
-    isError?: boolean
-}
-
-/** Query options received over IPC from the renderer */
-interface HarnessQueryOptions {
-    harnessId: HarnessId
-    cwd: string
-    mode?: "read-only" | "yolo"
-    model?: string
-    thinking?: "low" | "med" | "high" | "max"
-    fastMode?: boolean
-    appendSystemPrompt?: string
-    resumeSessionId?: string
-    forkSession?: boolean
-    processLabel?: string
-    additionalDirectories?: string[]
-    env?: Record<string, string>
-    disablePlanningTools?: boolean
-    mcpServerConfigs?: Record<string, McpServerConfig>
-    clientTools?: SerializedToolDefinition[]
-}
-
-type ContentBlock =
-    | { type: "text"; text: string }
-    | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
-
-// ============================================================================
-// Unified Event Types
-// ============================================================================
-
-// Base event shapes without id (used for emitting)
-type HarnessExecutionEventBase =
-    | { type: "raw_message"; executionId: string; harnessId: HarnessId; message: unknown }
-    | { type: "stderr"; executionId: string; harnessId: HarnessId; data: string }
-    | { type: "complete"; executionId: string; harnessId: HarnessId; usage?: unknown }
-    | { type: "error"; executionId: string; harnessId: HarnessId; error: string; code?: string }
-    | { type: "tool_call"; executionId: string; harnessId: HarnessId; callId: string; toolName: string; args: unknown }
-    | { type: "session_started"; executionId: string; harnessId: HarnessId; sessionId: string }
-
-type HarnessExecutionEvent = HarnessExecutionEventBase & { id: string }
-
-type HarnessCommandEvent =
-    | {
-          id: string
-          type: "start_query"
-          executionId: string
-          prompt: string | ContentBlock[]
-          options: HarnessQueryOptions
-      }
-    | {
-          id: string
-          type: "structured_query"
-          executionId: string
-          prompt: string | ContentBlock[]
-          options: HarnessQueryOptions
-          outputSchema: Record<string, unknown>
-      }
-    | { id: string; type: "tool_response"; executionId: string; callId: string; result?: ToolResult; error?: string }
-    | { id: string; type: "abort"; executionId: string }
-    | { id: string; type: "reconnect"; executionId: string }
-    | { id: string; type: "clear_buffer"; executionId: string }
-
-type HarnessStreamEvent =
-    | (HarnessExecutionEvent & { direction: "execution" })
-    | (HarnessCommandEvent & { direction: "command" })
 
 type HarnessEventSink = (event: HarnessStreamEvent) => void
 type HarnessSettledSink = (result: {
@@ -262,6 +190,13 @@ async function* deterministicSmokeHarnessEvents(harnessId: HarnessId): AsyncGene
     }
 }
 
+function rawMessageExecutionEvent(executionId: string, harnessId: HarnessId, message: unknown): HarnessExecutionEventBase {
+    if (harnessId === "claude-code") {
+        return { type: "raw_message", executionId, harnessId, message: message as ClaudeEvent }
+    }
+    return { type: "raw_message", executionId, harnessId, message: message as CodexEvent }
+}
+
 /** Emit an execution event to the buffer and renderer */
 function emitExecutionEvent(executionId: string, event: HarnessExecutionEventBase): void {
     const execution = activeExecutions.get(executionId)
@@ -356,12 +291,7 @@ async function streamToRenderer(
 
             switch (harnessEvent.type) {
                 case "message":
-                    emitExecutionEvent(executionId, {
-                        type: "raw_message",
-                        executionId,
-                        harnessId,
-                        message: harnessEvent.message,
-                    })
+                    emitExecutionEvent(executionId, rawMessageExecutionEvent(executionId, harnessId, harnessEvent.message))
 
                     // Update SDK capabilities cache from system:init message (Claude Code specific)
                     if (harnessId === "claude-code") {

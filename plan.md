@@ -1198,6 +1198,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - `projects/shared/companion` remains limited to actual companion pairing/device contracts; MCP host control is still trusted-local desktop capability, not a companion DTO namespace.
 - Focused verification passed: harness typecheck/build, Electron typecheck, web typecheck, Biome lint for the touched MCP/docs files, web `mcp.test.ts`, and Electron `runtimeApi.integration`.
 
+### 2026-06-01: Harness IPC Event DTOs Consolidated
+
+- Low-level harness IPC query, command, event, content-block, renderer-tool, and buffered-execution DTOs now live in `projects/harness/src/types.ts` as `HarnessIpc*`, exported by both `@openade/harness` and `@openade/harness/browser`.
+- `projects/electron/src/modules/code/harness.ts` imports the shared IPC types instead of declaring renderer-matching copies, while keeping only Electron-internal execution state for abort controllers, timers, and sinks.
+- `projects/web/src/electronAPI/harnessEventTypes.ts` now aliases the shared browser-safe IPC types and keeps only renderer helper functions and persisted-event compatibility helpers.
+- Focused verification passed: harness build, Electron typecheck, web typecheck, web harness event/prompt/stat tests, web `harnessStatus.test.ts`, and Electron `runtimeApi.integration`.
+
 ### 2026-06-01: openade.toml Config DTOs Consolidated
 
 - Browser-safe `openade.toml` process, cron, editable-file, read-result, save-result, and run-context DTOs now live in `projects/openade-module/src/types.ts`, alongside the OpenADE project process DTOs that consume those config definitions.
