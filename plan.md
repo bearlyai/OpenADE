@@ -1243,6 +1243,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - This removes another duplicated OpenADE API-boundary implementation without changing classic desktop process tray behavior or remote process permissions.
 - Focused verification passed: OpenADE module typecheck, Electron typecheck, scoped project process helper tests, OpenADE kernel integration, Electron companion runtime API integration, Biome lint for touched files, and `git diff --check`.
 
+### 2026-06-01: Scoped Project Process DTO Helpers Consolidated
+
+- `projects/openade-module/src/scopedProjectProcesses.ts` now also owns scoped project process registration/scope matching, timeout policy, runtime process instance conversion, and reconnect/stop response normalization.
+- `projects/openade-module/src/node.ts` and `projects/electron/src/modules/companion/runtimeGateway.ts` both use those helpers while retaining host-specific process start/reconnect/kill plumbing.
+- This removes duplicate project-process DTO shaping without changing classic desktop process tray behavior or remote process permissions.
+- Focused verification passed: OpenADE module typecheck, Electron typecheck, scoped project process helper tests, OpenADE kernel integration, Electron companion runtime API integration, Biome lint for touched files, and `git diff --check`.
+
 ### 2026-06-01: Scoped Task Terminal Helpers Consolidated
 
 - `projects/openade-module/src/scopedTaskTerminal.ts` now owns scoped task terminal id derivation and the raw PTY base64/plain-text conversion helpers used at the OpenADE task-terminal boundary.

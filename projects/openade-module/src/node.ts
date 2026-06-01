@@ -18,7 +18,16 @@ import { buildOpenADEPrompt } from "./promptBuilder"
 import { parseProcsFile } from "./procs"
 import { buildOpenADEPlanReviewPrompt, buildOpenADEReviewHandoffPrompt, buildOpenADEWorkReviewPrompt } from "./review"
 import { listOpenADEProjectFiles, readOpenADEProjectFile, searchOpenADEProject, writeOpenADEProjectFile } from "./scopedProjectHost"
-import { buildOpenADEProjectProcessDefinitions } from "./scopedProjectProcesses"
+import {
+    buildOpenADEProjectProcessDefinitions,
+    openADEProjectProcessInstanceFromUnknown,
+    openADEProjectProcessReconnectResultFromUnknown,
+    openADEProjectProcessScopeMatches,
+    openADEProjectProcessStartResponseFromUnknown,
+    openADEProjectProcessStopResultFromUnknown,
+    openADEProjectProcessTimeout,
+    type OpenADEProjectProcessRegistration,
+} from "./scopedProjectProcesses"
 import {
     assertOpenADETaskTerminalId,
     encodeOpenADETaskTerminalInput,
@@ -39,7 +48,6 @@ import type {
     OpenADEProjectProcessInstance,
     OpenADEProjectProcessListRequest,
     OpenADEProjectProcessListResult,
-    OpenADEProjectProcessOutputChunk,
     OpenADEProjectProcessReconnectRequest,
     OpenADEProjectProcessReconnectResult,
     OpenADEProjectProcessStartRequest,
@@ -760,18 +768,8 @@ type NodeProjectProcessProcsResult = {
     errors: OpenADEProjectProcessConfigError[]
 }
 
-type ScopedProjectProcessRegistration = {
-    repoId: string
-    taskId?: string
-    definitionId: string
-    cwd: string
-}
-
 const NODE_PROCS_CONFIG_FILENAME = "openade.toml"
 const NODE_PROCS_SKIP_DIRS = new Set([".git", "node_modules", "dist", "build", ".next", "vendor", ".venv", "venv", ".cache", "coverage"])
-const DEFAULT_SCOPED_PROJECT_PROCESS_TIMEOUT_MS = 10 * 60 * 1000
-const DAEMON_SCOPED_PROJECT_PROCESS_TIMEOUT_MS = 24 * 60 * 60 * 1000
-const MAX_SCOPED_PROJECT_PROCESS_TIMEOUT_MS = 24 * 60 * 60 * 1000
 let scopedProjectProcessRequestId = 0
 
 async function nodeProjectProcessGitInfo(searchRoot: string): Promise<{ repoRoot: string; isWorktree: boolean; worktreeRoot?: string } | null> {
@@ -855,43 +853,6 @@ async function scopedProjectProcessSearchRoot(params: { repo: OpenADEProject; ta
     return params.task ? scopedTaskWorkDir(params.repo, params.task) : path.resolve(params.repo.path)
 }
 
-function projectProcessScopeMatches(registration: ScopedProjectProcessRegistration, params: { repoId: string; taskId?: string }): boolean {
-    return registration.repoId === params.repoId && (registration.taskId ?? "") === (params.taskId ?? "")
-}
-
-function processOutputChunk(value: unknown): OpenADEProjectProcessOutputChunk | null {
-    const record = eventRecord(value)
-    if (!record) return null
-    const type = record.type
-    const data = record.data
-    const timestamp = record.timestamp
-    if ((type !== "stdout" && type !== "stderr") || typeof data !== "string" || typeof timestamp !== "number") return null
-    return { type, data, timestamp }
-}
-
-function projectProcessInstanceFromRaw(
-    value: unknown,
-    registration: ScopedProjectProcessRegistration
-): OpenADEProjectProcessInstance | null {
-    const record = eventRecord(value)
-    if (!record || typeof record.processId !== "string") return null
-    const completed = typeof record.completed === "boolean" ? record.completed : false
-    const exitCode = typeof record.exitCode === "number" || record.exitCode === null ? record.exitCode : null
-    const signal = typeof record.signal === "string" || record.signal === null ? record.signal : null
-    return {
-        processId: record.processId,
-        definitionId: registration.definitionId,
-        repoId: registration.repoId,
-        taskId: registration.taskId,
-        cwd: registration.cwd,
-        completed,
-        exitCode,
-        signal,
-        error: typeof record.error === "string" ? record.error : undefined,
-        pid: typeof record.pid === "number" ? record.pid : undefined,
-    }
-}
-
 async function nodeRuntimeRequest(server: RuntimeServer | undefined, method: string, params?: unknown): Promise<unknown> {
     if (!server) throw new RuntimeHandlerError("host_unavailable", "Scoped project process host requires a runtime server")
     const response = await server.handleRequest(
@@ -906,50 +867,8 @@ async function nodeRuntimeRequest(server: RuntimeServer | undefined, method: str
     return response.result
 }
 
-function projectProcessStartResponse(value: unknown): { processId: string; runtimeId?: string } {
-    const record = eventRecord(value)
-    if (!record || typeof record.processId !== "string") throw new Error("process start response is invalid")
-    return {
-        processId: record.processId,
-        runtimeId: typeof record.runtimeId === "string" ? record.runtimeId : undefined,
-    }
-}
-
-function projectProcessReconnectResponse(
-    value: unknown,
-    params: OpenADEProjectProcessReconnectRequest
-): OpenADEProjectProcessReconnectResult {
-    const record = eventRecord(value)
-    if (!record || record.found !== true) return { repoId: params.repoId, taskId: params.taskId, processId: params.processId, found: false, output: [] }
-    const output = Array.isArray(record.output) ? record.output.map(processOutputChunk).filter((chunk): chunk is OpenADEProjectProcessOutputChunk => chunk !== null) : []
-    return {
-        repoId: params.repoId,
-        taskId: params.taskId,
-        processId: params.processId,
-        found: true,
-        completed: typeof record.completed === "boolean" ? record.completed : undefined,
-        exitCode: typeof record.exitCode === "number" || record.exitCode === null ? record.exitCode : undefined,
-        signal: typeof record.signal === "string" || record.signal === null ? record.signal : undefined,
-        error: typeof record.error === "string" ? record.error : undefined,
-        outputCount: typeof record.outputCount === "number" ? record.outputCount : output.length,
-        output,
-    }
-}
-
-function projectProcessStopResponse(value: unknown, params: OpenADEProjectProcessStopRequest): OpenADEProjectProcessStopResult {
-    const record = eventRecord(value)
-    const ok = record?.ok === true
-    return {
-        repoId: params.repoId,
-        taskId: params.taskId,
-        processId: params.processId,
-        ok,
-        error: typeof record?.error === "string" ? record.error : ok ? undefined : "Process stop response is invalid",
-    }
-}
-
 async function listNodeProjectProcesses(
-    params: OpenADEProjectProcessListRequest & { repo: OpenADEProject; task?: OpenADETask; registry: Map<string, ScopedProjectProcessRegistration>; server?: RuntimeServer }
+    params: OpenADEProjectProcessListRequest & { repo: OpenADEProject; task?: OpenADETask; registry: Map<string, OpenADEProjectProcessRegistration>; server?: RuntimeServer }
 ): Promise<OpenADEProjectProcessListResult> {
     const searchRoot = await scopedProjectProcessSearchRoot(params)
     const result = await readNodeProjectProcessDefinitions(searchRoot)
@@ -962,8 +881,8 @@ async function listNodeProjectProcesses(
         const processId = typeof record?.processId === "string" ? record.processId : undefined
         if (!processId) continue
         const registration = params.registry.get(processId)
-        if (!registration || !projectProcessScopeMatches(registration, params)) continue
-        const instance = projectProcessInstanceFromRaw(rawProcess, registration)
+        if (!registration || !openADEProjectProcessScopeMatches(registration, params)) continue
+        const instance = openADEProjectProcessInstanceFromUnknown(rawProcess, registration)
         if (instance) instances.push(instance)
     }
 
@@ -980,13 +899,8 @@ async function listNodeProjectProcesses(
     }
 }
 
-function scopedProjectProcessTimeout(processDef: OpenADEProjectProcessDefinition, timeoutMs?: number): number {
-    const fallback = processDef.type === "daemon" ? DAEMON_SCOPED_PROJECT_PROCESS_TIMEOUT_MS : DEFAULT_SCOPED_PROJECT_PROCESS_TIMEOUT_MS
-    return Math.min(timeoutMs ?? fallback, MAX_SCOPED_PROJECT_PROCESS_TIMEOUT_MS)
-}
-
 async function startNodeProjectProcess(
-    params: OpenADEProjectProcessStartRequest & { repo: OpenADEProject; task?: OpenADETask; registry: Map<string, ScopedProjectProcessRegistration>; server?: RuntimeServer }
+    params: OpenADEProjectProcessStartRequest & { repo: OpenADEProject; task?: OpenADETask; registry: Map<string, OpenADEProjectProcessRegistration>; server?: RuntimeServer }
 ): Promise<OpenADEProjectProcessStartResult> {
     const searchRoot = await scopedProjectProcessSearchRoot(params)
     const result = await readNodeProjectProcessDefinitions(searchRoot)
@@ -995,11 +909,11 @@ async function startNodeProjectProcess(
     const stat = await fs.stat(processDef.cwd)
     if (!stat.isDirectory()) throw new Error("process cwd is not a directory")
 
-    const started = projectProcessStartResponse(
+    const started = openADEProjectProcessStartResponseFromUnknown(
         await nodeRuntimeRequest(params.server, "process/script/start", {
             script: processDef.command,
             cwd: processDef.cwd,
-            timeoutMs: scopedProjectProcessTimeout(processDef, params.timeoutMs),
+            timeoutMs: openADEProjectProcessTimeout(processDef, params.timeoutMs),
         })
     )
     params.registry.set(started.processId, {
@@ -1018,23 +932,23 @@ async function startNodeProjectProcess(
 }
 
 async function reconnectNodeProjectProcess(
-    params: OpenADEProjectProcessReconnectRequest & { registry: Map<string, ScopedProjectProcessRegistration>; server?: RuntimeServer }
+    params: OpenADEProjectProcessReconnectRequest & { registry: Map<string, OpenADEProjectProcessRegistration>; server?: RuntimeServer }
 ): Promise<OpenADEProjectProcessReconnectResult> {
     const registration = params.registry.get(params.processId)
-    if (!registration || !projectProcessScopeMatches(registration, params)) {
+    if (!registration || !openADEProjectProcessScopeMatches(registration, params)) {
         return { repoId: params.repoId, taskId: params.taskId, processId: params.processId, found: false, output: [] }
     }
-    return projectProcessReconnectResponse(await nodeRuntimeRequest(params.server, "process/reconnect", { processId: params.processId }), params)
+    return openADEProjectProcessReconnectResultFromUnknown(await nodeRuntimeRequest(params.server, "process/reconnect", { processId: params.processId }), params)
 }
 
 async function stopNodeProjectProcess(
-    params: OpenADEProjectProcessStopRequest & { registry: Map<string, ScopedProjectProcessRegistration>; server?: RuntimeServer }
+    params: OpenADEProjectProcessStopRequest & { registry: Map<string, OpenADEProjectProcessRegistration>; server?: RuntimeServer }
 ): Promise<OpenADEProjectProcessStopResult> {
     const registration = params.registry.get(params.processId)
-    if (!registration || !projectProcessScopeMatches(registration, params)) {
+    if (!registration || !openADEProjectProcessScopeMatches(registration, params)) {
         return { repoId: params.repoId, taskId: params.taskId, processId: params.processId, ok: false, error: "Process not found" }
     }
-    const result = projectProcessStopResponse(await nodeRuntimeRequest(params.server, "process/kill", { processId: params.processId }), params)
+    const result = openADEProjectProcessStopResultFromUnknown(await nodeRuntimeRequest(params.server, "process/kill", { processId: params.processId }), params)
     if (result.ok) params.registry.delete(params.processId)
     return result
 }
@@ -1331,7 +1245,7 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
     const server = options.server
     const agentExecutor = options.agentExecutor ?? createRuntimeNodeHarnessAgentExecutor()
     const activeTaskExecutions = new Map<string, ActiveTaskExecution>()
-    const scopedProjectProcesses = new Map<string, ScopedProjectProcessRegistration>()
+    const scopedProjectProcesses = new Map<string, OpenADEProjectProcessRegistration>()
     if (server) {
         server.registerRuntimeStopHandler((runtime) =>
             stopActiveOpenADERuntime({
