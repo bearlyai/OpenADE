@@ -6,6 +6,14 @@
  */
 
 import { makeAutoObservable, runInAction } from "mobx"
+import type {
+    OpenADETaskChangesReadRequest,
+    OpenADETaskChangesReadResult,
+    OpenADETaskDiffReadRequest,
+    OpenADETaskDiffReadResult,
+    OpenADETaskFilePairReadRequest,
+    OpenADETaskFilePairReadResult,
+} from "../../../openade-module/src"
 import { DEFAULT_MODEL, getDefaultModelForHarness, resolveModelForHarness } from "../constants"
 import type { GitSummaryResponse } from "../electronAPI/git"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
@@ -33,6 +41,23 @@ function legacyWorktreeDirFromSetupEvent(event: SetupEnvironmentEvent): string |
         .find((line) => line.startsWith("Worktree:"))
     const worktreeDir = worktreeLine?.slice("Worktree:".length).trim()
     return worktreeDir || event.workingDir || null
+}
+
+function gitSummaryFromProductChanges(files: OpenADETaskChangesReadResult["files"]): GitSummaryResponse {
+    const changedFiles = files.map((file) => ({
+        path: file.path,
+        binary: file.binary ?? false,
+        status: file.status,
+    }))
+    return {
+        branch: null,
+        headCommit: "",
+        ahead: null,
+        hasChanges: changedFiles.length > 0,
+        staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+        unstaged: { files: changedFiles, stats: { filesChanged: changedFiles.length, insertions: 0, deletions: 0 } },
+        untracked: [],
+    }
 }
 
 export class TaskModel {
@@ -242,6 +267,10 @@ export class TaskModel {
         return this.repoId
     }
 
+    get usesRuntimeProductReads(): boolean {
+        return this.store.shouldUseRuntimeProductReads()
+    }
+
     get createdAt(): string {
         return this.task?.createdAt ?? ""
     }
@@ -270,6 +299,18 @@ export class TaskModel {
             queuedTurnId,
         })
         await this.store.refreshProductStateAfterTaskMutation(this.taskId)
+    }
+
+    readProductTaskChanges(params: Omit<OpenADETaskChangesReadRequest, "repoId" | "taskId">): Promise<OpenADETaskChangesReadResult> {
+        return this.store.readProductTaskChanges({ repoId: this.repoId, taskId: this.taskId, ...params })
+    }
+
+    readProductTaskDiff(params: Omit<OpenADETaskDiffReadRequest, "repoId" | "taskId">): Promise<OpenADETaskDiffReadResult> {
+        return this.store.readProductTaskDiff({ repoId: this.repoId, taskId: this.taskId, ...params })
+    }
+
+    readProductTaskFilePair(params: Omit<OpenADETaskFilePairReadRequest, "repoId" | "taskId">): Promise<OpenADETaskFilePairReadResult> {
+        return this.store.readProductTaskFilePair({ repoId: this.repoId, taskId: this.taskId, ...params })
     }
 
     setEnabledMcpServerIds(serverIds: string[]): void {
@@ -532,19 +573,39 @@ export class TaskModel {
     // === Actions ===
 
     async refreshGitState(): Promise<void> {
-        // Load environment first (async)
-        const env = await this.loadEnvironment()
-        if (!env?.taskWorkingDir) {
-            runInAction(() => {
-                this.gitStatus = null
-            })
-            return
-        }
-
         if (this.gitStateLoading) return
         this.gitStateLoading = true
 
+        if (this.usesRuntimeProductReads && this.repoId) {
+            try {
+                const result = await this.readProductTaskChanges({})
+                runInAction(() => {
+                    this.gitStatus = gitSummaryFromProductChanges(result.files)
+                })
+            } catch (err) {
+                console.error("[TaskModel] Failed to refresh runtime git state:", err)
+                runInAction(() => {
+                    this.gitStatus = null
+                })
+            } finally {
+                runInAction(() => {
+                    this.gitStateLoading = false
+                })
+            }
+            return
+        }
+
         try {
+            // Load environment first (async)
+            const env = await this.loadEnvironment()
+            if (!env?.taskWorkingDir) {
+                runInAction(() => {
+                    this.gitStatus = null
+                    this.gitStateLoading = false
+                })
+                return
+            }
+
             const result = await env.getGitSummary()
             runInAction(() => {
                 this.gitStatus = result

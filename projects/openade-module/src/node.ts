@@ -54,6 +54,8 @@ import {
     type OpenADETaskCreateRequest,
     type OpenADETaskDiffReadRequest,
     type OpenADETaskDiffReadResult,
+    type OpenADETaskFilePairReadRequest,
+    type OpenADETaskFilePairReadResult,
     type OpenADETaskDiffStats,
     type OpenADETaskGitChangedFile,
     type OpenADETaskGitCommitRequest,
@@ -266,6 +268,8 @@ type ScopedGitResult = {
 const DEFAULT_SCOPED_TASK_GIT_LOG_LIMIT = 50
 const MAX_SCOPED_TASK_GIT_LOG_LIMIT = 200
 const MAX_SCOPED_TASK_PATCH_SIZE = 1024 * 1024
+const MAX_SCOPED_TASK_FILE_PAIR_BYTES = 1024 * 1024
+const MAX_SCOPED_TASK_FILE_PAIR_LINES = 10_000
 const SCOPED_TASK_GENERATED_FILE_BASENAMES = new Set([
     "package-lock.json",
     "yarn.lock",
@@ -558,6 +562,86 @@ async function scopedTaskDiff(params: OpenADETaskDiffReadRequest & { repo: OpenA
         })
     }
     return response
+}
+
+function exceedsScopedTaskFilePairLineLimit(content: string): boolean {
+    let count = 0
+    for (let index = 0; index < content.length; index++) {
+        if (content[index] === "\n") {
+            count += 1
+            if (count > MAX_SCOPED_TASK_FILE_PAIR_LINES) return true
+        }
+    }
+    return false
+}
+
+async function readScopedTaskFileAtTreeish(
+    workDir: string,
+    treeish: string,
+    filePath: string
+): Promise<{ content: string; exists: boolean; tooLarge?: boolean }> {
+    const relativePath = resolveTaskGitFilePath(workDir, filePath).relativePath
+    const objectSpec = `${treeish}:${relativePath}`
+    const sizeResult = await scopedGit(["cat-file", "-s", objectSpec], workDir)
+    if (!sizeResult.success) {
+        return { content: "", exists: false }
+    }
+
+    const fileSize = Number.parseInt(sizeResult.stdout.trim(), 10)
+    if (Number.isFinite(fileSize) && fileSize > MAX_SCOPED_TASK_FILE_PAIR_BYTES) {
+        return { content: "", exists: true, tooLarge: true }
+    }
+
+    const result = await scopedGit(["show", objectSpec], workDir)
+    if (!result.success) return { content: "", exists: false }
+    return {
+        content: result.stdout,
+        exists: true,
+    }
+}
+
+async function readScopedTaskWorkingTreeFile(workDir: string, filePath: string): Promise<{ content: string; tooLarge?: boolean }> {
+    const resolvedPath = resolveTaskGitFilePath(workDir, filePath)
+    const stat = await fs.stat(resolvedPath.absolutePath).catch(() => null)
+    if (!stat?.isFile()) return { content: "" }
+    if (stat.size > MAX_SCOPED_TASK_FILE_PAIR_BYTES) return { content: "", tooLarge: true }
+    return { content: await fs.readFile(resolvedPath.absolutePath, "utf8") }
+}
+
+async function scopedTaskFilePair(params: OpenADETaskFilePairReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskFilePairReadResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const fromTreeish = scopedTaskFromTreeish(params.task, params.fromTreeish)
+    const toTreeish = ""
+    const resultBase = {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        filePath: params.filePath,
+        oldPath: params.oldPath,
+        fromTreeish,
+        toTreeish,
+    }
+
+    if (SCOPED_TASK_GENERATED_FILE_BASENAMES.has(path.basename(params.filePath))) {
+        return { ...resultBase, before: "", after: "", tooLarge: true }
+    }
+
+    const beforePath = params.oldPath || params.filePath
+    const before = await readScopedTaskFileAtTreeish(workDir, fromTreeish, beforePath)
+    const after = await readScopedTaskWorkingTreeFile(workDir, params.filePath)
+    if (
+        before.tooLarge ||
+        after.tooLarge ||
+        exceedsScopedTaskFilePairLineLimit(before.content) ||
+        exceedsScopedTaskFilePairLineLimit(after.content)
+    ) {
+        return { ...resultBase, before: "", after: "", tooLarge: true }
+    }
+
+    return {
+        ...resultBase,
+        before: before.content,
+        after: after.content,
+    }
 }
 
 async function scopedTaskGitLog(params: OpenADETaskGitLogRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitLogResult> {
@@ -1984,6 +2068,7 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
             searchProject: scopedProjectSearch,
             readTaskChanges: scopedTaskChanges,
             readTaskDiff: scopedTaskDiff,
+            readTaskFilePair: scopedTaskFilePair,
             readTaskGitLog: scopedTaskGitLog,
             commitTaskGit: scopedTaskGitCommit,
             listProjectProcesses: (params) => listNodeProjectProcesses({ ...params, registry: scopedProjectProcesses, server }),

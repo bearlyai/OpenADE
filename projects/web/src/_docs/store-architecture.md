@@ -51,6 +51,10 @@ Runtime lifecycle notifications update `RuntimeManager`. Check with `codeStore.i
 
 Repo, task, comment, plan-cancel, turn, review, queued-turn, environment-setup, and preview-usage mutations should enter through `CodeStore` product helpers such as `startProductTurn()`, `updateProductTaskMetadata()`, and `createProductComment()`. When runtime product reads are active, those helpers use the injected `OpenADEProductStore`; otherwise they fall back to `runtime/localOpenADEClient.ts` and the legacy Yjs refresh path. The renderer store is a cache/view over persisted product state and should refresh through runtime DTO helpers or explicit legacy `refresh*FromStorage()` calls only on the fallback path.
 
+### Task Scoped Git Reads
+
+The classic desktop changes tray stays on `TaskPage`/`ChangesManager`, but runtime-backed reads should use `CodeStore.readProductTaskChanges()`, `readProductTaskDiff()`, and `readProductTaskFilePair()` through `TaskModel`. Raw `gitApi` calls remain the trusted-local fallback when runtime product reads are disabled.
+
 ## Environment Classes
 
 **RepoEnvironment** - Repo-level git operations. Cached in RepoManager.

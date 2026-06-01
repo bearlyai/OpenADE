@@ -272,6 +272,16 @@ function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: Runt
                 heavy: false,
                 stats: { insertions: 1, deletions: 0, changedLines: 1, hunkCount: 1 },
             }),
+            readTaskFilePair: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                filePath: params.filePath,
+                oldPath: params.oldPath,
+                fromTreeish: params.fromTreeish ?? "HEAD",
+                toTreeish: "",
+                before: "before\n",
+                after: "after\n",
+            }),
             readTaskGitLog: async (params) => ({
                 repoId: params.repoId,
                 taskId: params.taskId,
@@ -399,6 +409,11 @@ describe("OpenADEProductStore", () => {
             filePath: "README.md",
             patch: expect.stringContaining("+runtime product store"),
             stats: { insertions: 1, deletions: 0, changedLines: 1, hunkCount: 1 },
+        })
+        await expect(store.readTaskFilePair({ repoId: "repo-1", taskId: "task-1", filePath: "README.md" })).resolves.toMatchObject({
+            filePath: "README.md",
+            before: "before\n",
+            after: "after\n",
         })
         await expect(store.readTaskGitLog({ repoId: "repo-1", taskId: "task-1" })).resolves.toMatchObject({
             commits: [expect.objectContaining({ message: "Runtime product store commit" })],

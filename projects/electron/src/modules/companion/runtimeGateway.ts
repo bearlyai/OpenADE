@@ -56,6 +56,8 @@ import {
     type OpenADETaskDeviceEnvironment,
     type OpenADETaskDiffReadRequest,
     type OpenADETaskDiffReadResult,
+    type OpenADETaskFilePairReadRequest,
+    type OpenADETaskFilePairReadResult,
     type OpenADETaskGitCommitRequest,
     type OpenADETaskGitCommitResult,
     type OpenADETaskGitLogRequest,
@@ -99,6 +101,7 @@ import {
     deleteRuntimeBranch,
     deleteRuntimeWorkTree,
     getRuntimeChangedFiles,
+    getRuntimeFilePair,
     getRuntimeGitLog,
     getOrCreateRuntimeWorkTree,
     getRuntimeGitSummary,
@@ -1174,6 +1177,31 @@ async function readScopedTaskDiff(params: OpenADETaskDiffReadRequest & { repo: O
         truncated: result.truncated,
         heavy: result.heavy,
         stats: result.stats,
+    }
+}
+
+async function readScopedTaskFilePair(
+    params: OpenADETaskFilePairReadRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskFilePairReadResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const fromTreeish = scopedTaskFromTreeish(params.task, params.fromTreeish)
+    const result = await getRuntimeFilePair({
+        workDir,
+        fromTreeish,
+        toTreeish: "",
+        filePath: params.filePath,
+        oldPath: params.oldPath,
+    })
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        filePath: params.filePath,
+        oldPath: params.oldPath,
+        fromTreeish,
+        toTreeish: "",
+        before: result.before,
+        after: result.after,
+        tooLarge: result.tooLarge,
     }
 }
 
@@ -2317,6 +2345,7 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                 searchProject: searchScopedProject,
                 readTaskChanges: readScopedTaskChanges,
                 readTaskDiff: readScopedTaskDiff,
+                readTaskFilePair: readScopedTaskFilePair,
                 readTaskGitLog: readScopedTaskGitLog,
                 commitTaskGit: commitScopedTaskGit,
                 listProjectProcesses: listScopedProjectProcesses,

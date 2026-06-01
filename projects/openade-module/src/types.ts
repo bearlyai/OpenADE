@@ -717,6 +717,26 @@ export interface OpenADETaskDiffReadResult {
     stats: OpenADETaskDiffStats
 }
 
+export interface OpenADETaskFilePairReadRequest {
+    repoId: string
+    taskId: string
+    filePath: string
+    oldPath?: string
+    fromTreeish?: string
+}
+
+export interface OpenADETaskFilePairReadResult {
+    repoId: string
+    taskId: string
+    filePath: string
+    oldPath?: string
+    fromTreeish: string
+    toTreeish: string
+    before: string
+    after: string
+    tooLarge?: boolean
+}
+
 export interface OpenADETaskGitLogRequest {
     repoId: string
     taskId: string

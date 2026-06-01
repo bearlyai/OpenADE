@@ -108,6 +108,15 @@ class OpenADEClient {
         heavy: false,
         stats: { insertions: 0, deletions: 0, changedLines: 0, hunkCount: 0 },
     }))
+    readTaskFilePair = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        filePath: "README.md",
+        fromTreeish: "HEAD",
+        toTreeish: "",
+        before: "before\n",
+        after: "after\n",
+    }))
     readTaskGitLog = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", commits: [], hasMore: false }))
     commitTaskGit = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", committed: false, status: "nothing_to_commit" as const }))
     readTaskImage = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", imageId: "image-1", ext: "png", mediaType: "image/png", data: "" }))

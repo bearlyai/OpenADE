@@ -106,6 +106,7 @@ export const COMPANION_RUNTIME_PERMISSIONS = [
     "openade/task/read",
     "openade/task/changes/read",
     "openade/task/diff/read",
+    "openade/task/filePair/read",
     "openade/task/git/log",
     "openade/task/image/read",
     "openade/task/snapshot/patch/read",

@@ -183,8 +183,21 @@ export class ChangesManager {
         return this.taskModel.environment?.taskWorkingDir
     }
 
-    private get fromTreeish(): string {
+    private get usesRuntimeScopedGit(): boolean {
+        return this.taskModel.usesRuntimeProductReads === true && !!this.taskModel.repoId
+    }
+
+    private get legacyFromTreeish(): string {
         return this.diffSource === "uncommitted" ? "HEAD" : (this.taskModel.environment?.mergeBaseCommit ?? "HEAD")
+    }
+
+    private get runtimeFromTreeish(): string | undefined {
+        if (this.diffSource === "uncommitted") return "HEAD"
+        return this.taskModel.environment?.mergeBaseCommit
+    }
+
+    private get cacheFromTreeish(): string {
+        return this.usesRuntimeScopedGit ? (this.runtimeFromTreeish ?? "") : this.legacyFromTreeish
     }
 
     private get toTreeish(): string {
@@ -194,7 +207,7 @@ export class ChangesManager {
     private async loadFilePair(): Promise<void> {
         const file = this.selectedFile
         const dir = this.workDir
-        if (!file || !dir) {
+        if (!file || (!this.usesRuntimeScopedGit && !dir)) {
             runInAction(() => {
                 this.filePair = null
                 this.filePairLoading = false
@@ -227,13 +240,19 @@ export class ChangesManager {
         }
 
         try {
-            const result = await gitApi.getFilePair({
-                workDir: dir,
-                fromTreeish: this.fromTreeish,
-                toTreeish: this.toTreeish,
-                filePath: file.path,
-                oldPath: file.oldPath,
-            })
+            const result = this.usesRuntimeScopedGit
+                ? await this.taskModel.readProductTaskFilePair({
+                      fromTreeish: this.runtimeFromTreeish,
+                      filePath: file.path,
+                      oldPath: file.oldPath,
+                  })
+                : await gitApi.getFilePair({
+                      workDir: dir as string,
+                      fromTreeish: this.legacyFromTreeish,
+                      toTreeish: this.toTreeish,
+                      filePath: file.path,
+                      oldPath: file.oldPath,
+                  })
             runInAction(() => {
                 if (loadId !== this.filePairLoadId) return
                 this.filePairCache.set(cacheKey, result)
@@ -258,7 +277,7 @@ export class ChangesManager {
     private async loadFilePatch(contextLines: PatchContextLines = this.filePatchContextLines): Promise<void> {
         const file = this.selectedFile
         const dir = this.workDir
-        if (!file || !dir) {
+        if (!file || (!this.usesRuntimeScopedGit && !dir)) {
             runInAction(() => {
                 this.filePatch = null
                 this.filePatchLoading = false
@@ -290,13 +309,20 @@ export class ChangesManager {
         this.filePatchLoading = true
 
         try {
-            const result = await gitApi.getWorktreeFilePatch({
-                workDir: dir,
-                fromTreeish: this.fromTreeish,
-                filePath: file.path,
-                oldPath: file.oldPath,
-                contextLines,
-            })
+            const result = this.usesRuntimeScopedGit
+                ? await this.taskModel.readProductTaskDiff({
+                      fromTreeish: this.runtimeFromTreeish,
+                      filePath: file.path,
+                      oldPath: file.oldPath,
+                      contextLines,
+                  })
+                : await gitApi.getWorktreeFilePatch({
+                      workDir: dir as string,
+                      fromTreeish: this.legacyFromTreeish,
+                      filePath: file.path,
+                      oldPath: file.oldPath,
+                      contextLines,
+                  })
 
             runInAction(() => {
                 if (loadId !== this.filePatchLoadId) return
@@ -329,16 +355,18 @@ export class ChangesManager {
     private async loadFromBaseFiles(): Promise<void> {
         const dir = this.workDir
         const mergeBase = this.taskModel.environment?.mergeBaseCommit
-        if (!dir || !mergeBase) return
+        if (!this.usesRuntimeScopedGit && (!dir || !mergeBase)) return
 
         this.fromBaseLoading = true
 
         try {
-            const result = await gitApi.getChangedFiles({
-                workDir: dir,
-                fromTreeish: mergeBase,
-                toTreeish: "HEAD",
-            })
+            const result = this.usesRuntimeScopedGit
+                ? await this.taskModel.readProductTaskChanges({ fromTreeish: mergeBase })
+                : await gitApi.getChangedFiles({
+                      workDir: dir as string,
+                      fromTreeish: mergeBase as string,
+                      toTreeish: "HEAD",
+                  })
             runInAction(() => {
                 this.fromBaseFiles = result.files
                 this.fromBaseLoading = false
@@ -382,10 +410,10 @@ export class ChangesManager {
     }
 
     private getFilePairCacheKey(file: ChangedFileInfo): string {
-        return [this.diffSource, this.fromTreeish, this.toTreeish, file.path, file.oldPath ?? ""].join("::")
+        return [this.diffSource, this.cacheFromTreeish, this.toTreeish, file.path, file.oldPath ?? ""].join("::")
     }
 
     private getFilePatchCacheKey(file: ChangedFileInfo, contextLines: PatchContextLines): string {
-        return [this.diffSource, this.fromTreeish, this.toTreeish, file.path, file.oldPath ?? "", `U${contextLines}`].join("::")
+        return [this.diffSource, this.cacheFromTreeish, this.toTreeish, file.path, file.oldPath ?? "", `U${contextLines}`].join("::")
     }
 }

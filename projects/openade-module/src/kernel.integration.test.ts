@@ -425,6 +425,16 @@ describe("OpenADE kernel composition", () => {
             })
             expect(readmeDiff.patch).toContain("+runtime task git change")
 
+            const readmeFilePair = await client.readTaskFilePair({ repoId: repo.repoId, taskId: started.taskId, filePath: "README.md" })
+            expect(readmeFilePair).toMatchObject({
+                repoId: repo.repoId,
+                taskId: started.taskId,
+                filePath: "README.md",
+                fromTreeish: "HEAD",
+                before: "scoped kernel file search\n",
+                after: "scoped kernel file search\nruntime task git change\n",
+            })
+
             const untrackedDiff = await client.readTaskDiff({ repoId: repo.repoId, taskId: started.taskId, filePath: "notes/out.txt", contextLines: 3 })
             expect(untrackedDiff).toMatchObject({
                 filePath: "notes/out.txt",

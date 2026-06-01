@@ -35,6 +35,8 @@ import type {
     OpenADETaskChangesReadResult,
     OpenADETaskDiffReadRequest,
     OpenADETaskDiffReadResult,
+    OpenADETaskFilePairReadRequest,
+    OpenADETaskFilePairReadResult,
     OpenADETaskGitLogRequest,
     OpenADETaskGitLogResult,
     OpenADETaskImageReadRequest,
@@ -209,6 +211,10 @@ export function readRemoteTaskChanges(config: RemoteConfig, args: OpenADETaskCha
 
 export function readRemoteTaskDiff(config: RemoteConfig, args: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult> {
     return retryTransientRead(() => productStore(config).readTaskDiff(args))
+}
+
+export function readRemoteTaskFilePair(config: RemoteConfig, args: OpenADETaskFilePairReadRequest): Promise<OpenADETaskFilePairReadResult> {
+    return retryTransientRead(() => productStore(config).readTaskFilePair(args))
 }
 
 export function readRemoteTaskGitLog(config: RemoteConfig, args: OpenADETaskGitLogRequest): Promise<OpenADETaskGitLogResult> {

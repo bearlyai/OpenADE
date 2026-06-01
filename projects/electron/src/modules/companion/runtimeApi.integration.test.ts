@@ -454,6 +454,7 @@ describe("companion runtime API integration", () => {
                         "openade/project/process/stop",
                         "openade/task/changes/read",
                         "openade/task/diff/read",
+                        "openade/task/filePair/read",
                         "openade/task/git/log",
                         "openade/task/image/read",
                         "openade/task/snapshot/patch/read",
@@ -686,6 +687,16 @@ describe("companion runtime API integration", () => {
         expect(taskDiff).toMatchObject({ stats: { insertions: 1, deletions: 0, changedLines: 1 } })
         expect(taskDiff.patch).toContain("+paired task git change")
         expect(
+            runtimeResult<{ before: string; after: string; filePath: string }>(
+                await runtimeRequest(socket, 40, "openade/task/filePair/read", { repoId: "repo-1", taskId: "task-1", filePath: "README.md" }),
+                40
+            )
+        ).toMatchObject({
+            filePath: "README.md",
+            before: "hello from scoped project search\n",
+            after: "hello from scoped project search\npaired task git change\n",
+        })
+        expect(
             runtimeResult<{ commits: Array<{ message: string; author: string }> }>(
                 await runtimeRequest(socket, 24, "openade/task/git/log", { repoId: "repo-1", taskId: "task-1", limit: 3 }),
                 24
@@ -762,6 +773,10 @@ describe("companion runtime API integration", () => {
         })
         expect(await runtimeRequest(socket, 26, "openade/task/diff/read", { repoId: "repo-1", taskId: "task-1", filePath: "../secret.txt" })).toMatchObject({
             id: 26,
+            error: { code: "invalid_params" },
+        })
+        expect(await runtimeRequest(socket, 41, "openade/task/filePair/read", { repoId: "repo-1", taskId: "task-1", filePath: "../secret.txt" })).toMatchObject({
+            id: 41,
             error: { code: "invalid_params" },
         })
         expect(await runtimeRequest(socket, 27, "openade/project/file/write", { repoId: "repo-1", path: "README.md", content: "phone write" })).toMatchObject({

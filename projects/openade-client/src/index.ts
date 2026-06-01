@@ -49,6 +49,8 @@ import type {
     OpenADETaskDeleteResult,
     OpenADETaskDiffReadRequest,
     OpenADETaskDiffReadResult,
+    OpenADETaskFilePairReadRequest,
+    OpenADETaskFilePairReadResult,
     OpenADETaskEnvironmentSetupRequest,
     OpenADETaskGitCommitRequest,
     OpenADETaskGitCommitResult,
@@ -169,6 +171,10 @@ export class OpenADEClient {
 
     async readTaskDiff(args: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult> {
         return this.request("openade/task/diff/read", args)
+    }
+
+    async readTaskFilePair(args: OpenADETaskFilePairReadRequest): Promise<OpenADETaskFilePairReadResult> {
+        return this.request("openade/task/filePair/read", args)
     }
 
     async readTaskGitLog(args: OpenADETaskGitLogRequest): Promise<OpenADETaskGitLogResult> {

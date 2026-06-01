@@ -51,6 +51,8 @@ import type {
     OpenADETaskDiffContextLines,
     OpenADETaskDiffReadRequest,
     OpenADETaskDiffReadResult,
+    OpenADETaskFilePairReadRequest,
+    OpenADETaskFilePairReadResult,
     OpenADETaskGitCommitRequest,
     OpenADETaskGitCommitResult,
     OpenADETaskGitLogRequest,
@@ -152,6 +154,7 @@ export interface OpenADEScopedHostAdapter {
     readTaskImage(params: OpenADETaskImageReadRequest & { repo: OpenADEProject; task: OpenADETask; image: OpenADETaskImageReference }): Promise<OpenADETaskImageReadResult>
     readTaskChanges(params: OpenADETaskChangesReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskChangesReadResult>
     readTaskDiff(params: OpenADETaskDiffReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskDiffReadResult>
+    readTaskFilePair(params: OpenADETaskFilePairReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskFilePairReadResult>
     readTaskGitLog(params: OpenADETaskGitLogRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitLogResult>
     commitTaskGit(params: OpenADETaskGitCommitRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitCommitResult>
     readTaskSnapshotPatch(
@@ -480,6 +483,17 @@ function taskDiffReadParams(params: unknown): OpenADETaskDiffReadRequest {
         fromTreeish: optionalStringParam(record, "fromTreeish"),
         contextLines: taskDiffContextLinesParam(record.contextLines),
         allowTruncation: booleanParam(record, "allowTruncation"),
+    }
+}
+
+function taskFilePairReadParams(params: unknown): OpenADETaskFilePairReadRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        filePath: scopedRelativePathParam(record, "filePath"),
+        oldPath: optionalScopedRelativePathParam(record, "oldPath") || undefined,
+        fromTreeish: optionalStringParam(record, "fromTreeish"),
     }
 }
 
@@ -1338,6 +1352,11 @@ export function createOpenADEModule(adapters: OpenADEModuleAdapters): RuntimeMod
                     const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
                     return scopedHost.readTaskDiff({ ...request, repo, task })
                 }, { validateParams: validateWith(taskDiffReadParams) })
+                server.register("openade/task/filePair/read", async (params) => {
+                    const request = taskFilePairReadParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return scopedHost.readTaskFilePair({ ...request, repo, task })
+                }, { validateParams: validateWith(taskFilePairReadParams) })
                 server.register("openade/task/git/log", async (params) => {
                     const request = taskGitLogParams(params)
                     const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)

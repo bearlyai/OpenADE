@@ -240,6 +240,16 @@ function createRuntimeBackedConstructors(state: {
             heavy: false,
             stats: { insertions: 1, deletions: 0, changedLines: 1, hunkCount: 1 },
         }),
+        readTaskFilePair: async (params) => ({
+            repoId: params.repoId,
+            taskId: params.taskId,
+            filePath: params.filePath,
+            oldPath: params.oldPath,
+            fromTreeish: "HEAD",
+            toTreeish: "",
+            before: "before\n",
+            after: "after\n",
+        }),
         readTaskGitLog: async (params) => ({
             repoId: params.repoId,
             taskId: params.taskId,

@@ -17,6 +17,12 @@ import type {
     OpenADETaskDeleteRequest,
     OpenADETaskDeleteResult,
     OpenADETaskEnvironmentSetupRequest,
+    OpenADETaskChangesReadRequest,
+    OpenADETaskChangesReadResult,
+    OpenADETaskDiffReadRequest,
+    OpenADETaskDiffReadResult,
+    OpenADETaskFilePairReadRequest,
+    OpenADETaskFilePairReadResult,
     OpenADETaskMetadataUpdateRequest,
     OpenADETaskPreview,
     OpenADETaskReadOptions,
@@ -1046,6 +1052,30 @@ export class CodeStore {
         }
 
         return localOpenADEClient.deleteTask(params)
+    }
+
+    async readProductTaskChanges(params: OpenADETaskChangesReadRequest): Promise<OpenADETaskChangesReadResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readTaskChanges(params)
+        }
+
+        return localOpenADEClient.readTaskChanges(params)
+    }
+
+    async readProductTaskDiff(params: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readTaskDiff(params)
+        }
+
+        return localOpenADEClient.readTaskDiff(params)
+    }
+
+    async readProductTaskFilePair(params: OpenADETaskFilePairReadRequest): Promise<OpenADETaskFilePairReadResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readTaskFilePair(params)
+        }
+
+        return localOpenADEClient.readTaskFilePair(params)
     }
 
     async loadProductTaskForRead(repoId: string, taskId: string): Promise<Task | null> {

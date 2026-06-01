@@ -36,6 +36,8 @@ import type {
     OpenADETaskDiffReadRequest,
     OpenADETaskDiffReadResult,
     OpenADETaskEnvironmentSetupRequest,
+    OpenADETaskFilePairReadRequest,
+    OpenADETaskFilePairReadResult,
     OpenADETaskGitCommitRequest,
     OpenADETaskGitCommitResult,
     OpenADETaskGitLogRequest,
@@ -140,6 +142,10 @@ export class OpenADEProductStore {
 
     async readTaskDiff(args: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult> {
         return this.client.readTaskDiff(args)
+    }
+
+    async readTaskFilePair(args: OpenADETaskFilePairReadRequest): Promise<OpenADETaskFilePairReadResult> {
+        return this.client.readTaskFilePair(args)
     }
 
     async readTaskGitLog(args: OpenADETaskGitLogRequest): Promise<OpenADETaskGitLogResult> {
@@ -324,6 +330,7 @@ export interface OpenADEProductClient {
     stopProjectProcess(args: OpenADEProjectProcessStopRequest, options?: OpenADERequestOptions): Promise<OpenADEProjectProcessStopResult>
     readTaskChanges(args: OpenADETaskChangesReadRequest): Promise<OpenADETaskChangesReadResult>
     readTaskDiff(args: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult>
+    readTaskFilePair(args: OpenADETaskFilePairReadRequest): Promise<OpenADETaskFilePairReadResult>
     readTaskGitLog(args: OpenADETaskGitLogRequest): Promise<OpenADETaskGitLogResult>
     commitTaskGit(args: OpenADETaskGitCommitRequest, options?: OpenADERequestOptions): Promise<OpenADETaskGitCommitResult>
     startTaskTerminal(args: OpenADETaskTerminalStartRequest, options?: OpenADERequestOptions): Promise<OpenADETaskTerminalStartResult>
