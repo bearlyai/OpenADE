@@ -12,6 +12,8 @@ import { InlineWrapper } from "./wrappers/InlineWrapper"
 import { PillGroup } from "./wrappers/PillGroup"
 import { RowWrapper } from "./wrappers/RowWrapper"
 
+const INITIAL_RENDERABLE_TAIL_COUNT = 160
+
 export interface SessionInfo {
     sessionId?: string
     parentSessionId?: string
@@ -112,13 +114,26 @@ export function InlineMessages({ events, harnessId, sourceType, sessionInfo: _se
     }
 
     const commentCtx: CommentContext = useMemo(() => ({ taskId, actionEventId }), [taskId, actionEventId])
+    const [showAllRenderables, setShowAllRenderables] = useState(false)
 
     if (renderables.length === 0) return null
+
+    const hiddenRenderableCount = showAllRenderables ? 0 : Math.max(0, renderables.length - INITIAL_RENDERABLE_TAIL_COUNT)
+    const visibleRenderables = hiddenRenderableCount > 0 ? renderables.slice(hiddenRenderableCount) : renderables
 
     // 6. Render
     return (
         <div className="flex flex-col">
-            {renderables.map((item, i) => {
+            {hiddenRenderableCount > 0 && (
+                <button
+                    type="button"
+                    className="btn border-t border-border px-3 py-2 text-left text-xs text-muted hover:bg-base-200 hover:text-base-content"
+                    onClick={() => setShowAllRenderables(true)}
+                >
+                    Show {hiddenRenderableCount.toLocaleString()} earlier items
+                </button>
+            )}
+            {visibleRenderables.map((item) => {
                 if (item.mode === "inline") {
                     const renderer = getRenderer(item.item.group)
                     return <InlineWrapper key={item.item.id}>{renderer.renderContent(item.item.group, commentCtx)}</InlineWrapper>
@@ -129,6 +144,7 @@ export function InlineMessages({ events, harnessId, sourceType, sessionInfo: _se
                     const renderer = getRenderer(group)
                     const isPending = "isPending" in group && group.isPending
                     const isError = "isError" in group && group.isError
+                    const expanded = expandedIds.has(id)
 
                     return (
                         <RowWrapper
@@ -139,10 +155,10 @@ export function InlineMessages({ events, harnessId, sourceType, sessionInfo: _se
                             headerInfo={renderer.getHeaderInfo?.(group)}
                             isError={isError}
                             isPending={isPending}
-                            expanded={expandedIds.has(id)}
+                            expanded={expanded}
                             onToggle={() => toggle(id)}
                         >
-                            {renderer.renderContent(group, commentCtx)}
+                            {expanded ? renderer.renderContent(group, commentCtx) : null}
                         </RowWrapper>
                     )
                 }
@@ -160,13 +176,22 @@ export function InlineMessages({ events, harnessId, sourceType, sessionInfo: _se
                             label: renderer.getLabel(group),
                             isError,
                             isComplete,
-                            content: renderer.renderContent(group, commentCtx),
+                            renderContent: () => renderer.renderContent(group, commentCtx),
                         }
                     })
 
                     const expandedPillId = item.items.find((g) => expandedIds.has(g.id))?.id ?? null
+                    const firstId = item.items[0]?.id ?? "empty"
+                    const lastId = item.items[item.items.length - 1]?.id ?? firstId
 
-                    return <PillGroup key={`pills-${i}`} items={pillItems} expandedId={expandedPillId} onToggle={(id) => togglePill(id, groupIds)} />
+                    return (
+                        <PillGroup
+                            key={`pills-${firstId}-${lastId}`}
+                            items={pillItems}
+                            expandedId={expandedPillId}
+                            onToggle={(id) => togglePill(id, groupIds)}
+                        />
+                    )
                 }
 
                 return null

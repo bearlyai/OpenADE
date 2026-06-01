@@ -7,7 +7,7 @@ interface PillItem {
     icon: ReactNode
     label: string
     isError?: boolean
-    content: ReactNode
+    renderContent: () => ReactNode
 }
 
 interface PillGroupProps {
@@ -62,7 +62,7 @@ export function PillGroup({ items, expandedId, onToggle }: PillGroupProps) {
                     />
                 ))}
             </div>
-            {expandedItem && <div className="border-t border-border bg-base-100">{expandedItem.content}</div>}
+            {expandedItem && <div className="border-t border-border bg-base-100">{expandedItem.renderContent()}</div>}
         </div>
     )
 }

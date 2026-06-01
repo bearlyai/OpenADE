@@ -12,6 +12,12 @@
  */
 
 import { makeAutoObservable, runInAction } from "mobx"
+import type {
+    OpenADEProjectProcessListResult,
+    OpenADEProjectProcessReconnectResult,
+    OpenADEProjectProcessStartResult,
+    OpenADEProjectProcessStopResult,
+} from "../../../../openade-module/src"
 import { ProcessHandle, type ProcessOutputChunk } from "../../electronAPI/process"
 import type { ProcessDef, ProcsConfig, ReadProcsResult, RunContext } from "../../electronAPI/procs"
 import { getCwd } from "../../electronAPI/procs"
@@ -19,7 +25,7 @@ import { getCwd } from "../../electronAPI/procs"
 export type ProcessStatus = "running" | "stopped" | "error" | "starting"
 
 export interface ProcessInstance {
-    /** Process ID from openade.toml: "{relativePath}::{name}" */
+    /** Definition ID from openade.toml: "{relativePath}::{name}" */
     id: string
     /** Run context (repo or worktree) */
     context: RunContext
@@ -31,6 +37,10 @@ export interface ProcessInstance {
     status: ProcessStatus
     /** Electron process handle (null when not running) */
     processHandle: ProcessHandle | null
+    /** Runtime process id when this instance is managed through OpenADE scoped process APIs. */
+    productProcessId?: string
+    /** Runtime record id when available. */
+    runtimeId?: string
     /** Accumulated stdout/stderr output */
     output: string
     /** Error message if status is "error" */
@@ -39,9 +49,25 @@ export interface ProcessInstance {
     exitCode?: number | null
 }
 
+export interface ProductProjectProcessAccess {
+    startProjectProcess(args: { definitionId: string }): Promise<OpenADEProjectProcessStartResult>
+    reconnectProjectProcess(args: { processId: string }): Promise<OpenADEProjectProcessReconnectResult>
+    stopProjectProcess(args: { processId: string }): Promise<OpenADEProjectProcessStopResult>
+}
+
 /** Key for tracking setup completion */
 function makeSetupKey(context: RunContext, configPath: string): string {
     return `${context.root}::${configPath}`
+}
+
+function processOutputFromReconnect(result: OpenADEProjectProcessReconnectResult): string {
+    return (result.output ?? []).map((chunk) => chunk.data).join("")
+}
+
+function processStatusFromReconnect(result: OpenADEProjectProcessReconnectResult): ProcessStatus {
+    if (!result.found) return "error"
+    if (!result.completed) return "running"
+    return result.error || (result.exitCode !== undefined && result.exitCode !== null && result.exitCode !== 0) ? "error" : "stopped"
 }
 
 export class RepoProcessesManager {
@@ -63,6 +89,146 @@ export class RepoProcessesManager {
     }
 
     // ==================== Process Lifecycle ====================
+
+    syncProductProcesses(context: RunContext, procsResult: ReadProcsResult, result: OpenADEProjectProcessListResult): void {
+        const definitionsById = new Map(result.processes.map((process) => [process.id, process]))
+        const configsByPath = new Map(procsResult.configs.map((config) => [config.relativePath, config]))
+        const activeDefinitionIds = new Set<string>()
+
+        runInAction(() => {
+            for (const instance of result.instances) {
+                const definition = definitionsById.get(instance.definitionId)
+                if (!definition) continue
+                const config = configsByPath.get(definition.configPath)
+                if (!config) continue
+                activeDefinitionIds.add(definition.id)
+
+                const existing = this.runningProcesses.get(definition.id)
+                this.runningProcesses.set(definition.id, {
+                    id: definition.id,
+                    context,
+                    config,
+                    process: definition,
+                    status: instance.completed ? (instance.error || (instance.exitCode !== null && instance.exitCode !== 0) ? "error" : "stopped") : "running",
+                    processHandle: null,
+                    productProcessId: instance.processId,
+                    output: existing?.output ?? "",
+                    error: instance.error,
+                    exitCode: instance.exitCode,
+                })
+            }
+
+            for (const instance of this.getProcessesForContext(context)) {
+                if (!instance.productProcessId || activeDefinitionIds.has(instance.id)) continue
+                instance.status = "stopped"
+                instance.processHandle = null
+            }
+        })
+    }
+
+    async startProductProcess(process: ProcessDef, config: ProcsConfig, context: RunContext, access: ProductProjectProcessAccess): Promise<boolean> {
+        const processId = process.id
+        const existing = this.runningProcesses.get(processId)
+        if (existing?.productProcessId && existing.status === "running") return true
+
+        if (existing?.processHandle) {
+            await existing.processHandle.kill()
+            existing.processHandle.cleanup()
+        }
+
+        const instance: ProcessInstance = {
+            id: processId,
+            context,
+            config,
+            process,
+            status: "starting",
+            processHandle: null,
+            output: "=== Starting Process ===\n",
+        }
+
+        runInAction(() => {
+            this.runningProcesses.set(processId, instance)
+        })
+
+        try {
+            const started = await access.startProjectProcess({ definitionId: process.id })
+            const reconnected = await access.reconnectProjectProcess({ processId: started.processId }).catch(
+                (): OpenADEProjectProcessReconnectResult => ({
+                    repoId: started.repoId,
+                    taskId: started.taskId,
+                    processId: started.processId,
+                    found: true,
+                    completed: false,
+                    output: [],
+                })
+            )
+
+            runInAction(() => {
+                const current = this.runningProcesses.get(processId)
+                if (!current) return
+                current.productProcessId = started.processId
+                current.runtimeId = started.runtimeId
+                current.status = processStatusFromReconnect(reconnected)
+                current.output = processOutputFromReconnect(reconnected)
+                current.error = reconnected.error
+                current.exitCode = reconnected.exitCode
+            })
+            return true
+        } catch (err) {
+            runInAction(() => {
+                const current = this.runningProcesses.get(processId)
+                if (!current) return
+                current.status = "error"
+                current.error = err instanceof Error ? err.message : "Unknown error"
+                current.output += `\n[Process] Failed to start: ${current.error}\n`
+            })
+            return false
+        }
+    }
+
+    async refreshProductProcessOutput(definitionId: string, access: ProductProjectProcessAccess): Promise<void> {
+        const instance = this.runningProcesses.get(definitionId)
+        if (!instance?.productProcessId) return
+
+        const result = await access.reconnectProjectProcess({ processId: instance.productProcessId })
+        runInAction(() => {
+            const current = this.runningProcesses.get(definitionId)
+            if (!current) return
+            current.status = processStatusFromReconnect(result)
+            current.output = processOutputFromReconnect(result)
+            current.error = result.error
+            current.exitCode = result.exitCode
+        })
+    }
+
+    async stopProductProcess(definitionId: string, access: ProductProjectProcessAccess): Promise<void> {
+        const instance = this.runningProcesses.get(definitionId)
+        if (!instance?.productProcessId) return
+
+        runInAction(() => {
+            instance.output += "\n[Process] Stopping...\n"
+        })
+
+        const result = await access.stopProjectProcess({ processId: instance.productProcessId })
+        runInAction(() => {
+            const current = this.runningProcesses.get(definitionId)
+            if (!current) return
+            current.status = result.ok ? "stopped" : "error"
+            current.error = result.error
+            current.output += result.ok ? "[Process] Stopped.\n" : `[Process] Failed to stop: ${result.error ?? "Unknown error"}\n`
+        })
+    }
+
+    async restartProductProcess(processId: string, access: ProductProjectProcessAccess): Promise<boolean> {
+        const instance = this.runningProcesses.get(processId)
+        if (!instance) return false
+        await this.stopProductProcess(processId, access)
+        runInAction(() => {
+            const current = this.runningProcesses.get(processId)
+            if (current) current.output = ""
+        })
+        return this.startProductProcess(instance.process, instance.config, instance.context, access)
+    }
 
     async startProcess(process: ProcessDef, config: ProcsConfig, context: RunContext, procsResult: ReadProcsResult): Promise<boolean> {
         const processId = process.id

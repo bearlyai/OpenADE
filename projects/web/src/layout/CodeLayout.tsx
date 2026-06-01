@@ -41,15 +41,17 @@ export const CodeLayout = observer(({ children, isCodeModuleAvailable, workspace
 
     // Load repos on mount and initialize capabilities + platform info
     useEffect(() => {
+        let cancelled = false
         const init = async () => {
-            // Initialize code module capabilities and platform info early (caches for subsequent calls)
-            await initCodeModuleCapabilities()
-            await fetchPlatformInfo()
-            await codeStore.repos.loadRepos()
-            setHasInitialized(true)
+            // Initialize independent app-shell reads together so cold task opens are not serialized behind startup probes.
+            await Promise.all([initCodeModuleCapabilities(), fetchPlatformInfo(), codeStore.repos.loadRepos()])
+            if (!cancelled) setHasInitialized(true)
         }
-        init()
-    }, [])
+        void init()
+        return () => {
+            cancelled = true
+        }
+    }, [codeStore])
 
     // Ensure tasks are loaded when workspace changes
     useEffect(() => {

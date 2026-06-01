@@ -2,11 +2,12 @@ import NiceModal from "@ebay/nice-modal-react"
 import cx from "classnames"
 import { AlertTriangle, CheckCircle, ExternalLink, FileText, Folder, Pencil, Play, RefreshCw, RotateCcw, Server, Square, Wrench } from "lucide-react"
 import { observer } from "mobx-react"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import type { OpenADEProjectProcessListResult } from "../../../openade-module/src"
 import { type ProcessDef, type ProcessType, type ProcsConfig, type ReadProcsResult, type RunContext, readProcs } from "../electronAPI/procs"
 import { openUrlInNativeBrowser } from "../electronAPI/shell"
 import { useCodeStore } from "../store/context"
-import type { ProcessInstance, ProcessStatus } from "../store/managers/RepoProcessesManager"
+import type { ProcessInstance, ProcessStatus, ProductProjectProcessAccess } from "../store/managers/RepoProcessesManager"
 import { ProcsEditorModal } from "./procs/ProcsEditorModal"
 import { ProcessOutput } from "./ProcessOutput"
 import { type MenuItem, Menu } from "./ui/Menu"
@@ -20,6 +21,7 @@ interface ProcessesTrayProps {
     workspaceId: string
     /** Whether the panel is currently open */
     isOpen?: boolean
+    productScope?: { repoId: string; taskId?: string } | null
 }
 
 interface ConfigGroup {
@@ -32,6 +34,7 @@ interface ConfigGroup {
 
 /** Process types to show in the UI */
 const DISPLAY_TYPES: ProcessType[] = ["setup", "daemon", "task", "check"]
+const DISPLAY_TYPE_SET = new Set<ProcessType>(DISPLAY_TYPES)
 
 const TYPE_INFO: Record<ProcessType, { label: string; icon: typeof Server }> = {
     setup: { label: "Setup", icon: Wrench },
@@ -48,12 +51,54 @@ function joinPath(root: string, relativePath: string): string {
     return `${root}${separator}${relativePath}`
 }
 
-export const ProcessesTray = observer(function ProcessesTray({ searchPath, context, workspaceId, isOpen }: ProcessesTrayProps) {
+function readProcsFromProductProcesses(result: OpenADEProjectProcessListResult): ReadProcsResult {
+    const configsByPath = new Map<string, ProcsConfig>()
+    for (const process of result.processes) {
+        const config = configsByPath.get(process.configPath) ?? {
+            relativePath: process.configPath,
+            processes: [],
+            crons: [],
+        }
+        config.processes.push({
+            id: process.id,
+            name: process.name,
+            command: process.command,
+            workDir: process.workDir,
+            url: process.url,
+            type: process.type,
+        })
+        configsByPath.set(process.configPath, config)
+    }
+
+    return {
+        repoRoot: result.repoRoot,
+        searchRoot: result.searchRoot,
+        isWorktree: result.isWorktree,
+        worktreeRoot: result.worktreeRoot,
+        configs: [...configsByPath.values()],
+        errors: result.errors,
+    }
+}
+
+export const ProcessesTray = observer(function ProcessesTray({ searchPath, context, workspaceId, isOpen, productScope = null }: ProcessesTrayProps) {
     const codeStore = useCodeStore()
     const { repoProcesses } = codeStore
     const [procsResult, setProcsResult] = useState<ReadProcsResult | null>(null)
     const [loading, setLoading] = useState(true)
     const [refreshing, setRefreshing] = useState(false)
+    const productRepoId = productScope?.repoId ?? null
+    const productTaskId = productScope?.taskId
+    const productRequest = useMemo(() => (productRepoId ? { repoId: productRepoId, taskId: productTaskId } : null), [productRepoId, productTaskId])
+    const productAccess = useMemo<ProductProjectProcessAccess | null>(() => {
+        if (!productRepoId) return null
+        const repoId = productRepoId
+        const taskId = productTaskId
+        return {
+            startProjectProcess: (args) => codeStore.startProductProjectProcess({ repoId, taskId, definitionId: args.definitionId }),
+            reconnectProjectProcess: (args) => codeStore.reconnectProductProjectProcess({ repoId, taskId, processId: args.processId }),
+            stopProjectProcess: (args) => codeStore.stopProductProjectProcess({ repoId, taskId, processId: args.processId }),
+        }
+    }, [codeStore, productRepoId, productTaskId])
 
     // Load config files
     const loadProcs = useCallback(
@@ -64,6 +109,14 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                 setLoading(true)
             }
             try {
+                if (productRequest) {
+                    const result = await codeStore.listProductProjectProcesses(productRequest)
+                    const readResult = readProcsFromProductProcesses(result)
+                    setProcsResult(readResult)
+                    codeStore.repoProcesses.syncProductProcesses(context, readResult, result)
+                    return
+                }
+
                 const result = await readProcs(searchPath)
                 setProcsResult(result)
                 // Keep CronManager in sync with latest config
@@ -76,7 +129,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                 setRefreshing(false)
             }
         },
-        [searchPath, codeStore.crons, workspaceId]
+        [searchPath, codeStore, context, productRequest, workspaceId]
     )
 
     // Load when panel opens or path changes
@@ -138,27 +191,31 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
     const configGroups: ConfigGroup[] = []
     if (procsResult) {
         const runningProcesses = repoProcesses.getProcessesForContext(context)
+        const runningByProcessId = new Map(runningProcesses.map((process) => [process.id, process]))
 
         for (const config of procsResult.configs) {
-            // Only show non-setup processes
-            const displayProcesses = config.processes.filter((p) => DISPLAY_TYPES.includes(p.type))
+            const displayProcesses: ConfigGroup["processes"] = []
+            for (const process of config.processes) {
+                if (!DISPLAY_TYPE_SET.has(process.type)) continue
+                displayProcesses.push({ process, instance: runningByProcessId.get(process.id) })
+            }
             if (displayProcesses.length === 0) continue
 
             const group: ConfigGroup = {
                 config,
-                processes: displayProcesses.map((process) => ({
-                    process,
-                    instance: runningProcesses.find((p) => p.id === process.id),
-                })),
+                processes: displayProcesses,
             }
             configGroups.push(group)
         }
     }
 
     // Collect all daemon items across all config groups for global start/stop
-    const allDaemonItems = configGroups.flatMap((group) =>
-        group.processes.filter((item) => item.process.type === "daemon").map((item) => ({ ...item, config: group.config }))
-    )
+    const allDaemonItems = []
+    for (const group of configGroups) {
+        for (const item of group.processes) {
+            if (item.process.type === "daemon") allDaemonItems.push({ ...item, config: group.config })
+        }
+    }
     const allStoppedDaemons = allDaemonItems.filter((item) => {
         const status = item.instance?.status ?? "stopped"
         return status === "stopped" || status === "error"
@@ -167,15 +224,23 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
 
     const handleStartAllDaemons = useCallback(async () => {
         for (const item of allStoppedDaemons) {
-            await repoProcesses.startProcess(item.process, item.config, context, procsResult!)
+            if (productAccess) {
+                await repoProcesses.startProductProcess(item.process, item.config, context, productAccess)
+            } else {
+                await repoProcesses.startProcess(item.process, item.config, context, procsResult!)
+            }
         }
-    }, [allStoppedDaemons, context, procsResult, repoProcesses])
+    }, [allStoppedDaemons, context, productAccess, procsResult, repoProcesses])
 
     const handleStopAllDaemons = useCallback(async () => {
         for (const item of allRunningDaemons) {
-            await repoProcesses.stopProcess(item.process.id)
+            if (productAccess) {
+                await repoProcesses.stopProductProcess(item.process.id, productAccess)
+            } else {
+                await repoProcesses.stopProcess(item.process.id)
+            }
         }
-    }, [allRunningDaemons, repoProcesses])
+    }, [allRunningDaemons, productAccess, repoProcesses])
 
     const hasProcesses = configGroups.length > 0
     const hasErrors = procsResult && procsResult.errors.length > 0
@@ -265,8 +330,8 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                             </span>
                         </div>
                         <div className="mt-1 space-y-0.5">
-                            {procsResult.errors.map((err, i) => (
-                                <div key={i} className="text-[10px] text-error/80 font-mono truncate">
+                            {procsResult.errors.map((err) => (
+                                <div key={`${err.relativePath}:${err.line ?? "file"}:${err.error}`} className="text-[10px] text-error/80 font-mono truncate">
                                     {err.relativePath}: {err.error}
                                 </div>
                             ))}
@@ -282,6 +347,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                             group={group}
                             context={context}
                             procsResult={procsResult!}
+                            productAccess={productAccess}
                             onEditConfig={() => openEditor("processes", joinPath(procsResult!.repoRoot, group.config.relativePath))}
                         />
                     ))}
@@ -306,10 +372,11 @@ interface ConfigGroupViewProps {
     group: ConfigGroup
     context: RunContext
     procsResult: ReadProcsResult
+    productAccess: ProductProjectProcessAccess | null
     onEditConfig: () => void
 }
 
-const ConfigGroupView = observer(function ConfigGroupView({ group, context, procsResult, onEditConfig }: ConfigGroupViewProps) {
+const ConfigGroupView = observer(function ConfigGroupView({ group, context, procsResult, productAccess, onEditConfig }: ConfigGroupViewProps) {
     const codeStore = useCodeStore()
     const { repoProcesses } = codeStore
     const selectedProcessId = repoProcesses.expandedProcessId
@@ -332,15 +399,23 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
 
     const handleStartAllDaemons = useCallback(async () => {
         for (const item of stoppedDaemons) {
-            await repoProcesses.startProcess(item.process, group.config, context, procsResult)
+            if (productAccess) {
+                await repoProcesses.startProductProcess(item.process, group.config, context, productAccess)
+            } else {
+                await repoProcesses.startProcess(item.process, group.config, context, procsResult)
+            }
         }
-    }, [stoppedDaemons, group.config, context, procsResult, repoProcesses])
+    }, [stoppedDaemons, group.config, context, productAccess, procsResult, repoProcesses])
 
     const handleStopAllDaemons = useCallback(async () => {
         for (const item of runningDaemons) {
-            await repoProcesses.stopProcess(item.process.id)
+            if (productAccess) {
+                await repoProcesses.stopProductProcess(item.process.id, productAccess)
+            } else {
+                await repoProcesses.stopProcess(item.process.id)
+            }
         }
-    }, [runningDaemons, repoProcesses])
+    }, [runningDaemons, productAccess, repoProcesses])
 
     // Extract directory from config path (e.g., "packages/api/openade.toml" -> "packages/api")
     const configDir = group.config.relativePath.replace(/\/openade\.toml$/, "") || "."
@@ -398,6 +473,7 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
                                 config={group.config}
                                 context={context}
                                 procsResult={procsResult}
+                                productAccess={productAccess}
                                 isSelected={selectedProcessId === item.process.id}
                                 showTypeIcon={processesByType.size > 1}
                             />
@@ -424,11 +500,21 @@ interface ProcessRowViewProps {
     config: ProcsConfig
     context: RunContext
     procsResult: ReadProcsResult
+    productAccess: ProductProjectProcessAccess | null
     isSelected: boolean
     showTypeIcon?: boolean
 }
 
-const ProcessRowView = observer(function ProcessRowView({ process, instance, config, context, procsResult, isSelected, showTypeIcon }: ProcessRowViewProps) {
+const ProcessRowView = observer(function ProcessRowView({
+    process,
+    instance,
+    config,
+    context,
+    procsResult,
+    productAccess,
+    isSelected,
+    showTypeIcon,
+}: ProcessRowViewProps) {
     const codeStore = useCodeStore()
     const { repoProcesses } = codeStore
     const status = instance?.status ?? "stopped"
@@ -437,14 +523,29 @@ const ProcessRowView = observer(function ProcessRowView({ process, instance, con
 
     const handleStart = useCallback(async () => {
         repoProcesses.setExpandedProcess(process.id)
-        await repoProcesses.startProcess(process, config, context, procsResult)
-    }, [repoProcesses, process, config, context, procsResult])
+        if (productAccess) {
+            await repoProcesses.startProductProcess(process, config, context, productAccess)
+        } else {
+            await repoProcesses.startProcess(process, config, context, procsResult)
+        }
+    }, [repoProcesses, process, config, context, productAccess, procsResult])
 
-    const handleStop = useCallback(() => repoProcesses.stopProcess(process.id), [repoProcesses, process.id])
+    const handleStop = useCallback(() => {
+        if (productAccess) return repoProcesses.stopProductProcess(process.id, productAccess)
+        return repoProcesses.stopProcess(process.id)
+    }, [repoProcesses, process.id, productAccess])
 
-    const handleRestart = useCallback(() => repoProcesses.restartProcess(process.id, procsResult), [repoProcesses, process.id, procsResult])
+    const handleRestart = useCallback(() => {
+        if (productAccess) return repoProcesses.restartProductProcess(process.id, productAccess)
+        return repoProcesses.restartProcess(process.id, procsResult)
+    }, [repoProcesses, process.id, productAccess, procsResult])
 
-    const handleSelect = useCallback(() => repoProcesses.setExpandedProcess(process.id), [repoProcesses, process.id])
+    const handleSelect = useCallback(() => {
+        repoProcesses.setExpandedProcess(process.id)
+        if (productAccess && instance?.productProcessId) {
+            void repoProcesses.refreshProductProcessOutput(process.id, productAccess)
+        }
+    }, [repoProcesses, process.id, productAccess, instance?.productProcessId])
 
     const TypeIcon = TYPE_INFO[process.type].icon
 

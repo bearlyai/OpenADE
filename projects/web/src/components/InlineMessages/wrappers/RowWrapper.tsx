@@ -30,9 +30,10 @@ export function RowWrapper({ icon, label, statusIcon, headerInfo, isError, isPen
 
     return (
         <div className="border-t border-border">
-            <div
+            <button
+                type="button"
                 className={cx(
-                    "flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-sm cursor-pointer",
+                    "btn w-full flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-left text-sm cursor-pointer",
                     isError ? "bg-error/10 hover:bg-error/20" : "bg-base-200/50 hover:bg-base-300"
                 )}
                 onClick={onToggle}
@@ -41,7 +42,7 @@ export function RowWrapper({ icon, label, statusIcon, headerInfo, isError, isPen
                 {icon}
                 <span className={cx("font-medium", isError ? "text-error" : "text-base-content")}>{label}</span>
                 {headerInfo}
-            </div>
+            </button>
             {expanded && children}
         </div>
     )

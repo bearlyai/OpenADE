@@ -69,6 +69,11 @@ function getTaskTerminalProductAccess(tray: TrayManager): TaskTerminalProductAcc
     }
 }
 
+function getProjectProcessProductScope(tray: TrayManager): { repoId: string; taskId: string } | null {
+    if (!tray.taskModel.usesRuntimeProductReads || !tray.taskModel.repoId) return null
+    return { repoId: tray.taskModel.repoId, taskId: tray.taskId }
+}
+
 export const TRAY_CONFIGS: TrayConfig[] = [
     {
         id: "changes",
@@ -173,7 +178,15 @@ export const TRAY_CONFIGS: TrayConfig[] = [
             if (!context) {
                 return <NoEnvironment />
             }
-            return <ProcessesTray searchPath={context.root} context={context} workspaceId={tray.workspaceId} isOpen={tray.openTray === "processes"} />
+            return (
+                <ProcessesTray
+                    searchPath={context.root}
+                    context={context}
+                    workspaceId={tray.workspaceId}
+                    isOpen={tray.openTray === "processes"}
+                    productScope={getProjectProcessProductScope(tray)}
+                />
+            )
         },
     },
 ]

@@ -9,9 +9,11 @@ import type { RuntimeMessage, RuntimeRecord, RuntimeRequest } from "../../../run
 import { type RuntimeConnection, RuntimeServer } from "../../../runtime/src"
 import { analytics } from "../analytics"
 import { GitLogTray } from "../components/GitLogTray"
+import { ProcessesTray } from "../components/ProcessesTray"
 import { ViewPatch } from "../components/ViewPatch"
 import { filesApi } from "../electronAPI/files"
 import { gitApi } from "../electronAPI/git"
+import { ProcessHandle } from "../electronAPI/process"
 import { snapshotsApi } from "../electronAPI/snapshots"
 import { OpenADEProductStore } from "../kernel/productStore"
 import { CodeStoreProvider } from "./context"
@@ -138,6 +140,12 @@ interface RuntimeBridgeState {
         writes: string[]
         resizedTo?: { cols: number; rows: number }
         exited: boolean
+    }
+    projectProcess?: {
+        processId: string
+        running: boolean
+        output: string[]
+        stopped: boolean
     }
 }
 
@@ -505,10 +513,77 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
                     truncated: false,
                 }
             },
-            listProjectProcesses: unsupportedMutation("listProjectProcesses"),
-            startProjectProcess: unsupportedMutation("startProjectProcess"),
-            reconnectProjectProcess: unsupportedMutation("reconnectProjectProcess"),
-            stopProjectProcess: unsupportedMutation("stopProjectProcess"),
+            listProjectProcesses: async (params) => {
+                requireStateProject(state, params.repoId)
+                return {
+                    repoId: params.repoId,
+                    taskId: params.taskId,
+                    searchRoot: "/tmp/runtime-repo",
+                    repoRoot: "/tmp/runtime-repo",
+                    isWorktree: false,
+                    processes: [
+                        {
+                            id: "openade.toml::Runtime Process",
+                            name: "Runtime Process",
+                            command: "printf runtime-process",
+                            type: "task",
+                            configPath: "openade.toml",
+                            cwd: "/tmp/runtime-repo",
+                        },
+                    ],
+                    errors: [],
+                    instances:
+                        state.projectProcess?.running === true
+                            ? [
+                                  {
+                                      processId: state.projectProcess.processId,
+                                      definitionId: "openade.toml::Runtime Process",
+                                      repoId: params.repoId,
+                                      taskId: params.taskId,
+                                      cwd: "/tmp/runtime-repo",
+                                      completed: false,
+                                      exitCode: null,
+                                      signal: null,
+                                  },
+                              ]
+                            : [],
+                }
+            },
+            startProjectProcess: async (params) => {
+                requireStateProject(state, params.repoId)
+                state.projectProcess = {
+                    processId: "process-runtime-test",
+                    running: true,
+                    output: ["runtime process output\n"],
+                    stopped: false,
+                }
+                return { repoId: params.repoId, taskId: params.taskId, definitionId: params.definitionId, processId: state.projectProcess.processId }
+            },
+            reconnectProjectProcess: async (params) => {
+                requireStateProject(state, params.repoId)
+                if (!state.projectProcess || params.processId !== state.projectProcess.processId) {
+                    return { repoId: params.repoId, taskId: params.taskId, processId: params.processId, found: false, output: [] }
+                }
+                return {
+                    repoId: params.repoId,
+                    taskId: params.taskId,
+                    processId: params.processId,
+                    found: true,
+                    completed: !state.projectProcess.running,
+                    exitCode: state.projectProcess.running ? null : 0,
+                    signal: null,
+                    outputCount: state.projectProcess.output.length,
+                    output: state.projectProcess.output.map((data, index) => ({ type: "stdout", data, timestamp: index + 1 })),
+                }
+            },
+            stopProjectProcess: async (params) => {
+                requireStateProject(state, params.repoId)
+                if (state.projectProcess && params.processId === state.projectProcess.processId) {
+                    state.projectProcess.running = false
+                    state.projectProcess.stopped = true
+                }
+                return { repoId: params.repoId, taskId: params.taskId, processId: params.processId, ok: true }
+            },
             startTaskTerminal: async (params) => {
                 requireStateTask(state, params.taskId)
                 state.terminal = {
@@ -1148,6 +1223,162 @@ describe("CodeStore runtime product store bridge", () => {
             legacyContentSearch.mockRestore()
             legacyDescribePath.mockRestore()
             legacyFuzzySearch.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("routes classic processes tray actions through task-scoped runtime project methods", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient({
+            project: { ...project, path: "/tmp/runtime-repo" },
+            task: { ...task, isolationStrategy: { type: "head" } },
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const rawProcessStart = vi.spyOn(ProcessHandle, "startScript").mockRejectedValue(new Error("legacy process start should not be used"))
+        const runtimeProcessList = vi.spyOn(codeStore, "listProductProjectProcesses")
+        const runtimeProcessStart = vi.spyOn(codeStore, "startProductProjectProcess")
+        const runtimeProcessReconnect = vi.spyOn(codeStore, "reconnectProductProjectProcess")
+        const runtimeProcessStop = vi.spyOn(codeStore, "stopProductProjectProcess")
+        ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+        const container = document.createElement("div")
+        document.body.appendChild(container)
+        const root = createRoot(container)
+
+        const clickButtonByTitle = (title: string) => {
+            const button = Array.from(container.querySelectorAll("button")).find((candidate) => candidate.title === title)
+            if (!(button instanceof HTMLButtonElement)) throw new Error(`Button titled "${title}" was not rendered`)
+            button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }))
+        }
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+
+            await act(async () => {
+                root.render(
+                    createElement(
+                        CodeStoreProvider,
+                        { store: codeStore },
+                        createElement(ProcessesTray, {
+                            searchPath: "/tmp/runtime-repo",
+                            context: { type: "repo", root: "/tmp/runtime-repo" },
+                            workspaceId: "repo-1",
+                            isOpen: true,
+                            productScope: { repoId: "repo-1", taskId: "task-1" },
+                        })
+                    )
+                )
+            })
+
+            await vi.waitFor(() => {
+                expect(container.textContent).toContain("Runtime Process")
+                expect(runtimeProcessList).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1" })
+            })
+
+            await act(async () => {
+                clickButtonByTitle("Start")
+            })
+
+            await vi.waitFor(() => {
+                expect(container.textContent).toContain("runtime process output")
+                expect(runtimeProcessStart).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1", definitionId: "openade.toml::Runtime Process" })
+                expect(runtimeProcessReconnect).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1", processId: "process-runtime-test" })
+            })
+
+            await act(async () => {
+                clickButtonByTitle("Stop")
+            })
+
+            await vi.waitFor(() => {
+                expect(runtimeProcessStop).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1", processId: "process-runtime-test" })
+                expect(state.projectProcess?.stopped).toBe(true)
+            })
+            expect(rawProcessStart).not.toHaveBeenCalled()
+        } finally {
+            act(() => root.unmount())
+            container.remove()
+            rawProcessStart.mockRestore()
+            runtimeProcessList.mockRestore()
+            runtimeProcessStart.mockRestore()
+            runtimeProcessReconnect.mockRestore()
+            runtimeProcessStop.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("reconnects existing runtime project process output from the classic processes tray", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient({
+            project: { ...project, path: "/tmp/runtime-repo" },
+            task: { ...task, isolationStrategy: { type: "head" } },
+        })
+        state.projectProcess = {
+            processId: "process-runtime-test",
+            running: true,
+            output: ["existing runtime process output\n"],
+            stopped: false,
+        }
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const rawProcessStart = vi.spyOn(ProcessHandle, "startScript").mockRejectedValue(new Error("legacy process start should not be used"))
+        const runtimeProcessReconnect = vi.spyOn(codeStore, "reconnectProductProjectProcess")
+        ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+        const container = document.createElement("div")
+        document.body.appendChild(container)
+        const root = createRoot(container)
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+
+            await act(async () => {
+                root.render(
+                    createElement(
+                        CodeStoreProvider,
+                        { store: codeStore },
+                        createElement(ProcessesTray, {
+                            searchPath: "/tmp/runtime-repo",
+                            context: { type: "repo", root: "/tmp/runtime-repo" },
+                            workspaceId: "repo-1",
+                            isOpen: true,
+                            productScope: { repoId: "repo-1", taskId: "task-1" },
+                        })
+                    )
+                )
+            })
+
+            await vi.waitFor(() => {
+                expect(container.textContent).toContain("Runtime Process")
+            })
+
+            const label = Array.from(container.querySelectorAll("span")).find((candidate) => candidate.textContent === "Runtime Process")
+            if (!label) throw new Error("Runtime process row label was not rendered")
+
+            await act(async () => {
+                label.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }))
+            })
+
+            await vi.waitFor(() => {
+                expect(container.textContent).toContain("existing runtime process output")
+                expect(runtimeProcessReconnect).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1", processId: "process-runtime-test" })
+            })
+            expect(rawProcessStart).not.toHaveBeenCalled()
+        } finally {
+            act(() => root.unmount())
+            container.remove()
+            rawProcessStart.mockRestore()
+            runtimeProcessReconnect.mockRestore()
             codeStore.disconnectAllStores()
             await runtime.close()
         }
