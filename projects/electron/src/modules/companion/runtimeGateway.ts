@@ -22,6 +22,8 @@ import {
     groupOpenADEHyperPlanByDepth,
     isStandardOpenADEHyperPlanStrategy,
     listOpenADEProjectFiles,
+    openADEQueuedTurnIdForClientRequest,
+    openADETaskIdForClientRequest,
     openADETaskTerminalId,
     publishOpenADECompanionEvent,
     readOpenADEProjectFile,
@@ -283,16 +285,8 @@ function fallbackSlug(): string {
     return `task-${randomUUID().replace(/-/g, "").slice(0, 8)}`
 }
 
-function taskIdForClientRequest(repoId: string, clientRequestId: string | undefined): string | undefined {
-    if (!clientRequestId) return undefined
-    const hash = createHash("sha256").update(repoId).update("\0").update(clientRequestId).digest("hex").slice(0, 26)
-    return `task-${hash}`
-}
-
 function queuedTurnIdForClientRequest(taskId: string, clientRequestId: string | undefined): string {
-    if (!clientRequestId) return `queued-${randomUUID()}`
-    const hash = createHash("sha256").update(taskId).update("\0").update(clientRequestId).digest("hex").slice(0, 26)
-    return `queued-${hash}`
+    return openADEQueuedTurnIdForClientRequest(taskId, clientRequestId) ?? `queued-${randomUUID()}`
 }
 
 function canCreateTaskInRuntime(params: OpenADETurnStartRequest): boolean {
@@ -2272,7 +2266,7 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                 if (!repo) throw new Error(`Repository ${params.repoId} not found`)
                 const createdAt = new Date().toISOString()
                 const isolationStrategy = params.isolationStrategy ?? { type: "head" }
-                const taskId = taskIdForClientRequest(params.repoId, params.clientRequestId)
+                const taskId = openADETaskIdForClientRequest(params.repoId, params.clientRequestId)
                 const slug = taskId ?? fallbackSlug()
                 const environment = await createTaskEnvironment({
                     repoPath: repo.path,

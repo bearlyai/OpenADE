@@ -4,6 +4,7 @@ Target package for OpenADE product semantics loaded into a runtime server.
 
 - Own projects, tasks, turns, comments, snapshots, openade.toml process config DTOs/parser/serializer, and Yjs compatibility.
 - Own OpenADE product and openade.toml config types in src/types.ts; companion shared types and host bridges should only re-export or alias them for compatibility.
+- `src/clientRequestIds.ts` owns stable id derivation from `clientRequestId` for OpenADE tasks and queued turns. Electron companion runtime and headless Node runtime should import these helpers instead of maintaining host-specific request-id hashing.
 - `src/procs.ts` owns the shared dependency-light `openade.toml` parser/serializer used by Electron procs editing and Node project-process discovery. Do not add a second host-specific parser in Electron, web, or node adapters.
 - `src/scopedProjectHost.ts` owns the shared Node filesystem implementation for scoped OpenADE project file tree/read/write/search methods. Electron companion runtime and headless Node runtime should import these helpers instead of maintaining host-specific copies.
 - `src/scopedProjectProcesses.ts` owns scoped OpenADE project process definition building and cwd containment from parsed `openade.toml` configs. Hosts may keep their own process lifecycle plumbing, but they should not duplicate config-to-definition logic.

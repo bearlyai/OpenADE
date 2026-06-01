@@ -14,6 +14,7 @@
 - Scoped OpenADE project file tree/read/write/search behavior lives in `projects/openade-module/src/scopedProjectHost.ts`. The companion runtime gateway should import those product-owned helpers instead of carrying Electron-only copies of path containment, hidden/generated filtering, file-size limits, or search behavior.
 - Scoped OpenADE project process definition building and cwd containment live in `projects/openade-module/src/scopedProjectProcesses.ts`. Electron may keep its process start/reconnect/kill plumbing, but should import the shared builder for parsed `openade.toml` configs.
 - Scoped OpenADE task terminal id derivation and raw PTY base64/plain-text conversion helpers live in `projects/openade-module/src/scopedTaskTerminal.ts`. Electron may keep PTY lifecycle plumbing, but should not maintain a second terminal hash or encoding implementation.
+- Stable OpenADE task and queued-turn ids derived from `clientRequestId` live in `projects/openade-module/src/clientRequestIds.ts`. Electron should import those helpers instead of carrying request-id hashing logic.
 - Low-level harness IPC event/query DTOs live in `projects/harness/src/types.ts` as `HarnessIpc*`. Electron harness bridge code should import those types from `@openade/harness` instead of declaring renderer-matching copies.
 - Renderer wrappers under `projects/web/src/electronAPI` should alias those types instead of re-declaring matching Electron main-process interfaces.
 

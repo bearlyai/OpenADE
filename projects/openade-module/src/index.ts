@@ -1,4 +1,5 @@
 export * from "./module"
+export * from "./clientRequestIds"
 export * from "./hyperplan"
 export * from "./promptBuilder"
 export * from "./procs"

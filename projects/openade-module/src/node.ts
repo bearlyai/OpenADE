@@ -1,8 +1,8 @@
 import os from "node:os"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { createHash } from "node:crypto"
 import { execFile } from "node:child_process"
+import { openADETaskIdForClientRequest } from "./clientRequestIds"
 import {
     buildOpenADEHyperPlanStepPrompt,
     buildOpenADEReconcileStepPrompt,
@@ -1194,12 +1194,6 @@ function executionIdForTask(taskId: string): string {
     return `headless-${taskId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }
 
-function taskIdForClientRequest(repoId: string, clientRequestId: string | undefined): string | undefined {
-    if (!clientRequestId) return undefined
-    const hash = createHash("sha256").update(repoId).update("\0").update(clientRequestId).digest("hex").slice(0, 26)
-    return `task-${hash}`
-}
-
 function eventRecord(value: unknown): Record<string, unknown> | null {
     return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null
 }
@@ -1411,7 +1405,7 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
                 createdBy: { id: "headless-runtime", email: "headless@openade.local" },
                 deviceId: "headless-runtime",
                 title: params.title ?? fallbackTitle(params.input),
-                taskId: taskIdForClientRequest(params.repoId, params.clientRequestId),
+                taskId: openADETaskIdForClientRequest(params.repoId, params.clientRequestId),
                 createdAt,
                 isolationStrategy: params.isolationStrategy,
                 enabledMcpServerIds: params.enabledMcpServerIds,

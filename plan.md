@@ -1250,6 +1250,13 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - This removes duplicate terminal hash and encoding logic without changing classic desktop terminal behavior; the desktop `Terminal` component still uses trusted-local PTY streaming until product terminal notifications can preserve live output without raw `pty/*` subscription.
 - Focused verification passed: OpenADE module typecheck, Electron typecheck, scoped task terminal helper tests, OpenADE kernel integration, Electron companion runtime API integration, Biome lint for touched files, and `git diff --check`.
 
+### 2026-06-01: Client Request ID Helpers Consolidated
+
+- `projects/openade-module/src/clientRequestIds.ts` now owns stable task and queued-turn id derivation from `clientRequestId`.
+- `projects/openade-module/src/node.ts` and `projects/electron/src/modules/companion/runtimeGateway.ts` both import those helpers instead of carrying duplicate request-id hash logic.
+- This preserves idempotent task creation and queued-turn retry behavior while keeping the id contract in the OpenADE product module.
+- Focused verification passed: OpenADE module typecheck, Electron typecheck, client request id helper tests, OpenADE kernel integration, Electron companion runtime API integration, Biome lint for touched files, and `git diff --check`.
+
 ### 2026-06-01: Snapshot Patch Indexing Consolidated
 
 - `projects/openade-module/src/snapshotPatchIndex.ts` now owns OpenADE snapshot patch indexing and byte slicing for both inline and external snapshot patches.
