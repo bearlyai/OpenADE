@@ -5,63 +5,9 @@ import os from "os"
 import { execFileSync } from "child_process"
 import { pipeline } from "stream/promises"
 import { Readable } from "stream"
+import { MANAGED_BINARY_REGISTRY, type ManagedBinaryPlatformKey, type ManagedBinaryPlatformName } from "./binaries"
 
-// ============================================================================
-// Types — mirrors BinaryDef from binaries.ts
-// ============================================================================
-
-type PlatformKey = "darwin-arm64" | "darwin-x64" | "linux-arm64" | "linux-x64" | "win32-x64"
-type PlatformName = "darwin" | "linux" | "win32"
 type BinaryType = "elf" | "macho" | "pe" | "unknown"
-
-interface BinaryDef {
-    displayName: string
-    version: string
-    urls: Partial<Record<PlatformKey, string>>
-    filename: Partial<Record<PlatformName, string>>
-    verifyArgs: string[]
-}
-
-// ============================================================================
-// Test registry — must stay in sync with binaries.ts REGISTRY
-// ============================================================================
-
-const REGISTRY: Record<string, BinaryDef> = {
-    bun: {
-        displayName: "Bun",
-        version: "1.3.8",
-        urls: {
-            "darwin-arm64": "https://github.com/bearlyai/crossbins/releases/download/v1/bun-1.3.8-darwin-aarch64",
-            "darwin-x64": "https://github.com/bearlyai/crossbins/releases/download/v1/bun-1.3.8-darwin-x86_64",
-            "linux-arm64": "https://github.com/bearlyai/crossbins/releases/download/v1/bun-1.3.8-linux-aarch64",
-            "linux-x64": "https://github.com/bearlyai/crossbins/releases/download/v1/bun-1.3.8-linux-x86_64",
-            "win32-x64": "https://github.com/bearlyai/crossbins/releases/download/v1/bun-1.3.8-windows-x86_64.exe",
-        },
-        filename: {
-            darwin: "bun",
-            linux: "bun",
-            win32: "bun.exe",
-        },
-        verifyArgs: ["--help"],
-    },
-    rg: {
-        displayName: "ripgrep",
-        version: "15.1.0",
-        urls: {
-            "darwin-arm64": "https://github.com/bearlyai/crossbins/releases/download/v1/rg-15.1.0-darwin-aarch64",
-            "darwin-x64": "https://github.com/bearlyai/crossbins/releases/download/v1/rg-15.1.0-darwin-x86_64",
-            "linux-arm64": "https://github.com/bearlyai/crossbins/releases/download/v1/rg-15.1.0-linux-aarch64",
-            "linux-x64": "https://github.com/bearlyai/crossbins/releases/download/v1/rg-15.1.0-linux-x86_64-musl",
-            "win32-x64": "https://github.com/bearlyai/crossbins/releases/download/v1/rg-15.1.0-windows-x86_64.exe",
-        },
-        filename: {
-            darwin: "rg",
-            linux: "rg",
-            win32: "rg.exe",
-        },
-        verifyArgs: ["--version"],
-    },
-}
 
 // ============================================================================
 // Helpers
@@ -123,8 +69,8 @@ async function downloadToFile(url: string, destPath: string): Promise<void> {
     await pipeline(nodeStream, fs.createWriteStream(destPath))
 }
 
-function currentPlatformKey(): PlatformKey {
-    return `${process.platform}-${process.arch}` as PlatformKey
+function currentPlatformKey(): ManagedBinaryPlatformKey {
+    return `${process.platform}-${process.arch}` as ManagedBinaryPlatformKey
 }
 
 // ============================================================================
@@ -143,45 +89,6 @@ describe("binaries - crossbins download verification", () => {
     })
 
     // ------------------------------------------------------------------
-    // Registry sync check — ensure our test registry matches the source
-    // ------------------------------------------------------------------
-
-    describe("registry sync check", () => {
-        it("test registry matches binaries.ts source", () => {
-            const sourceFile = fs.readFileSync(path.resolve(__dirname, "binaries.ts"), "utf-8")
-
-            for (const [name, def] of Object.entries(REGISTRY)) {
-                // Check version appears in source
-                expect(sourceFile, `version ${def.version} for ${name} not found in source`).toContain(def.version)
-
-                // Check every URL appears in source
-                for (const [platform, url] of Object.entries(def.urls)) {
-                    expect(sourceFile, `URL for ${name}/${platform} not found in source`).toContain(url as string)
-                }
-
-                // Check verifyArgs appear in source
-                for (const arg of def.verifyArgs) {
-                    expect(sourceFile, `verifyArg "${arg}" for ${name} not found in source`).toContain(arg)
-                }
-            }
-
-            // Also verify we haven't missed any binaries in the source REGISTRY
-            const registryKeyPattern = /^\s{4}(\w+):\s*\{$/gm
-            const sourceKeys: string[] = []
-            // Only match keys inside the REGISTRY block
-            const registryBlock = sourceFile.match(/const REGISTRY[^{]*\{([\s\S]*?)^}/m)
-            if (registryBlock) {
-                let match: RegExpExecArray | null
-                while ((match = registryKeyPattern.exec(registryBlock[1])) !== null) {
-                    sourceKeys.push(match[1])
-                }
-            }
-            const testKeys = Object.keys(REGISTRY).sort()
-            expect(sourceKeys.sort()).toEqual(testKeys)
-        })
-    })
-
-    // ------------------------------------------------------------------
     // Download and verify each binary for the current platform
     // ------------------------------------------------------------------
 
@@ -189,7 +96,7 @@ describe("binaries - crossbins download verification", () => {
         const platformKey = currentPlatformKey()
         const expected = expectedBinaryType()
 
-        for (const [name, def] of Object.entries(REGISTRY)) {
+        for (const [name, def] of Object.entries(MANAGED_BINARY_REGISTRY)) {
             const url = def.urls[platformKey]
 
             if (!url) {
@@ -198,7 +105,7 @@ describe("binaries - crossbins download verification", () => {
             }
 
             it(`downloads and verifies ${name} (${def.displayName} ${def.version})`, { timeout: 120_000 }, async () => {
-                const filename = def.filename[process.platform as PlatformName]
+                const filename = def.filename[process.platform as ManagedBinaryPlatformName]
                 expect(filename, `no filename mapping for platform ${process.platform}`).toBeDefined()
 
                 const destPath = path.join(tmpDir, `${name}-${filename}`)
@@ -246,7 +153,7 @@ describe("binaries - crossbins download verification", () => {
     // ------------------------------------------------------------------
 
     describe("all platform URLs are reachable", () => {
-        for (const [name, def] of Object.entries(REGISTRY)) {
+        for (const [name, def] of Object.entries(MANAGED_BINARY_REGISTRY)) {
             for (const [platform, url] of Object.entries(def.urls)) {
                 it(`${name} ${platform} URL returns 200`, { timeout: 30_000 }, async () => {
                     const response = await fetch(url as string, {

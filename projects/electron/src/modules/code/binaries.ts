@@ -22,18 +22,21 @@ import type { ManagedBinaryStatus } from "./hostBridgeTypes"
 // Binary Registry — hardcoded URLs from bearlyai/crossbins
 // ============================================================================
 
-interface BinaryDef {
+export type ManagedBinaryPlatformKey = "darwin-arm64" | "darwin-x64" | "linux-arm64" | "linux-x64" | "win32-x64"
+export type ManagedBinaryPlatformName = "darwin" | "linux" | "win32"
+
+export interface ManagedBinaryDef {
     displayName: string
     version: string
     /** URL per Electron platform-arch key */
-    urls: Record<string, string>
+    urls: Partial<Record<ManagedBinaryPlatformKey, string>>
     /** Local filename (with .exe for win32) per platform */
-    filename: Record<string, string>
+    filename: Partial<Record<ManagedBinaryPlatformName, string>>
     /** Args to verify the binary works after download */
     verifyArgs: string[]
 }
 
-const REGISTRY: Record<string, BinaryDef> = {
+export const MANAGED_BINARY_REGISTRY: Record<string, ManagedBinaryDef> = {
     bun: {
         displayName: "Bun",
         version: "1.3.8",
@@ -115,21 +118,21 @@ function removeVersion(name: string): void {
     }
 }
 
-function getBinaryPath(def: BinaryDef): string | null {
-    const filename = def.filename[process.platform]
+function getBinaryPath(def: ManagedBinaryDef): string | null {
+    const filename = def.filename[process.platform as ManagedBinaryPlatformName]
     if (!filename) return null
     return path.join(getBinDir(), filename)
 }
 
-function getPlatformKey(): string {
-    return `${process.platform}-${process.arch}`
+function getPlatformKey(): ManagedBinaryPlatformKey {
+    return `${process.platform}-${process.arch}` as ManagedBinaryPlatformKey
 }
 
 /**
  * Check if a binary needs a version upgrade.
  */
 function needsUpgrade(name: string): boolean {
-    const def = REGISTRY[name]
+    const def = MANAGED_BINARY_REGISTRY[name]
     if (!def) return false
     const installed = readVersions()[name]
     return installed !== def.version
@@ -205,7 +208,7 @@ async function downloadBinary(url: string, destPath: string, name: string): Prom
  * Resolve a managed binary. Returns its path if downloaded and version matches, or null.
  */
 export function resolve(name: string): string | null {
-    const def = REGISTRY[name]
+    const def = MANAGED_BINARY_REGISTRY[name]
     if (!def) return null
 
     const binaryPath = getBinaryPath(def)
@@ -218,7 +221,7 @@ export function resolve(name: string): string | null {
  * Deduplicates concurrent calls for the same binary.
  */
 export async function ensureRuntimeBinary(name: string): Promise<string> {
-    const def = REGISTRY[name]
+    const def = MANAGED_BINARY_REGISTRY[name]
     if (!def) throw new Error(`Unknown binary: ${name}`)
 
     const existing = resolve(name)
@@ -267,7 +270,7 @@ export async function ensureRuntimeBinary(name: string): Promise<string> {
  */
 export function getRuntimeBinaryStatuses(): ManagedBinaryStatus[] {
     const platformKey = getPlatformKey()
-    return Object.entries(REGISTRY).map(([name, def]) => {
+    return Object.entries(MANAGED_BINARY_REGISTRY).map(([name, def]) => {
         const binaryPath = resolve(name)
         const isDownloading = activeDownloads.has(name)
         const supported = !!def.urls[platformKey]
@@ -287,7 +290,7 @@ export function getRuntimeBinaryStatuses(): ManagedBinaryStatus[] {
  * Remove a managed binary.
  */
 export function removeRuntimeBinary(name: string): void {
-    const def = REGISTRY[name]
+    const def = MANAGED_BINARY_REGISTRY[name]
     if (!def) return
 
     const binaryPath = getBinaryPath(def)
@@ -309,7 +312,7 @@ export const load = () => {
     // Eagerly download any binaries that aren't available yet — deferred until app is ready
     // because net.fetch requires the app to be fully initialized
     app.whenReady().then(() => {
-        for (const name of Object.keys(REGISTRY)) {
+        for (const name of Object.keys(MANAGED_BINARY_REGISTRY)) {
             if (!resolve(name)) {
                 ensureRuntimeBinary(name).catch((err) => {
                     logger.warn(`[Binaries] Background download of ${name} failed:`, err instanceof Error ? err.message : err)

@@ -1235,6 +1235,12 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - This keeps desktop-specific host utility contracts in the Electron code module boundary while preserving the existing trusted local runtime methods and classic desktop settings/process wrappers.
 - Focused verification passed: Electron typecheck, web typecheck, Electron `runtimeData.integration` host utility method, web `Routes.runtimeProductStore.test.ts`, and Biome lint for the touched host bridge files.
 
+### 2026-06-01: Managed Binary Registry Mirror Removed
+
+- `projects/electron/src/modules/code/binaries.ts` now exports the internal managed-binary registry and its platform key types so verification code uses the production registry directly.
+- `projects/electron/src/modules/code/binaries.test.ts` no longer copies the registry or string-scans `binaries.ts` to keep the copy synchronized.
+- Focused verification passed: Electron typecheck, real `binaries.test.ts` downloads and URL checks, Biome lint for touched binary files, and `git diff --check`.
+
 ### 2026-06-01: Raw Git Bridge DTOs Consolidated
 
 - `projects/electron/src/modules/code/gitBridgeTypes.ts` now owns browser-safe DTOs for raw trusted-local `git/*` methods: install/directory checks, worktrees, branch lists, status/summary, file listings, commits, path resolution, raw git log reads, file-pair reads, and patch reads.
