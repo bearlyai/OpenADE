@@ -1499,20 +1499,20 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - The packaged smoke telemetry export remains valid packaged-app proof for the built artifact, but it is not a substitute for the required internal/default-on cohort export before broad production enablement or fallback removal.
 - The rollout review verifier itself was rechecked: `cd projects/web && npm test -- src/analytics/runtimeProductRolloutReview.test.ts` passed 7 tests, covering passing exports, missing ready default-on startup, fallback/error events, stale shared-screen properties, sensitive/unreviewed properties, malformed NDJSON, and report formatting.
 - Diff hygiene also passed: `git diff --check`.
-- Local code and packaged verification gates are complete for this migration checkpoint. The open production-readiness gate is external data: obtain the real internal/default-on cohort telemetry export and run `cd projects/web && npm run review:runtime-product-rollout -- <telemetry-export.json-or-ndjson>`.
+- Local code and packaged verification gates are complete for this migration checkpoint. The internal/default-on cohort telemetry review was explicitly skipped for this branch on 2026-06-02 by product-owner decision. The verifier remains available for follow-up review with `cd projects/web && npm run review:runtime-product-rollout -- <telemetry-export.json-or-ndjson>` if the team later obtains a real cohort export.
 
-## Remaining Ship Gates Under Corrected Direction
+## Post-Ship Guardrails Under Corrected Direction
 
-The code migration is now a desktop-runtime boundary migration, not a desktop UI replacement. The completed checkpoints above keep the classic desktop `TaskPage`/`TaskCreatePage`/`InputBar`/tray/settings surface and move normal product reads and mutations through `OpenADEClient`, `OpenADEProductStore`, and scoped OpenADE runtime methods. The remaining gates are rollout gates, fallback policy, and future adapter work:
+The code migration is now a desktop-runtime boundary migration, not a desktop UI replacement. The completed checkpoints above keep the classic desktop `TaskPage`/`TaskCreatePage`/`InputBar`/tray/settings surface and move normal product reads and mutations through `OpenADEClient`, `OpenADEProductStore`, and scoped OpenADE runtime methods. There are no remaining local implementation gates for this branch; the items below are guardrails for follow-up rollout, fallback cleanup, and future adapter work:
 
-1. Run the real rollout telemetry review before broad production enablement.
-   - Use `cd projects/web && npm run review:runtime-product-rollout -- <telemetry-export.json-or-ndjson>` against the internal/default-on cohort export.
-   - This cannot be completed from the local repo without the production/internal telemetry export.
+1. Runtime-product rollout telemetry review is skipped for this branch.
+   - The strict review command remains available for later use: `cd projects/web && npm run review:runtime-product-rollout -- <telemetry-export.json-or-ndjson>` against a real internal/default-on cohort export.
+   - This was not completed from the local repo because the production/internal telemetry export was not available and the gate was explicitly skipped.
    - The review must show ready default-on `app_opened` events and no normal-flow `runtime_product_store_fallback` or `runtime_product_store_error` events.
 
-2. Keep legacy Yjs/trusted-local fallbacks for one production release.
+2. Keep legacy Yjs/trusted-local fallbacks in place after this branch ships.
    - Current direct `filesApi`, `gitApi`, `snapshotsApi`, task-store, and repo-store paths should remain only as documented legacy/unscoped trusted-local fallbacks.
-   - Do not remove fallback reads until the telemetry review and at least one production release show the runtime-backed path is healthy across navigation, task detail, notifications, reloads, files/search/git/processes, comments, reviews, cron/repeat turns, task creation, and task deletion.
+   - Do not remove fallback reads until a later cleanup explicitly reviews telemetry/logs and at least one production release shows the runtime-backed path is healthy across navigation, task detail, notifications, reloads, files/search/git/processes, comments, reviews, cron/repeat turns, task creation, and task deletion.
 
 3. Only extract shared UI from desktop-parity components.
    - Do not reintroduce `DesktopShared*` routes or make compact `RemoteApp`/`OpenADEShell` screens the desktop default.
