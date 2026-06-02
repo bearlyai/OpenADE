@@ -1,8 +1,8 @@
-import type { TaskPreview } from "@/persistence/repoStore"
 import { Code, ListTodo, Loader2, Settings, Sparkles } from "lucide-react"
 import { observer } from "mobx-react"
 import { useCallback, useRef, useState } from "react"
 import { Navigate, useParams } from "react-router"
+import type { OpenADETaskPreview } from "../../openade-module/src"
 import { TaskStatsBar } from "./components/TaskStatsBar"
 import { getLastViewed } from "./constants"
 import { isCodeModuleAvailable } from "./electronAPI/capabilities"
@@ -23,7 +23,7 @@ const Layout = (props: Omit<CodeLayoutProps, "isCodeModuleAvailable">) => <CodeL
 
 // ==================== Route: /dashboard/code ====================
 
-function getMostRecentTaskId(tasks: TaskPreview[]): string | undefined {
+function getMostRecentTaskId(tasks: OpenADETaskPreview[]): string | undefined {
     const zeroTime = new Date(0).toISOString()
     const openTasks = tasks.filter((t) => !t.closed)
     if (openTasks.length === 0) return undefined

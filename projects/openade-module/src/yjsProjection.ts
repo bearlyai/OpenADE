@@ -1,4 +1,12 @@
-import type { OpenADEProject, OpenADEQueuedTurn, OpenADESnapshot, OpenADETask, OpenADETaskPreview } from "./types"
+import type {
+    OpenADEIsolationStrategy,
+    OpenADEProject,
+    OpenADEQueuedTurn,
+    OpenADESnapshot,
+    OpenADETask,
+    OpenADETaskPreview,
+    OpenADETaskReadOptions,
+} from "./types"
 
 export interface OpenADEYjsStorageAdapter {
     hostName?: () => string | undefined
@@ -13,7 +21,7 @@ export interface OpenADEYjsProjection {
     readSnapshot(options?: { version?: string; hostName?: string; workingTaskIds?: string[] }): Promise<OpenADESnapshot>
     readProjects(options?: { workingTaskIds?: string[] }): Promise<OpenADEProject[]>
     readTaskList(repoId: string, options?: { workingTaskIds?: string[] }): Promise<OpenADETaskPreview[]>
-    readTask(repoId: string, taskId: string): Promise<OpenADETask>
+    readTask(repoId: string, taskId: string, options?: OpenADETaskReadOptions): Promise<OpenADETask>
     listDataDocuments(): Promise<string[]>
     readDataDocumentBase64(id: string): Promise<{ id: string; data: string } | null>
 }
@@ -30,6 +38,8 @@ const themeLabels: Record<string, string> = {
 }
 
 const zeroTime = new Date(0).toISOString()
+const LIGHTWEIGHT_TASK_EVENT_TAIL_COUNT = 80
+const LIGHTWEIGHT_STREAM_EVENT_TAIL_COUNT = 360
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -63,6 +73,81 @@ function queuedTurns(value: unknown): OpenADEQueuedTurn[] | undefined {
         return typeof item.id === "string" && (item.type === "do" || item.type === "ask") && typeof item.input === "string" && typeof item.status === "string"
     })
     return result.length > 0 ? result : undefined
+}
+
+function boundedStreamEvents(value: unknown, keepTail: boolean): { events: unknown[]; omittedEventCount?: number } {
+    const events = Array.isArray(value) ? value : []
+    const keepCount = keepTail ? LIGHTWEIGHT_STREAM_EVENT_TAIL_COUNT : 0
+    if (events.length <= keepCount) return { events }
+
+    return {
+        events: keepCount > 0 ? events.slice(-keepCount) : [],
+        omittedEventCount: events.length - keepCount,
+    }
+}
+
+function boundedExecution(value: unknown, keepTail: boolean): unknown {
+    if (!isRecord(value)) return value
+
+    const bounded = boundedStreamEvents(value.events, keepTail)
+    if (bounded.events === value.events && !bounded.omittedEventCount) return value
+
+    return {
+        ...value,
+        events: bounded.events,
+        ...(bounded.omittedEventCount ? { omittedEventCount: bounded.omittedEventCount } : {}),
+    }
+}
+
+function boundedHyperPlanSubExecution(value: unknown, keepTail: boolean): unknown {
+    if (!isRecord(value)) return value
+
+    const bounded = boundedStreamEvents(value.events, keepTail)
+    if (bounded.events === value.events && !bounded.omittedEventCount) return value
+
+    return {
+        ...value,
+        events: bounded.events,
+        ...(bounded.omittedEventCount ? { omittedEventCount: bounded.omittedEventCount } : {}),
+    }
+}
+
+function boundedHyperPlanSubExecutions(value: unknown, keepTail: boolean): unknown {
+    if (!Array.isArray(value)) return value
+    return value.map((subExecution) => boundedHyperPlanSubExecution(subExecution, keepTail))
+}
+
+function boundedTaskEvent(value: Record<string, unknown>, keepTail: boolean): Record<string, unknown> {
+    if (value.type !== "action") return value
+
+    const execution = boundedExecution(value.execution, keepTail)
+    const hyperplanSubExecutions = boundedHyperPlanSubExecutions(value.hyperplanSubExecutions, keepTail)
+    if (execution === value.execution && hyperplanSubExecutions === value.hyperplanSubExecutions) return value
+
+    return {
+        ...value,
+        execution,
+        ...(hyperplanSubExecutions !== value.hyperplanSubExecutions ? { hyperplanSubExecutions } : {}),
+    }
+}
+
+function boundTaskSessionPayloads(events: Record<string, unknown>[], options: OpenADETaskReadOptions | undefined): Record<string, unknown>[] {
+    if (options?.hydrateSessionEvents) return events
+
+    const tailStart = Math.max(0, events.length - LIGHTWEIGHT_TASK_EVENT_TAIL_COUNT)
+    return events.map((event, index) => boundedTaskEvent(event, index >= tailStart))
+}
+
+function isolationStrategy(value: unknown): OpenADEIsolationStrategy {
+    if (!isRecord(value)) return { type: "head" }
+    if (value.type === "head") return { type: "head" }
+    if (value.type === "worktree") {
+        return {
+            type: "worktree",
+            sourceBranch: stringValue(value.sourceBranch, "HEAD"),
+        }
+    }
+    return { type: "head" }
 }
 
 function lastEventTime(task: OpenADETaskPreview): string {
@@ -181,7 +266,7 @@ export function createOpenADEYjsProjection(storage: OpenADEYjsStorageAdapter): O
         return repos.find((repo) => repo.id === repoId)?.tasks ?? []
     }
 
-    async function readTask(repoId: string, taskId: string): Promise<OpenADETask> {
+    async function readTask(repoId: string, taskId: string, options: OpenADETaskReadOptions = {}): Promise<OpenADETask> {
         const documentId = `code:task:${taskId}`
         const [meta, events, comments, deviceEnvironments, preview] = await Promise.all([
             storage.readMapObject(documentId, "task:meta"),
@@ -223,9 +308,7 @@ export function createOpenADEYjsProjection(storage: OpenADEYjsStorageAdapter): O
             slug: stringValue(meta.slug, preview?.slug ?? ""),
             title: stringValue(meta.title, preview?.title ?? "Untitled task"),
             description: stringValue(meta.description),
-            isolationStrategy: isRecord(meta.isolationStrategy)
-                ? (meta.isolationStrategy as OpenADETask["isolationStrategy"])
-                : { type: "head" },
+            isolationStrategy: isolationStrategy(meta.isolationStrategy),
             enabledMcpServerIds: Array.isArray(meta.enabledMcpServerIds)
                 ? meta.enabledMcpServerIds.filter((id): id is string => typeof id === "string")
                 : undefined,
@@ -240,7 +323,7 @@ export function createOpenADEYjsProjection(storage: OpenADEYjsStorageAdapter): O
             lastEventAt: optionalString(meta.lastEventAt),
             closed: optionalBoolean(meta.closed),
             pullRequest: isRecord(meta.pullRequest) ? (meta.pullRequest as OpenADETask["pullRequest"]) : undefined,
-            events: events ?? [],
+            events: boundTaskSessionPayloads(events ?? [], options),
             comments: comments ?? [],
         }
     }

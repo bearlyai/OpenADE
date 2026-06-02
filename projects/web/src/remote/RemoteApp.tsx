@@ -24,40 +24,20 @@ import {
     type PairingTarget,
     type RemoteConfig,
     type RemoteRealtimeConnectionStatus,
-    abortRemote,
     activateRemoteConfig,
     buildPairingTarget,
-    cancelRemoteQueuedTurn,
     clearRemoteConfig,
-    createRemoteComment,
-    deleteRemoteComment,
-    deleteRemoteTask,
-    editRemoteComment,
-    getSnapshot,
-    getTask,
-    listRemoteProjectFiles,
-    listRemoteProjectProcesses,
+    getRemoteProductStore,
     loadRemoteConfig,
     loadRemoteConfigs,
     pairRemote,
     parsePairingCode,
-    readRemoteProjectFile,
-    readRemoteTaskChanges,
-    readRemoteTaskDiff,
-    readRemoteTaskGitLog,
-    readRemoteTaskImage,
-    reconnectRemoteProjectProcess,
     remoteErrorMessage,
     removeRemoteConfig,
+    retryRemoteRead,
     saveRemoteConfig,
-    searchRemoteProject,
     selfRevokeRemoteDevice,
-    startRemoteProjectProcess,
-    startRemoteReview,
-    startRemoteTurn,
-    stopRemoteProjectProcess,
     subscribeRemoteChanges,
-    updateRemoteTaskMetadata,
 } from "./client"
 import { remoteRefreshPlan } from "./refreshPolicy"
 import { nextRemoteRefreshDelay } from "./refreshQueue"
@@ -197,7 +177,6 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const snapshotRefreshTimerRef = useRef<number | null>(null)
     const snapshotRefreshRepairsNavigationRef = useRef(false)
     const taskRefreshTimerRef = useRef<number | null>(null)
-    const hydratedTaskRefreshTimerRef = useRef<number | null>(null)
     const sessionRefreshTimerRef = useRef<number | null>(null)
     const taskRefreshInFlightRef = useRef(false)
     const taskRefreshPendingRef = useRef<{ repoId: string; taskId: string } | null>(null)
@@ -233,7 +212,9 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             const currentConfig = configRef.current
             const currentTask = task
             if (!currentConfig || !currentTask) return null
-            const result = await readRemoteTaskImage(currentConfig, { repoId: currentTask.repoId, taskId: currentTask.id, imageId: image.id, ext: image.ext })
+            const result = await retryRemoteRead(() =>
+                getRemoteProductStore(currentConfig).readTaskImage({ repoId: currentTask.repoId, taskId: currentTask.id, imageId: image.id, ext: image.ext })
+            )
             if (!result.data) return null
             return `data:${remoteImageMediaType(image, result.mediaType)};base64,${result.data}`
         },
@@ -252,7 +233,6 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         return () => {
             if (snapshotRefreshTimerRef.current) window.clearTimeout(snapshotRefreshTimerRef.current)
             if (taskRefreshTimerRef.current) window.clearTimeout(taskRefreshTimerRef.current)
-            if (hydratedTaskRefreshTimerRef.current) window.clearTimeout(hydratedTaskRefreshTimerRef.current)
             if (sessionRefreshTimerRef.current) window.clearTimeout(sessionRefreshTimerRef.current)
         }
     }, [])
@@ -285,7 +265,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
 
     const refreshSnapshot = async (nextConfig = config, options: SnapshotRefreshOptions = {}): Promise<OpenADESnapshot | null> => {
         if (!nextConfig) return null
-        const next = await getSnapshot(nextConfig)
+        const next = await retryRemoteRead(() => getRemoteProductStore(nextConfig).refreshSnapshot())
         const currentRepoId = selectedRepoIdRef.current
         const currentTaskId = selectedTaskIdRef.current
         const shouldRepairNavigation = options.repairNavigation === true
@@ -318,7 +298,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         const entries = await Promise.all(
             configs.map(async (item) => {
                 try {
-                    return [item.id, await getSnapshot(item)] as const
+                    return [item.id, await retryRemoteRead(() => getRemoteProductStore(item).refreshSnapshot())] as const
                 } catch {
                     return [item.id, null] as const
                 }
@@ -340,7 +320,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         options: { hydrateSessionEvents?: boolean } = { hydrateSessionEvents: false }
     ) => {
         if (!nextConfig || !repoId || !taskId) return
-        const nextTask = await getTask(nextConfig, repoId, taskId, options)
+        const nextTask = await retryRemoteRead(() => getRemoteProductStore(nextConfig).getTask(repoId, taskId, options))
         if (selectedTaskIdRef.current === taskId) setTask(nextTask)
         return nextTask
     }
@@ -353,7 +333,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         }
         setProjectProcessesLoading(true)
         try {
-            const result = await listRemoteProjectProcesses(nextConfig, { repoId })
+            const result = await retryRemoteRead(() => getRemoteProductStore(nextConfig).listProjectProcesses({ repoId }))
             if (selectedRepoIdRef.current === repoId) setProjectProcesses(result)
             return result
         } finally {
@@ -368,7 +348,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         }
         setProjectFilesLoading(true)
         try {
-            const result = await listRemoteProjectFiles(nextConfig, { repoId, maxDepth: 2, maxEntries: 40 })
+            const result = await retryRemoteRead(() => getRemoteProductStore(nextConfig).listProjectFiles({ repoId, maxDepth: 2, maxEntries: 40 }))
             if (selectedRepoIdRef.current === repoId) setProjectFiles(result)
             return result
         } finally {
@@ -388,10 +368,10 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         }
         setTaskChangesLoading(true)
         try {
-            const [changes, gitLog] = await Promise.all([
-                readRemoteTaskChanges(nextConfig, { repoId, taskId }),
-                readRemoteTaskGitLog(nextConfig, { repoId, taskId, limit: 5 }),
-            ])
+            const [changes, gitLog] = await retryRemoteRead(() => {
+                const store = getRemoteProductStore(nextConfig)
+                return Promise.all([store.readTaskChanges({ repoId, taskId }), store.readTaskGitLog({ repoId, taskId, limit: 5 })])
+            })
             if (selectedRepoIdRef.current === repoId && selectedTaskIdRef.current === taskId) {
                 setTaskChanges(changes)
                 setTaskGitLog(gitLog)
@@ -453,17 +433,6 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         )
     }
 
-    const scheduleHydratedTaskRefresh = (repoId: string | undefined | null, taskId: string | undefined | null, delayMs = 700) => {
-        if (!repoId || !taskId) return
-        if (snapshotRef.current?.workingTaskIds.includes(taskId)) return
-        if (hydratedTaskRefreshTimerRef.current) window.clearTimeout(hydratedTaskRefreshTimerRef.current)
-        hydratedTaskRefreshTimerRef.current = window.setTimeout(() => {
-            void runBackgroundRefresh(async () => {
-                await refreshTask(configRef.current, repoId, taskId, { hydrateSessionEvents: true })
-            }, "Unable to hydrate task history")
-        }, delayMs)
-    }
-
     const scheduleSessionSnapshotsRefresh = (delayMs = 1200) => {
         if (sessionRefreshTimerRef.current) window.clearTimeout(sessionRefreshTimerRef.current)
         sessionRefreshTimerRef.current = window.setTimeout(() => {
@@ -485,7 +454,6 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             if (!taskId && selectedTaskIdRef.current) {
                 await refreshTask(config, selectedRepoIdRef.current ?? nextSnapshot?.repos[0]?.id, selectedTaskIdRef.current, { hydrateSessionEvents: false })
             }
-            scheduleHydratedTaskRefresh(repoId, taskId)
         } catch (err) {
             setError(remoteErrorMessage(err, "Unable to refresh"))
         } finally {
@@ -521,9 +489,6 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         if (!config || screen !== "task" || !selectedRepoId || !selectedTaskId) return
         setIsLoading(true)
         void refreshTask(config, selectedRepoId, selectedTaskId, { hydrateSessionEvents: false })
-            .then(() => {
-                scheduleHydratedTaskRefresh(selectedRepoId, selectedTaskId)
-            })
             .catch((err) => {
                 if (!isTransientRemoteRefreshError(err)) setError(remoteErrorMessage(err, "Unable to load task"))
             })
@@ -704,7 +669,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         const submittedType = commandType
         const submittedTaskId = task?.unavailableReason ? undefined : selectedTaskId
         try {
-            const result = await startRemoteTurn(config, {
+            const result = await getRemoteProductStore(config).startTurn({
                 repoId: selectedRepo.id,
                 type: submittedType,
                 input: submittedInput,
@@ -733,7 +698,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         const submittedPrompt = newTaskPrompt
         const submittedMode = newTaskMode
         try {
-            const result = await startRemoteTurn(config, {
+            const result = await getRemoteProductStore(config).startTurn({
                 repoId,
                 type: submittedMode,
                 input: submittedPrompt,
@@ -755,7 +720,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
 
     const handleAbort = async () => {
         if (!config || !selectedTaskId) return
-        await abortRemote(config, selectedTaskId)
+        await getRemoteProductStore(config).interruptTurn(selectedTaskId)
         await refreshAll()
     }
 
@@ -773,14 +738,16 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         setError(null)
         setTaskDiffActionPath(file.path)
         try {
-            const result = await readRemoteTaskDiff(config, {
-                repoId: selectedRepoId,
-                taskId: selectedTaskId,
-                filePath: file.path,
-                oldPath: file.oldPath,
-                contextLines: 3,
-                allowTruncation: true,
-            })
+            const result = await retryRemoteRead(() =>
+                getRemoteProductStore(config).readTaskDiff({
+                    repoId: selectedRepoId,
+                    taskId: selectedTaskId,
+                    filePath: file.path,
+                    oldPath: file.oldPath,
+                    contextLines: 3,
+                    allowTruncation: true,
+                })
+            )
             setTaskDiff(result)
         } catch (err) {
             setError(remoteErrorMessage(err, "Unable to read task diff"))
@@ -812,7 +779,9 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         setError(null)
         setProjectFileActionPath(filePath)
         try {
-            const result = await readRemoteProjectFile(config, { repoId: selectedRepoId, path: filePath, maxBytes: 64 * 1024 })
+            const result = await retryRemoteRead(() =>
+                getRemoteProductStore(config).readProjectFile({ repoId: selectedRepoId, path: filePath, maxBytes: 64 * 1024 })
+            )
             setProjectFileRead(result)
         } catch (err) {
             setError(remoteErrorMessage(err, "Unable to read file"))
@@ -826,7 +795,9 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         setError(null)
         setProjectSearchLoading(true)
         try {
-            const result = await searchRemoteProject(config, { repoId: selectedRepoId, query: projectSearchQuery.trim(), limit: 25 })
+            const result = await retryRemoteRead(() =>
+                getRemoteProductStore(config).searchProject({ repoId: selectedRepoId, query: projectSearchQuery.trim(), limit: 25 })
+            )
             if (selectedRepoIdRef.current === selectedRepoId) setProjectSearchResult(result)
         } catch (err) {
             setError(remoteErrorMessage(err, "Unable to search files"))
@@ -840,7 +811,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         setError(null)
         setProjectProcessActionId(definitionId)
         try {
-            await startRemoteProjectProcess(config, {
+            await getRemoteProductStore(config).startProjectProcess({
                 repoId: selectedRepoId,
                 definitionId,
                 clientRequestId: newClientRequestId("remote-process-start"),
@@ -859,7 +830,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         setError(null)
         setProjectProcessActionId(processId)
         try {
-            const result = await reconnectRemoteProjectProcess(config, { repoId, processId })
+            const result = await retryRemoteRead(() => getRemoteProductStore(config).reconnectProjectProcess({ repoId, processId }))
             if (selectedRepoIdRef.current === repoId) setProjectProcessOutput(result)
             await refreshProjectProcesses(config, repoId)
         } catch (err) {
@@ -874,7 +845,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         setError(null)
         setProjectProcessActionId(processId)
         try {
-            await stopRemoteProjectProcess(config, {
+            await getRemoteProductStore(config).stopProjectProcess({
                 repoId: selectedRepoId,
                 processId,
                 clientRequestId: newClientRequestId("remote-process-stop"),
@@ -899,7 +870,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         if (!config || !selectedTaskId || !taskTitleDraft.trim()) return
         setError(null)
         try {
-            await updateRemoteTaskMetadata(config, { taskId: selectedTaskId, title: taskTitleDraft.trim() })
+            await getRemoteProductStore(config).updateTaskMetadata({ taskId: selectedTaskId, title: taskTitleDraft.trim() })
             await refreshSelectedTaskAfterMutation()
         } catch (err) {
             setError(remoteErrorMessage(err, "Unable to update task title"))
@@ -910,7 +881,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         if (!config || !selectedTaskId) return
         setError(null)
         try {
-            await updateRemoteTaskMetadata(config, { taskId: selectedTaskId, closed: !(task?.closed ?? selectedTask?.closed ?? false) })
+            await getRemoteProductStore(config).updateTaskMetadata({ taskId: selectedTaskId, closed: !(task?.closed ?? selectedTask?.closed ?? false) })
             await refreshSelectedTaskAfterMutation()
         } catch (err) {
             setError(remoteErrorMessage(err, "Unable to update task"))
@@ -922,7 +893,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         if (!window.confirm("Delete this task?")) return
         setError(null)
         try {
-            await deleteRemoteTask(config, {
+            await getRemoteProductStore(config).deleteTask({
                 repoId: selectedRepoId,
                 taskId: selectedTaskId,
                 options: { deleteSnapshots: false, deleteImages: false, deleteSessions: false, deleteWorktrees: false },
@@ -940,7 +911,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         if (!config || !selectedTaskId || !commentDraft.trim()) return
         setError(null)
         try {
-            await createRemoteComment(config, {
+            await getRemoteProductStore(config).createComment({
                 taskId: selectedTaskId,
                 content: commentDraft.trim(),
                 source: { type: "companion" },
@@ -964,7 +935,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         if (!config || !selectedTaskId || !editingCommentDraft.trim()) return
         setError(null)
         try {
-            await editRemoteComment(config, { taskId: selectedTaskId, commentId, content: editingCommentDraft.trim() })
+            await getRemoteProductStore(config).editComment({ taskId: selectedTaskId, commentId, content: editingCommentDraft.trim() })
             setEditingCommentId(null)
             setEditingCommentDraft("")
             await refreshSelectedTaskAfterMutation()
@@ -977,7 +948,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         if (!config || !selectedTaskId) return
         setError(null)
         try {
-            await deleteRemoteComment(config, { taskId: selectedTaskId, commentId })
+            await getRemoteProductStore(config).deleteComment({ taskId: selectedTaskId, commentId })
             if (editingCommentId === commentId) {
                 setEditingCommentId(null)
                 setEditingCommentDraft("")
@@ -992,7 +963,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         if (!config || !selectedRepoId || !selectedTaskId) return
         setError(null)
         try {
-            await cancelRemoteQueuedTurn(config, { repoId: selectedRepoId, taskId: selectedTaskId, queuedTurnId })
+            await getRemoteProductStore(config).cancelQueuedTurn({ repoId: selectedRepoId, taskId: selectedTaskId, queuedTurnId })
             await refreshSelectedTaskAfterMutation()
         } catch (err) {
             setError(remoteErrorMessage(err, "Unable to cancel queued turn"))
@@ -1007,7 +978,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         try {
             const harnessId = DEFAULT_HARNESS_ID
             const modelId = getDefaultModelForHarness(harnessId)
-            const result = await startRemoteReview(config, {
+            const result = await getRemoteProductStore(config).startReview({
                 repoId: selectedRepoId,
                 taskId: selectedTaskId,
                 reviewType,

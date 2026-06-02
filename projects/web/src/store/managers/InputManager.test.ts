@@ -35,16 +35,27 @@ function createManager({
     queuedTurns = [],
     isTaskRunning = () => true,
     refreshTaskStoreFromStorage = vi.fn(async () => undefined),
+    isolationStrategy = { type: "head" as const },
+    environment = null,
+    stopAllForContext = vi.fn(async () => undefined),
 }: {
     queuedTurns?: QueuedTurn[]
     isTaskRunning?: (taskId: string) => boolean
     refreshTaskStoreFromStorage?: (taskId: string) => Promise<void>
+    isolationStrategy?: { type: "head" } | { type: "worktree"; sourceBranch: string }
+    environment?: { taskWorkingDir: string } | null
+    stopAllForContext?: (
+        context: { type: "worktree"; root: string },
+        access?: { stopProjectProcess(args: { processId: string }): Promise<unknown> }
+    ) => Promise<void>
 } = {}) {
     const cancelQueuedTurn = vi.fn(async () => undefined)
+    const setTaskClosed = vi.fn(async () => undefined)
     const task = {
         id: "task-1",
         repoId: "repo-1",
         closed: false,
+        isolationStrategy,
         events: [],
         queuedTurns,
     }
@@ -58,6 +69,7 @@ function createManager({
         model: "gpt-5-codex",
         thinking: "med",
         fastMode: true,
+        environment,
         queuedTurns,
         cancelQueuedTurn,
     }
@@ -74,6 +86,12 @@ function createManager({
         refreshRuntimeProductTaskForTaskId: vi.fn(async () => null),
         getTaskStore: vi.fn(async () => undefined),
         refreshTaskStoreFromStorage,
+        startProductProjectProcess: vi.fn(),
+        reconnectProductProjectProcess: vi.fn(),
+        stopProductProjectProcess: vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", processId: "process-1", ok: true })),
+        repoProcesses: {
+            stopAllForContext,
+        },
         queuedTurns: queuedTurnManager,
         queries: {
             interruptTask,
@@ -89,6 +107,7 @@ function createManager({
         tasks: {
             getTask: (taskId: string) => (taskId === "task-1" ? task : null),
             getTaskModel: (taskId: string) => (taskId === "task-1" ? taskModel : null),
+            setTaskClosed,
         },
         personalSettingsStore: {
             settings: {
@@ -119,6 +138,7 @@ function createManager({
         cancelQueuedTurn,
         interruptTask,
         queuedTurnManager,
+        setTaskClosed,
     }
 }
 
@@ -330,5 +350,29 @@ describe("InputManager queueable desktop commands", () => {
         await manager.cancelQueuedTurn("queued-do")
 
         expect(cancelQueuedTurn).toHaveBeenCalledWith("queued-do")
+    })
+
+    it("stops worktree product processes through scoped process APIs before closing runtime-backed tasks", async () => {
+        const stopAllForContext = vi.fn(
+            async (_context: { type: "worktree"; root: string }, access?: { stopProjectProcess(args: { processId: string }): Promise<unknown> }) => {
+                await access?.stopProjectProcess({ processId: "process-1" })
+            }
+        )
+        const { manager, store, setTaskClosed } = createManager({
+            isTaskRunning: () => false,
+            isolationStrategy: { type: "worktree", sourceBranch: "main" },
+            environment: { taskWorkingDir: "/tmp/runtime-worktree" },
+            stopAllForContext,
+        })
+        store.shouldUseRuntimeProductReads.mockReturnValue(true)
+
+        await manager.runCommand("close")
+
+        expect(stopAllForContext).toHaveBeenCalledWith(
+            { type: "worktree", root: "/tmp/runtime-worktree" },
+            expect.objectContaining({ stopProjectProcess: expect.any(Function) })
+        )
+        expect(store.stopProductProjectProcess).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1", processId: "process-1" })
+        expect(setTaskClosed).toHaveBeenCalledWith("task-1", true)
     })
 })

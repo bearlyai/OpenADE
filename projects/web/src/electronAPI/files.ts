@@ -6,7 +6,6 @@
  */
 
 import type {
-    RuntimeNodeContentSearchMatch,
     RuntimeNodeContentSearchParams,
     RuntimeNodeContentSearchResponse,
     RuntimeNodeDescribePathParams,
@@ -26,7 +25,6 @@ type DescribePathParams = RuntimeNodeDescribePathParams
 export type PathEntry = RuntimeNodePathEntry
 export type DescribePathResponse = RuntimeNodeDescribePathResponse
 type ContentSearchParams = RuntimeNodeContentSearchParams
-export type ContentSearchMatch = RuntimeNodeContentSearchMatch
 type ContentSearchResponse = RuntimeNodeContentSearchResponse
 
 // ============================================================================

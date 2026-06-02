@@ -6,6 +6,7 @@
  */
 
 import type * as Y from "yjs"
+import type { OpenADETaskPreview } from "../../../openade-module/src"
 import type { User } from "../types"
 import { ulid } from "../utils/ulid"
 import { type YArrayHandle, arrayOfType } from "./storage"
@@ -13,47 +14,6 @@ import { type YArrayHandle, arrayOfType } from "./storage"
 // ============================================================================
 // Types
 // ============================================================================
-
-/**
- * Last event info for sidebar rendering.
- */
-export interface TaskPreviewLastEvent {
-    type: "action" | "setup_environment" | "snapshot"
-    status: "in_progress" | "completed" | "error" | "stopped"
-    sourceType?: "plan" | "revise" | "run_plan" | "do" | "ask" | "hyperplan" | "review" // Only for action events
-    sourceLabel: string // Display label ("Plan", "Do", "Ask", "Setup", "Snapshot")
-    at: string // ISO timestamp
-}
-
-/**
- * Aggregated usage stats for a task, synced from TaskStore.
- */
-export interface TaskPreviewUsage {
-    usageVersion?: number
-    inputTokens: number
-    outputTokens: number
-    totalCostUsd: number
-    eventCount: number
-    costByModel: Record<string, number>
-    // Optional for backward compat with previews persisted before duration tracking.
-    durationMs?: number
-}
-
-/**
- * Lightweight task preview for sidebar rendering.
- * Full task data is loaded on-demand via task id.
- */
-export interface TaskPreview {
-    id: string
-    slug: string
-    title: string
-    lastEvent?: TaskPreviewLastEvent
-    closed?: boolean
-    createdAt: string // ISO timestamp
-    usage?: TaskPreviewUsage
-    lastViewedAt?: string // ISO timestamp - for unread badge computation
-    lastEventAt?: string // ISO timestamp - for unread badge computation
-}
 
 /**
  * Repo with embedded task previews.
@@ -68,7 +28,7 @@ export interface RepoItem {
     createdAt: string
     updatedAt: string
     archived?: boolean
-    tasks: TaskPreview[]
+    tasks: OpenADETaskPreview[]
 }
 
 /**
@@ -178,7 +138,7 @@ export function addTaskPreview(
  * Updates a task preview's sidebar-visible fields.
  * Call this after TaskStore changes that affect sidebar display.
  */
-export function updateTaskPreview(store: RepoStore, repoId: string, taskId: string, updates: Partial<Omit<TaskPreview, "id">>): void {
+export function updateTaskPreview(store: RepoStore, repoId: string, taskId: string, updates: Partial<Omit<OpenADETaskPreview, "id">>): void {
     store.repos.update(repoId, (draft) => {
         const task = draft.tasks.find((t) => t.id === taskId)
         if (task) {
@@ -210,7 +170,7 @@ export function deleteTaskPreview(store: RepoStore, repoId: string, taskId: stri
  * Gets a task preview by ID from a specific repo.
  * Returns undefined if not found.
  */
-export function getTaskPreview(store: RepoStore, repoId: string, taskId: string): TaskPreview | undefined {
+export function getTaskPreview(store: RepoStore, repoId: string, taskId: string): OpenADETaskPreview | undefined {
     const repo = store.repos.get(repoId)
     return repo?.tasks.find((t) => t.id === taskId)
 }

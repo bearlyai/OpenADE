@@ -1,4 +1,3 @@
-import type { TaskPreview, TaskPreviewLastEvent } from "@/persistence/repoStore"
 import { ContextMenu } from "@base-ui-components/react/context-menu"
 import { useModal } from "@ebay/nice-modal-react"
 import cx from "classnames"
@@ -6,6 +5,7 @@ import { CheckCircle, CheckSquare, Copy, ListTodo, Loader2, Pencil, Pin, Plus, R
 import { observer } from "mobx-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useHotkeys } from "react-hotkeys-hook"
+import type { OpenADETaskPreview } from "../../../../openade-module/src"
 import { usePortalContainer } from "../../hooks/usePortalContainer"
 import { useShortcutHintsVisible } from "../../hooks/useShortcutHintsVisible"
 import { useCodeNavigate } from "../../routing"
@@ -26,15 +26,17 @@ import { resolveTaskCopyPath } from "./sidebarPathUtils"
 import { runtimeFirstTaskDisplayEvent } from "./taskRuntimeDisplay"
 import { sortTaskPreviewsLikeSidebar } from "./taskSorting"
 
+type OpenADETaskPreviewLastEvent = NonNullable<OpenADETaskPreview["lastEvent"]>
+
 const NEW_TASK_SHORTCUT = "mod+n"
 const PREVIOUS_TASK_SHORTCUT_LABEL = "↑"
 const NEXT_TASK_SHORTCUT_LABEL = "↓"
 
-function isPlanType(lastEvent: TaskPreviewLastEvent): boolean {
+function isPlanType(lastEvent: OpenADETaskPreviewLastEvent): boolean {
     return lastEvent.sourceType === "plan" || lastEvent.sourceType === "revise"
 }
 
-function codeEventToPreviewEvent(event: CodeEvent): TaskPreviewLastEvent {
+function codeEventToPreviewEvent(event: CodeEvent): OpenADETaskPreviewLastEvent {
     const sourceLabel = (() => {
         if (event.type === "action") return event.source.userLabel
         if (event.type === "setup_environment") return "Setup"
@@ -50,7 +52,7 @@ function codeEventToPreviewEvent(event: CodeEvent): TaskPreviewLastEvent {
     }
 }
 
-function getInProgressEventForTask(codeStore: ReturnType<typeof useCodeStore>, preview: TaskPreview): TaskPreviewLastEvent | null {
+function getInProgressEventForTask(codeStore: ReturnType<typeof useCodeStore>, preview: OpenADETaskPreview): OpenADETaskPreviewLastEvent | null {
     const taskId = preview.id
     const task = codeStore.tasks.getTask(taskId)
     if (task && task.events.length > 0) {
@@ -67,13 +69,13 @@ function getInProgressEventForTask(codeStore: ReturnType<typeof useCodeStore>, p
 // Status helpers
 // ============================================================================
 
-function getStatusColor(lastEvent: TaskPreviewLastEvent): string {
+function getStatusColor(lastEvent: OpenADETaskPreviewLastEvent): string {
     if (lastEvent.status === "error") return "text-error"
     if (isPlanType(lastEvent)) return "text-primary"
     return "text-success"
 }
 
-function getStatusIcon(lastEvent: TaskPreviewLastEvent): React.ReactNode {
+function getStatusIcon(lastEvent: OpenADETaskPreviewLastEvent): React.ReactNode {
     switch (lastEvent.status) {
         case "in_progress":
             return <Loader2 className="w-3 h-3 animate-spin" />
@@ -117,11 +119,11 @@ const TaskItem = ({
     onCopyPath,
     onRename,
 }: {
-    preview: TaskPreview
+    preview: OpenADETaskPreview
     isActive: boolean
     isUnread: boolean
     isPinned: boolean
-    inProgressEvent: TaskPreviewLastEvent | null
+    inProgressEvent: OpenADETaskPreviewLastEvent | null
     selectionMode: boolean
     isSelected: boolean
     onSelect: () => void

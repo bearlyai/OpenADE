@@ -1,8 +1,8 @@
 import { type HarnessUsage, calculateCodexCostUsd } from "@openade/harness/browser"
+import type { OpenADETaskPreviewUsage } from "../../../openade-module/src"
 import type { HarnessRawMessageEvent, HarnessStreamEvent } from "../electronAPI/harnessEventTypes"
 import { extractRawMessageEvents } from "../electronAPI/harnessEventTypes"
 import type { ActionEvent, CodeEvent, HarnessId } from "../types"
-import type { TaskPreviewUsage } from "./repoStore"
 
 export const TASK_USAGE_STATS_VERSION = 2
 
@@ -22,11 +22,11 @@ interface UsageEntry {
     allowLegacySameSessionDelta?: boolean
 }
 
-export function needsTaskUsageBackfill(usage?: TaskPreviewUsage): boolean {
+export function needsTaskUsageBackfill(usage?: OpenADETaskPreviewUsage): boolean {
     return !usage || usage.durationMs === undefined || usage.usageVersion !== TASK_USAGE_STATS_VERSION
 }
 
-export function normalizeTaskPreviewUsage(usage?: TaskPreviewUsage): TaskPreviewUsage {
+export function normalizeTaskPreviewUsage(usage?: OpenADETaskPreviewUsage): OpenADETaskPreviewUsage {
     return {
         usageVersion: TASK_USAGE_STATS_VERSION,
         inputTokens: usage?.inputTokens ?? 0,
@@ -38,7 +38,7 @@ export function normalizeTaskPreviewUsage(usage?: TaskPreviewUsage): TaskPreview
     }
 }
 
-export function computeTaskUsage(events: Array<CodeEvent & { id: string }>): TaskPreviewUsage {
+export function computeTaskUsage(events: Array<CodeEvent & { id: string }>): OpenADETaskPreviewUsage {
     let inputTokens = 0
     let outputTokens = 0
     let totalCostUsd = 0

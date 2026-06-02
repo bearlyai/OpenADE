@@ -550,9 +550,9 @@ export class RepoProcessesManager {
 
     // ==================== Cleanup ====================
 
-    async stopAllForContext(context: RunContext): Promise<void> {
+    async stopAllForContext(context: RunContext, productAccess?: ProductProjectProcessAccess): Promise<void> {
         const processes = this.getProcessesForContext(context)
-        await Promise.all(processes.map((p) => this.stopProcess(p.id)))
+        await Promise.all(processes.map((p) => (productAccess && p.productProcessId ? this.stopProductProcess(p.id, productAccess) : this.stopProcess(p.id))))
 
         runInAction(() => {
             for (const p of processes) {

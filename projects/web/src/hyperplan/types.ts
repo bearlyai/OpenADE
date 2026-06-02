@@ -78,6 +78,7 @@ export interface HyperPlanSubExecution {
     parentSessionId?: string
     status: "in_progress" | "completed" | "error" | "stopped"
     events: HarnessStreamEvent[]
+    omittedEventCount?: number
     /** Extracted plan/review text. Set on completion. */
     resultText?: string
     error?: string

@@ -37,7 +37,7 @@ function harnessErrorEvent(message: string): HarnessStreamEvent {
     } as HarnessStreamEvent
 }
 
-function renderInlineMessages(events: HarnessStreamEvent[]) {
+function renderInlineMessages(events: HarnessStreamEvent[], onRequestFullHistory?: () => void, omittedEventCount?: number) {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     const container = document.createElement("div")
     document.body.appendChild(container)
@@ -47,10 +47,12 @@ function renderInlineMessages(events: HarnessStreamEvent[]) {
         root.render(
             createElement(InlineMessages, {
                 events,
+                omittedEventCount,
                 harnessId: "codex",
                 sourceType: "do",
                 taskId: "task-1",
                 actionEventId: "action-1",
+                onRequestFullHistory,
             })
         )
     })
@@ -67,22 +69,54 @@ function renderInlineMessages(events: HarnessStreamEvent[]) {
 describe("InlineMessages", () => {
     it("renders the tail of long streams first and keeps earlier activity available", () => {
         const events = Array.from({ length: 220 }, (_, index) => [stderrEvent(index), codexTurnStartedEvent(index)]).flat()
-        const { container, cleanup } = renderInlineMessages(events)
+        let fullHistoryRequests = 0
+        const { container, cleanup } = renderInlineMessages(events, () => {
+            fullHistoryRequests += 1
+        })
 
         try {
-            expect(container.textContent).toContain("Show 60 earlier items")
+            expect(container.textContent).toContain("Show 80 earlier stream events")
             expect(container.textContent).not.toContain("stderr 0")
             expect(container.textContent).toContain("stderr 219")
 
-            const showEarlier = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Show 60 earlier items"))
+            const showEarlier = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Show 80 earlier stream events"))
             if (!showEarlier) throw new Error("Missing show-earlier control")
 
             act(() => {
                 showEarlier.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }))
             })
 
+            expect(fullHistoryRequests).toBe(1)
             expect(container.textContent).toContain("stderr 0")
             expect(container.textContent).toContain("stderr 219")
+        } finally {
+            cleanup()
+        }
+    })
+
+    it("keeps omitted runtime history requestable when the loaded stream is already bounded", () => {
+        const events = Array.from({ length: 20 }, (_, index) => stderrEvent(index))
+        let fullHistoryRequests = 0
+        const { container, cleanup } = renderInlineMessages(
+            events,
+            () => {
+                fullHistoryRequests += 1
+            },
+            45
+        )
+
+        try {
+            expect(container.textContent).toContain("Show 45 earlier stream events")
+
+            const showEarlier = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Show 45 earlier stream events"))
+            if (!showEarlier) throw new Error("Missing omitted-history control")
+
+            act(() => {
+                showEarlier.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }))
+            })
+
+            expect(fullHistoryRequests).toBe(1)
+            expect(container.textContent).toContain("Loading 45 earlier stream events...")
         } finally {
             cleanup()
         }

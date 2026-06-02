@@ -28,6 +28,7 @@ export interface Execution {
     modelId?: string
     fastMode?: boolean
     events: HarnessStreamEvent[]
+    omittedEventCount?: number
     gitRefsBefore?: GitRefs
     gitRefsAfter?: GitRefs
 }

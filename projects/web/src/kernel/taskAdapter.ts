@@ -35,6 +35,10 @@ function numberValue(value: unknown, fallback = 0): number {
     return typeof value === "number" && Number.isFinite(value) ? value : fallback
 }
 
+function optionalNumber(value: unknown): number | undefined {
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined
+}
+
 function booleanValue(value: unknown): boolean | undefined {
     return typeof value === "boolean" ? value : undefined
 }
@@ -212,6 +216,7 @@ function toHyperPlanSubExecution(value: unknown): HyperPlanSubExecution | null {
         parentSessionId: optionalString(value.parentSessionId),
         status: value.status,
         events: toHarnessStreamEvents(value.events),
+        omittedEventCount: optionalNumber(value.omittedEventCount),
         resultText: optionalString(value.resultText),
         error: optionalString(value.error),
         reconcileLabel: optionalString(value.reconcileLabel),
@@ -271,6 +276,7 @@ function toCodeEvent(value: unknown): CodeEvent | null {
                     modelId: optionalString(execution.modelId),
                     fastMode: booleanValue(execution.fastMode),
                     events: toHarnessStreamEvents(execution.events),
+                    omittedEventCount: optionalNumber(execution.omittedEventCount),
                     gitRefsBefore: isRecord(execution.gitRefsBefore)
                         ? { sha: stringValue(execution.gitRefsBefore.sha), branch: optionalString(execution.gitRefsBefore.branch) }
                         : undefined,

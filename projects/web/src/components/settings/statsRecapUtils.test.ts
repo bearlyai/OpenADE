@@ -1,23 +1,17 @@
 import { describe, expect, it } from "vitest"
-import type { RepoItem, TaskPreview } from "../../persistence/repoStore"
-import { buildStatsRecap, buildStatsRecapText } from "./statsRecapUtils"
+import { type StatsRecapRepoInput, type StatsRecapTaskInput, buildStatsRecap, buildStatsRecapText } from "./statsRecapUtils"
 
-function task(overrides: Partial<TaskPreview> & Pick<TaskPreview, "id" | "title">): TaskPreview {
+function task(overrides: Partial<StatsRecapTaskInput> & Pick<StatsRecapTaskInput, "id" | "title">): StatsRecapTaskInput {
     return {
-        slug: overrides.id,
         createdAt: "2026-05-01T12:00:00.000Z",
         ...overrides,
     }
 }
 
-function repo(id: string, name: string, tasks: TaskPreview[]): RepoItem {
+function repo(id: string, name: string, tasks: StatsRecapTaskInput[]): StatsRecapRepoInput {
     return {
         id,
         name,
-        path: `/tmp/${id}`,
-        createdBy: { id: "user", email: "user@example.com" },
-        createdAt: "2026-05-01T12:00:00.000Z",
-        updatedAt: "2026-05-01T12:00:00.000Z",
         tasks,
     }
 }

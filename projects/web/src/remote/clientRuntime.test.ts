@@ -2,20 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { OpenADEClientOptions } from "../../../openade-client/src"
 import type { OpenADESnapshot, OpenADETask, OpenADETurnStartResult } from "../../../openade-module/src"
 import type { RuntimeClientOptions } from "../../../runtime-client/src"
-import {
-    type RemoteConfig,
-    __setRemoteClientConstructorsForTest,
-    cancelRemoteQueuedTurn,
-    createRemoteComment,
-    deleteRemoteTask,
-    getSnapshot,
-    getTask,
-    reconnectRemoteProjectProcess,
-    startRemoteReview,
-    startRemoteTurn,
-    subscribeRemoteChanges,
-    updateRemoteTaskMetadata,
-} from "./client"
+import { type RemoteConfig, __setRemoteClientConstructorsForTest, getRemoteProductStore, retryRemoteRead, subscribeRemoteChanges } from "./client"
 
 const runtimeClients: RuntimeClient[] = []
 const openadeClients: OpenADEClient[] = []
@@ -69,6 +56,29 @@ class OpenADEClient {
         size: args.content.length,
     }))
     searchProject = vi.fn(async () => ({ repoId: "repo-1", matches: [], truncated: false }))
+    readProjectGitInfo = vi.fn(async () => ({
+        repoId: "repo-1",
+        isGitRepo: true as const,
+        repoRoot: "/tmp/repo",
+        relativePath: "",
+        mainBranch: "main",
+        hasGhCli: false,
+    }))
+    readProjectGitBranches = vi.fn(async () => ({
+        repoId: "repo-1",
+        defaultBranch: "main",
+        branches: [{ name: "main", isDefault: true, isRemote: false }],
+    }))
+    readProjectGitSummary = vi.fn(async () => ({
+        repoId: "repo-1",
+        branch: "main",
+        headCommit: "abc123",
+        ahead: 0,
+        hasChanges: false,
+        staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+        unstaged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+        untracked: [],
+    }))
     listProjectProcesses = vi.fn(async () => ({
         repoId: "repo-1",
         searchRoot: "/tmp/repo",
@@ -107,6 +117,15 @@ class OpenADEClient {
         staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
         unstaged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
         untracked: [],
+    }))
+    readTaskGitScopes = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        defaultBranch: "main",
+        scopes: [
+            { id: "branch:HEAD", type: "branch" as const, name: "HEAD", ref: "HEAD", isDefault: false, isRemote: false },
+            { id: "branch:main", type: "branch" as const, name: "main", ref: "main", isDefault: true, isRemote: false },
+        ],
     }))
     readTaskChanges = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", files: [], fromTreeish: "HEAD", toTreeish: "" }))
     readTaskDiff = vi.fn(async () => ({
@@ -151,6 +170,21 @@ class OpenADEClient {
     }))
     commitTaskGit = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", committed: false, status: "nothing_to_commit" as const }))
     readTaskImage = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", imageId: "image-1", ext: "png", mediaType: "image/png", data: "" }))
+    readTaskResourceInventory = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        taskTitle: "Task",
+        isRunning: false,
+        snapshotIds: [],
+        images: [],
+        sessions: [],
+        worktree: null,
+    }))
+    generateTaskTitle = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        title: "Generated task title",
+    }))
     readTaskSnapshotPatch = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", eventId: "snapshot-1", patch: "" }))
     readTaskSnapshotIndex = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", eventId: "snapshot-1", index: null }))
     readTaskSnapshotPatchSlice = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", eventId: "snapshot-1", patch: "" }))
@@ -170,6 +204,19 @@ class OpenADEClient {
     deleteComment = vi.fn(async () => undefined)
     deleteTask = vi.fn(async (args: { repoId: string; taskId: string }) => ({ repoId: args.repoId, taskId: args.taskId, deleted: true as const }))
     setupTaskEnvironment = vi.fn(async () => undefined)
+    prepareTaskEnvironment = vi.fn(async (args: { repoId: string; taskId: string }) => ({
+        repoId: args.repoId,
+        taskId: args.taskId,
+        deviceEnvironment: {
+            id: "runtime-device",
+            deviceId: "runtime-device",
+            setupComplete: true,
+            createdAt: "2026-05-31T00:00:00.000Z",
+            lastUsedAt: "2026-05-31T00:00:00.000Z",
+        },
+        cwd: "/tmp/runtime-repo",
+        rootPath: "/tmp/runtime-repo",
+    }))
     subscribeToChanges = vi.fn((listener: (notification: { method: string; params?: unknown }) => void) => {
         changeListeners.push(listener)
         return () => {
@@ -220,18 +267,19 @@ afterEach(() => {
 describe("companion remote runtime client cache", () => {
     it("reuses one runtime socket client for repeated calls to the same paired host", async () => {
         const remote = config()
+        const store = getRemoteProductStore(remote)
 
-        await getSnapshot(remote)
-        await getTask(remote, "repo-1", "task-1")
+        await store.refreshSnapshot()
+        await store.getTask("repo-1", "task-1")
         const unsubscribeA = subscribeRemoteChanges(remote, vi.fn())
         const unsubscribeB = subscribeRemoteChanges(remote, vi.fn())
-        await startRemoteTurn(remote, { repoId: "repo-1", type: "ask", input: "hello" })
+        await store.startTurn({ repoId: "repo-1", type: "ask", input: "hello" })
 
         expect(runtimeClients).toHaveLength(1)
         expect(openadeClients).toHaveLength(1)
         expect(openadeClients[0].getSnapshot).toHaveBeenCalledTimes(2)
         expect(openadeClients[0].getTask).toHaveBeenCalledTimes(2)
-        expect(openadeClients[0].getTask).toHaveBeenCalledWith("repo-1", "task-1", {})
+        expect(openadeClients[0].getTask).toHaveBeenCalledWith("repo-1", "task-1", { hydrateSessionEvents: false })
         expect(openadeClients[0].subscribeToChanges).toHaveBeenCalledTimes(2)
         expect(openadeClients[0].startTurn).toHaveBeenCalledWith({ repoId: "repo-1", type: "ask", input: "hello" }, {})
 
@@ -242,7 +290,7 @@ describe("companion remote runtime client cache", () => {
     it("passes task read hydration options through to the runtime protocol", async () => {
         const remote = config()
 
-        await getTask(remote, "repo-1", "task-1", { hydrateSessionEvents: false })
+        await getRemoteProductStore(remote).getTask("repo-1", "task-1", { hydrateSessionEvents: false })
 
         expect(openadeClients[0].getTask).toHaveBeenCalledWith("repo-1", "task-1", { hydrateSessionEvents: false })
     })
@@ -250,8 +298,9 @@ describe("companion remote runtime client cache", () => {
     it("retries transient runtime socket failures for reads", async () => {
         vi.useFakeTimers()
         getTaskFailures = 1
+        const remote = config()
 
-        const task = getTask(config(), "repo-1", "task-1", { hydrateSessionEvents: false })
+        const task = retryRemoteRead(() => getRemoteProductStore(remote).getTask("repo-1", "task-1", { hydrateSessionEvents: false }))
         await vi.advanceTimersByTimeAsync(250)
 
         await expect(task).resolves.toEqual(
@@ -265,10 +314,10 @@ describe("companion remote runtime client cache", () => {
     })
 
     it("closes and replaces the runtime socket client when saved credentials change", async () => {
-        await getSnapshot(config())
+        await getRemoteProductStore(config()).refreshSnapshot()
         const firstRuntime = runtimeClients[0]
 
-        await getSnapshot(config({ token: "token-2" }))
+        await getRemoteProductStore(config({ token: "token-2" })).refreshSnapshot()
 
         expect(firstRuntime.close).toHaveBeenCalledTimes(1)
         expect(runtimeClients).toHaveLength(2)
@@ -310,7 +359,7 @@ describe("companion remote runtime client cache", () => {
     it("preserves queued turn start results from the runtime protocol", async () => {
         startTurnResult = { taskId: "task-1", queued: true, queuedTurnId: "queued-1" }
 
-        await expect(startRemoteTurn(config(), { repoId: "repo-1", type: "do", input: "after this" })).resolves.toEqual({
+        await expect(getRemoteProductStore(config()).startTurn({ repoId: "repo-1", type: "do", input: "after this" })).resolves.toEqual({
             taskId: "task-1",
             queued: true,
             queuedTurnId: "queued-1",
@@ -319,10 +368,11 @@ describe("companion remote runtime client cache", () => {
 
     it("routes product mutations through the shared remote product store", async () => {
         const remote = config()
-        await getTask(remote, "repo-1", "task-1")
+        const store = getRemoteProductStore(remote)
+        await store.getTask("repo-1", "task-1")
 
         await expect(
-            startRemoteReview(remote, {
+            store.startReview({
                 repoId: "repo-1",
                 taskId: "task-1",
                 reviewType: "work",
@@ -330,20 +380,20 @@ describe("companion remote runtime client cache", () => {
                 modelId: "model-1",
             })
         ).resolves.toEqual({ taskId: "task-1" })
-        await expect(cancelRemoteQueuedTurn(remote, { repoId: "repo-1", taskId: "task-1", queuedTurnId: "queued-1" })).resolves.toEqual({
+        await expect(store.cancelQueuedTurn({ repoId: "repo-1", taskId: "task-1", queuedTurnId: "queued-1" })).resolves.toEqual({
             taskId: "task-1",
             queuedTurnId: "queued-1",
             cancelled: true,
         })
-        await updateRemoteTaskMetadata(remote, { taskId: "task-1", title: "Updated" })
-        await expect(reconnectRemoteProjectProcess(remote, { repoId: "repo-1", processId: "proc-remote-test" })).resolves.toEqual({
+        await store.updateTaskMetadata({ taskId: "task-1", title: "Updated" })
+        await expect(store.reconnectProjectProcess({ repoId: "repo-1", processId: "proc-remote-test" })).resolves.toEqual({
             repoId: "repo-1",
             processId: "proc-remote-test",
             found: true,
             output: [],
         })
         await expect(
-            createRemoteComment(remote, {
+            store.createComment({
                 taskId: "task-1",
                 commentId: "comment-1",
                 content: "Comment",
@@ -352,7 +402,7 @@ describe("companion remote runtime client cache", () => {
                 author: { id: "user-1", email: "user@example.com" },
             })
         ).resolves.toEqual({ commentId: "comment-1", createdAt: "2026-05-31T00:00:00.000Z" })
-        await expect(deleteRemoteTask(remote, { repoId: "repo-1", taskId: "task-1" })).resolves.toEqual({
+        await expect(store.deleteTask({ repoId: "repo-1", taskId: "task-1" })).resolves.toEqual({
             repoId: "repo-1",
             taskId: "task-1",
             deleted: true,

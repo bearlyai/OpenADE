@@ -48,6 +48,8 @@ function makeMockStore(repos: Array<{ id: string; path: string }> = []): CodeSto
         refreshProductStateAfterTaskMutation: vi.fn().mockResolvedValue(undefined),
         refreshProductStateAfterTaskCreation: vi.fn().mockResolvedValue(undefined),
         getTaskStore: vi.fn().mockResolvedValue(undefined),
+        shouldUseRuntimeProductReads: vi.fn(() => false),
+        listProductProjectProcesses: vi.fn(),
         startProductTurn: vi.fn().mockResolvedValue({ taskId: "task-1" }),
     } as unknown as CodeStore
 }

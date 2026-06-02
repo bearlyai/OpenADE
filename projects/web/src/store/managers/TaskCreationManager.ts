@@ -37,7 +37,6 @@ export interface TaskCreation {
     fastMode?: boolean
     phase: CreationPhase | "pending" | "completing"
     error: string | null
-    slug: string | null
     abortController: AbortController
     createdAt: string
     completedTaskId: string | null
@@ -110,7 +109,6 @@ export class TaskCreationManager {
             fastMode: options.fastMode,
             phase: "pending",
             error: null,
-            slug: null,
             abortController: new AbortController(),
             createdAt: new Date().toISOString(),
             completedTaskId: null,
@@ -138,11 +136,6 @@ export class TaskCreationManager {
         if (!creation) return
 
         creation.abortController.abort()
-
-        // Clean up worktree if we created one
-        if (creation.slug && creation.isolationStrategy.type === "worktree") {
-            await this.store.tasks.cleanupWorktree(creation.repoId, creation.slug)
-        }
 
         runInAction(() => {
             this.creationsById.delete(id)
@@ -211,9 +204,7 @@ export class TaskCreationManager {
             await this.store.refreshProductStateAfterTaskCreation(creation.repoId, result.taskId)
 
             if (signal.aborted) {
-                await this.store.interruptProductTurn(result.taskId).catch((err) => {
-                    console.warn("[TaskCreationManager] Failed to interrupt cancelled runtime task:", err)
-                })
+                await this.cleanupAcceptedCancelledTask(creation.repoId, result.taskId)
                 throw new Error("Task creation cancelled")
             }
 
@@ -230,6 +221,7 @@ export class TaskCreationManager {
 
             // Generate title async - don't block task creation
             this.generateTitleAsync({
+                repoId: creation.repoId,
                 taskId: result.taskId,
                 description: creation.description,
                 harnessId: creation.harnessId,
@@ -249,19 +241,49 @@ export class TaskCreationManager {
         }
     }
 
+    private async cleanupAcceptedCancelledTask(repoId: string, taskId: string): Promise<void> {
+        await this.store.interruptProductTurn(taskId).catch((err) => {
+            console.warn("[TaskCreationManager] Failed to interrupt cancelled runtime task:", err)
+        })
+        await this.store
+            .deleteProductTask({
+                repoId,
+                taskId,
+                options: {
+                    deleteSnapshots: true,
+                    deleteImages: true,
+                    deleteSessions: true,
+                    deleteWorktrees: true,
+                },
+            })
+            .catch((err) => {
+                console.warn("[TaskCreationManager] Failed to delete cancelled runtime task:", err)
+            })
+        await this.store.refreshProductStateAfterTaskDeletion(taskId).catch((err) => {
+            console.warn("[TaskCreationManager] Failed to refresh cancelled task deletion:", err)
+        })
+    }
+
     /** Generate title async and update task when done (fire-and-forget) */
     private async generateTitleAsync({
+        repoId,
         taskId,
         description,
         harnessId,
         cwd,
     }: {
+        repoId: string
         taskId: string
         description: string
         harnessId?: HarnessId
         cwd: string
     }): Promise<void> {
         try {
+            if (this.store.shouldUseRuntimeProductReads()) {
+                await this.store.generateProductTaskTitle({ repoId, taskId, harnessId })
+                return
+            }
+
             const abortController = new AbortController()
             const generatedTitle = await generateTitle(description, abortController, { harnessId, cwd })
             this.store.tasks.setTaskTitle(taskId, generatedTitle ?? fallbackTitle(description))

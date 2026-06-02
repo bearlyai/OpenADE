@@ -127,7 +127,6 @@ describe("TaskCreationManager creation plumbing", () => {
             fastMode: true,
             phase: "pending",
             error: null,
-            slug: null,
             abortController: new AbortController(),
             createdAt: "2026-01-01T00:00:00.000Z",
             completedTaskId: null,
@@ -137,6 +136,7 @@ describe("TaskCreationManager creation plumbing", () => {
 
         expect(generateTitleSpy).toHaveBeenCalledWith(
             expect.objectContaining({
+                repoId: "repo-1",
                 taskId: "task-1",
                 description: "describe task",
                 harnessId: "codex",
@@ -159,5 +159,62 @@ describe("TaskCreationManager creation plumbing", () => {
         )
         expect(store.refreshProductStateAfterTaskCreation).toHaveBeenCalledWith("repo-1", "task-1")
         expect(manager.getCreation("creation-1")?.completedTaskId).toBe("task-1")
+    })
+
+    it("cleans up a server-accepted task through product APIs when creation is cancelled", async () => {
+        const startProductTurn = vi.fn(async () => ({ taskId: "task-1" }))
+        const refreshProductStateAfterTaskCreation = vi.fn(async () => {
+            manager.getCreation("creation-1")?.abortController.abort()
+        })
+        const interruptProductTurn = vi.fn(async () => undefined)
+        const deleteProductTask = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", deleted: true }))
+        const refreshProductStateAfterTaskDeletion = vi.fn(async () => undefined)
+        const generateTitleSpy = vi
+            .spyOn(TaskCreationManager.prototype as unknown as { generateTitleAsync: (...args: unknown[]) => Promise<void> }, "generateTitleAsync")
+            .mockResolvedValue(undefined)
+
+        const store = {
+            repos: {
+                getRepo: vi.fn(() => ({ id: "repo-1", path: "/tmp/repo" })),
+            },
+            startProductTurn,
+            refreshProductStateAfterTaskCreation,
+            interruptProductTurn,
+            deleteProductTask,
+            refreshProductStateAfterTaskDeletion,
+            getActiveHyperPlanStrategy: vi.fn(),
+        } as unknown as CodeStore
+
+        const manager = new TaskCreationManager(store)
+        manager.creationsById.set("creation-1", {
+            id: "creation-1",
+            repoId: "repo-1",
+            description: "describe task",
+            mode: "do",
+            isolationStrategy: { type: "worktree", sourceBranch: "main" },
+            images: [],
+            phase: "pending",
+            error: null,
+            abortController: new AbortController(),
+            createdAt: "2026-01-01T00:00:00.000Z",
+            completedTaskId: null,
+        })
+
+        await (manager as unknown as { runCreation: (id: string) => Promise<void> }).runCreation("creation-1")
+
+        expect(interruptProductTurn).toHaveBeenCalledWith("task-1")
+        expect(deleteProductTask).toHaveBeenCalledWith({
+            repoId: "repo-1",
+            taskId: "task-1",
+            options: {
+                deleteSnapshots: true,
+                deleteImages: true,
+                deleteSessions: true,
+                deleteWorktrees: true,
+            },
+        })
+        expect(refreshProductStateAfterTaskDeletion).toHaveBeenCalledWith("task-1")
+        expect(generateTitleSpy).not.toHaveBeenCalled()
+        expect(manager.getCreation("creation-1")).toBeNull()
     })
 })

@@ -1,13 +1,8 @@
+import type { HarnessInstallStatus as SharedHarnessInstallStatus } from "@openade/harness/browser"
 import { isCodeModuleAvailable } from "./capabilities"
 import { localRuntimeClient } from "../runtime/localRuntimeClient"
 
-export interface HarnessInstallStatus {
-    installed: boolean
-    version?: string
-    authType: "api-key" | "account" | "none"
-    authenticated: boolean
-    authInstructions?: string
-}
+export type HarnessInstallStatus = SharedHarnessInstallStatus
 
 export type HarnessStatusMap = Record<string, HarnessInstallStatus>
 

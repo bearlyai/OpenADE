@@ -7,7 +7,8 @@
  */
 
 import { computed, makeAutoObservable } from "mobx"
-import { type BranchInfo, type GitSummaryResponse, gitApi } from "../../electronAPI/git"
+import { type BranchInfo, type GitFileInfo, type GitSummaryResponse, gitApi } from "../../electronAPI/git"
+import type { OpenADETaskGitChangedFile } from "../../../../openade-module/src"
 import type { Repo } from "../../types"
 import type { CodeStore } from "../store"
 
@@ -18,6 +19,25 @@ export interface GitInfo {
     relativePath: string
     mainBranch: string
     hasGhCli: boolean
+}
+
+function emptyGitSummary(): GitSummaryResponse {
+    return {
+        branch: null,
+        headCommit: "",
+        ahead: null,
+        hasChanges: false,
+        staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+        unstaged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+        untracked: [],
+    }
+}
+
+function gitSummaryFiles(files: OpenADETaskGitChangedFile[]): GitFileInfo[] {
+    return files.map((file) => ({
+        ...file,
+        binary: file.binary ?? false,
+    }))
 }
 
 export class RepoManager {
@@ -131,18 +151,30 @@ export class RepoManager {
             return this.gitInfoCache.get(repoId) ?? null
         }
 
-        // Fetch from Electron
         try {
-            const response = await gitApi.isGitDirectory({ directory: repo.path })
-            const gitInfo = response.isGitDirectory
-                ? {
-                      isGitRepo: true,
-                      repoRoot: response.repoRoot,
-                      relativePath: response.relativePath,
-                      mainBranch: response.mainBranch,
-                      hasGhCli: response.hasGhCli,
-                  }
-                : null
+            const response = this.store.shouldUseRuntimeProductReads()
+                ? await this.store.readProductProjectGitInfo({ repoId })
+                : await gitApi.isGitDirectory({ directory: repo.path })
+            const gitInfo: GitInfo | null =
+                "isGitRepo" in response
+                    ? response.isGitRepo
+                        ? {
+                              isGitRepo: true,
+                              repoRoot: response.repoRoot,
+                              relativePath: response.relativePath,
+                              mainBranch: response.mainBranch,
+                              hasGhCli: response.hasGhCli,
+                          }
+                        : null
+                    : response.isGitDirectory
+                      ? {
+                            isGitRepo: true,
+                            repoRoot: response.repoRoot,
+                            relativePath: response.relativePath,
+                            mainBranch: response.mainBranch,
+                            hasGhCli: response.hasGhCli,
+                        }
+                      : null
 
             this.gitInfoCache.set(repoId, gitInfo)
             return gitInfo
@@ -169,8 +201,9 @@ export class RepoManager {
      */
     async refreshGhCliStatus(repoId: string): Promise<boolean> {
         try {
-            const result = await gitApi.checkGhCli()
-            const hasGhCli = result.hasGhCli
+            const hasGhCli = this.store.shouldUseRuntimeProductReads()
+                ? await this.store.readProductProjectGitInfo({ repoId }).then((result) => (result.isGitRepo === true ? result.hasGhCli : false))
+                : await gitApi.checkGhCli().then((result) => result.hasGhCli)
 
             // Update the cached git info entry if it exists
             const cached = this.gitInfoCache.get(repoId)
@@ -181,16 +214,6 @@ export class RepoManager {
             return hasGhCli
         } catch (err) {
             console.error(`[RepoManager] Failed to refresh gh CLI status for ${repoId}:`, err)
-            return false
-        }
-    }
-
-    /** Check if a path is a git repo - returns true/false */
-    async isGitRepo(directory: string): Promise<boolean> {
-        try {
-            const response = await gitApi.isGitDirectory({ directory })
-            return response.isGitDirectory
-        } catch {
             return false
         }
     }
@@ -213,6 +236,14 @@ export class RepoManager {
             return { branches: [], defaultBranch: "main" }
         }
 
+        if (this.store.shouldUseRuntimeProductReads()) {
+            const result = await this.store.readProductProjectGitBranches({ repoId, includeRemote })
+            return {
+                branches: result.branches,
+                defaultBranch: result.defaultBranch,
+            }
+        }
+
         if (!gitApi.isAvailable()) {
             return { branches: [], defaultBranch: gitInfo.mainBranch }
         }
@@ -230,27 +261,30 @@ export class RepoManager {
     async getGitSummary(repoId: string): Promise<GitSummaryResponse> {
         const gitInfo = await this.getGitInfo(repoId)
         if (!gitInfo) {
+            return emptyGitSummary()
+        }
+
+        if (this.store.shouldUseRuntimeProductReads()) {
+            const result = await this.store.readProductProjectGitSummary({ repoId })
             return {
-                branch: null,
-                headCommit: "",
-                ahead: null,
-                hasChanges: false,
-                staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
-                unstaged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
-                untracked: [],
+                branch: result.branch,
+                headCommit: result.headCommit,
+                ahead: result.ahead,
+                hasChanges: result.hasChanges,
+                staged: {
+                    files: gitSummaryFiles(result.staged.files),
+                    stats: result.staged.stats,
+                },
+                unstaged: {
+                    files: gitSummaryFiles(result.unstaged.files),
+                    stats: result.unstaged.stats,
+                },
+                untracked: gitSummaryFiles(result.untracked),
             }
         }
 
         if (!gitApi.isAvailable()) {
-            return {
-                branch: null,
-                headCommit: "",
-                ahead: null,
-                hasChanges: false,
-                staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
-                unstaged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
-                untracked: [],
-            }
+            return emptyGitSummary()
         }
 
         return gitApi.getGitSummary({

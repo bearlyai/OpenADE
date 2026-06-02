@@ -24,6 +24,12 @@ import type {
     OpenADEProjectFilesTreeResult,
     OpenADEProjectFileWriteRequest,
     OpenADEProjectFileWriteResult,
+    OpenADEProjectGitBranchesReadRequest,
+    OpenADEProjectGitBranchesReadResult,
+    OpenADEProjectGitInfoRequest,
+    OpenADEProjectGitInfoResult,
+    OpenADEProjectGitSummaryReadRequest,
+    OpenADEProjectGitSummaryReadResult,
     OpenADEProjectProcessListRequest,
     OpenADEProjectProcessListResult,
     OpenADEProjectProcessReconnectRequest,
@@ -49,10 +55,14 @@ import type {
     OpenADETaskReadOptions,
     OpenADETaskDeleteRequest,
     OpenADETaskDeleteResult,
+    OpenADETaskTitleGenerateRequest,
+    OpenADETaskTitleGenerateResult,
     OpenADETaskDiffReadRequest,
     OpenADETaskDiffReadResult,
     OpenADETaskFilePairReadRequest,
     OpenADETaskFilePairReadResult,
+    OpenADETaskEnvironmentPrepareRequest,
+    OpenADETaskEnvironmentPrepareResult,
     OpenADETaskEnvironmentSetupRequest,
     OpenADETaskGitCommitFilePatchRequest,
     OpenADETaskGitCommitFilePatchResult,
@@ -64,10 +74,14 @@ import type {
     OpenADETaskGitFileAtTreeishResult,
     OpenADETaskGitLogRequest,
     OpenADETaskGitLogResult,
+    OpenADETaskGitScopesReadRequest,
+    OpenADETaskGitScopesReadResult,
     OpenADETaskGitSummaryRequest,
     OpenADETaskGitSummaryResult,
     OpenADETaskImageReadRequest,
     OpenADETaskImageReadResult,
+    OpenADETaskResourceInventoryReadRequest,
+    OpenADETaskResourceInventoryReadResult,
     OpenADETaskTerminalMutationResult,
     OpenADETaskTerminalReconnectRequest,
     OpenADETaskTerminalReconnectResult,
@@ -160,6 +174,18 @@ export class OpenADEClient {
         return this.request("openade/project/search", args)
     }
 
+    async readProjectGitInfo(args: OpenADEProjectGitInfoRequest): Promise<OpenADEProjectGitInfoResult> {
+        return this.request("openade/project/git/info/read", args)
+    }
+
+    async readProjectGitBranches(args: OpenADEProjectGitBranchesReadRequest): Promise<OpenADEProjectGitBranchesReadResult> {
+        return this.request("openade/project/git/branches/read", args)
+    }
+
+    async readProjectGitSummary(args: OpenADEProjectGitSummaryReadRequest): Promise<OpenADEProjectGitSummaryReadResult> {
+        return this.request("openade/project/git/summary/read", args)
+    }
+
     async listProjectProcesses(args: OpenADEProjectProcessListRequest): Promise<OpenADEProjectProcessListResult> {
         return this.request("openade/project/process/list", args)
     }
@@ -185,6 +211,10 @@ export class OpenADEClient {
 
     async readTaskGitSummary(args: OpenADETaskGitSummaryRequest): Promise<OpenADETaskGitSummaryResult> {
         return this.request("openade/task/git/summary/read", args)
+    }
+
+    async readTaskGitScopes(args: OpenADETaskGitScopesReadRequest): Promise<OpenADETaskGitScopesReadResult> {
+        return this.request("openade/task/git/scopes/read", args)
     }
 
     async readTaskDiff(args: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult> {
@@ -237,6 +267,14 @@ export class OpenADEClient {
 
     async readTaskImage(args: OpenADETaskImageReadRequest): Promise<OpenADETaskImageReadResult> {
         return this.request("openade/task/image/read", args)
+    }
+
+    async readTaskResourceInventory(args: OpenADETaskResourceInventoryReadRequest): Promise<OpenADETaskResourceInventoryReadResult> {
+        return this.request("openade/task/resourceInventory/read", args)
+    }
+
+    async generateTaskTitle(args: OpenADETaskTitleGenerateRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskTitleGenerateResult> {
+        return this.request("openade/task/title/generate", withClientRequestId(args, options))
     }
 
     async readTaskSnapshotPatch(args: OpenADETaskSnapshotPatchReadRequest): Promise<OpenADETaskSnapshotPatchReadResult> {
@@ -352,6 +390,13 @@ export class OpenADEClient {
 
     async setupTaskEnvironment(args: OpenADETaskEnvironmentSetupRequest, options: OpenADERequestOptions = {}): Promise<void> {
         return this.request("openade/task/environment/setup", withClientRequestId(args, options))
+    }
+
+    async prepareTaskEnvironment(
+        args: OpenADETaskEnvironmentPrepareRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADETaskEnvironmentPrepareResult> {
+        return this.request("openade/task/environment/prepare", withClientRequestId(args, options))
     }
 
     subscribeToChanges(onEvent: (notification: RuntimeNotification) => void): () => void {

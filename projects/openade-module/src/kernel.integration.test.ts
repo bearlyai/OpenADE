@@ -74,6 +74,9 @@ function createDeterministicAgentExecutor(): RuntimeNodeAgentExecutor {
             })
             return Promise.resolve({ ok: true })
         },
+        structuredQuery() {
+            return Promise.resolve({ title: "Deterministic Title" })
+        },
         interrupt() {
             return { ok: true }
         },
@@ -106,6 +109,7 @@ function initializeGitRepo(repoPath: string): void {
     execGit(repoPath, ["config", "user.name", "Kernel Test"])
     execGit(repoPath, ["add", "README.md"])
     execGit(repoPath, ["commit", "-m", "Initial kernel fixture"])
+    execGit(repoPath, ["branch", "-M", "main"])
 }
 
 async function waitForCompletedTask(client: OpenADEClient, repoId: string, taskId: string): Promise<OpenADETask> {
@@ -200,12 +204,19 @@ describe("OpenADE kernel composition", () => {
                 "openade/project/file/read",
                 "openade/project/file/write",
                 "openade/project/search",
+                "openade/project/git/info/read",
+                "openade/project/git/branches/read",
+                "openade/project/git/summary/read",
                 "openade/task/terminal/start",
                 "openade/task/terminal/write",
                 "openade/task/terminal/reconnect",
                 "openade/task/terminal/resize",
                 "openade/task/terminal/stop",
                 "openade/task/image/read",
+                "openade/task/resourceInventory/read",
+                "openade/task/title/generate",
+                "openade/task/environment/prepare",
+                "openade/task/git/scopes/read",
                 "openade/task/git/commit",
                 "openade/turn/start",
                 "openade/task/read",
@@ -253,6 +264,8 @@ describe("OpenADE kernel composition", () => {
         fs.mkdirSync(path.join(root, "images"), { recursive: true })
         fs.writeFileSync(path.join(root, "images", "image-kernel.png"), Buffer.from("kernel image bytes"))
         initializeGitRepo(repoPath)
+        const alternateWorktreePath = path.join(root, "repo-alt")
+        execGit(repoPath, ["worktree", "add", alternateWorktreePath, "-b", "alt-scope"])
 
         const served = await serveOpenADEKernelHttp({
             dataDir,
@@ -275,6 +288,8 @@ describe("OpenADE kernel composition", () => {
             reconnect: false,
         })
         const client = new OpenADEClient({ runtime })
+        let preparedWorktreeRoot: string | null = null
+        let preparedWorktreeBranch: string | null = null
 
         try {
             const repo = await client.createRepo(
@@ -286,6 +301,25 @@ describe("OpenADE kernel composition", () => {
                 },
                 { clientRequestId: "repo-create" }
             )
+            await expect(client.readProjectGitInfo({ repoId: repo.repoId })).resolves.toMatchObject({
+                repoId: repo.repoId,
+                isGitRepo: true,
+                repoRoot: fs.realpathSync(repoPath),
+                relativePath: "",
+                mainBranch: "main",
+            })
+            await expect(client.readProjectGitBranches({ repoId: repo.repoId, includeRemote: true })).resolves.toMatchObject({
+                repoId: repo.repoId,
+                defaultBranch: "main",
+                branches: expect.arrayContaining([expect.objectContaining({ name: "main", isDefault: true, isRemote: false })]),
+            })
+            await expect(client.readProjectGitSummary({ repoId: repo.repoId })).resolves.toMatchObject({
+                repoId: repo.repoId,
+                branch: "main",
+                hasChanges: true,
+                headCommit: expect.any(String),
+                untracked: [expect.objectContaining({ path: "openade.toml", status: "added" })],
+            })
             await expect(client.listProjectFiles({ repoId: repo.repoId, maxDepth: 2 })).resolves.toMatchObject({
                 repoId: repo.repoId,
                 entries: expect.arrayContaining([expect.objectContaining({ path: "README.md", name: "README.md", type: "file" })]),
@@ -382,6 +416,17 @@ describe("OpenADE kernel composition", () => {
             })
             expect(streamEvents.map((event) => event?.type).sort()).toEqual(["complete", "message", "session_started"])
 
+            await expect(
+                client.generateTaskTitle({ repoId: repo.repoId, taskId: started.taskId, harnessId: "codex" }, { clientRequestId: "title-generate" })
+            ).resolves.toEqual({
+                repoId: repo.repoId,
+                taskId: started.taskId,
+                title: "Deterministic Title",
+            })
+            await expect(client.getTask(repo.repoId, started.taskId, { hydrateSessionEvents: false })).resolves.toMatchObject({
+                title: "Deterministic Title",
+            })
+
             await client.createActionEvent(
                 {
                     taskId: started.taskId,
@@ -409,6 +454,44 @@ describe("OpenADE kernel composition", () => {
             await expect(client.readTaskImage({ repoId: repo.repoId, taskId: started.taskId, imageId: "../image-kernel", ext: "png" })).rejects.toThrow(
                 /imageId is invalid/
             )
+
+            const worktreeStarted = await client.startTurn(
+                {
+                    repoId: repo.repoId,
+                    type: "do",
+                    input: "Prepare a runtime worktree task",
+                    title: "Kernel worktree task",
+                    harnessId: "codex",
+                    modelId: "fixture-model",
+                    isolationStrategy: { type: "worktree", sourceBranch: "main" },
+                },
+                { clientRequestId: "worktree-turn-start" }
+            )
+            const worktreeTask = await waitForCompletedTask(client, repo.repoId, worktreeStarted.taskId)
+            const prepared = await client.prepareTaskEnvironment(
+                { repoId: repo.repoId, taskId: worktreeStarted.taskId },
+                { clientRequestId: "worktree-prepare" }
+            )
+            preparedWorktreeRoot = prepared.rootPath
+            preparedWorktreeBranch = `openade/${worktreeTask.slug}`
+
+            expect(prepared).toMatchObject({
+                repoId: repo.repoId,
+                taskId: worktreeStarted.taskId,
+                deviceEnvironment: expect.objectContaining({
+                    setupComplete: true,
+                    worktreeDir: prepared.rootPath,
+                }),
+                setupEvent: expect.objectContaining({
+                    worktreeId: worktreeTask.slug,
+                    workingDir: prepared.cwd,
+                }),
+            })
+            const preparedTask = await client.getTask(repo.repoId, worktreeStarted.taskId, { hydrateSessionEvents: false })
+            expect(preparedTask.deviceEnvironments).toEqual([expect.objectContaining({ worktreeDir: prepared.rootPath, setupComplete: true })])
+            expect(preparedTask.events).toEqual([expect.objectContaining({ type: "action" }), expect.objectContaining({ type: "setup_environment" })])
+            expect(gitOutput(prepared.rootPath, ["branch", "--show-current"])).toBe(preparedWorktreeBranch)
+            expect(gitOutput(repoPath, ["worktree", "list", "--porcelain"])).toContain(prepared.rootPath)
 
             const terminal = await client.startTaskTerminal(
                 { repoId: repo.repoId, taskId: started.taskId, cols: 80, rows: 24 },
@@ -508,6 +591,22 @@ describe("OpenADE kernel composition", () => {
                 commits: [expect.objectContaining({ message: "Initial kernel fixture", author: "Kernel Test" })],
                 hasMore: false,
             })
+            await expect(client.readTaskGitScopes({ repoId: repo.repoId, taskId: started.taskId, includeRemote: true })).resolves.toMatchObject({
+                repoId: repo.repoId,
+                taskId: started.taskId,
+                defaultBranch: "main",
+                scopes: expect.arrayContaining([
+                    expect.objectContaining({ id: "branch:HEAD", type: "branch", ref: "HEAD" }),
+                    expect.objectContaining({ id: "branch:main", type: "branch", name: "main", isDefault: true }),
+                    expect.objectContaining({ id: "worktree:repo-alt", type: "worktree", worktreeId: "repo-alt", branch: "alt-scope" }),
+                ]),
+            })
+            await expect(client.readTaskGitLog({ repoId: repo.repoId, taskId: started.taskId, scopeId: "worktree:repo-alt", limit: 5 })).resolves.toMatchObject({
+                commits: [expect.objectContaining({ message: "Initial kernel fixture" })],
+            })
+            await expect(client.readTaskGitLog({ repoId: repo.repoId, taskId: started.taskId, scopeId: "../repo-alt", limit: 5 })).rejects.toThrow(
+                /scopeId is invalid/
+            )
             const initialCommit = gitOutput(repoPath, ["rev-parse", "HEAD"])
             await expect(client.readTaskGitCommitFiles({ repoId: repo.repoId, taskId: started.taskId, commit: initialCommit })).resolves.toMatchObject({
                 repoId: repo.repoId,
@@ -589,10 +688,23 @@ describe("OpenADE kernel composition", () => {
             await expect(
                 client.readTaskSnapshotPatchSlice({ repoId: repo.repoId, taskId: started.taskId, eventId: "snapshot-kernel", start: 35, end: 58 })
             ).resolves.toMatchObject({ patch: "+kernel snapshot patch\n" })
+            await expect(client.readTaskResourceInventory({ repoId: repo.repoId, taskId: started.taskId })).resolves.toMatchObject({
+                repoId: repo.repoId,
+                taskId: started.taskId,
+                taskTitle: "Deterministic Title",
+                snapshotIds: [],
+                images: [{ id: "image-kernel", ext: "png" }],
+                worktree: null,
+            })
 
             expect(await client.getSnapshot()).toMatchObject({
                 server: { version: "kernel-test", hostName: "kernel-host" },
-                repos: [{ id: "repo-kernel", tasks: [{ id: started.taskId, title: "Kernel turn" }] }],
+                repos: [
+                    {
+                        id: "repo-kernel",
+                        tasks: expect.arrayContaining([expect.objectContaining({ id: started.taskId, title: "Deterministic Title" })]),
+                    },
+                ],
             })
 
             runtime.close()
@@ -616,6 +728,21 @@ describe("OpenADE kernel composition", () => {
 
             expect(actionEvent(persistedTask)).toMatchObject({ status: "completed" })
         } finally {
+            if (preparedWorktreeRoot) {
+                try {
+                    execGit(repoPath, ["worktree", "remove", preparedWorktreeRoot, "--force"])
+                } catch {
+                    // Best-effort cleanup for worktree state created under ~/.openade.
+                }
+                fs.rmSync(preparedWorktreeRoot, { recursive: true, force: true })
+            }
+            if (preparedWorktreeBranch) {
+                try {
+                    execGit(repoPath, ["branch", "-D", preparedWorktreeBranch])
+                } catch {
+                    // Best-effort cleanup for the matching task branch.
+                }
+            }
             runtime.close()
         }
     }, 20_000)

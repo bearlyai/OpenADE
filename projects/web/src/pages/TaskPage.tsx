@@ -119,6 +119,26 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
         })
     }, [taskModel])
 
+    useEffect(() => {
+        if (taskModel.needsEnvironmentSetup) return
+
+        let cancelled = false
+        void taskModel
+            .loadEnvironment()
+            .then((environment) => {
+                if (cancelled || !environment?.taskWorkingDir) return
+                taskModel.fileBrowser.setWorkingDir(environment.taskWorkingDir)
+                taskModel.contentSearch.setWorkingDir(environment.taskWorkingDir)
+            })
+            .catch((err) => {
+                if (!cancelled) console.warn("[TaskPage] Failed to load task environment:", err)
+            })
+
+        return () => {
+            cancelled = true
+        }
+    }, [taskModel, taskModel.needsEnvironmentSetup])
+
     // Refresh git state on window focus
     useEffect(() => {
         let cancelScheduledRefresh: (() => void) | null = null
@@ -161,6 +181,13 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
         taskModel.refreshGitState()
     }, [taskModel])
 
+    const handleRequestFullHistory = useCallback(() => {
+        if (!codeStore.shouldUseRuntimeProductReads()) return
+        void codeStore.loadRuntimeProductTask(workspaceId, taskId, { hydrateSessionEvents: true }).catch((err) => {
+            console.warn("[TaskPage] Failed to hydrate task history:", err)
+        })
+    }, [codeStore, workspaceId, taskId])
+
     // Page-level drop zone for images
     const { isDragOver, dragHandlers } = useImageDropZone(editorManager)
 
@@ -174,7 +201,7 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
             {isDragOver && <ImageDropOverlay />}
             <InputWrapper trayOpen={tray.isOpen} onClose={() => tray.close()}>
                 <ScrollArea viewportRef={scrollViewportRef} viewportClassName="pb-56">
-                    <EventLog taskId={taskId} events={events} />
+                    <EventLog taskId={taskId} events={events} onRequestFullHistory={handleRequestFullHistory} />
                 </ScrollArea>
             </InputWrapper>
             {showKeyboardHints && (

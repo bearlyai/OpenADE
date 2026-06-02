@@ -5,6 +5,9 @@ import { createHash, randomUUID } from "node:crypto"
 import {
     buildOpenADEHyperPlanStepPrompt,
     buildOpenADEProjectProcessDefinitions,
+    buildOpenADETaskEnvironmentSetupOutput,
+    buildOpenADETaskTitlePrompt,
+    buildOpenADETaskResourceInventory,
     buildOpenADEReconcileStepPrompt,
     buildOpenADEReviewHandoffPrompt,
     buildOpenADEPlanReviewPrompt,
@@ -19,6 +22,7 @@ import {
     decodeOpenADETaskTerminalOutputChunk,
     encodeOpenADETaskTerminalInput,
     extractOpenADEPlanText,
+    fallbackOpenADETaskTitle,
     fuzzySearchOpenADEProjectFiles,
     groupOpenADEHyperPlanByDepth,
     isStandardOpenADEHyperPlanStrategy,
@@ -31,6 +35,8 @@ import {
     openADEQueuedTurnIdForClientRequest,
     openADETaskIdForClientRequest,
     openADETaskTerminalId,
+    OPENADE_TASK_TITLE_OUTPUT_SCHEMA,
+    OPENADE_TASK_TITLE_SYSTEM_PROMPT,
     publishOpenADECompanionEvent,
     readOpenADEProjectFile,
     readOpenADETaskSnapshotIndex,
@@ -39,12 +45,19 @@ import {
     resolveOpenADETaskWorkDir,
     resolveOpenADEHyperPlanStrategy,
     searchOpenADEProject,
+    titleFromStructuredOutput,
     validateOpenADEHyperPlanStrategy,
     writeOpenADEProjectFile,
     type OpenADEActionEventSource,
     type OpenADEHyperPlanStep,
     type OpenADEHyperPlanStrategy,
     type OpenADEProject,
+    type OpenADEProjectGitBranchesReadRequest,
+    type OpenADEProjectGitBranchesReadResult,
+    type OpenADEProjectGitInfoRequest,
+    type OpenADEProjectGitInfoResult,
+    type OpenADEProjectGitSummaryReadRequest,
+    type OpenADEProjectGitSummaryReadResult,
     type OpenADEProjectProcessConfigError,
     type OpenADEProjectProcessDefinition,
     type OpenADEProjectProcessInstance,
@@ -66,6 +79,8 @@ import {
     type OpenADETaskChangesReadResult,
     type OpenADETaskDeleteRequest,
     type OpenADETaskDeviceEnvironment,
+    type OpenADETaskEnvironmentPrepareRequest,
+    type OpenADETaskEnvironmentPrepareResult,
     type OpenADETaskDiffReadRequest,
     type OpenADETaskDiffReadResult,
     type OpenADETaskFilePairReadRequest,
@@ -81,11 +96,16 @@ import {
     type OpenADETaskGitFileAtTreeishResult,
     type OpenADETaskGitLogRequest,
     type OpenADETaskGitLogResult,
+    type OpenADETaskGitScope,
+    type OpenADETaskGitScopesReadRequest,
+    type OpenADETaskGitScopesReadResult,
     type OpenADETaskGitSummaryRequest,
     type OpenADETaskGitSummaryResult,
     type OpenADETaskImageReadRequest,
     type OpenADETaskImageReadResult,
     type OpenADETaskImageReference,
+    type OpenADETaskResourceInventoryReadRequest,
+    type OpenADETaskResourceInventoryReadResult,
     type OpenADETaskTerminalMutationResult,
     type OpenADETaskTerminalReconnectRequest,
     type OpenADETaskTerminalReconnectResult,
@@ -94,6 +114,8 @@ import {
     type OpenADETaskTerminalStartResult,
     type OpenADETaskTerminalStopRequest,
     type OpenADETaskTerminalWriteRequest,
+    type OpenADETaskTitleGenerateRequest,
+    type OpenADETaskTitleGenerateResult,
     type OpenADETaskSnapshotIndexReadRequest,
     type OpenADETaskSnapshotIndexReadResult,
     type OpenADETaskSnapshotPatchReadRequest,
@@ -114,6 +136,7 @@ import {
     clearRuntimeHarnessBuffer,
     deleteRuntimeHarnessSession,
     startRuntimeHarnessQuery,
+    structuredRuntimeHarnessQuery,
 } from "../code/harness"
 import { listOrphanHarnessProcesses, terminateOrphanHarness } from "../code/orphanHarness"
 import { deleteRuntimeDataFile, loadRuntimeDataFile, saveRuntimeDataFile } from "../code/dataFolder"
@@ -128,9 +151,12 @@ import {
     getRuntimeGitLog,
     getOrCreateRuntimeWorkTree,
     getRuntimeGitSummary,
+    listRuntimeBranches,
+    listRuntimeWorkTrees,
     getRuntimeMergeBase,
     getRuntimeWorktreeFilePatch,
     isRuntimeGitDirectory,
+    isRuntimeBranchMerged,
     commitRuntimeWorkingTree,
 } from "../code/git"
 import {
@@ -281,11 +307,6 @@ interface RuntimeImageAttachment {
 }
 
 type OpenADEYjsStorage = ReturnType<typeof createOpenADEYjsStorageAdapter>
-
-function fallbackTitle(input: string): string {
-    const cleaned = input.replace(/\s+/g, " ").trim()
-    return cleaned.length <= 50 ? cleaned : `${cleaned.slice(0, 50).trim()}...`
-}
 
 function fallbackSlug(): string {
     return `task-${randomUUID().replace(/-/g, "").slice(0, 8)}`
@@ -885,55 +906,9 @@ function eventRecord(value: unknown): Record<string, unknown> | null {
     return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null
 }
 
-function collectSnapshotPatchIds(task: OpenADETask): string[] {
-    const ids = new Set<string>()
-    for (const rawEvent of task.events) {
-        const event = eventRecord(rawEvent)
-        if (!event || event.type !== "snapshot" || typeof event.patchFileId !== "string") continue
-        ids.add(event.patchFileId)
-    }
-    return [...ids]
-}
-
-function collectTaskImages(task: OpenADETask): Array<{ id: string; ext: string }> {
-    const images = new Map<string, { id: string; ext: string }>()
-    for (const rawEvent of task.events) {
-        const event = eventRecord(rawEvent)
-        if (!event || event.type !== "action") continue
-        for (const image of imageAttachments(event.images)) {
-            images.set(`${image.id}.${image.ext}`, { id: image.id, ext: image.ext })
-        }
-    }
-    return [...images.values()]
-}
-
-function collectTaskSessions(task: OpenADETask): Array<{ sessionId: string; harnessId: string }> {
-    const sessions = new Map<string, string>()
-    for (const sessionId of Object.values(task.sessionIds ?? {})) {
-        if (sessionId) sessions.set(sessionId, "claude-code")
-    }
-
-    for (const rawEvent of task.events) {
-        const event = eventRecord(rawEvent)
-        if (!event || event.type !== "action") continue
-        const execution = eventRecord(event.execution)
-        const harnessId = typeof execution?.harnessId === "string" ? execution.harnessId : "claude-code"
-        if (typeof execution?.sessionId === "string" && execution.sessionId) sessions.set(execution.sessionId, harnessId)
-
-        const subExecutions = Array.isArray(event.hyperplanSubExecutions) ? event.hyperplanSubExecutions : []
-        for (const rawSubExecution of subExecutions) {
-            const subExecution = eventRecord(rawSubExecution)
-            if (!subExecution) continue
-            const subHarnessId = typeof subExecution.harnessId === "string" ? subExecution.harnessId : harnessId
-            if (typeof subExecution.sessionId === "string" && subExecution.sessionId) sessions.set(subExecution.sessionId, subHarnessId)
-        }
-    }
-
-    return [...sessions.entries()].map(([sessionId, harnessId]) => ({ sessionId, harnessId }))
-}
-
 async function cleanupTaskResources(task: OpenADETask, repoPath: string, options: NonNullable<OpenADETaskDeleteRequest["options"]>): Promise<void> {
     const active = activeTaskExecutions.get(task.id)
+    const inventory = buildOpenADETaskResourceInventory({ task, isRunning: active !== undefined })
     if (active) {
         active.stopping = true
         abortRuntimeHarnessQuery({ executionId: active.executionId })
@@ -945,19 +920,19 @@ async function cleanupTaskResources(task: OpenADETask, repoPath: string, options
     await killRuntimePty({ ptyId: task.id }).catch(() => ({ ok: false }))
 
     if (options.deleteSnapshots) {
-        await Promise.all(collectSnapshotPatchIds(task).map((id) => deleteRuntimeSnapshotBundle({ id }).catch(() => undefined)))
+        await Promise.all(inventory.snapshotIds.map((id) => deleteRuntimeSnapshotBundle({ id }).catch(() => undefined)))
     }
 
     if (options.deleteImages) {
         await Promise.all(
-            collectTaskImages(task).map((image) =>
+            inventory.images.map((image) =>
                 deleteRuntimeDataFile({ folder: "images", id: image.id, ext: image.ext }).catch(() => undefined)
             )
         )
     }
 
     if (options.deleteSessions) {
-        await Promise.all(collectTaskSessions(task).map((session) => deleteRuntimeHarnessSession(session).catch(() => ({ ok: false }))))
+        await Promise.all(inventory.sessions.map((session) => deleteRuntimeHarnessSession(session).catch(() => ({ ok: false }))))
     }
 
     if (options.deleteWorktrees && task.isolationStrategy?.type === "worktree") {
@@ -999,6 +974,87 @@ function scopedTaskSummaryFile(
     }
 }
 
+async function readScopedProjectGitInfo(
+    params: OpenADEProjectGitInfoRequest & { repo: OpenADEProject }
+): Promise<OpenADEProjectGitInfoResult> {
+    const gitInfo = await isRuntimeGitDirectory({ directory: params.repo.path })
+    if (!gitInfo.isGitDirectory) {
+        return {
+            repoId: params.repoId,
+            isGitRepo: false,
+            error: gitInfo.error,
+        }
+    }
+
+    return {
+        repoId: params.repoId,
+        isGitRepo: true,
+        repoRoot: gitInfo.repoRoot,
+        relativePath: gitInfo.relativePath,
+        mainBranch: gitInfo.mainBranch,
+        hasGhCli: gitInfo.hasGhCli,
+    }
+}
+
+async function readScopedProjectGitBranches(
+    params: OpenADEProjectGitBranchesReadRequest & { repo: OpenADEProject }
+): Promise<OpenADEProjectGitBranchesReadResult> {
+    const gitInfo = await isRuntimeGitDirectory({ directory: params.repo.path })
+    if (!gitInfo.isGitDirectory) {
+        return {
+            repoId: params.repoId,
+            branches: [],
+            defaultBranch: "main",
+        }
+    }
+
+    const result = await listRuntimeBranches({ repoDir: gitInfo.repoRoot, includeRemote: params.includeRemote })
+    return {
+        repoId: params.repoId,
+        branches: result.branches,
+        defaultBranch: result.defaultBranch,
+    }
+}
+
+async function readScopedProjectGitSummary(
+    params: OpenADEProjectGitSummaryReadRequest & { repo: OpenADEProject }
+): Promise<OpenADEProjectGitSummaryReadResult> {
+    const gitInfo = await isRuntimeGitDirectory({ directory: params.repo.path })
+    if (!gitInfo.isGitDirectory) {
+        return {
+            repoId: params.repoId,
+            branch: null,
+            headCommit: "",
+            ahead: null,
+            hasChanges: false,
+            staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+            unstaged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+            untracked: [],
+        }
+    }
+
+    const summary = await getRuntimeGitSummary({ repoDir: gitInfo.repoRoot })
+    const stagedFiles = summary.staged.files.map((file) => scopedTaskSummaryFile(file, "modified"))
+    const unstagedFiles = summary.unstaged.files.map((file) => scopedTaskSummaryFile(file, "modified"))
+    const untracked = summary.untracked.map((file) => scopedTaskSummaryFile(file, "added"))
+    return {
+        repoId: params.repoId,
+        branch: summary.branch,
+        headCommit: summary.headCommit,
+        ahead: summary.ahead,
+        hasChanges: summary.hasChanges,
+        staged: {
+            files: stagedFiles,
+            stats: summary.staged.stats,
+        },
+        unstaged: {
+            files: unstagedFiles,
+            stats: summary.unstaged.stats,
+        },
+        untracked,
+    }
+}
+
 async function readScopedTaskGitSummary(
     params: OpenADETaskGitSummaryRequest & { repo: OpenADEProject; task: OpenADETask }
 ): Promise<OpenADETaskGitSummaryResult> {
@@ -1025,6 +1081,84 @@ async function readScopedTaskGitSummary(
         },
         untracked,
     }
+}
+
+function scopedRuntimeWorktreeBranch(branch: string): string {
+    return branch.replace(/^refs\/heads\//, "")
+}
+
+async function readScopedTaskGitScopes(
+    params: OpenADETaskGitScopesReadRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskGitScopesReadResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const branches = await listRuntimeBranches({ repoDir: workDir, includeRemote: params.includeRemote })
+    const worktrees = await listRuntimeWorkTrees({ repoDir: workDir }).catch(() => ({ worktrees: [] }))
+    const scopes: OpenADETaskGitScope[] = [
+        {
+            id: "branch:HEAD",
+            type: "branch",
+            name: "HEAD",
+            ref: "HEAD",
+            isDefault: false,
+            isRemote: false,
+        },
+        ...branches.branches.map((branch) => ({
+            id: `branch:${branch.name}`,
+            type: "branch" as const,
+            name: branch.name,
+            ref: branch.name,
+            isDefault: branch.isDefault,
+            isRemote: branch.isRemote,
+        })),
+        ...worktrees.worktrees.map((worktree) => ({
+            id: `worktree:${worktree.id}`,
+            type: "worktree" as const,
+            worktreeId: worktree.id,
+            branch: scopedRuntimeWorktreeBranch(worktree.branch),
+            head: worktree.head,
+            label: path.basename(worktree.path),
+        })),
+    ]
+
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        defaultBranch: branches.defaultBranch,
+        scopes,
+    }
+}
+
+async function scopedTaskGitWorkDirForLog(params: OpenADETaskGitLogRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<string> {
+    const defaultWorkDir = await scopedTaskWorkDir(params.repo, params.task)
+    if (!params.scopeId?.startsWith("worktree:")) return defaultWorkDir
+
+    const worktreeId = params.scopeId.slice("worktree:".length)
+    if (!worktreeId) return defaultWorkDir
+
+    const worktrees = await listRuntimeWorkTrees({ repoDir: defaultWorkDir }).catch(() => ({ worktrees: [] }))
+    return worktrees.worktrees.find((worktree) => worktree.id === worktreeId)?.path ?? defaultWorkDir
+}
+
+async function readScopedTaskResourceInventory(
+    params: OpenADETaskResourceInventoryReadRequest & { repo: OpenADEProject; task: OpenADETask; isRunning: boolean }
+): Promise<OpenADETaskResourceInventoryReadResult> {
+    let branchMerged: boolean | null = null
+    if (params.task.isolationStrategy?.type === "worktree") {
+        const gitInfo = await isRuntimeGitDirectory({ directory: params.repo.path }).catch(() => null)
+        if (gitInfo?.isGitDirectory) {
+            branchMerged = await isRuntimeBranchMerged({
+                repoDir: gitInfo.repoRoot,
+                branchName: `openade/${params.task.slug}`,
+                targetBranch: params.task.isolationStrategy.sourceBranch,
+            }).catch(() => null)
+        }
+    }
+
+    return buildOpenADETaskResourceInventory({
+        task: params.task,
+        isRunning: params.isRunning,
+        branchMerged,
+    })
 }
 
 async function readScopedTaskChanges(
@@ -1098,7 +1232,7 @@ async function readScopedTaskFilePair(
 }
 
 async function readScopedTaskGitLog(params: OpenADETaskGitLogRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitLogResult> {
-    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const workDir = await scopedTaskGitWorkDirForLog(params)
     const result = await getRuntimeGitLog({
         workDir,
         ref: params.ref,
@@ -1178,6 +1312,37 @@ async function commitScopedTaskGit(params: OpenADETaskGitCommitRequest & { repo:
         sha: result.sha,
         error: result.error,
     }
+}
+
+function titleModelIdForHarness(harnessId: HarnessId): string {
+    return getModelFullId(getDefaultModelForHarness(harnessId), harnessId)
+}
+
+async function generateScopedTaskTitle(
+    params: OpenADETaskTitleGenerateRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskTitleGenerateResult> {
+    const description = params.task.description.trim()
+    const fallback = fallbackOpenADETaskTitle(description || params.task.title || "Untitled task") || "Untitled task"
+    if (!description) return { repoId: params.repoId, taskId: params.taskId, title: fallback }
+
+    const cwd = await scopedTaskWorkDir(params.repo, params.task)
+    const harnessId = (params.harnessId ?? lastActionSessionContext(params.task)?.harnessId ?? "claude-code") as HarnessId
+    const prompt = buildOpenADETaskTitlePrompt({ description, events: params.task.events })
+    const result = await structuredRuntimeHarnessQuery({
+        prompt,
+        options: {
+            harnessId,
+            cwd,
+            model: titleModelIdForHarness(harnessId),
+            mode: "read-only",
+            disablePlanningTools: true,
+            appendSystemPrompt: OPENADE_TASK_TITLE_SYSTEM_PROMPT,
+            processLabel: `OpenADE title ${params.task.id}`,
+        },
+        outputSchema: OPENADE_TASK_TITLE_OUTPUT_SCHEMA,
+    })
+    const title = result.ok ? titleFromStructuredOutput(result.output) : null
+    return { repoId: params.repoId, taskId: params.taskId, title: title ?? fallback }
 }
 
 const runtimeSnapshotPatchStore = {
@@ -1726,22 +1891,6 @@ async function stopActiveOpenADERuntime(
     return true
 }
 
-function worktreeSetupOutput(params: {
-    worktreeDir: string
-    workingDir: string
-    sourceBranch: string
-    mergeBaseCommit?: string
-}): string {
-    return [
-        `Worktree: ${params.worktreeDir}`,
-        `Working directory: ${params.workingDir}`,
-        `Branch: ${params.sourceBranch}`,
-        params.mergeBaseCommit ? `Merge base: ${params.mergeBaseCommit.slice(0, 8)}` : "",
-    ]
-        .filter(Boolean)
-        .join("\n")
-}
-
 function snapshotBaseForTask(task: OpenADETask, deviceEnvironment?: OpenADETaskDeviceEnvironment): SnapshotBase | undefined {
     const isolationStrategy = task.isolationStrategy ?? { type: "head" }
     if (isolationStrategy.type === "head") {
@@ -2054,7 +2203,7 @@ async function createTaskEnvironment({
             worktreeId: slug,
             deviceId,
             workingDir,
-            setupOutput: worktreeSetupOutput({
+            setupOutput: buildOpenADETaskEnvironmentSetupOutput({
                 worktreeDir: worktree.worktreeDir,
                 workingDir,
                 sourceBranch,
@@ -2065,6 +2214,25 @@ async function createTaskEnvironment({
         },
         cwd: workingDir,
         rootPath: worktree.worktreeDir,
+    }
+}
+
+async function prepareScopedTaskEnvironment(
+    params: OpenADETaskEnvironmentPrepareRequest & { repo: OpenADEProject; task: OpenADETask; createdAt: string }
+): Promise<OpenADETaskEnvironmentPrepareResult> {
+    const environment = await createTaskEnvironment({
+        repoPath: params.repo.path,
+        slug: params.task.slug,
+        isolationStrategy: params.task.isolationStrategy ?? { type: "head" },
+        createdAt: params.createdAt,
+    })
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        deviceEnvironment: environment.deviceEnvironment,
+        setupEvent: environment.setupEvent,
+        cwd: environment.cwd,
+        rootPath: environment.rootPath,
     }
 }
 
@@ -2147,7 +2315,12 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                 writeProjectFile: writeOpenADEProjectFile,
                 fuzzySearchProjectFiles: fuzzySearchOpenADEProjectFiles,
                 searchProject: searchOpenADEProject,
+                readProjectGitInfo: readScopedProjectGitInfo,
+                readProjectGitBranches: readScopedProjectGitBranches,
+                readProjectGitSummary: readScopedProjectGitSummary,
                 readTaskGitSummary: readScopedTaskGitSummary,
+                readTaskGitScopes: readScopedTaskGitScopes,
+                readTaskResourceInventory: readScopedTaskResourceInventory,
                 readTaskChanges: readScopedTaskChanges,
                 readTaskDiff: readScopedTaskDiff,
                 readTaskFilePair: readScopedTaskFilePair,
@@ -2156,6 +2329,8 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                 readTaskGitFileAtTreeish: readScopedTaskGitFileAtTreeish,
                 readTaskGitCommitFilePatch: readScopedTaskGitCommitFilePatch,
                 commitTaskGit: commitScopedTaskGit,
+                prepareTaskEnvironment: prepareScopedTaskEnvironment,
+                generateTaskTitle: generateScopedTaskTitle,
                 listProjectProcesses: listScopedProjectProcesses,
                 startProjectProcess: startScopedProjectProcess,
                 reconnectProjectProcess: reconnectScopedProjectProcess,
@@ -2235,7 +2410,7 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                     input: params.input,
                     taskId,
                     slug,
-                    title: params.title ?? fallbackTitle(params.input),
+                    title: params.title ?? fallbackOpenADETaskTitle(params.input),
                     createdBy: { id: "local-user", email: "local@openade.dev" },
                     deviceId: getDeviceConfig().deviceId,
                     createdAt,

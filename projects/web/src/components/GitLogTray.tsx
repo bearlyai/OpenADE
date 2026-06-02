@@ -3,7 +3,7 @@ import { RefreshCw } from "lucide-react"
 import { observer } from "mobx-react"
 import { type ReactNode, useEffect, useMemo, useState } from "react"
 import { twMerge } from "tailwind-merge"
-import type { OpenADETaskGitChangedFile, OpenADETaskGitCommitFilePatchResult, OpenADETaskGitLogEntry } from "../../../openade-module/src"
+import type { OpenADETaskGitChangedFile, OpenADETaskGitCommitFilePatchResult, OpenADETaskGitLogEntry, OpenADETaskGitScope } from "../../../openade-module/src"
 import { type WorkTreeInfo, gitApi } from "../electronAPI/git"
 import { useCodeStore } from "../store/context"
 import { getPatchContextLines, shouldUsePatchDiff } from "../utils/gitDiffContext"
@@ -43,6 +43,8 @@ interface ScopeOption {
     content: ReactNode
     workDir: string
     ref?: string
+    productRef?: string
+    productScopeId?: string
 }
 
 interface FileSelectEntry {
@@ -100,6 +102,38 @@ function buildScopeOptions(workDir: string, branches: { name: string }[], worktr
     })
 
     return [...branchOptions, ...worktreeOptions]
+}
+
+function buildProductScopeOptions(workDir: string, scopes: OpenADETaskGitScope[]): ScopeOption[] {
+    return scopes.map((scope) => {
+        if (scope.type === "branch") {
+            return {
+                id: scope.id,
+                workDir,
+                ref: scope.ref,
+                productRef: scope.ref,
+                content: (
+                    <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-[10px] uppercase tracking-wide text-muted flex-shrink-0">{scope.isRemote ? "Remote" : "Branch"}</span>
+                        <span className="truncate">{scope.name}</span>
+                    </div>
+                ),
+            }
+        }
+
+        return {
+            id: scope.id,
+            workDir,
+            productScopeId: scope.id,
+            content: (
+                <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-[10px] uppercase tracking-wide text-muted flex-shrink-0">Worktree</span>
+                    <span className="truncate">{scope.label}</span>
+                    {scope.branch && <span className="truncate text-muted">({scope.branch})</span>}
+                </div>
+            ),
+        }
+    })
 }
 
 export const GitLogTray = observer(function GitLogTray({ taskId, workDir, currentBranch, className }: GitLogTrayProps) {
@@ -227,13 +261,24 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
 
         async function loadScopes() {
             try {
-                const [branchesResult, worktreesResult] = await Promise.all([
-                    gitApi.listBranches({ repoDir: workDir, includeRemote: true }),
-                    gitApi.listWorkTrees({ repoDir: workDir }),
-                ])
+                const options = runtimeRepoId
+                    ? buildProductScopeOptions(
+                          workDir,
+                          (
+                              await codeStore.readProductTaskGitScopes({
+                                  repoId: runtimeRepoId,
+                                  taskId,
+                                  includeRemote: true,
+                              })
+                          ).scopes
+                      )
+                    : buildScopeOptions(
+                          workDir,
+                          (await gitApi.listBranches({ repoDir: workDir, includeRemote: true })).branches,
+                          (await gitApi.listWorkTrees({ repoDir: workDir })).worktrees
+                      )
                 if (cancelled) return
 
-                const options = buildScopeOptions(workDir, branchesResult.branches, worktreesResult.worktrees)
                 setScopeOptions(options)
                 setSelectedScopeId((previousId) => {
                     if (options.some((option) => option.id === previousId)) {
@@ -264,7 +309,7 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         return () => {
             cancelled = true
         }
-    }, [workDir, currentBranch, scopeRefreshToken])
+    }, [codeStore, runtimeRepoId, taskId, workDir, currentBranch, scopeRefreshToken])
 
     useEffect(() => {
         const scope = selectedScope
@@ -285,11 +330,12 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         async function loadLog(scopeValue: ScopeOption) {
             try {
                 const result =
-                    runtimeRepoId && scopeValue.workDir === workDir
+                    runtimeRepoId && (scopeValue.productRef || scopeValue.productScopeId)
                         ? await codeStore.readProductTaskGitLog({
                               repoId: runtimeRepoId,
                               taskId,
-                              ref: scopeValue.ref,
+                              ref: scopeValue.productRef,
+                              scopeId: scopeValue.productScopeId,
                               limit: PAGE_SIZE,
                               skip: 0,
                           })
@@ -348,7 +394,7 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         async function loadCommitFiles(scopeValue: ScopeOption, commitValue: OpenADETaskGitLogEntry) {
             try {
                 const result =
-                    runtimeRepoId && scopeValue.workDir === workDir
+                    runtimeRepoId && (scopeValue.productRef || scopeValue.productScopeId)
                         ? await codeStore.readProductTaskGitCommitFiles({
                               repoId: runtimeRepoId,
                               taskId,
@@ -413,7 +459,7 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
 
                 const beforeTreeish = commitValue.parentCount === 0 ? null : `${commitValue.sha}^`
                 const beforePath = fileValue.oldPath ?? fileValue.path
-                const runtimeGitDetails = runtimeRepoId && scopeValue.workDir === workDir ? { repoId: runtimeRepoId, taskId } : null
+                const runtimeGitDetails = runtimeRepoId && (scopeValue.productRef || scopeValue.productScopeId) ? { repoId: runtimeRepoId, taskId } : null
 
                 const [beforeResult, afterResult] = await Promise.all([
                     beforeTreeish
@@ -505,7 +551,7 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         async function loadFilePatch(scopeValue: ScopeOption, commitValue: OpenADETaskGitLogEntry, fileValue: OpenADETaskGitChangedFile) {
             try {
                 const result =
-                    runtimeRepoId && scopeValue.workDir === workDir
+                    runtimeRepoId && (scopeValue.productRef || scopeValue.productScopeId)
                         ? await codeStore.readProductTaskGitCommitFilePatch({
                               repoId: runtimeRepoId,
                               taskId,
@@ -562,11 +608,12 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         setLoadingMore(true)
         try {
             const result =
-                runtimeRepoId && selectedScope.workDir === workDir
+                runtimeRepoId && (selectedScope.productRef || selectedScope.productScopeId)
                     ? await codeStore.readProductTaskGitLog({
                           repoId: runtimeRepoId,
                           taskId,
-                          ref: selectedScope.ref,
+                          ref: selectedScope.productRef,
+                          scopeId: selectedScope.productScopeId,
                           limit: PAGE_SIZE,
                           skip: commits.length,
                       })

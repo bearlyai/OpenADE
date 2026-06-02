@@ -18,7 +18,7 @@ import type {
 import { DEFAULT_MODEL, getDefaultModelForHarness, resolveModelForHarness } from "../constants"
 import type { GitSummaryResponse } from "../electronAPI/git"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
-import { computeTaskUsage } from "../persistence/taskStatsUtils"
+import { computeTaskUsage, normalizeTaskPreviewUsage } from "../persistence/taskStatsUtils"
 import { type TaskThreadFormat, type TaskThreadJson, buildTaskThreadJson, buildTaskThreadXml } from "../prompts/taskThreadSerializer"
 import type { ActionEvent, CodeEvent, IsolationStrategy, QueuedTurn, SetupEnvironmentEvent, SnapshotEvent, Task, TaskDeviceEnvironment } from "../types"
 import { getDeviceId } from "../utils/deviceId"
@@ -592,6 +592,17 @@ export class TaskModel {
     }
 
     get stats(): { totalCostUsd: number; durationMs: number; inputTokens: number; outputTokens: number } {
+        const previewUsage = this.usesRuntimeProductReads ? this.store.getRuntimeProductTaskPreviewDto(this.repoId, this.taskId)?.usage : undefined
+        if (previewUsage) {
+            const usage = normalizeTaskPreviewUsage(previewUsage)
+            return {
+                totalCostUsd: usage.totalCostUsd,
+                durationMs: usage.durationMs ?? 0,
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+            }
+        }
+
         const events = this.task?.events ?? []
         const usage = computeTaskUsage(events)
         return {

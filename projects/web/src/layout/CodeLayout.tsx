@@ -10,6 +10,7 @@ import { fetchPlatformInfo } from "../electronAPI/platform"
 import { DesktopRequiredPage } from "../pages/DesktopRequiredPage"
 import { useCodeStore } from "../store/context"
 import { CodeAppLayout } from "./CodeAppLayout"
+
 export interface CodeLayoutProps {
     children: ReactNode
     isCodeModuleAvailable: boolean
@@ -67,7 +68,7 @@ export const CodeLayout = observer(({ children, isCodeModuleAvailable, workspace
         const loadTask = async () => {
             try {
                 if (codeStore.shouldUseRuntimeProductReads()) {
-                    await codeStore.loadRuntimeProductTask(workspaceId, taskId)
+                    await codeStore.loadRuntimeProductTask(workspaceId, taskId, { hydrateSessionEvents: false })
                     return
                 }
                 await codeStore.getTaskStore(workspaceId, taskId)
@@ -76,8 +77,8 @@ export const CodeLayout = observer(({ children, isCodeModuleAvailable, workspace
             }
         }
 
-        loadTask()
-    }, [workspaceId, taskId, hasInitialized, codeStore.runtimeProductStoreStatus])
+        void loadTask()
+    }, [workspaceId, taskId, hasInitialized, codeStore, codeStore.runtimeProductStoreStatus])
 
     // Check if tasks are loaded for the current workspace
     const tasksLoaded = !workspaceId || codeStore.tasks.loadedRepoIds.has(workspaceId)

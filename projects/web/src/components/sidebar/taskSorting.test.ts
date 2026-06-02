@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
-import type { TaskPreview } from "@/persistence/repoStore"
+import type { OpenADETaskPreview } from "../../../../openade-module/src"
 import { sortTaskPreviewsLikeSidebar } from "./taskSorting"
 
-function task(id: string, overrides: Partial<TaskPreview> = {}): TaskPreview {
+function task(id: string, overrides: Partial<OpenADETaskPreview> = {}): OpenADETaskPreview {
     return {
         id,
         slug: id,

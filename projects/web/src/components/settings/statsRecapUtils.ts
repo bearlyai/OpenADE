@@ -1,11 +1,21 @@
-import type { TaskPreview, TaskPreviewUsage } from "../../persistence/repoStore"
+import type { OpenADETaskPreview, OpenADETaskPreviewUsage } from "../../../../openade-module/src"
+import { formatDuration } from "../../persistence/taskStatsUtils"
 
 export interface StatsRecapRepoInput {
     id: string
     name: string
-    tasks: TaskPreview[]
+    tasks: StatsRecapTaskInput[]
 }
-import { formatDuration } from "../../persistence/taskStatsUtils"
+
+export interface StatsRecapTaskInput {
+    id: string
+    title: string
+    closed?: boolean
+    createdAt: string
+    lastEvent?: OpenADETaskPreview["lastEvent"]
+    lastEventAt?: string
+    usage?: OpenADETaskPreviewUsage
+}
 
 export interface StatsRecapPeriod {
     label: string
@@ -52,7 +62,7 @@ export interface StatsRecapSummary {
     totalTokens: number
 }
 
-const EMPTY_USAGE: TaskPreviewUsage = {
+const EMPTY_USAGE: OpenADETaskPreviewUsage = {
     inputTokens: 0,
     outputTokens: 0,
     totalCostUsd: 0,
@@ -61,7 +71,7 @@ const EMPTY_USAGE: TaskPreviewUsage = {
     durationMs: 0,
 }
 
-function getActivityAt(task: TaskPreview): string {
+function getActivityAt(task: StatsRecapTaskInput): string {
     return task.lastEventAt ?? task.lastEvent?.at ?? task.createdAt
 }
 
@@ -78,7 +88,7 @@ function isInPeriod(value: string, period: StatsRecapPeriod): boolean {
     return true
 }
 
-function getStatus(task: TaskPreview): { label: string; tone: StatsRecapTone; completed: boolean } {
+function getStatus(task: StatsRecapTaskInput): { label: string; tone: StatsRecapTone; completed: boolean } {
     if (task.closed) {
         return { label: "Closed", tone: "success", completed: true }
     }
@@ -97,7 +107,7 @@ function getStatus(task: TaskPreview): { label: string; tone: StatsRecapTone; co
     }
 }
 
-function getUsage(task: TaskPreview): TaskPreviewUsage {
+function getUsage(task: StatsRecapTaskInput): OpenADETaskPreviewUsage {
     return task.usage ?? EMPTY_USAGE
 }
 

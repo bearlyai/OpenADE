@@ -145,12 +145,25 @@ export class InputManager {
     /** Stop all processes associated with this task (used before closing).
      *  Only kills processes for worktree tasks — repo/global processes are shared and should persist. */
     private async stopTaskProcesses(): Promise<void> {
-        const env = this.taskModel?.environment
+        const taskModel = this.taskModel
+        const env = taskModel?.environment
         if (!env?.taskWorkingDir) return
 
         const task = this.store.tasks.getTask(this.taskId)
         if (task?.isolationStrategy?.type === "worktree") {
-            await this.store.repoProcesses.stopAllForContext({ type: "worktree", root: env.taskWorkingDir })
+            const repoId = taskModel?.repoId
+            const productAccess =
+                this.store.shouldUseRuntimeProductReads() && repoId
+                    ? {
+                          startProjectProcess: (args: { definitionId: string }) =>
+                              this.store.startProductProjectProcess({ repoId, taskId: this.taskId, definitionId: args.definitionId }),
+                          reconnectProjectProcess: (args: { processId: string }) =>
+                              this.store.reconnectProductProjectProcess({ repoId, taskId: this.taskId, processId: args.processId }),
+                          stopProjectProcess: (args: { processId: string }) =>
+                              this.store.stopProductProjectProcess({ repoId, taskId: this.taskId, processId: args.processId }),
+                      }
+                    : undefined
+            await this.store.repoProcesses.stopAllForContext({ type: "worktree", root: env.taskWorkingDir }, productAccess)
         }
     }
 

@@ -21,6 +21,7 @@ export const EnvironmentSetupView = observer(function EnvironmentSetupView({ tas
     const [error, setError] = useState<string | null>(null)
     const [isSettingUp, setIsSettingUp] = useState(false)
     const abortControllerRef = useRef<AbortController | null>(null)
+    const hasAutoStartedRef = useRef(false)
 
     const task = codeStore.tasks.getTask(taskModel.taskId)
     const repo = task ? codeStore.repos.getRepo(task.repoId) : null
@@ -45,7 +46,19 @@ export const EnvironmentSetupView = observer(function EnvironmentSetupView({ tas
         abortControllerRef.current = new AbortController()
 
         try {
-            // Fetch git info before setup
+            if (codeStore.shouldUseRuntimeProductReads()) {
+                setPhase("workspace")
+                await codeStore.prepareProductTaskEnvironment({ repoId: task.repoId, taskId: task.id })
+                setPhase("completing")
+                await codeStore.refreshProductStateAfterTaskMutation(task.id)
+                runInAction(() => {
+                    codeStore.tasks.invalidateTaskModel(task.id)
+                })
+                setPhase("complete")
+                onComplete()
+                return
+            }
+
             const gitInfo = await codeStore.repos.getGitInfo(task.repoId)
 
             const params: SetupParams = {
@@ -78,7 +91,7 @@ export const EnvironmentSetupView = observer(function EnvironmentSetupView({ tas
             setIsSettingUp(false)
             abortControllerRef.current = null
         }
-    }, [task, repo, onComplete])
+    }, [codeStore, task, repo, taskModel.taskId, onComplete])
 
     const handleCancel = useCallback(() => {
         if (abortControllerRef.current) {
@@ -93,10 +106,10 @@ export const EnvironmentSetupView = observer(function EnvironmentSetupView({ tas
     }, [runSetup])
 
     useEffect(() => {
-        if (!isSettingUp && !error && phase === "pending") {
-            runSetup()
-        }
-    }, [])
+        if (hasAutoStartedRef.current) return
+        hasAutoStartedRef.current = true
+        void runSetup()
+    }, [runSetup])
 
     const isolationStrategy = task?.isolationStrategy
     const strategyLabel = isolationStrategy

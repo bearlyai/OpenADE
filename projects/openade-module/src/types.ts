@@ -94,6 +94,18 @@ export interface OpenADETaskReadRequest extends OpenADETaskReadOptions {
     taskId: string
 }
 
+export interface OpenADETaskTitleGenerateRequest extends OpenADEClientRequest {
+    repoId: string
+    taskId: string
+    harnessId?: string
+}
+
+export interface OpenADETaskTitleGenerateResult {
+    repoId: string
+    taskId: string
+    title: string
+}
+
 export interface OpenADEReviewStartRequest extends OpenADEClientRequest {
     repoId: string
     taskId: string
@@ -237,6 +249,20 @@ export interface OpenADETaskEnvironmentSetupRequest extends OpenADEClientRequest
     setupEvent?: OpenADESetupEnvironmentEventCreateRequest
 }
 
+export interface OpenADETaskEnvironmentPrepareRequest extends OpenADEClientRequest {
+    repoId: string
+    taskId: string
+}
+
+export interface OpenADETaskEnvironmentPrepareResult {
+    repoId: string
+    taskId: string
+    deviceEnvironment: OpenADETaskDeviceEnvironment
+    setupEvent?: OpenADESetupEnvironmentEventCreateRequest
+    cwd: string
+    rootPath: string
+}
+
 export interface OpenADEActionStreamAppendRequest extends OpenADEClientRequest {
     taskId: string
     eventId: string
@@ -300,6 +326,7 @@ export interface OpenADEHyperPlanSubExecution {
     parentSessionId?: string
     status: "in_progress" | "completed" | "error" | "stopped"
     events: Array<Record<string, unknown> & { id: string }>
+    omittedEventCount?: number
     resultText?: string
     error?: string
     reconcileLabel?: string
@@ -515,6 +542,48 @@ export interface OpenADEProjectSearchResult {
     matches: OpenADEProjectSearchMatch[]
     truncated: boolean
 }
+
+export interface OpenADEProjectGitInfoRequest {
+    repoId: string
+}
+
+export type OpenADEProjectGitInfoResult =
+    | {
+          repoId: string
+          isGitRepo: true
+          repoRoot: string
+          relativePath: string
+          mainBranch: string
+          hasGhCli: boolean
+      }
+    | {
+          repoId: string
+          isGitRepo: false
+          error?: string
+      }
+
+export interface OpenADEProjectGitBranch {
+    name: string
+    isDefault: boolean
+    isRemote: boolean
+}
+
+export interface OpenADEProjectGitBranchesReadRequest {
+    repoId: string
+    includeRemote?: boolean
+}
+
+export interface OpenADEProjectGitBranchesReadResult {
+    repoId: string
+    branches: OpenADEProjectGitBranch[]
+    defaultBranch: string
+}
+
+export interface OpenADEProjectGitSummaryReadRequest {
+    repoId: string
+}
+
+export interface OpenADEProjectGitSummaryReadResult extends Omit<OpenADETaskGitSummaryResult, "taskId"> {}
 
 export type OpenADEProcsProcessType = "setup" | "daemon" | "task" | "check"
 
@@ -805,6 +874,39 @@ export interface OpenADETaskGitSummaryResult {
     untracked: OpenADETaskGitChangedFile[]
 }
 
+export interface OpenADETaskGitScopesReadRequest {
+    repoId: string
+    taskId: string
+    includeRemote?: boolean
+}
+
+export interface OpenADETaskGitBranchScope {
+    id: string
+    type: "branch"
+    name: string
+    ref: string
+    isDefault: boolean
+    isRemote: boolean
+}
+
+export interface OpenADETaskGitWorktreeScope {
+    id: string
+    type: "worktree"
+    worktreeId: string
+    branch: string
+    head: string
+    label: string
+}
+
+export type OpenADETaskGitScope = OpenADETaskGitBranchScope | OpenADETaskGitWorktreeScope
+
+export interface OpenADETaskGitScopesReadResult {
+    repoId: string
+    taskId: string
+    defaultBranch: string
+    scopes: OpenADETaskGitScope[]
+}
+
 export interface OpenADETaskChangesReadRequest {
     repoId: string
     taskId: string
@@ -872,6 +974,7 @@ export interface OpenADETaskFilePairReadResult {
 export interface OpenADETaskGitLogRequest {
     repoId: string
     taskId: string
+    scopeId?: string
     ref?: string
     limit?: number
     skip?: number
@@ -1029,6 +1132,29 @@ export interface OpenADETaskSnapshotPatchSliceReadResult {
     patchFileId?: string
     patch: string | null
 }
+
+export interface OpenADETaskResourceInventoryReadRequest {
+    repoId: string
+    taskId: string
+}
+
+export interface OpenADETaskResourceInventory {
+    repoId: string
+    taskId: string
+    taskTitle: string
+    isRunning: boolean
+    snapshotIds: string[]
+    images: Array<{ id: string; ext: string }>
+    sessions: Array<{ sessionId: string; harnessId: string }>
+    worktree: {
+        slug: string
+        branchName: string
+        sourceBranch: string
+        branchMerged: boolean | null
+    } | null
+}
+
+export type OpenADETaskResourceInventoryReadResult = OpenADETaskResourceInventory
 
 export interface OpenADETaskMetadataUpdateRequest extends OpenADEClientRequest {
     taskId: string

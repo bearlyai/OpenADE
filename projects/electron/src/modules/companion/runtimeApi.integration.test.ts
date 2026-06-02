@@ -174,6 +174,7 @@ function initializeGitRepo(repoPath: string): void {
     execGit(repoPath, ["config", "user.name", "Companion Test"])
     execGit(repoPath, ["add", "README.md"])
     execGit(repoPath, ["commit", "-m", "Initial companion fixture"])
+    execGit(repoPath, ["branch", "-M", "main"])
 }
 
 async function saveRuntimeSnapshotFixture(): Promise<void> {
@@ -449,6 +450,9 @@ describe("companion runtime API integration", () => {
                         "openade/project/files/fuzzySearch",
                         "openade/project/file/read",
                         "openade/project/search",
+                        "openade/project/git/info/read",
+                        "openade/project/git/branches/read",
+                        "openade/project/git/summary/read",
                         "openade/project/process/list",
                         "openade/project/process/start",
                         "openade/project/process/reconnect",
@@ -457,7 +461,9 @@ describe("companion runtime API integration", () => {
                         "openade/task/diff/read",
                         "openade/task/filePair/read",
                         "openade/task/git/log",
+                        "openade/task/git/scopes/read",
                         "openade/task/image/read",
+                        "openade/task/resourceInventory/read",
                         "openade/task/snapshot/patch/read",
                         "openade/task/snapshot/index/read",
                         "openade/task/snapshot/patch/readSlice",
@@ -503,6 +509,7 @@ describe("companion runtime API integration", () => {
                 "openade/action/create",
                 "openade/action/reconcileRuntime",
                 "openade/task/environment/setup",
+                "openade/task/environment/prepare",
                 "openade/snapshot/create",
                 "data/yjs/read",
                 "host/platform/info",
@@ -548,6 +555,7 @@ describe("companion runtime API integration", () => {
             [8, "openade/action/create", { taskId: "task-1" }],
             [9, "openade/action/reconcileRuntime", { taskId: "task-1", eventId: "event-1", status: "failed" }],
             [10, "openade/task/environment/setup", { taskId: "task-1" }],
+            [36, "openade/task/environment/prepare", { repoId: "repo-1", taskId: "task-1" }],
             [11, "openade/snapshot/create", { taskId: "task-1" }],
             [12, "data/file/save", { folder: "images", id: "blocked", ext: "txt", data: "blocked" }],
             [35, "data/file/load", { folder: "images", id: "phone-image", ext: "png" }],
@@ -576,6 +584,7 @@ describe("companion runtime API integration", () => {
             [45, "openade/task/git/commit/files/read", { repoId: "repo-1", taskId: "task-1", commit: "HEAD" }],
             [46, "openade/task/git/fileAtTreeish/read", { repoId: "repo-1", taskId: "task-1", treeish: "HEAD", filePath: "README.md" }],
             [47, "openade/task/git/commit/filePatch/read", { repoId: "repo-1", taskId: "task-1", commit: "HEAD", filePath: "README.md" }],
+            [48, "openade/task/title/generate", { repoId: "repo-1", taskId: "task-1" }],
             [38, "remote/device/list"],
             [39, "remote/device/revoke", { deviceId: "blocked-device" }],
             [40, "remote/device/dropAll"],
@@ -634,6 +643,31 @@ describe("companion runtime API integration", () => {
                 221
             )
         ).toMatchObject({ results: expect.arrayContaining(["README.md"]) })
+        expect(
+            runtimeResult<{ isGitRepo: boolean; mainBranch?: string }>(
+                await runtimeRequest(socket, 222, "openade/project/git/info/read", { repoId: "repo-1" }),
+                222
+            )
+        ).toMatchObject({ isGitRepo: true, mainBranch: "main" })
+        expect(
+            runtimeResult<{ defaultBranch: string; branches: Array<{ name: string; isDefault: boolean }> }>(
+                await runtimeRequest(socket, 223, "openade/project/git/branches/read", { repoId: "repo-1", includeRemote: true }),
+                223
+            )
+        ).toMatchObject({
+            defaultBranch: "main",
+            branches: [expect.objectContaining({ name: "main", isDefault: true })],
+        })
+        expect(
+            runtimeResult<{ branch: string | null; hasChanges: boolean; untracked: Array<{ path: string }> }>(
+                await runtimeRequest(socket, 224, "openade/project/git/summary/read", { repoId: "repo-1" }),
+                224
+            )
+        ).toMatchObject({
+            branch: "main",
+            hasChanges: true,
+            untracked: [expect.objectContaining({ path: "openade.toml" })],
+        })
         expect(
             runtimeResult<{ processes: Array<{ id: string; name: string; cwd: string }> }>(
                 await runtimeRequest(socket, 32, "openade/project/process/list", { repoId: "repo-1" }),
@@ -715,6 +749,18 @@ describe("companion runtime API integration", () => {
                 24
             )
         ).toMatchObject({ commits: [expect.objectContaining({ message: "Initial companion fixture", author: "Companion Test" })] })
+        expect(
+            runtimeResult<{ defaultBranch: string; scopes: Array<{ id: string; type: string; name?: string }> }>(
+                await runtimeRequest(socket, 241, "openade/task/git/scopes/read", { repoId: "repo-1", taskId: "task-1", includeRemote: true }),
+                241
+            )
+        ).toMatchObject({
+            defaultBranch: "main",
+            scopes: expect.arrayContaining([
+                expect.objectContaining({ id: "branch:HEAD", type: "branch", name: "HEAD" }),
+                expect.objectContaining({ id: "branch:main", type: "branch", name: "main" }),
+            ]),
+        })
         const initialCommit = gitOutput(repoPath, ["rev-parse", "HEAD"])
         await expect(
             trustedRuntimeResult("trusted-git-commit-files", "openade/task/git/commit/files/read", {
@@ -814,6 +860,17 @@ describe("companion runtime API integration", () => {
             imageId: "phone-image",
             mediaType: "image/png",
             data: Buffer.from("paired image bytes").toString("base64"),
+        })
+        expect(
+            runtimeResult<{ taskId: string; snapshotIds: string[]; images: Array<{ id: string; ext: string }>; worktree: null }>(
+                await runtimeRequest(socket, 40, "openade/task/resourceInventory/read", { repoId: "repo-1", taskId: "task-1" }),
+                40
+            )
+        ).toMatchObject({
+            taskId: "task-1",
+            snapshotIds: ["snapshot-1"],
+            images: [{ id: "phone-image", ext: "png" }],
+            worktree: null,
         })
         expect(
             runtimeResult<{ data: string | null }>(

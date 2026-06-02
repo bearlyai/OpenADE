@@ -83,11 +83,13 @@ export const EventItem = observer(
         event,
         isLast,
         isLatestPlan,
+        onRequestFullHistory,
     }: {
         taskId: string
         event: CodeEvent
         isLast: boolean
         isLatestPlan: boolean
+        onRequestFullHistory?: () => void
     }) => {
         const codeStore = useCodeStore()
         const taskUIState = codeStore.tasks.getTaskUIState(taskId)
@@ -109,7 +111,7 @@ export const EventItem = observer(
 
         switch (getEventRenderKind(event)) {
             case "hyperplan":
-                return <HyperPlanEventItem {...baseProps} event={event as ActionEvent} taskId={taskId} />
+                return <HyperPlanEventItem {...baseProps} event={event as ActionEvent} taskId={taskId} onRequestFullHistory={onRequestFullHistory} />
             case "action": {
                 const actionEvent = event as ActionEvent
                 const isPlan = isPlanOrRevise(actionEvent)
@@ -118,7 +120,14 @@ export const EventItem = observer(
                 const displayMode: DisplayMode = isPlan ? "full" : "compact"
 
                 return (
-                    <ActionEventItem {...baseProps} event={actionEvent} displayMode={displayMode} taskId={taskId} readOnlyComments={isPlan && !isLatestPlan} />
+                    <ActionEventItem
+                        {...baseProps}
+                        event={actionEvent}
+                        displayMode={displayMode}
+                        taskId={taskId}
+                        readOnlyComments={isPlan && !isLatestPlan}
+                        onRequestFullHistory={onRequestFullHistory}
+                    />
                 )
             }
             case "setup_environment":

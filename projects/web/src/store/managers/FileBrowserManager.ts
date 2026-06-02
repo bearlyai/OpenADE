@@ -118,6 +118,10 @@ export class FileBrowserManager {
         return this.productAccess?.getContext(this.workingDir) ?? null
     }
 
+    private get hasProductContext(): boolean {
+        return this.productAccess !== null && this.productContext !== null
+    }
+
     private relativePathForProduct(absolutePath: string): string | null {
         if (!this.workingDir) return null
         const relativePath = getRelativePath(this.workingDir, absolutePath)
@@ -246,10 +250,18 @@ export class FileBrowserManager {
             // The showHidden toggle controls whether user sees dotfiles like .env
             const result =
                 (await this.listDirectoryViaProduct(dirPath)) ??
-                (await filesApi.describePath({
-                    path: dirPath,
-                    showHidden: true,
-                }))
+                (this.hasProductContext
+                    ? null
+                    : await filesApi.describePath({
+                          path: dirPath,
+                          showHidden: true,
+                      }))
+            if (!result) {
+                runInAction(() => {
+                    this.loadingPaths.delete(dirPath)
+                })
+                return
+            }
             runInAction(() => {
                 if (result.type === "dir") {
                     // Filter out infrastructure directories (always hidden)
@@ -348,12 +360,21 @@ export class FileBrowserManager {
                         matchDirs: false,
                         limit: 50,
                     })) ??
-                    (await filesApi.fuzzySearch({
-                        dir: this.workingDir,
-                        query,
-                        matchDirs: false,
-                        limit: 50,
-                    }))
+                    (this.hasProductContext
+                        ? null
+                        : await filesApi.fuzzySearch({
+                              dir: this.workingDir,
+                              query,
+                              matchDirs: false,
+                              limit: 50,
+                          }))
+                if (!result) {
+                    runInAction(() => {
+                        this.searchResults = []
+                        this.searchLoading = false
+                    })
+                    return
+                }
                 runInAction(() => {
                     // Filter out paths inside infra dirs like .git/
                     this.searchResults = result.results.filter((path) => {
@@ -416,12 +437,15 @@ export class FileBrowserManager {
                     matchDirs,
                     limit: FILE_REFERENCE_SEARCH_LIMIT,
                 })) ??
-                (await filesApi.fuzzySearch({
-                    dir: this.workingDir,
-                    query,
-                    matchDirs,
-                    limit: FILE_REFERENCE_SEARCH_LIMIT,
-                }))
+                (this.hasProductContext
+                    ? null
+                    : await filesApi.fuzzySearch({
+                          dir: this.workingDir,
+                          query,
+                          matchDirs,
+                          limit: FILE_REFERENCE_SEARCH_LIMIT,
+                      }))
+            if (!result) return null
             const match = chooseBestFuzzyReferenceMatch(result.results, query)
             return match ? joinPath(this.workingDir, match) : null
         } catch {
@@ -518,11 +542,21 @@ export class FileBrowserManager {
         try {
             const result =
                 (await this.readFileViaProduct(absolutePath)) ??
-                (await filesApi.describePath({
-                    path: absolutePath,
-                    readContents: true,
-                    maxReadSize: MAX_FILE_READ_SIZE,
-                }))
+                (this.hasProductContext
+                    ? null
+                    : await filesApi.describePath({
+                          path: absolutePath,
+                          readContents: true,
+                          maxReadSize: MAX_FILE_READ_SIZE,
+                      }))
+            if (!result) {
+                runInAction(() => {
+                    if (this.activeFile !== absolutePath) return
+                    this.fileError = "File not found"
+                    this.fileLoading = false
+                })
+                return
+            }
             runInAction(() => {
                 if (this.activeFile !== absolutePath) return
                 if (result.type === "file") {

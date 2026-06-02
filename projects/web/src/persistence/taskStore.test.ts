@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest"
-import type { RepoStore, TaskPreview } from "./repoStore"
+import type { OpenADETaskPreview } from "../../../openade-module/src"
+import type { RepoStore } from "./repoStore"
 import type { TaskStore } from "./taskStore"
 import { syncTaskPreviewUsageFromStore } from "./taskStore"
 
-function repoStoreWithPreview(preview: TaskPreview): RepoStore {
+function repoStoreWithPreview(preview: OpenADETaskPreview): RepoStore {
     return {
         repos: {
-            update: vi.fn((_repoId: string, recipe: (draft: { tasks: TaskPreview[] }) => void) => {
+            update: vi.fn((_repoId: string, recipe: (draft: { tasks: OpenADETaskPreview[] }) => void) => {
                 recipe({ tasks: [preview] })
             }),
         },
@@ -26,7 +27,7 @@ function taskStoreWithMeta(id: string): TaskStore {
 
 describe("syncTaskPreviewUsageFromStore", () => {
     it("updates usage on the requested preview id", () => {
-        const preview: TaskPreview = {
+        const preview: OpenADETaskPreview = {
             id: "task-1",
             slug: "task-1",
             title: "Task",
@@ -48,7 +49,7 @@ describe("syncTaskPreviewUsageFromStore", () => {
     })
 
     it("rejects mismatched task docs instead of updating the wrong preview", () => {
-        const preview: TaskPreview = {
+        const preview: OpenADETaskPreview = {
             id: "task-1",
             slug: "task-1",
             title: "Task",

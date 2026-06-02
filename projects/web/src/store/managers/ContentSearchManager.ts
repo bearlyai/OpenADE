@@ -1,6 +1,6 @@
 import { makeAutoObservable, runInAction } from "mobx"
-import type { OpenADEProjectFileReadResult, OpenADEProjectSearchResult } from "../../../../openade-module/src"
-import { type ContentSearchMatch, type DescribePathResponse, filesApi } from "../../electronAPI/files"
+import type { OpenADEProjectFileReadResult, OpenADEProjectSearchMatch, OpenADEProjectSearchResult } from "../../../../openade-module/src"
+import { type DescribePathResponse, filesApi } from "../../electronAPI/files"
 
 const MAX_FILE_READ_SIZE = 5 * 1024 * 1024 // 5MB
 const CONTENT_RESULTS_LIMIT = 100 // Max content matches to show
@@ -28,7 +28,7 @@ interface ProductProjectSearchAccess {
 export class ContentSearchManager {
     // Search state
     query = ""
-    contentResults: ContentSearchMatch[] = [] // Content matches
+    contentResults: OpenADEProjectSearchMatch[] = [] // Content matches
     loading = false
     contentTruncated = false
     error: string | null = null
@@ -55,7 +55,7 @@ export class ContentSearchManager {
         return this.productAccess?.getContext(this.workingDir) ?? null
     }
 
-    private async searchContent(query: string): Promise<{ matches: ContentSearchMatch[]; truncated: boolean }> {
+    private async searchContent(query: string): Promise<{ matches: OpenADEProjectSearchMatch[]; truncated: boolean }> {
         const productAccess = this.productAccess
         const productContext = this.productContext
         if (productAccess && productContext) {
@@ -66,13 +66,10 @@ export class ContentSearchManager {
                 limit: CONTENT_RESULTS_LIMIT,
                 caseSensitive: false,
             })
-            return {
-                matches: result.matches.map((match) => ({ ...match, file: match.path })),
-                truncated: result.truncated,
-            }
+            return { matches: result.matches, truncated: result.truncated }
         }
 
-        return filesApi.contentSearch({
+        const result = await filesApi.contentSearch({
             dir: this.workingDir,
             query,
             limit: CONTENT_RESULTS_LIMIT,
@@ -80,6 +77,16 @@ export class ContentSearchManager {
             regex: false,
             rankByHotFiles: true,
         })
+        return {
+            matches: result.matches.map((match) => ({
+                path: match.file,
+                line: match.line,
+                content: match.content,
+                matchStart: match.matchStart,
+                matchEnd: match.matchEnd,
+            })),
+            truncated: result.truncated,
+        }
     }
 
     private async readPreviewFile(absolutePath: string, relativePath: string): Promise<DescribePathResponse> {
@@ -225,8 +232,8 @@ export class ContentSearchManager {
     /**
      * Load file preview for a content match
      */
-    async loadPreviewForMatch(match: ContentSearchMatch): Promise<void> {
-        const absolutePath = `${this.workingDir}/${match.file}`
+    async loadPreviewForMatch(match: OpenADEProjectSearchMatch): Promise<void> {
+        const absolutePath = `${this.workingDir}/${match.path}`
 
         // Skip if already loading this file
         if (this.previewPath === absolutePath && this.previewLoading) {
@@ -244,7 +251,7 @@ export class ContentSearchManager {
         this.previewError = null
 
         try {
-            const response = await this.readPreviewFile(absolutePath, match.file)
+            const response = await this.readPreviewFile(absolutePath, match.path)
 
             runInAction(() => {
                 // Only update if still viewing this file

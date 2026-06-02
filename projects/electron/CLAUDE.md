@@ -8,7 +8,7 @@
 ## Code Host Bridge Contracts
 
 - `src/modules/code/hostBridgeTypes.ts` owns browser-safe DTOs for desktop-specific trusted host utilities such as binaries, platform, shell, frame colors, and code-module capability probes.
-- `src/modules/code/gitBridgeTypes.ts` owns browser-safe DTOs for raw trusted-local `git/*` bridge methods. Product-scoped task git DTOs still come from `projects/openade-module/src/types.ts`.
+- `src/modules/code/gitBridgeTypes.ts` owns browser-safe DTOs for raw trusted-local `git/*` bridge methods. Product-scoped task git scope/read/commit DTOs still come from `projects/openade-module/src/types.ts`, and scoped git scope reads must not expose raw worktree paths to renderers or paired devices.
 - `src/modules/deviceConfigTypes.ts` owns browser-safe device config result DTOs. Snapshot patch index DTOs and indexing/slicing helpers live in `projects/openade-module/src/snapshotPatchIndex.ts`; `src/modules/code/snapshotsIndex.ts` should stay a compatibility re-export for Electron callers.
 - `openade.toml` process/cron DTOs and parser/serializer live in `projects/openade-module/src/types.ts` and `projects/openade-module/src/procs.ts`. Electron procs modules should alias or re-export those product-owned contracts, not keep a second parser or type set.
 - Scoped OpenADE project file tree/read/write/filename-search/content-search behavior, optional task scoping, task workdir resolution, path containment, hidden/generated filtering, file-size limits, and file metadata live in `projects/openade-module/src/scopedProjectHost.ts`. The companion runtime gateway should import those product-owned helpers instead of carrying Electron-only copies.
@@ -16,7 +16,8 @@
 - Scoped OpenADE task terminal id derivation and raw PTY base64/plain-text conversion helpers live in `projects/openade-module/src/scopedTaskTerminal.ts`. Electron may keep PTY lifecycle plumbing, but should not maintain a second terminal hash or encoding implementation.
 - Stable OpenADE task and queued-turn ids derived from `clientRequestId` live in `projects/openade-module/src/clientRequestIds.ts`. Electron should import those helpers instead of carrying request-id hashing logic.
 - OpenADE task snapshot patch/index/slice read semantics live in `projects/openade-module/src/taskSnapshotPatchReads.ts`. Electron should keep storage plumbing in `src/modules/code/snapshots.ts` and pass those loaders to the product helper instead of duplicating inline/external patch read rules.
-- Low-level harness IPC event/query DTOs live in `projects/harness/src/types.ts` as `HarnessIpc*`. Electron harness bridge code should import those types from `@openade/harness` instead of declaring renderer-matching copies.
+- OpenADE task resource inventory extraction lives in `projects/openade-module/src/taskResourceInventory.ts`. Electron may compute host-specific worktree branch merge status, but should not duplicate snapshot/image/session event scans in `runtimeGateway.ts`.
+- Low-level harness IPC event/query DTOs and harness install status DTOs live in `projects/harness/src/types.ts` as `HarnessIpc*` and `HarnessInstallStatus`. Electron harness bridge code should import those types from `@openade/harness` instead of declaring renderer-matching copies.
 - Renderer wrappers under `projects/web/src/electronAPI` should alias those types instead of re-declaring matching Electron main-process interfaces.
 
 ## Packaged Smoke Tests

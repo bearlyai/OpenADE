@@ -445,6 +445,43 @@ describe("HyperPlan handoff consistency", () => {
     })
 })
 
+describe("TaskModel stats", () => {
+    it("uses runtime preview usage instead of scanning task events when runtime reads are active", () => {
+        const task = createTask([createActionEvent({ id: "a1", harnessId: "codex", modelId: "gpt-test" })])
+        const getRuntimeProductTaskPreviewDto = vi.fn(() => ({
+            usage: {
+                usageVersion: 2,
+                inputTokens: 123,
+                outputTokens: 45,
+                totalCostUsd: 0.42,
+                eventCount: 1,
+                costByModel: { "gpt-test": 0.42 },
+                durationMs: 6_000,
+            },
+        }))
+        const store = {
+            execution: {
+                onAfterEvent: () => () => {},
+            },
+            tasks: {
+                getTask: (taskId: string) => (taskId === task.id ? task : null),
+            },
+            shouldUseRuntimeProductReads: () => true,
+            getRuntimeProductTaskPreviewDto,
+        } as unknown as CodeStore
+
+        const model = new TaskModel(store, task.id)
+
+        expect(model.stats).toEqual({
+            totalCostUsd: 0.42,
+            durationMs: 6_000,
+            inputTokens: 123,
+            outputTokens: 45,
+        })
+        expect(getRuntimeProductTaskPreviewDto).toHaveBeenCalledWith("repo-1", "task-1")
+    })
+})
+
 describe("TaskModel environment loading", () => {
     it("does not force setup for legacy head-mode tasks without device environment rows", async () => {
         const task: Task = createTask([])

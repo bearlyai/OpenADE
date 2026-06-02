@@ -1,8 +1,10 @@
-import type { TaskPreviewLastEvent } from "@/persistence/repoStore"
+import type { OpenADETaskPreview } from "../../../../openade-module/src"
+
+type OpenADETaskPreviewLastEvent = NonNullable<OpenADETaskPreview["lastEvent"]>
 
 const zeroTime = new Date(0).toISOString()
 
-export function runtimeFirstTaskDisplayEvent(lastEvent: TaskPreviewLastEvent | undefined, isRunning: boolean): TaskPreviewLastEvent | null {
+export function runtimeFirstTaskDisplayEvent(lastEvent: OpenADETaskPreviewLastEvent | undefined, isRunning: boolean): OpenADETaskPreviewLastEvent | null {
     if (lastEvent?.status === "in_progress") return lastEvent
     if (!isRunning) return null
 

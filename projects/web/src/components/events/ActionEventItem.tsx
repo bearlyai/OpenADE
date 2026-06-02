@@ -18,6 +18,7 @@ interface ActionEventItemProps extends BaseEventItemProps {
     displayMode: DisplayMode
     taskId: string
     readOnlyComments?: boolean
+    onRequestFullHistory?: () => void
 }
 
 function getEventIcon(sourceType: ActionEvent["source"]["type"], userLabel?: string) {
@@ -55,7 +56,7 @@ export function getReviewUserInstructions(event: ActionEvent): string | undefine
     return text ? text : undefined
 }
 
-export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: ActionEventItemProps) => {
+export const ActionEventItem = observer(({ event, expanded, onToggle, taskId, onRequestFullHistory }: ActionEventItemProps) => {
     const codeStore = useCodeStore()
     const isPlan = isPlanOrRevise(event)
     const { icon, label } = getEventIcon(event.source.type, event.source.userLabel)
@@ -122,11 +123,13 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId }: 
                 <div className="ml-5 border-l-2 border-primary/20">
                     <InlineMessages
                         events={event.execution.events}
+                        omittedEventCount={event.execution.omittedEventCount}
                         harnessId={event.execution.harnessId ?? "claude-code"}
                         sourceType={event.source.type}
                         sessionInfo={sessionInfo}
                         taskId={taskId}
                         actionEventId={event.id}
+                        onRequestFullHistory={onRequestFullHistory}
                     />
                 </div>
             )}

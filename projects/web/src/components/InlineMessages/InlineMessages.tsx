@@ -12,7 +12,7 @@ import { InlineWrapper } from "./wrappers/InlineWrapper"
 import { PillGroup } from "./wrappers/PillGroup"
 import { RowWrapper } from "./wrappers/RowWrapper"
 
-const INITIAL_RENDERABLE_TAIL_COUNT = 160
+const INITIAL_STREAM_EVENT_TAIL_COUNT = 360
 
 export interface SessionInfo {
     sessionId?: string
@@ -21,11 +21,13 @@ export interface SessionInfo {
 
 export interface InlineMessagesProps {
     events: HarnessStreamEvent[]
+    omittedEventCount?: number
     harnessId: HarnessId
     sourceType: ActionEventSource["type"]
     sessionInfo?: SessionInfo
     taskId: string
     actionEventId: string
+    onRequestFullHistory?: () => void
 }
 
 function getGroupId(group: MergedGroup, index: number): string {
@@ -62,9 +64,27 @@ function toggleSet(set: Set<string>, id: string): Set<string> {
     return next
 }
 
-export function InlineMessages({ events, harnessId, sourceType, sessionInfo: _sessionInfo, taskId, actionEventId }: InlineMessagesProps) {
+export function InlineMessages({
+    events,
+    omittedEventCount = 0,
+    harnessId,
+    sourceType,
+    sessionInfo: _sessionInfo,
+    taskId,
+    actionEventId,
+    onRequestFullHistory,
+}: InlineMessagesProps) {
+    const [showAllRenderables, setShowAllRenderables] = useState(false)
+    const [fullHistoryRequested, setFullHistoryRequested] = useState(false)
+    const localHiddenStreamEventCount = showAllRenderables ? 0 : Math.max(0, events.length - INITIAL_STREAM_EVENT_TAIL_COUNT)
+    const hiddenStreamEventCount = omittedEventCount + localHiddenStreamEventCount
+    const eventsForGrouping = useMemo(
+        () => (localHiddenStreamEventCount > 0 ? events.slice(localHiddenStreamEventCount) : events),
+        [events, localHiddenStreamEventCount]
+    )
+
     // 1. Group raw events (no tool merging - groupByRenderMode handles pill grouping)
-    const groups = useMemo(() => groupStreamEvents(events, harnessId), [events, harnessId])
+    const groups = useMemo(() => groupStreamEvents(eventsForGrouping, harnessId), [eventsForGrouping, harnessId])
 
     // 2. Find last text index for context
     const lastTextIndex = useMemo(() => {
@@ -114,26 +134,31 @@ export function InlineMessages({ events, harnessId, sourceType, sessionInfo: _se
     }
 
     const commentCtx: CommentContext = useMemo(() => ({ taskId, actionEventId }), [taskId, actionEventId])
-    const [showAllRenderables, setShowAllRenderables] = useState(false)
 
-    if (renderables.length === 0) return null
+    if (renderables.length === 0 && hiddenStreamEventCount === 0) return null
 
-    const hiddenRenderableCount = showAllRenderables ? 0 : Math.max(0, renderables.length - INITIAL_RENDERABLE_TAIL_COUNT)
-    const visibleRenderables = hiddenRenderableCount > 0 ? renderables.slice(hiddenRenderableCount) : renderables
+    const handleShowEarlier = () => {
+        setShowAllRenderables(true)
+        setFullHistoryRequested(true)
+        onRequestFullHistory?.()
+    }
 
     // 6. Render
     return (
         <div className="flex flex-col">
-            {hiddenRenderableCount > 0 && (
+            {hiddenStreamEventCount > 0 && (
                 <button
                     type="button"
                     className="btn border-t border-border px-3 py-2 text-left text-xs text-muted hover:bg-base-200 hover:text-base-content"
-                    onClick={() => setShowAllRenderables(true)}
+                    onClick={handleShowEarlier}
+                    disabled={fullHistoryRequested && omittedEventCount > 0}
                 >
-                    Show {hiddenRenderableCount.toLocaleString()} earlier items
+                    {fullHistoryRequested && omittedEventCount > 0
+                        ? `Loading ${omittedEventCount.toLocaleString()} earlier stream events...`
+                        : `Show ${hiddenStreamEventCount.toLocaleString()} earlier stream events`}
                 </button>
             )}
-            {visibleRenderables.map((item) => {
+            {renderables.map((item) => {
                 if (item.mode === "inline") {
                     const renderer = getRenderer(item.item.group)
                     return <InlineWrapper key={item.item.id}>{renderer.renderContent(item.item.group, commentCtx)}</InlineWrapper>

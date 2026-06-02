@@ -43,6 +43,16 @@ import {
 } from "./scopedTaskTerminal"
 import { buildOpenADESnapshotPatchIndex } from "./snapshotPatchIndex"
 import { readOpenADETaskSnapshotIndex, readOpenADETaskSnapshotPatch, readOpenADETaskSnapshotPatchSlice } from "./taskSnapshotPatchReads"
+import { buildOpenADETaskEnvironmentSetupOutput } from "./taskEnvironment"
+import { buildOpenADETaskResourceInventory } from "./taskResourceInventory"
+import {
+    buildOpenADETaskTitlePrompt,
+    extractOpenADETaskTitleFromStreamEvent,
+    fallbackOpenADETaskTitle,
+    OPENADE_TASK_TITLE_OUTPUT_SCHEMA,
+    OPENADE_TASK_TITLE_SYSTEM_PROMPT,
+    titleFromStructuredOutput,
+} from "./taskTitle"
 import type {
     OpenADEActionEventCreateRequest,
     OpenADEActionEventSource,
@@ -50,6 +60,12 @@ import type {
     OpenADEHyperPlanStrategy,
     OpenADEProcsConfig,
     OpenADEProject,
+    OpenADEProjectGitBranchesReadRequest,
+    OpenADEProjectGitBranchesReadResult,
+    OpenADEProjectGitInfoRequest,
+    OpenADEProjectGitInfoResult,
+    OpenADEProjectGitSummaryReadRequest,
+    OpenADEProjectGitSummaryReadResult,
     OpenADEProjectProcessConfigError,
     OpenADEProjectProcessDefinition,
     OpenADEProjectProcessInstance,
@@ -84,12 +100,23 @@ import type {
     OpenADETaskGitLogEntry,
     OpenADETaskGitLogRequest,
     OpenADETaskGitLogResult,
+    OpenADETaskGitBranchScope,
     OpenADETaskGitChangeStats,
+    OpenADETaskGitScope,
+    OpenADETaskGitScopesReadRequest,
+    OpenADETaskGitScopesReadResult,
     OpenADETaskGitSummaryRequest,
     OpenADETaskGitSummaryResult,
+    OpenADETaskGitWorktreeScope,
     OpenADETaskImageReadRequest,
     OpenADETaskImageReadResult,
     OpenADETaskImageReference,
+    OpenADETaskEnvironmentPrepareRequest,
+    OpenADETaskEnvironmentPrepareResult,
+    OpenADETaskResourceInventoryReadRequest,
+    OpenADETaskResourceInventoryReadResult,
+    OpenADETaskTitleGenerateRequest,
+    OpenADETaskTitleGenerateResult,
     OpenADETaskTerminalMutationResult,
     OpenADETaskTerminalOutputChunk,
     OpenADETaskTerminalReconnectRequest,
@@ -273,10 +300,9 @@ function scopedTaskSummaryFiles(stdout: string): OpenADETaskGitChangedFile[] {
     return parseScopedNameStatusOutput(stdout).map((file) => ({ ...file, binary: isScopedTaskBinaryPath(file.path) }))
 }
 
-async function scopedTaskGitSummary(
-    params: OpenADETaskGitSummaryRequest & { repo: OpenADEProject; task: OpenADETask }
-): Promise<OpenADETaskGitSummaryResult> {
-    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+type ScopedGitSummary = Omit<OpenADETaskGitSummaryResult, "repoId" | "taskId">
+
+async function scopedGitSummary(workDir: string): Promise<ScopedGitSummary> {
     const branchResult = await scopedGit(["rev-parse", "--abbrev-ref", "HEAD"], workDir)
     const branchName = branchResult.success ? branchResult.stdout.trim() : ""
     const branch = branchName && branchName !== "HEAD" ? branchName : null
@@ -306,8 +332,6 @@ async function scopedTaskGitSummary(
         : []
 
     return {
-        repoId: params.repoId,
-        taskId: params.taskId,
         branch,
         headCommit,
         ahead,
@@ -324,6 +348,344 @@ async function scopedTaskGitSummary(
     }
 }
 
+async function scopedTaskGitSummary(
+    params: OpenADETaskGitSummaryRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskGitSummaryResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        ...(await scopedGitSummary(workDir)),
+    }
+}
+
+function normalizeScopedGitBranchName(value: string): string {
+    return value.trim().replace(/^refs\/heads\//, "")
+}
+
+function scopedTaskGitBranchScopes(stdout: string, defaultBranch: string, isRemote: boolean): OpenADETaskGitBranchScope[] {
+    return stdout
+        .split("\n")
+        .map((branch) => normalizeScopedGitBranchName(branch))
+        .filter((branch) => branch.length > 0 && !branch.includes("HEAD"))
+        .map((name) => ({
+            id: `branch:${name}`,
+            type: "branch" as const,
+            name,
+            ref: name,
+            isDefault: name.replace(/^origin\//, "") === defaultBranch,
+            isRemote,
+        }))
+}
+
+function scopedTaskGitDefaultBranch(workDir: string): Promise<string> {
+    return (async () => {
+        const remoteHeadResult = await scopedGit(["symbolic-ref", "refs/remotes/origin/HEAD"], workDir)
+        if (remoteHeadResult.success) {
+            const remoteHead = remoteHeadResult.stdout.trim().replace("refs/remotes/origin/", "")
+            if (remoteHead) return remoteHead
+        }
+
+        const mainResult = await scopedGit(["show-ref", "--verify", "refs/heads/main"], workDir)
+        if (mainResult.success) return "main"
+
+        const masterResult = await scopedGit(["show-ref", "--verify", "refs/heads/master"], workDir)
+        if (masterResult.success) return "master"
+
+        return "main"
+    })()
+}
+
+function scopedGhAuthenticated(cwd: string): Promise<boolean> {
+    return new Promise((resolve) => {
+        execFile("gh", ["auth", "status"], { cwd, timeout: 5000 }, (error) => {
+            resolve(!error)
+        })
+    })
+}
+
+async function scopedProjectGitInfo(params: OpenADEProjectGitInfoRequest & { repo: OpenADEProject }): Promise<OpenADEProjectGitInfoResult> {
+    try {
+        const gitInfo = await scopedGitRepositoryInfo(params.repo.path)
+        return {
+            repoId: params.repoId,
+            isGitRepo: true,
+            repoRoot: gitInfo.repoRoot,
+            relativePath: gitInfo.relativePath,
+            mainBranch: gitInfo.defaultBranch,
+            hasGhCli: await scopedGhAuthenticated(gitInfo.repoRoot),
+        }
+    } catch (error) {
+        return {
+            repoId: params.repoId,
+            isGitRepo: false,
+            error: error instanceof Error ? error.message : "Repository is not a git directory",
+        }
+    }
+}
+
+function scopedProjectGitBranchesFromOutput(stdout: string, defaultBranch: string, isRemote: boolean): OpenADEProjectGitBranchesReadResult["branches"] {
+    return stdout
+        .split("\n")
+        .map((branch) => normalizeScopedGitBranchName(branch))
+        .filter((branch) => branch.length > 0 && !branch.includes("HEAD"))
+        .map((name) => ({
+            name,
+            isDefault: name.replace(/^origin\//, "") === defaultBranch,
+            isRemote,
+        }))
+}
+
+async function scopedProjectGitBranches(
+    params: OpenADEProjectGitBranchesReadRequest & { repo: OpenADEProject }
+): Promise<OpenADEProjectGitBranchesReadResult> {
+    const gitInfo = await scopedGitRepositoryInfo(params.repo.path)
+    const localBranchesResult = await scopedGitRequire(["branch", "--format=%(refname:short)"], gitInfo.repoRoot, "Failed to list project git branches")
+    const branches = scopedProjectGitBranchesFromOutput(localBranchesResult, gitInfo.defaultBranch, false)
+    const localNames = new Set(branches.map((branch) => branch.name))
+
+    if (params.includeRemote) {
+        const remoteBranchesResult = await scopedGit(["branch", "-r", "--format=%(refname:short)"], gitInfo.repoRoot)
+        if (remoteBranchesResult.success) {
+            for (const remoteBranch of scopedProjectGitBranchesFromOutput(remoteBranchesResult.stdout, gitInfo.defaultBranch, true)) {
+                const localName = remoteBranch.name.replace(/^origin\//, "")
+                if (!localNames.has(localName) && !localNames.has(remoteBranch.name)) branches.push(remoteBranch)
+            }
+        }
+    }
+
+    branches.sort((a, b) => {
+        if (a.isDefault && !b.isDefault) return -1
+        if (!a.isDefault && b.isDefault) return 1
+        return a.name.localeCompare(b.name)
+    })
+
+    return {
+        repoId: params.repoId,
+        branches,
+        defaultBranch: gitInfo.defaultBranch,
+    }
+}
+
+async function scopedProjectGitSummary(params: OpenADEProjectGitSummaryReadRequest & { repo: OpenADEProject }): Promise<OpenADEProjectGitSummaryReadResult> {
+    const gitInfo = await scopedGitRepositoryInfo(params.repo.path)
+    return {
+        repoId: params.repoId,
+        ...(await scopedGitSummary(gitInfo.repoRoot)),
+    }
+}
+
+function scopedTaskGitWorktreeEntries(stdout: string): Array<{ scope: OpenADETaskGitWorktreeScope; path: string }> {
+    const entries: Array<{ scope: OpenADETaskGitWorktreeScope; path: string }> = []
+    const lines = stdout.split("\n")
+    let current: { path?: string; head?: string; branch?: string } = {}
+
+    const pushCurrent = () => {
+        if (!current.path || !current.head) {
+            current = {}
+            return
+        }
+        const worktreeId = path.basename(current.path)
+        if (!worktreeId) {
+            current = {}
+            return
+        }
+        const branch = current.branch ? normalizeScopedGitBranchName(current.branch) : ""
+        entries.push({
+            path: current.path,
+            scope: {
+                id: `worktree:${worktreeId}`,
+                type: "worktree",
+                worktreeId,
+                branch,
+                head: current.head,
+                label: worktreeId,
+            },
+        })
+        current = {}
+    }
+
+    for (const line of lines) {
+        if (line.startsWith("worktree ")) {
+            if (current.path) pushCurrent()
+            current.path = line.slice("worktree ".length).trim()
+        } else if (line.startsWith("HEAD ")) {
+            current.head = line.slice("HEAD ".length).trim()
+        } else if (line.startsWith("branch ")) {
+            current.branch = line.slice("branch ".length).trim()
+        } else if (line === "") {
+            pushCurrent()
+        }
+    }
+    pushCurrent()
+
+    return entries
+}
+
+function scopedTaskGitWorktreeScopes(stdout: string): OpenADETaskGitWorktreeScope[] {
+    return scopedTaskGitWorktreeEntries(stdout).map((entry) => entry.scope)
+}
+
+async function scopedTaskGitWorkDirForLog(params: OpenADETaskGitLogRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<string> {
+    const defaultWorkDir = await scopedTaskWorkDir(params.repo, params.task)
+    if (!params.scopeId?.startsWith("worktree:")) return defaultWorkDir
+
+    const worktreeId = params.scopeId.slice("worktree:".length)
+    if (!worktreeId) return defaultWorkDir
+
+    const worktreeScopesResult = await scopedGit(["worktree", "list", "--porcelain"], defaultWorkDir)
+    if (!worktreeScopesResult.success) return defaultWorkDir
+
+    return scopedTaskGitWorktreeEntries(worktreeScopesResult.stdout).find((entry) => entry.scope.worktreeId === worktreeId)?.path ?? defaultWorkDir
+}
+
+async function scopedTaskGitScopes(
+    params: OpenADETaskGitScopesReadRequest & { repo: OpenADEProject; task: OpenADETask }
+): Promise<OpenADETaskGitScopesReadResult> {
+    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const defaultBranch = await scopedTaskGitDefaultBranch(workDir)
+    const localBranchesResult = await scopedGitRequire(["branch", "--format=%(refname:short)"], workDir, "Failed to list task git branches")
+    const branchScopes: OpenADETaskGitScope[] = [
+        {
+            id: "branch:HEAD",
+            type: "branch",
+            name: "HEAD",
+            ref: "HEAD",
+            isDefault: false,
+            isRemote: false,
+        },
+        ...scopedTaskGitBranchScopes(localBranchesResult, defaultBranch, false),
+    ]
+
+    if (params.includeRemote) {
+        const remoteBranchesResult = await scopedGit(["branch", "-r", "--format=%(refname:short)"], workDir)
+        if (remoteBranchesResult.success) {
+            const localBranchNames = new Set(branchScopes.filter((scope): scope is OpenADETaskGitBranchScope => scope.type === "branch").map((scope) => scope.name))
+            for (const remoteBranch of scopedTaskGitBranchScopes(remoteBranchesResult.stdout, defaultBranch, true)) {
+                const localName = remoteBranch.name.replace(/^origin\//, "")
+                if (!localBranchNames.has(localName) && !localBranchNames.has(remoteBranch.name)) {
+                    branchScopes.push(remoteBranch)
+                }
+            }
+        }
+    }
+
+    const worktreeScopesResult = await scopedGit(["worktree", "list", "--porcelain"], workDir)
+    const worktreeScopes = worktreeScopesResult.success ? scopedTaskGitWorktreeScopes(worktreeScopesResult.stdout) : []
+
+    const headScope = branchScopes[0]
+    const sortableBranches = branchScopes.slice(1)
+    sortableBranches.sort((a, b) => {
+        if (a.type !== "branch" || b.type !== "branch") return a.id.localeCompare(b.id)
+        if (a.isDefault && !b.isDefault) return -1
+        if (!a.isDefault && b.isDefault) return 1
+        return a.name.localeCompare(b.name)
+    })
+
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        defaultBranch,
+        scopes: headScope ? [headScope, ...sortableBranches, ...worktreeScopes] : [...sortableBranches, ...worktreeScopes],
+    }
+}
+
+async function scopedTaskResourceInventory(
+    params: OpenADETaskResourceInventoryReadRequest & { repo: OpenADEProject; task: OpenADETask; isRunning: boolean }
+): Promise<OpenADETaskResourceInventoryReadResult> {
+    let branchMerged: boolean | null = null
+    if (params.task.isolationStrategy?.type === "worktree") {
+        const result = await scopedGit(
+            ["merge-base", "--is-ancestor", `openade/${params.task.slug}`, params.task.isolationStrategy.sourceBranch],
+            params.repo.path
+        ).catch(() => null)
+        branchMerged = result?.success ?? null
+    }
+
+    return buildOpenADETaskResourceInventory({
+        task: params.task,
+        isRunning: params.isRunning,
+        branchMerged,
+    })
+}
+
+async function generateNodeTaskTitle(
+    params: OpenADETaskTitleGenerateRequest & {
+        repo: OpenADEProject
+        task: OpenADETask
+        agentExecutor: RuntimeNodeAgentExecutor
+    }
+): Promise<OpenADETaskTitleGenerateResult> {
+    const description = params.task.description.trim()
+    const fallback = fallbackOpenADETaskTitle(description || params.task.title || "Untitled task") || "Untitled task"
+    if (!description) return { repoId: params.repoId, taskId: params.taskId, title: fallback }
+
+    const cwd = await scopedTaskWorkDir(params.repo, params.task)
+    const harnessId = params.harnessId ?? actionHarnessId(latestCompletedPlanEvent(params.task.events), "claude-code")
+    const prompt = buildOpenADETaskTitlePrompt({ description, events: params.task.events })
+
+    if (params.agentExecutor.structuredQuery) {
+        try {
+            const output = await params.agentExecutor.structuredQuery({
+                prompt,
+                options: {
+                    harnessId,
+                    cwd,
+                    mode: "read-only",
+                    appendSystemPrompt: OPENADE_TASK_TITLE_SYSTEM_PROMPT,
+                    disablePlanningTools: true,
+                },
+                outputSchema: OPENADE_TASK_TITLE_OUTPUT_SCHEMA,
+            })
+            const title = titleFromStructuredOutput(output)
+            if (title) return { repoId: params.repoId, taskId: params.taskId, title }
+        } catch {
+            // Fall through to the streaming executor path.
+        }
+    }
+
+    let generatedTitle: string | null = null
+    const executionId = executionIdForTask(params.taskId)
+
+    const settled = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+        let done = false
+        const finish = (result: { ok: boolean; error?: string }) => {
+            if (done) return
+            done = true
+            resolve(result)
+        }
+
+        void params.agentExecutor
+            .start(
+                {
+                    executionId,
+                    harnessId,
+                    cwd,
+                    prompt,
+                    mode: "read-only",
+                    appendSystemPrompt: OPENADE_TASK_TITLE_SYSTEM_PROMPT,
+                    processLabel: `OpenADE title ${params.task.id}`,
+                },
+                {
+                    onEvent(event) {
+                        const title = extractOpenADETaskTitleFromStreamEvent(event)
+                        if (title) generatedTitle = title
+                    },
+                    onSettled(result) {
+                        finish({ ok: result.status === "completed", error: result.error })
+                    },
+                }
+            )
+            .then((result) => {
+                if (!result.ok) finish(result)
+            })
+            .catch((error: unknown) => finish({ ok: false, error: error instanceof Error ? error.message : "Title generation failed" }))
+    })
+
+    if (!settled.ok && !generatedTitle) return { repoId: params.repoId, taskId: params.taskId, title: fallback }
+    return { repoId: params.repoId, taskId: params.taskId, title: generatedTitle ?? fallback }
+}
+
 function latestTaskMergeBase(task: OpenADETask): string | undefined {
     for (let index = task.deviceEnvironments.length - 1; index >= 0; index--) {
         const environment = task.deviceEnvironments[index]
@@ -336,6 +698,123 @@ function latestTaskMergeBase(task: OpenADETask): string | undefined {
         }
     }
     return undefined
+}
+
+const HEADLESS_RUNTIME_DEVICE_ID = "headless-runtime"
+
+function scopedTaskEnvironmentWorktreeBaseDir(): string {
+    return path.join(os.homedir(), ".openade", "workspaces", "worktrees")
+}
+
+function validateScopedTaskEnvironmentSlug(slug: string): string {
+    if (!/^[A-Za-z0-9._-]+$/.test(slug)) throw new Error("Task slug is invalid for environment setup")
+    return slug
+}
+
+async function scopedGitRepositoryInfo(directory: string): Promise<{ repoRoot: string; relativePath: string; defaultBranch: string }> {
+    const repoRoot = (await scopedGitRequire(["rev-parse", "--show-toplevel"], directory, "Failed to resolve repository root")).trim()
+    const relativePath = (await scopedGitRequire(["rev-parse", "--show-prefix"], directory, "Failed to resolve repository path")).trim().replace(/\/+$/, "")
+    const defaultBranch = await scopedTaskGitDefaultBranch(repoRoot)
+    return { repoRoot, relativePath, defaultBranch }
+}
+
+async function scopedTaskEnvironmentMergeBase(params: { repoRoot: string; worktreeBranch: string; sourceBranch: string }): Promise<string | undefined> {
+    const result = await scopedGit(["merge-base", params.worktreeBranch, params.sourceBranch], params.repoRoot)
+    return result.success ? result.stdout.trim() || undefined : undefined
+}
+
+async function scopedTaskEnvironmentWorktree(params: {
+    repoRoot: string
+    slug: string
+    sourceBranch: string
+}): Promise<{ worktreeDir: string; mergeBaseCommit?: string }> {
+    const slug = validateScopedTaskEnvironmentSlug(params.slug)
+    const worktreeDir = path.join(scopedTaskEnvironmentWorktreeBaseDir(), slug)
+    const worktreeBranch = `openade/${slug}`
+    const expectedBranch = `refs/heads/${worktreeBranch}`
+    await fs.mkdir(scopedTaskEnvironmentWorktreeBaseDir(), { recursive: true })
+
+    const worktrees = await scopedGit(["worktree", "list", "--porcelain"], params.repoRoot)
+    if (worktrees.success) {
+        const existing = scopedTaskGitWorktreeEntries(worktrees.stdout).find((entry) => entry.path === worktreeDir)
+        if (existing?.scope.branch === worktreeBranch || existing?.scope.branch === expectedBranch) {
+            return {
+                worktreeDir,
+                mergeBaseCommit: await scopedTaskEnvironmentMergeBase({ repoRoot: params.repoRoot, worktreeBranch, sourceBranch: params.sourceBranch }),
+            }
+        }
+        if (existing) {
+            await scopedGitRequire(["worktree", "remove", worktreeDir, "--force"], params.repoRoot, "Failed to remove mismatched task worktree")
+        }
+    }
+
+    let added = await scopedGit(["worktree", "add", "-b", worktreeBranch, worktreeDir, params.sourceBranch], params.repoRoot)
+    if (!added.success && added.stderr.includes("already exists")) {
+        added = await scopedGit(["worktree", "add", worktreeDir, worktreeBranch], params.repoRoot)
+    }
+    if (!added.success) throw new Error(`Failed to create task worktree: ${added.stderr || added.stdout}`)
+
+    return {
+        worktreeDir,
+        mergeBaseCommit: await scopedTaskEnvironmentMergeBase({ repoRoot: params.repoRoot, worktreeBranch, sourceBranch: params.sourceBranch }),
+    }
+}
+
+async function prepareScopedTaskEnvironment(
+    params: OpenADETaskEnvironmentPrepareRequest & { repo: OpenADEProject; task: OpenADETask; createdAt: string }
+): Promise<OpenADETaskEnvironmentPrepareResult> {
+    const isolationStrategy = params.task.isolationStrategy ?? { type: "head" }
+    if (isolationStrategy.type === "head") {
+        return {
+            repoId: params.repoId,
+            taskId: params.taskId,
+            deviceEnvironment: {
+                id: HEADLESS_RUNTIME_DEVICE_ID,
+                deviceId: HEADLESS_RUNTIME_DEVICE_ID,
+                setupComplete: true,
+                createdAt: params.createdAt,
+                lastUsedAt: params.createdAt,
+            },
+            cwd: params.repo.path,
+            rootPath: params.repo.path,
+        }
+    }
+
+    const gitInfo = await scopedGitRepositoryInfo(params.repo.path)
+    const sourceBranch = isolationStrategy.sourceBranch || gitInfo.defaultBranch || "main"
+    const worktree = await scopedTaskEnvironmentWorktree({ repoRoot: gitInfo.repoRoot, slug: params.task.slug, sourceBranch })
+    const workingDir = gitInfo.relativePath ? path.join(worktree.worktreeDir, gitInfo.relativePath) : worktree.worktreeDir
+    if (gitInfo.relativePath) await fs.mkdir(workingDir, { recursive: true })
+
+    return {
+        repoId: params.repoId,
+        taskId: params.taskId,
+        deviceEnvironment: {
+            id: HEADLESS_RUNTIME_DEVICE_ID,
+            deviceId: HEADLESS_RUNTIME_DEVICE_ID,
+            worktreeDir: worktree.worktreeDir,
+            setupComplete: true,
+            mergeBaseCommit: worktree.mergeBaseCommit,
+            createdAt: params.createdAt,
+            lastUsedAt: params.createdAt,
+        },
+        setupEvent: {
+            eventId: `setup-${HEADLESS_RUNTIME_DEVICE_ID}`,
+            worktreeId: params.task.slug,
+            deviceId: HEADLESS_RUNTIME_DEVICE_ID,
+            workingDir,
+            setupOutput: buildOpenADETaskEnvironmentSetupOutput({
+                worktreeDir: worktree.worktreeDir,
+                workingDir,
+                sourceBranch,
+                mergeBaseCommit: worktree.mergeBaseCommit,
+            }),
+            createdAt: params.createdAt,
+            completedAt: params.createdAt,
+        },
+        cwd: workingDir,
+        rootPath: worktree.worktreeDir,
+    }
 }
 
 async function scopedTaskWorkDir(repo: OpenADEProject, task: OpenADETask): Promise<string> {
@@ -605,7 +1084,7 @@ async function scopedTaskFilePair(params: OpenADETaskFilePairReadRequest & { rep
 }
 
 async function scopedTaskGitLog(params: OpenADETaskGitLogRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitLogResult> {
-    const workDir = await scopedTaskWorkDir(params.repo, params.task)
+    const workDir = await scopedTaskGitWorkDirForLog(params)
     const limit = Math.max(1, Math.min(params.limit ?? DEFAULT_SCOPED_TASK_GIT_LOG_LIMIT, MAX_SCOPED_TASK_GIT_LOG_LIMIT))
     const skip = Math.max(0, params.skip ?? 0)
     const fieldSeparator = "\x1f"
@@ -1147,11 +1626,6 @@ function sourceForTurn(type: OpenADETurnStartRequest["type"], label?: string): O
     }
 }
 
-function fallbackTitle(input: string): string {
-    const cleaned = input.replace(/\s+/g, " ").trim()
-    return cleaned.length <= 50 ? cleaned : `${cleaned.slice(0, 50).trim()}...`
-}
-
 function executionIdForTask(taskId: string): string {
     return `headless-${taskId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }
@@ -1366,7 +1840,7 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
                 input: params.input,
                 createdBy: { id: "headless-runtime", email: "headless@openade.local" },
                 deviceId: "headless-runtime",
-                title: params.title ?? fallbackTitle(params.input),
+                title: params.title ?? fallbackOpenADETaskTitle(params.input),
                 taskId: openADETaskIdForClientRequest(params.repoId, params.clientRequestId),
                 createdAt,
                 isolationStrategy: params.isolationStrategy,
@@ -1748,7 +2222,7 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
         readSnapshot: (params) => projection.readSnapshot(params),
         readProjects: (params) => projection.readProjects(params),
         readTaskList: (repoId, params) => projection.readTaskList(repoId, params),
-        readTask: (repoId, taskId) => projection.readTask(repoId, taskId),
+        readTask: (repoId, taskId, params) => projection.readTask(repoId, taskId, params),
         listDataDocuments: () => projection.listDataDocuments(),
         readDataDocumentBase64: (id) => projection.readDataDocumentBase64(id),
         scopedHost: {
@@ -1757,7 +2231,12 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
             writeProjectFile: writeOpenADEProjectFile,
             fuzzySearchProjectFiles: fuzzySearchOpenADEProjectFiles,
             searchProject: searchOpenADEProject,
+            readProjectGitInfo: scopedProjectGitInfo,
+            readProjectGitBranches: scopedProjectGitBranches,
+            readProjectGitSummary: scopedProjectGitSummary,
             readTaskGitSummary: scopedTaskGitSummary,
+            readTaskGitScopes: scopedTaskGitScopes,
+            readTaskResourceInventory: scopedTaskResourceInventory,
             readTaskChanges: scopedTaskChanges,
             readTaskDiff: scopedTaskDiff,
             readTaskFilePair: scopedTaskFilePair,
@@ -1766,6 +2245,8 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
             readTaskGitFileAtTreeish: scopedTaskGitFileAtTreeish,
             readTaskGitCommitFilePatch: scopedTaskGitCommitFilePatch,
             commitTaskGit: scopedTaskGitCommit,
+            prepareTaskEnvironment: prepareScopedTaskEnvironment,
+            generateTaskTitle: (params) => generateNodeTaskTitle({ ...params, agentExecutor }),
             listProjectProcesses: (params) => listNodeProjectProcesses({ ...params, registry: scopedProjectProcesses, server }),
             startProjectProcess: (params) => startNodeProjectProcess({ ...params, registry: scopedProjectProcesses, server }),
             reconnectProjectProcess: (params) => reconnectNodeProjectProcess({ ...params, registry: scopedProjectProcesses, server }),
@@ -1845,7 +2326,11 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
             }
             return { taskId: params.taskId, queuedTurnId: params.queuedTurnId, cancelled }
         },
-        setupTaskEnvironment: (params) => writer.setupTaskEnvironment(params),
+        setupTaskEnvironment: async (params) => {
+            await writer.setupTaskEnvironment(params)
+            const project = (await projection.readProjects()).find((candidate) => candidate.tasks.some((task) => task.id === params.taskId))
+            if (project) notifyTaskChanged(server, project.id, params.taskId)
+        },
         createActionEvent: (params) => writer.createActionEvent(params),
         appendActionStreamEvent: (params) => writer.appendActionStreamEvent(params),
         completeActionEvent: (params) => writer.completeActionEvent(params),

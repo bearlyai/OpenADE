@@ -48,7 +48,7 @@ Mobile is now a thin host adapter rather than a separate product UI:
 
 - `projects/mobile/src/App.tsx` owns native QR scanning, secure storage mirroring, OTA readiness, and error reset.
 - The main product shell is imported from `projects/web/src/remote/RemoteApp.tsx`, which delegates project/task/new-task/session/settings composition to `projects/web/src/shell/OpenADEShell.tsx`.
-- `projects/web/src/remote/client.ts` owns pairing URL parsing, host validation, config persistence, runtime WebSocket construction, reconnect status, and remote reads/actions.
+- `projects/web/src/remote/client.ts` owns pairing URL parsing, host validation, config persistence, runtime WebSocket construction, reconnect status, `getRemoteProductStore()`, transient read retry, and remote-only device/session actions. Product reads and mutations go through `OpenADEProductStore` rather than per-method remote wrappers.
 
 The current remote UI remains intentionally safer than desktop, but it now covers more product parity than the initial plan state. It reads snapshots/tasks, starts and interrupts turns, listens to runtime notifications, edits task metadata/comments, cancels queued turns, starts reviews, deletes tasks, renders task-owned images, and exposes scoped file/search/process/git-read panels. It still does not expose desktop parity for model/MCP controls, raw terminal access, arbitrary process control, file writes, commit/push, native desktop settings, or broad admin/device-management surfaces.
 
@@ -822,7 +822,7 @@ Record major decisions here as the migration proceeds.
 ### 2026-05-31: Companion Product Mutation Parity Started
 
 - Paired-device runtime permissions are centralized in `projects/electron/src/modules/companion/runtimeSocket.ts` and now allow the high-level product methods intentionally surfaced in the companion UI.
-- Companion permissions still deny raw `runtime/*`, `process/*`, `pty/*`, `fs/*`, `git/*`, `host/*`, `snapshot/*`, `data/*`, `openade/action/*`, `openade/snapshot/create`, and `openade/task/environment/setup` methods.
+- Companion permissions still deny raw `runtime/*`, `process/*`, `pty/*`, `fs/*`, `git/*`, `host/*`, `snapshot/*`, `data/*`, `openade/action/*`, `openade/snapshot/create`, `openade/task/environment/setup`, and `openade/task/environment/prepare` methods.
 - `projects/electron/src/modules/companion/runtimeApi.integration.test.ts` now verifies allowed product mutations over an authenticated paired WebSocket with temp Yjs storage, and verifies denied raw host/storage calls on the same socket.
 - `RemoteApp` now exposes runtime-backed product controls for task title, close/reopen, task delete, comments, queued-turn cancellation, review start, and task command modes including Revise and Run Plan.
 - `projects/web/src/remote/RemoteApp.integration.test.ts` renders the companion UI against a real `RuntimeServer`, `RuntimeLocalClient`, and `OpenADEClient` rather than mocked client methods.
@@ -1112,7 +1112,7 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - Classic desktop task mutation refreshes now share `CodeStore.refreshProductStateAfterTaskMutation()`, `refreshProductStateAfterTaskCreation()`, and `refreshProductStateAfterTaskDeletion()`. Under runtime-backed reads, task metadata, comments, review start, repeat/cron turns, task creation, and task deletion refresh runtime DTOs instead of legacy renderer task-store/repo-store state; with runtime reads disabled, the same callers keep the old Yjs refresh behavior.
 - Classic desktop repo mutations now share `CodeStore.createProductRepo()`, `updateProductRepo()`, `deleteProductRepo()`, and `refreshProductStateAfterRepoMutation()`. Under runtime-backed reads, workspace create, settings updates, archive, and delete use the injected runtime product store/OpenADE client and refresh runtime snapshots instead of forcing legacy repo-store refreshes.
 - Classic desktop task/comment/turn mutations now also enter through `CodeStore` product helpers (`startProductTurn()`, `startProductReview()`, `interruptProductTurn()`, `cancelProductQueuedTurn()`, `updateProductTaskMetadata()`, `setupProductTaskEnvironment()`, comment helpers, and `deleteProductTask()`). Under runtime-backed reads, `InputBar`, task creation, repeat/cron turns, review, queued-turn cancellation, comments, metadata, environment setup, and deep delete use the injected `OpenADEProductStore`; legacy `runtime/localOpenADEClient.ts` remains the explicit fallback path.
-- Classic desktop task read helpers now share `CodeStore.loadProductTaskForRead()`. Delete-resource inventory, title regeneration, sidebar task lists, and sidebar copy-path load runtime task DTOs when runtime product reads are active and only use legacy task stores in the fallback path.
+- Classic desktop task read helpers now share `CodeStore.loadProductTaskForRead()`. Delete-resource inventory, sidebar task lists, and sidebar copy-path load runtime task DTOs when runtime product reads are active and only use legacy task stores in the fallback path. Title generation/regeneration uses `CodeStore.generateProductTaskTitle()` in the runtime-backed path so the host/core owns workspace and harness access.
 - Runtime notifications now preserve that same boundary: task updates, preview changes, deletions, queued-turn reconciliation, repo snapshot changes, and runtime-settlement after-event callbacks refresh `OpenADEProductStore`/runtime DTO state when runtime reads are active, and only call `refreshRepoStoreFromStorage()` or `refreshTaskStoreFromStorage()` in the legacy fallback path.
 - Classic desktop changes tray reads now keep the old desktop UI while routing file lists, split-view file pairs, unified patches, and from-base comparisons through `CodeStore.readProductTaskChanges()`, `readProductTaskDiff()`, and `readProductTaskFilePair()` when runtime product reads are active. The scoped OpenADE API now exposes `openade/task/filePair/read` so desktop, remote web, and mobile adapters can share the same task-scoped core read without raw trusted-local `git/*`.
 - Classic desktop Git Log tray commit-list, commit-file list, commit file-content, and commit patch reads now keep the old tray UI while routing task-scoped branch history/details through `CodeStore.readProductTaskGitLog()`, `readProductTaskGitCommitFiles()`, `readProductTaskGitFileAtTreeish()`, and `readProductTaskGitCommitFilePatch()`. Branch/worktree scope discovery still uses trusted-local `gitApi`; non-task worktree scopes remain the explicit local fallback until the product API owns scope discovery.
@@ -1309,6 +1309,12 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - This removes the duplicate preload/web global contract while preserving the existing Electron IPC runtime bridge and classic desktop wrappers.
 - Focused verification passed: Electron typecheck, web typecheck, web Electron API wrapper tests for companion/MCP/harness status, and Biome lint for the touched preload/global/docs files.
 
+### 2026-06-01: Harness Status DTO Alias Consolidated
+
+- `projects/web/src/electronAPI/harnessStatus.ts` now aliases `HarnessInstallStatus` from the browser-safe `@openade/harness/browser` entrypoint instead of declaring a renderer-owned copy of the runtime harness install-status contract.
+- The renderer wrapper still validates `agent/provider/status` payloads at the runtime boundary and keeps its local `HarnessStatusResult` UI helper, but the durable DTO now has a single harness-owned source.
+- Focused verification passed: web harness status wrapper tests, harness status view utility tests, web typecheck, source scan for duplicate install-status interfaces, and `git diff --check`.
+
 ### 2026-06-01: Desktop Host Utility DTOs Consolidated
 
 - `projects/electron/src/modules/code/hostBridgeTypes.ts` now owns browser-safe DTOs for managed binaries, code-module capabilities, SDK capabilities, platform info, shell directory creation/selection/opening, binary checks, and Electron frame colors.
@@ -1336,36 +1342,189 @@ Run this review before shipping the default-on runtime/shared-shell branch broad
 - This removes two more small duplicate renderer/main-process type pairs without changing device config persistence or snapshot bundle storage.
 - Focused verification passed: Electron typecheck, web typecheck, Electron `deviceConfig.test.ts`, web `store.test.ts` and `Routes.runtimeProductStore.test.ts`, and Biome lint for the touched storage/config files.
 
-## Remaining Work Under Corrected Direction
+### 2026-06-01: Classic Task Open Runtime Refresh Made Responsive
 
-The remaining work is not a desktop UI rewrite. It is a boundary migration: keep the old desktop app experience and replace its direct renderer storage/host assumptions with runtime/OpenADE APIs.
+- Classic desktop task opening now reads runtime-backed task detail with `hydrateSessionEvents: false` first and keeps full session-history hydration behind explicit user history expansion instead of a hidden route-open timer.
+- Runtime-backed task refresh notifications now avoid duplicate refreshes between `OpenADEProductStore` and `CodeStore`, use non-hydrating task reads for notification-driven updates, and coalesce bursty `openade/task/updated` notifications per task before refreshing.
+- `EventLog` and `InlineMessages` now parse/render long histories tail-first: long task histories initially mount recent events, long harness streams group only the visible tail, and older records are exposed behind explicit "Show earlier" controls that can request hydrated runtime history.
+- Runtime-backed `TaskModel.stats` now uses snapshot task-preview usage when available, so the classic navbar stats do not rescan the full task event stream during task open.
+- This keeps the classic desktop `TaskPage`/`InputBar` route intact while reducing main-thread work during task open and active runtime streams.
+- Focused verification passed: web `TaskModel.test.ts`, `EventLog.test.ts`, `storeRuntimeProductStore.test.ts`, and `Routes.runtimeProductStore.test.ts` through real classic components and real `RuntimeServer`/`RuntimeLocalClient`/`OpenADEClient` paths, plus web typecheck, React Doctor diff scan with no blocking errors, and `git diff --check`.
 
-1. Keep desktop default on the classic route.
-   - Keep packaged smoke asserting `data-openade-surface="desktop-classic-task"`.
-   - Keep compact `desktop-shared-project` and `desktop-shared-task` surfaces absent.
-   - Keep the desktop shared-screen flag and `DesktopShared*` route files removed.
+### 2026-06-01: Lightweight Task Reads Bound Stream Payloads
 
-2. Finish API-backing the classic desktop product surface.
-   - Inventory any remaining `TaskPage`, `TaskCreatePage`, `InputBar`, tray, sidebar, settings, and manager reads that still reach directly into renderer Yjs stores or raw local host helpers.
-   - Move each one to `OpenADEClient`, `kernel/productStore.ts`, `electronAPI/*`, or scoped OpenADE runtime methods.
-   - Preserve legacy Yjs fallback reads for at least one production release after default-on runtime rollout.
+- `projects/openade-module/src/yjsProjection.ts` now honors `hydrateSessionEvents: false` by keeping task/event metadata while bounding action and HyperPlan stream arrays before the runtime response crosses into the renderer. Hidden older task events carry zero stream entries; visible recent task events carry a recent stream tail.
+- Bounded stream DTOs set `omittedEventCount`, and the classic desktop `InlineMessages` path shows those omitted entries behind the existing explicit full-history request instead of treating a trimmed `events` array as complete.
+- The Node OpenADE adapter now forwards task-read options into the Yjs projection, so real headless/Electron runtime reads get the same lightweight behavior rather than only test adapters recording the flag.
+- Focused verification passed: OpenADE Yjs projection fixture test using real file-backed Yjs storage, OpenADE kernel WebSocket integration with persisted turn reload, web `InlineMessages`, `OpenADEProductStore`, `storeRuntimeProductStore`, and classic route runtime-product tests through real runtime/client paths, OpenADE module and web typechecks, React Doctor diff scan with no blocking errors, and `git diff --check`.
 
-3. Extract shared UI only from desktop-parity components.
-   - Extract task thread/event presentation only after it matches the desktop route.
-   - Extract composer behavior from the rich desktop `InputBar`, not from the compact companion composer.
-   - Extract desktop trays and settings onto runtime-backed APIs before adapting them to mobile sheets/tabs.
-   - Keep `NewTaskScreen` out of desktop until it preserves `TaskCreatePage` parity.
+### 2026-06-01: Task Resource Inventory Moved To Scoped OpenADE API
 
-4. Rebuild mobile/web as adapters.
-   - Treat current companion screens as disposable adapter UI.
-   - Adapt desktop-derived components down to mobile/web with role and capability gates.
-   - Keep raw host powers trusted-local unless scoped product methods and permission tests say otherwise.
+- `openade/task/resourceInventory/read` now returns the task-owned delete/resource inventory from the OpenADE scoped host boundary: snapshot patch ids, task image ids, harness session ids, running state, and worktree branch-merge status.
+- `projects/openade-module/src/taskResourceInventory.ts` owns the shared extraction helper used by Electron cleanup and the new read API, removing the duplicate snapshot/image/session event scans from `runtimeGateway.ts`.
+- Classic desktop `TaskManager.getResourceInventory()` keeps the old delete dialog behavior but uses `CodeStore.readProductTaskResourceInventory()` when runtime-backed reads are active; the renderer-side task-store scan and `gitApi.isBranchMerged()` branch check are now legacy fallback only.
+- Paired-device permissions include the new scoped read while continuing to deny raw `git/*`, `snapshot/*`, `data/*`, `fs/*`, `host/*`, `process/*`, and `pty/*` methods.
+- Focused verification passed: OpenADE resource-inventory helper test, real OpenADE WebSocket kernel integration, web runtime product store/client/route/product-store tests through a real `RuntimeServer`/`RuntimeLocalClient`/`OpenADEClient`, OpenADE module/client/web/Electron typechecks, and Electron companion runtime API integration over an authenticated paired WebSocket.
 
-5. Ship only with real verification.
-   - Run old-vs-new projection parity fixtures for production Yjs shapes.
-   - Use real `RuntimeServer`, `RuntimeLocalClient`, `OpenADEClient`, temp storage, temp git repos, and packaged Electron smoke.
-   - Add screenshot or browser checks for desktop visual parity when a shared component touches layout.
-   - Run `npm run review:runtime-product-rollout -- <telemetry-export>` against the default-on cohort before broad rollout or fallback removal.
+### 2026-06-01: Classic Git Log Scope Discovery Moved To Scoped OpenADE API
+
+- `openade/task/git/scopes/read` now returns sanitized branch and worktree scope metadata for a task-resolved git context without exposing filesystem paths to the renderer or paired devices.
+- `openade/task/git/log` accepts an optional sanitized `scopeId`; worktree scope ids are resolved server-side by the Node/Electron scoped host adapters, so the classic Git Log tray no longer sends worktree cwd values through product APIs.
+- Classic desktop `GitLogTray` keeps its existing visual/functionality surface but uses `CodeStore.readProductTaskGitScopes()` and `readProductTaskGitLog()` for task-scoped branch/worktree history when runtime-backed reads are active. Raw `gitApi.listBranches()` and `gitApi.listWorkTrees()` remain legacy/unscoped fallback only.
+- Paired-device permissions include the read-only scoped scope-discovery method while raw `git/*` methods and scoped git mutation/detail methods remain denied unless explicitly reviewed.
+- Focused verification passed: OpenADE WebSocket kernel integration with a real temp git repo/worktree, web product-store and classic Git Log tray tests through a real `RuntimeServer`/`RuntimeLocalClient`/`OpenADEClient`, typed OpenADE client test, and Electron companion runtime API integration over an authenticated paired WebSocket.
+
+### 2026-06-01: Classic Environment Setup Moved To Scoped OpenADE API
+
+- `openade/task/environment/prepare` now resolves repo/task ids server-side and lets trusted local product clients prepare the task environment without renderer-side repo path, worktree, or git plumbing.
+- The Node scoped host creates or reuses the `openade/<task-slug>` worktree under `~/.openade/workspaces/worktrees` for worktree-isolated tasks, records the setup event through OpenADE writers, and returns the persisted task environment DTO.
+- The Electron scoped host reuses the existing desktop worktree creation path but now exposes it through the same scoped OpenADE host boundary used by the headless kernel.
+- Classic desktop `EnvironmentSetupView` keeps the existing visual flow but calls `CodeStore.prepareProductTaskEnvironment()` when runtime-backed reads are active; direct `TaskEnvironment.setup()` and raw git setup remain legacy fallback only.
+- Paired-device permissions intentionally deny `openade/task/environment/prepare`; remote/mobile clients may observe persisted environment state but must not create worktrees without a separate role/permission decision and integration coverage.
+- Focused verification passed: real OpenADE WebSocket kernel integration with a temp git repo/worktree, web rendered `EnvironmentSetupView` through a real `RuntimeServer`/`RuntimeLocalClient`/`OpenADEClient` while rejecting legacy renderer setup, typed OpenADE client/product-store tests, and Electron companion runtime API integration over an authenticated paired WebSocket.
+
+### 2026-06-01: Classic Snapshot Event Copy Runtime-Gated
+
+- Classic `SnapshotEventItem` copy/download reads now prefer `CodeStore.readProductTaskSnapshotPatch()` when runtime-backed reads are active, even if the full task model has not been loaded yet and only the runtime snapshot can resolve the repo id.
+- Raw `snapshotsApi.loadPatch()` remains only the trusted-local fallback for legacy/unscoped operation.
+- Focused verification passed: rendered `SnapshotEventItem` under a real `RuntimeServer`/`RuntimeLocalClient`/`OpenADEClient` copies the server-owned patch through the scoped runtime read and rejects legacy snapshot API use.
+
+### 2026-06-01: Pending Task Creation Cleanup Moved To Product APIs
+
+- `TaskCreationManager` no longer tracks a renderer-owned worktree slug or asks `TaskManager` to call raw `gitApi.deleteWorkTree()` when a pending task creation is cancelled.
+- If cancellation happens after the server has accepted a task, the renderer now interrupts through `CodeStore.interruptProductTurn()` and deletes the task through `CodeStore.deleteProductTask()` with snapshots, images, sessions, and worktrees selected for cleanup.
+- The obsolete `TaskManager.cleanupWorktree()` renderer helper was removed; worktree cleanup for real tasks is owned by OpenADE task deletion host adapters.
+- Focused verification passed: `TaskCreationManager.test.ts` covers server-accepted cancellation cleanup through product APIs and confirms title generation does not continue for the cancelled task; `storeRuntimeProductStore.test.ts` runs the same cleanup through a real `RuntimeServer`/`RuntimeLocalClient`/`OpenADEClient` and verifies the accepted task is deleted.
+
+### 2026-06-01: Task Title Generation Moved To Scoped OpenADE API
+
+- `openade/task/title/generate` now resolves repo/task ids server-side, builds the shared title prompt/schema from `projects/openade-module/src/taskTitle.ts`, asks the trusted host harness in read-only mode, and persists the resulting title through `openade/task/metadata/update` semantics.
+- Classic desktop task creation and title regeneration keep the old desktop UI but use `CodeStore.generateProductTaskTitle()` when runtime-backed reads are active; renderer-side `prompts/titleExtractor.generateTitle()` remains legacy fallback only.
+- Electron and headless Node hosts implement the same scoped host method. Paired devices intentionally remain denied for `openade/task/title/generate` until there is an explicit role/permission decision and matching integration coverage.
+- Focused verification passed: OpenADE kernel integration with a deterministic real executor `structuredQuery`, web `OpenADEProductStore` and `CodeStore` runtime product tests through real `RuntimeServer`/`RuntimeLocalClient`/`OpenADEClient`, typed OpenADE client request tests, web route/remote integration tests, Electron companion permission integration, and OpenADE module/web/Electron typechecks.
+
+### 2026-06-01: Yjs Projection Compatibility Fixtures Hardened
+
+- `projects/openade-module/src/yjsProjectionFixtures.test.ts` now proves `openade/snapshot/read`, `readProjects`, and `readTaskList` share the same old-Yjs preview ordering and field contract for the committed fixture data.
+- The fixture suite now writes a sparse legacy task document through real Yjs updates and the node storage adapter, then verifies `createOpenADEYjsProjection()` returns a valid `OpenADETask` DTO rather than leaking malformed metadata to clients.
+- `projects/openade-module/src/yjsProjection.ts` now normalizes legacy `isolationStrategy` records at the storage boundary, preserving worktree scoping with a `HEAD` source-branch fallback when old data omitted the branch.
+- Focused verification passed: OpenADE module Yjs projection fixture tests and OpenADE module typecheck.
+
+### 2026-06-01: Classic Task-Create Project Git Reads Moved To Scoped OpenADE API
+
+- `openade/project/git/info/read`, `openade/project/git/branches/read`, and `openade/project/git/summary/read` now resolve repo ids server-side and return scoped project-level git metadata for classic task creation and repo-level status checks.
+- Electron and headless Node hosts implement the same scoped host methods while keeping raw `git/*` methods as trusted-local fallback only. Paired devices are granted these read-only scoped project git methods while raw `git/*`, task git mutation/detail, terminal, environment prepare, and title generation methods stay denied.
+- Classic desktop `RepoManager.getGitInfo()`, `listBranches()`, `getGitSummary()`, and `refreshGhCliStatus()` keep their existing callers and UI behavior but use `CodeStore.readProductProjectGitInfo()`, `readProductProjectGitBranches()`, and `readProductProjectGitSummary()` whenever runtime-backed reads are active.
+- Focused verification passed: OpenADE WebSocket kernel integration with a real temp git repo, web `OpenADEProductStore` and `CodeStore` runtime product tests through real `RuntimeServer`/`RuntimeLocalClient`/`OpenADEClient`, typed OpenADE client tests, web remote/client/route integration tests, Electron companion authenticated WebSocket permission/integration tests, OpenADE module/web/Electron typechecks, and React Doctor diff scan with no blocking errors.
+
+### 2026-06-01: Classic Task Route Environment Load Preserved Under Runtime Reads
+
+- Classic desktop `TaskPage` now loads the task environment independently from runtime git-summary refresh so task-open performance fixes do not leave file mentions, Files/Search trays, Git Log, Terminal, or Processes without a working directory on runtime-backed tasks.
+- The environment load stays on the runtime-backed `RepoManager.getGitInfo()` path, which uses scoped `openade/project/git/info/read` when runtime product reads are active; raw renderer `gitApi` remains only the legacy fallback.
+- `Routes.runtimeProductStore.test.ts` now proves the classic task route resolves the task working directory and runs SmartEditor file mention search through scoped project file search using a real `RuntimeServer` behind the production local runtime bridge.
+- Focused verification passed: web classic route runtime-product test, web typecheck, React Doctor diff scan with no blocking errors, and `git diff --check`.
+
+### 2026-06-01: Worktree Close Stops Runtime-Owned Product Processes
+
+- `RepoProcessesManager.stopAllForContext()` now accepts scoped product process access and stops runtime-owned process instances through `openade/project/process/stop` before removing them from renderer state.
+- Classic desktop `InputManager` passes that scoped product process access when closing runtime-backed worktree tasks, preserving the existing Close command while avoiding the legacy-only `ProcessHandle` cleanup path for product-managed processes.
+- Legacy `ProcessHandle` cleanup remains the fallback for non-runtime or unscoped process instances.
+- Focused verification passed: web `RepoProcessesManager.test.ts`, `InputManager.test.ts`, `Routes.runtimeProductStore.test.ts`, web typecheck, React Doctor diff scan with no blocking errors, and `git diff --check`.
+
+### 2026-06-01: Dead TaskEnvironment Raw Git Helpers Removed
+
+- `TaskEnvironment` no longer exposes raw patch, changed-file, file-pair, or full-status helpers. Classic Changes tray reads now stay on `TaskModel`/`ChangesManager` scoped product APIs under runtime-backed reads, with raw `gitApi` calls only in the explicit legacy fallback managers.
+- The remaining `TaskEnvironment` raw host surface is the documented trusted-local fallback for environment setup and lightweight git summary during the one-release legacy fallback window.
+- Focused verification passed: code search confirms the removed helpers are absent from `TaskEnvironment`, web `TaskModel.test.ts`, web `storeRuntimeProductStore.test.ts`, and `git diff --check`.
+
+### 2026-06-01: Task Preview Usage DTOs Consolidated
+
+- Web task preview storage, route, sidebar, stats, and store APIs now use OpenADE-owned task preview DTOs from `projects/openade-module/src` instead of maintaining a separate web preview shape.
+- Settings stats recap utilities consume a narrow OpenADE-derived task preview input instead of depending on legacy `RepoItem` persistence metadata, so sidebar/settings calculations do not recreate another product DTO family.
+- Focused verification passed: web stats recap tests, web runtime product store tests, web typecheck, duplicate type search, and `git diff --check`.
+
+### 2026-06-01: Remote Product Method Wrappers Removed
+
+- `projects/web/src/remote/client.ts` now exposes the paired-host `OpenADEProductStore` plus a generic transient read retry helper instead of maintaining one `readRemote*`, `listRemote*`, `startRemote*`, or mutation wrapper per product method.
+- `RemoteApp` keeps pairing/session/subscription orchestration locally but calls the shared product store directly for snapshots, task reads, scoped file/search/git/process reads, turns, reviews, comments, task metadata, and task deletion.
+- Focused verification passed: remote client config tests, remote runtime client cache tests, `RemoteApp.integration.test.ts`, web typecheck, React Doctor diff scan with no blocking errors, `git diff --check`, and a code search confirming the old method-specific remote product wrappers are absent from production remote/mobile code.
+
+### 2026-06-01: Sidebar Preview DTO Imports Consolidated
+
+- Desktop route/sidebar helpers now consume `OpenADETaskPreview` directly instead of importing the legacy `TaskPreview` compatibility alias from `persistence/repoStore.ts`.
+- Task usage stat helpers now use `OpenADETaskPreviewUsage` directly, and `persistence/repoStore.ts` stores `OpenADETaskPreview` values without exporting `TaskPreview`, `TaskPreviewLastEvent`, or `TaskPreviewUsage` aliases.
+- Focused verification passed: persistence preview-sync tests, sidebar task sorting tests, task stats utility tests, classic runtime route tests, runtime product store bridge tests, web typecheck, `git diff --check`, and a code search confirming the old web `TaskPreview*` aliases are absent.
+
+### 2026-06-01: Files Tray Product Fallback Closed
+
+- `FileBrowserManager` now treats a valid product context as authoritative for directory listing, file reads, and filename fuzzy matching. If scoped product file APIs miss or fail in that context, the Files tray fails closed instead of falling through to raw `filesApi` reads.
+- Raw `filesApi` fallback remains available for genuinely unscoped legacy browsing, preserving the one-release legacy fallback window without giving runtime-backed task paths two active file-read routes.
+- Focused verification passed: `FileBrowserManager.test.ts` proves product-scoped directory/file/fuzzy paths do not call raw `filesApi`, `storeRuntimeProductStore.test.ts -t "routes classic file browsing"` exercises the classic Files/Search path through a real `RuntimeServer`/`RuntimeLocalClient`/`OpenADEClient` with legacy `filesApi` mocked to fail, and web typecheck passed.
+
+### 2026-06-01: RemoteApp Product Read Alias Removed
+
+- `RemoteApp.tsx` now calls the paired-host `OpenADEProductStore` directly through `getRemoteProductStore(config)` and `retryRemoteRead()` instead of keeping a local `readRemoteProduct()` helper on top of the product store.
+- The remote entrypoint remains a session/action adapter: `client.ts` owns paired-host store construction, runtime client caching, retry policy, companion config persistence, and device/session actions.
+- Focused verification passed: remote runtime client tests, `RemoteApp.integration.test.ts`, web typecheck, `git diff --check`, React Doctor diff scan with no blocking errors, and a code search confirming the old method-specific remote product aliases remain absent from the remote surface.
+
+### 2026-06-01: Classic Search Match DTO Consolidated
+
+- `ContentSearchManager` now exposes OpenADE `OpenADEProjectSearchMatch` values to the classic Search tray instead of leaking the legacy runtime-node `ContentSearchMatch` shape into UI state.
+- Legacy `fs/search/content` fallback results are adapted once at the manager boundary from `{ file, line, content, matchStart, matchEnd }` to the OpenADE `{ path, line, content, matchStart, matchEnd }` shape. Runtime-backed search results flow through unchanged.
+- The unused web `ContentSearchMatch` alias was removed from `electronAPI/files.ts`; the low-level runtime-node fallback response type remains internal to the file API bridge.
+- Focused verification passed: `storeRuntimeProductStore.test.ts -t "routes classic file browsing"` exercises classic content search and preview through a real `RuntimeServer`/`RuntimeLocalClient`/`OpenADEClient`, web typecheck, `git diff --check`, React Doctor diff scan with no blocking errors, and a source scan confirming no renderer `ContentSearchMatch` aliases remain.
+
+### 2026-06-01: Full Web Verification Refreshed
+
+- The full `projects/web` Vitest suite initially exposed a stale `CronManager.test.ts` fake store that lacked the production `shouldUseRuntimeProductReads()` gate. The fixture now explicitly returns `false`, preserving those tests as legacy `readProcs` scheduling coverage while product-process cron coverage remains in `storeRuntimeProductStore.test.ts`.
+- Full web verification now passes: `npm test` reports 83 files and 504 tests passing, including the real runtime product route/store coverage, remote integration tests, cron scheduling tests, and the classic desktop route smoke tests.
+- Final web hygiene also passed after the fixture fix: web typecheck, `git diff --check`, and the previous React Doctor diff scan with no blocking errors.
+
+### 2026-06-02: Final Packaged Electron Smoke Refreshed
+
+- The current branch diff was rebuilt into a packaged macOS directory app: `cd projects/electron && npm run build && npm run build:web && NONOTARY=1 CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir`.
+- The packaged smoke passed against that built app: `cd projects/electron && npm run test:smoke` reported `1 passed`. This smoke drives the packaged artifact, not the dev server.
+- This run re-proves the bundled UI boots, runtime IPC initializes, scoped OpenADE runtime methods work, the packaged app navigates to the classic desktop task route with `data-openade-surface="desktop-classic-task"`, compact shared desktop markers are absent, and the smoke telemetry export passes the runtime-product rollout review command.
+
+### 2026-06-02: Cross-Package Verification Refreshed
+
+- Electron package verification passed after the packaged smoke build: `cd projects/electron && npm run typecheck` and `npm test` reported 28 files and 256 tests passing.
+- OpenADE product/runtime package verification passed: `cd projects/openade-module && npm run typecheck && npm test` reported 11 files and 32 tests passing, including the real WebSocket OpenADE kernel persistence test.
+- OpenADE client package verification passed: `cd projects/openade-client && npm run typecheck`.
+- Together with the full web verification checkpoint, this covers the touched desktop host, paired companion runtime, OpenADE runtime module/client, Yjs projection/mutation, and classic desktop renderer paths with real integration coverage.
+
+### 2026-06-02: Remaining Gate Audit
+
+- The remaining ship-gate audit found no committed or generated internal/default-on cohort telemetry export in the local worktree. Searches for telemetry, rollout, analytics export, Amplitude, NDJSON, and JSONL artifacts found only the rollout review script, source/tests, and dependency folders.
+- The packaged smoke telemetry export remains valid packaged-app proof for the built artifact, but it is not a substitute for the required internal/default-on cohort export before broad production enablement or fallback removal.
+- The rollout review verifier itself was rechecked: `cd projects/web && npm test -- src/analytics/runtimeProductRolloutReview.test.ts` passed 7 tests, covering passing exports, missing ready default-on startup, fallback/error events, stale shared-screen properties, sensitive/unreviewed properties, malformed NDJSON, and report formatting.
+- Diff hygiene also passed: `git diff --check`.
+- Local code and packaged verification gates are complete for this migration checkpoint. The open production-readiness gate is external data: obtain the real internal/default-on cohort telemetry export and run `cd projects/web && npm run review:runtime-product-rollout -- <telemetry-export.json-or-ndjson>`.
+
+## Remaining Ship Gates Under Corrected Direction
+
+The code migration is now a desktop-runtime boundary migration, not a desktop UI replacement. The completed checkpoints above keep the classic desktop `TaskPage`/`TaskCreatePage`/`InputBar`/tray/settings surface and move normal product reads and mutations through `OpenADEClient`, `OpenADEProductStore`, and scoped OpenADE runtime methods. The remaining gates are rollout gates, fallback policy, and future adapter work:
+
+1. Run the real rollout telemetry review before broad production enablement.
+   - Use `cd projects/web && npm run review:runtime-product-rollout -- <telemetry-export.json-or-ndjson>` against the internal/default-on cohort export.
+   - This cannot be completed from the local repo without the production/internal telemetry export.
+   - The review must show ready default-on `app_opened` events and no normal-flow `runtime_product_store_fallback` or `runtime_product_store_error` events.
+
+2. Keep legacy Yjs/trusted-local fallbacks for one production release.
+   - Current direct `filesApi`, `gitApi`, `snapshotsApi`, task-store, and repo-store paths should remain only as documented legacy/unscoped trusted-local fallbacks.
+   - Do not remove fallback reads until the telemetry review and at least one production release show the runtime-backed path is healthy across navigation, task detail, notifications, reloads, files/search/git/processes, comments, reviews, cron/repeat turns, task creation, and task deletion.
+
+3. Only extract shared UI from desktop-parity components.
+   - Do not reintroduce `DesktopShared*` routes or make compact `RemoteApp`/`OpenADEShell` screens the desktop default.
+   - If future work shares more UI, extract from the classic desktop behavior first, then adapt it down to web/mobile with role and capability gates.
+   - Any layout-affecting desktop parity extraction needs screenshot/browser checks in addition to runtime integration tests.
+
+4. Treat mobile/web parity as adapter work, not the canonical surface.
+   - The current mobile companion UI is not production canonical and should not drive desktop design.
+   - Remote/mobile clients should keep raw host powers denied unless scoped product methods, permissions, and authenticated WebSocket integration tests explicitly approve them.
+
+5. Re-run local gates if the branch changes again.
+   - Any later web/Electron/runtime change after this checkpoint must rerun the relevant focused tests and the packaged smoke before shipping.
 
 ## Open Questions
 

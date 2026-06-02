@@ -8,6 +8,7 @@ import type {
     OpenADESnapshot,
     OpenADETask,
     OpenADETaskMetadataUpdateRequest,
+    OpenADETaskReadOptions,
     OpenADETaskPreview,
     OpenADETurnStartRequest,
 } from "../../openade-module/src/types"
@@ -122,8 +123,11 @@ function unsupportedMutation(method: string): () => Promise<never> {
 interface RouteRuntimeServerHooks {
     onStartTurn?: (params: OpenADETurnStartRequest) => void
     onUpdateTaskMetadata?: (params: OpenADETaskMetadataUpdateRequest) => void
+    onReadTask?: (params: { repoId: string; taskId: string; options?: OpenADETaskReadOptions }) => void
     onReadTaskGitSummary?: () => void
     onReadTaskChanges?: () => void
+    onReadProjectGitInfo?: () => void
+    onFuzzySearchProjectFiles?: () => void
 }
 
 function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeServer {
@@ -136,7 +140,8 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
         readSnapshot: async () => runtimeSnapshot(task),
         readProjects: async () => [project],
         readTaskList: async () => project.tasks,
-        readTask: async (_repoId, taskId) => {
+        readTask: async (repoId, taskId, options) => {
+            hooks.onReadTask?.({ repoId, taskId, options })
             if (taskId !== task.id) throw new Error(`Task ${taskId} not found`)
             return cloneTask(task)
         },
@@ -304,19 +309,48 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
                 content: "Runtime route readme\nshared shell\n",
             }),
             writeProjectFile: unsupportedMutation("writeProjectFile"),
-            fuzzySearchProjectFiles: async (params) => ({
-                repoId: params.repoId,
-                taskId: params.taskId,
-                results: params.query.toLowerCase().includes("readme") ? ["README.md"] : [],
-                truncated: false,
-                source: "filesystem",
-            }),
+            fuzzySearchProjectFiles: async (params) => {
+                hooks.onFuzzySearchProjectFiles?.()
+                return {
+                    repoId: params.repoId,
+                    taskId: params.taskId,
+                    results: params.query.toLowerCase().includes("readme") ? ["README.md"] : [],
+                    truncated: false,
+                    source: "filesystem",
+                }
+            },
             searchProject: async (params) => ({
                 repoId: params.repoId,
                 matches: params.query.toLowerCase().includes("readme")
                     ? [{ path: "README.md", line: 1, content: "Runtime route readme", matchStart: 14, matchEnd: 20 }]
                     : [],
                 truncated: false,
+            }),
+            readProjectGitInfo: async (params) => {
+                hooks.onReadProjectGitInfo?.()
+                return {
+                    repoId: params.repoId,
+                    isGitRepo: true,
+                    repoRoot: project.path,
+                    relativePath: "",
+                    mainBranch: "main",
+                    hasGhCli: false,
+                }
+            },
+            readProjectGitBranches: async (params) => ({
+                repoId: params.repoId,
+                defaultBranch: "main",
+                branches: [{ name: "main", isDefault: true, isRemote: false }],
+            }),
+            readProjectGitSummary: async (params) => ({
+                repoId: params.repoId,
+                branch: "main",
+                headCommit: "abc123",
+                ahead: 0,
+                hasChanges: false,
+                staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                unstaged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                untracked: [],
             }),
             listProjectProcesses: async (params) => ({
                 repoId: params.repoId,
@@ -383,6 +417,43 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
                     untracked: [],
                 }
             },
+            readTaskGitScopes: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                defaultBranch: "main",
+                scopes: [
+                    { id: "branch:HEAD", type: "branch", name: "HEAD", ref: "HEAD", isDefault: false, isRemote: false },
+                    { id: "branch:main", type: "branch", name: "main", ref: "main", isDefault: true, isRemote: false },
+                ],
+            }),
+            readTaskResourceInventory: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                taskTitle: params.task.title,
+                isRunning: params.isRunning,
+                snapshotIds: [],
+                images: [],
+                sessions: [],
+                worktree: null,
+            }),
+            generateTaskTitle: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                title: "Runtime route title",
+            }),
+            prepareTaskEnvironment: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                deviceEnvironment: {
+                    id: "runtime-device",
+                    deviceId: "runtime-device",
+                    setupComplete: true,
+                    createdAt: now,
+                    lastUsedAt: now,
+                },
+                cwd: "/tmp/runtime-route-repo",
+                rootPath: "/tmp/runtime-route-repo",
+            }),
             readTaskChanges: async (params) => {
                 hooks.onReadTaskChanges?.()
                 return {
@@ -674,19 +745,30 @@ describe("Code routes with runtime product reads", () => {
 
     it("renders the classic desktop task route by default after loading task detail through the real local runtime product store", async () => {
         const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
+        const setTimeoutSpy = vi.spyOn(window, "setTimeout")
         const startedTurns: OpenADETurnStartRequest[] = []
         const metadataUpdates: OpenADETaskMetadataUpdateRequest[] = []
+        const taskReads: Array<{ repoId: string; taskId: string; options?: OpenADETaskReadOptions }> = []
         let taskGitSummaryReadCount = 0
         let taskChangesReadCount = 0
+        let projectGitInfoReadCount = 0
+        let fuzzyProjectFileSearchCount = 0
         cleanupOpenADEApi = installOpenADEApiRuntimeBridge(
             createRouteRuntimeServer({
                 onStartTurn: (params) => startedTurns.push(params),
                 onUpdateTaskMetadata: (params) => metadataUpdates.push(params),
+                onReadTask: (params) => taskReads.push(params),
                 onReadTaskGitSummary: () => {
                     taskGitSummaryReadCount += 1
                 },
                 onReadTaskChanges: () => {
                     taskChangesReadCount += 1
+                },
+                onReadProjectGitInfo: () => {
+                    projectGitInfoReadCount += 1
+                },
+                onFuzzySearchProjectFiles: () => {
+                    fuzzyProjectFileSearchCount += 1
                 },
             })
         )
@@ -710,10 +792,22 @@ describe("Code routes with runtime product reads", () => {
             )
             root.render(createElement(CodeStoreProvider, { store: codeStore }, router))
             await vi.waitFor(() => expect(taskGitSummaryReadCount).toBeGreaterThan(0), { timeout: 1000, interval: 10 })
+            await vi.waitFor(() => expect(codeStore.tasks.getTaskModel("task-1")?.environment?.taskWorkingDir).toBe("/tmp/runtime-route-repo"), {
+                timeout: 1000,
+                interval: 10,
+            })
+            const editorManager = codeStore.smartEditors.getManager("task-task-1", "repo-1")
+            await expect(editorManager.searchFileMentions("/tmp/runtime-route-repo", "readme")).resolves.toMatchObject({ results: ["README.md"] })
+            expect(projectGitInfoReadCount).toBeGreaterThan(0)
+            expect(fuzzyProjectFileSearchCount).toBeGreaterThan(0)
 
             expect(container.querySelector('[data-openade-surface="desktop-classic-task"]')).toBeInstanceOf(HTMLElement)
             expect(container.querySelector('[data-openade-surface="desktop-shared-task"]')).toBeNull()
             expect(taskChangesReadCount).toBe(0)
+            expect(taskReads[0]).toEqual({ repoId: "repo-1", taskId: "task-1", options: { hydrateSessionEvents: false } })
+            await vi.waitFor(() => expect(metadataUpdates.some((update) => update.lastViewedAt)).toBe(true), { timeout: 1000, interval: 10 })
+            expect(taskReads.every((read) => read.options?.hydrateSessionEvents === false)).toBe(true)
+            expect(setTimeoutSpy).not.toHaveBeenCalledWith(expect.any(Function), 2500)
             await waitForText(container, "Runtime route task")
             await waitForText(container, "Do the runtime-backed work")
             await waitForText(container, "1 comment")
@@ -721,7 +815,7 @@ describe("Code routes with runtime product reads", () => {
             await waitForText(container, "Runtime pending comment")
             expect(findButtonByTitle(container, "Attach image")).toBeInstanceOf(HTMLButtonElement)
 
-            codeStore.smartEditors.getManager("task-task-1", "repo-1").setValue("Classic desktop runtime turn")
+            editorManager.setValue("Classic desktop runtime turn")
             const doButton = findButtonByTitlePrefix(container, "Do")
             await vi.waitFor(() => expect(doButton.disabled).toBe(false), { timeout: 1000, interval: 10 })
             clickElement(doButton)
@@ -745,8 +839,10 @@ describe("Code routes with runtime product reads", () => {
             await vi.waitFor(() => expect(findButtonByText(container, "Close")).toBeInstanceOf(HTMLButtonElement), { timeout: 1000, interval: 10 })
             expect(metadataUpdates).toEqual(expect.arrayContaining([expect.objectContaining({ taskId: "task-1", closed: true })]))
             expect(metadataUpdates).toEqual(expect.arrayContaining([expect.objectContaining({ taskId: "task-1", closed: false })]))
+            expect(taskReads.every((read) => read.options?.hydrateSessionEvents === false)).toBe(true)
             expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
         } finally {
+            setTimeoutSpy.mockRestore()
             trackSpy.mockRestore()
             codeStore.disconnectAllStores()
         }

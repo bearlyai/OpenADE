@@ -1,4 +1,5 @@
 import { makeAutoObservable, runInAction } from "mobx"
+import type { OpenADETaskResourceInventory } from "../../../../openade-module/src"
 import { gitApi } from "../../electronAPI/git"
 import { taskFromStore } from "../../persistence"
 import { fallbackTitle, generateTitle } from "../../prompts/titleExtractor"
@@ -11,20 +12,7 @@ import { TaskUIStateManager } from "./TaskUIStateManager"
 // Deep Delete Types
 // ============================================================================
 
-export interface TaskResourceInventory {
-    taskId: string
-    taskTitle: string
-    isRunning: boolean
-    snapshotIds: string[]
-    images: Array<{ id: string; ext: string }>
-    sessions: Array<{ sessionId: string; harnessId: string }>
-    worktree: {
-        slug: string
-        branchName: string
-        sourceBranch: string
-        branchMerged: boolean | null
-    } | null
-}
+export type TaskResourceInventory = OpenADETaskResourceInventory
 
 export interface DeleteOptions {
     deleteSnapshots: boolean
@@ -158,6 +146,11 @@ export class TaskManager {
             const repoId = this.resolveRepoId(id)
             if (!repoId) continue
 
+            if (this.store.shouldUseRuntimeProductReads()) {
+                results.push(await this.store.readProductTaskResourceInventory({ repoId, taskId: id }))
+                continue
+            }
+
             const task = await this.store.loadProductTaskForRead(repoId, id)
             if (!task) continue
             const events = task.events
@@ -212,6 +205,7 @@ export class TaskManager {
             }
 
             results.push({
+                repoId,
                 taskId: id,
                 taskTitle: task.title || task.description || "Untitled",
                 isRunning: this.store.isTaskRunning(id),
@@ -274,29 +268,11 @@ export class TaskManager {
         this.invalidateTaskModel(taskId)
     }
 
-    async cleanupWorktree(repoId: string, slug: string): Promise<void> {
-        const gitInfo = await this.store.repos.getGitInfo(repoId)
-        if (!gitInfo?.repoRoot) {
-            console.debug("[TaskManager] Cannot cleanup worktree - repo has no gitInfo")
-            return
-        }
-
-        try {
-            console.debug("[TaskManager] Cleaning up worktree:", { repoGitRoot: gitInfo.repoRoot, slug })
-            await gitApi.deleteWorkTree({
-                repoDir: gitInfo.repoRoot,
-                id: slug,
-            })
-            console.debug("[TaskManager] Worktree cleaned up successfully")
-        } catch (error) {
-            console.error("[TaskManager] Failed to cleanup worktree:", error)
-        }
-    }
-
     async markTaskViewed(taskId: string): Promise<void> {
         if (!this.getTask(taskId)) return
 
         await this.store.updateProductTaskMetadata({ taskId, lastViewedAt: new Date().toISOString() })
+        if (this.store.shouldUseRuntimeProductReads()) return
         await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
@@ -352,14 +328,21 @@ export class TaskManager {
         const description = task.description
         if (!description) return
 
-        const repo = this.store.repos.getRepo(task.repoId)
-        if (!repo) return
-
         const taskModel = this.getTaskModel(taskId)
         const harnessId = taskModel?.harnessId
 
         runInAction(() => this.regeneratingTitleTaskIds.add(taskId))
         try {
+            if (this.store.shouldUseRuntimeProductReads()) {
+                const repoId = task.repoId || this.resolveRepoId(taskId)
+                if (!repoId) return
+                await this.store.generateProductTaskTitle({ repoId, taskId, harnessId })
+                return
+            }
+
+            const repo = this.store.repos.getRepo(task.repoId)
+            if (!repo) return
+
             const abortController = new AbortController()
             const generatedTitle = await generateTitle(description, abortController, { harnessId, cwd: repo.path, events: task.events })
             this.setTaskTitle(taskId, generatedTitle ?? fallbackTitle(description))

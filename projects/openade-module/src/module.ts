@@ -34,6 +34,12 @@ import type {
     OpenADEProjectProcessStartResult,
     OpenADEProjectProcessStopRequest,
     OpenADEProjectProcessStopResult,
+    OpenADEProjectGitBranchesReadRequest,
+    OpenADEProjectGitBranchesReadResult,
+    OpenADEProjectGitInfoRequest,
+    OpenADEProjectGitInfoResult,
+    OpenADEProjectGitSummaryReadRequest,
+    OpenADEProjectGitSummaryReadResult,
     OpenADERepoCreateRequest,
     OpenADERepoCreateResult,
     OpenADERepoDeleteRequest,
@@ -65,11 +71,15 @@ import type {
     OpenADETaskGitFileAtTreeishResult,
     OpenADETaskGitLogRequest,
     OpenADETaskGitLogResult,
+    OpenADETaskGitScopesReadRequest,
+    OpenADETaskGitScopesReadResult,
     OpenADETaskGitSummaryRequest,
     OpenADETaskGitSummaryResult,
     OpenADETaskImageReadRequest,
     OpenADETaskImageReadResult,
     OpenADETaskImageReference,
+    OpenADETaskResourceInventoryReadRequest,
+    OpenADETaskResourceInventoryReadResult,
     OpenADETaskTerminalMutationResult,
     OpenADETaskTerminalReconnectRequest,
     OpenADETaskTerminalReconnectResult,
@@ -86,8 +96,12 @@ import type {
     OpenADETaskSnapshotPatchSliceReadResult,
     OpenADETaskReadOptions,
     OpenADETaskReadRequest,
+    OpenADETaskTitleGenerateRequest,
+    OpenADETaskTitleGenerateResult,
     OpenADETaskDeleteRequest,
     OpenADETaskDeleteResult,
+    OpenADETaskEnvironmentPrepareRequest,
+    OpenADETaskEnvironmentPrepareResult,
     OpenADETaskEnvironmentSetupRequest,
     OpenADETaskPreview,
     OpenADETaskMetadataUpdateRequest,
@@ -157,6 +171,11 @@ export interface OpenADEScopedHostAdapter {
         params: OpenADEProjectProcessReconnectRequest & { repo: OpenADEProject; task?: OpenADETask }
     ): Promise<OpenADEProjectProcessReconnectResult>
     stopProjectProcess(params: OpenADEProjectProcessStopRequest & { repo: OpenADEProject; task?: OpenADETask }): Promise<OpenADEProjectProcessStopResult>
+    readProjectGitInfo(params: OpenADEProjectGitInfoRequest & { repo: OpenADEProject }): Promise<OpenADEProjectGitInfoResult>
+    readProjectGitBranches(
+        params: OpenADEProjectGitBranchesReadRequest & { repo: OpenADEProject }
+    ): Promise<OpenADEProjectGitBranchesReadResult>
+    readProjectGitSummary(params: OpenADEProjectGitSummaryReadRequest & { repo: OpenADEProject }): Promise<OpenADEProjectGitSummaryReadResult>
     startTaskTerminal(params: OpenADETaskTerminalStartRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskTerminalStartResult>
     reconnectTaskTerminal(
         params: OpenADETaskTerminalReconnectRequest & { repo: OpenADEProject; task: OpenADETask }
@@ -166,6 +185,7 @@ export interface OpenADEScopedHostAdapter {
     stopTaskTerminal(params: OpenADETaskTerminalStopRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskTerminalMutationResult>
     readTaskImage(params: OpenADETaskImageReadRequest & { repo: OpenADEProject; task: OpenADETask; image: OpenADETaskImageReference }): Promise<OpenADETaskImageReadResult>
     readTaskGitSummary(params: OpenADETaskGitSummaryRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitSummaryResult>
+    readTaskGitScopes(params: OpenADETaskGitScopesReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskGitScopesReadResult>
     readTaskChanges(params: OpenADETaskChangesReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskChangesReadResult>
     readTaskDiff(params: OpenADETaskDiffReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskDiffReadResult>
     readTaskFilePair(params: OpenADETaskFilePairReadRequest & { repo: OpenADEProject; task: OpenADETask }): Promise<OpenADETaskFilePairReadResult>
@@ -187,6 +207,15 @@ export interface OpenADEScopedHostAdapter {
     readTaskSnapshotPatchSlice(
         params: OpenADETaskSnapshotPatchSliceReadRequest & { repo: OpenADEProject; task: OpenADETask; snapshotEvent: OpenADESnapshotEventRecord }
     ): Promise<OpenADETaskSnapshotPatchSliceReadResult>
+    readTaskResourceInventory(
+        params: OpenADETaskResourceInventoryReadRequest & { repo: OpenADEProject; task: OpenADETask; isRunning: boolean }
+    ): Promise<OpenADETaskResourceInventoryReadResult>
+    generateTaskTitle(
+        params: OpenADETaskTitleGenerateRequest & { repo: OpenADEProject; task: OpenADETask }
+    ): Promise<OpenADETaskTitleGenerateResult>
+    prepareTaskEnvironment(
+        params: OpenADETaskEnvironmentPrepareRequest & { repo: OpenADEProject; task: OpenADETask; createdAt: string }
+    ): Promise<OpenADETaskEnvironmentPrepareResult>
 }
 
 export interface OpenADETurnStartContext {
@@ -370,6 +399,28 @@ function projectSearchParams(params: unknown): OpenADEProjectSearchRequest {
     }
 }
 
+function projectGitInfoParams(params: unknown): OpenADEProjectGitInfoRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+    }
+}
+
+function projectGitBranchesReadParams(params: unknown): OpenADEProjectGitBranchesReadRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        includeRemote: booleanParam(record, "includeRemote"),
+    }
+}
+
+function projectGitSummaryReadParams(params: unknown): OpenADEProjectGitSummaryReadRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+    }
+}
+
 function projectProcessListParams(params: unknown): OpenADEProjectProcessListRequest {
     const record = asRecord(params)
     return {
@@ -502,6 +553,33 @@ function taskGitSummaryParams(params: unknown): OpenADETaskGitSummaryRequest {
     }
 }
 
+function taskGitScopesReadParams(params: unknown): OpenADETaskGitScopesReadRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        includeRemote: booleanParam(record, "includeRemote"),
+    }
+}
+
+function taskResourceInventoryReadParams(params: unknown): OpenADETaskResourceInventoryReadRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+    }
+}
+
+function taskTitleGenerateParams(params: unknown): OpenADETaskTitleGenerateRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        harnessId: optionalStringParam(record, "harnessId"),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+}
+
 function taskDiffContextLinesParam(value: unknown): OpenADETaskDiffContextLines {
     if (value === undefined) return 3
     switch (value) {
@@ -549,10 +627,23 @@ function taskGitLogParams(params: unknown): OpenADETaskGitLogRequest {
     return {
         repoId: stringParam(record, "repoId"),
         taskId: stringParam(record, "taskId"),
+        scopeId: optionalTaskGitScopeIdParam(record, "scopeId"),
         ref: optionalStringParam(record, "ref"),
         limit: optionalPositiveIntegerParam(record, "limit"),
         skip: optionalNonNegativeIntegerParam(record, "skip", 0),
     }
+}
+
+function optionalTaskGitScopeIdParam(record: Record<string, unknown>, key: string): string | undefined {
+    const value = record[key]
+    if (value === undefined) return undefined
+    if (typeof value !== "string") throw new Error(`${key} is invalid`)
+    const trimmed = value.trim()
+    if (!trimmed || trimmed.length > 256 || trimmed.includes("\0") || trimmed.includes("..") || trimmed.startsWith("-") || /\s/.test(trimmed)) {
+        throw new Error(`${key} is invalid`)
+    }
+    if (!/^(branch|worktree):[A-Za-z0-9._/@-]+$/.test(trimmed)) throw new Error(`${key} is invalid`)
+    return trimmed
 }
 
 function taskGitTreeishParam(record: Record<string, unknown>, key: string): string {
@@ -1220,6 +1311,15 @@ function taskEnvironmentSetupParams(params: unknown): OpenADETaskEnvironmentSetu
     }
 }
 
+function taskEnvironmentPrepareParams(params: unknown): OpenADETaskEnvironmentPrepareRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+}
+
 function dataDocumentIdParam(params: unknown): string {
     return stringParam(asRecord(params), "id")
 }
@@ -1380,6 +1480,21 @@ export function createOpenADEModule(adapters: OpenADEModuleAdapters): RuntimeMod
                     const { repo, task } = await readScopedProjectOptionalTask(request.repoId, request.taskId)
                     return scopedHost.searchProject({ ...request, repo, task })
                 }, { validateParams: validateWith(projectSearchParams) })
+                server.register("openade/project/git/info/read", async (params) => {
+                    const request = projectGitInfoParams(params)
+                    const repo = await readScopedProject(request.repoId)
+                    return scopedHost.readProjectGitInfo({ ...request, repo })
+                }, { validateParams: validateWith(projectGitInfoParams) })
+                server.register("openade/project/git/branches/read", async (params) => {
+                    const request = projectGitBranchesReadParams(params)
+                    const repo = await readScopedProject(request.repoId)
+                    return scopedHost.readProjectGitBranches({ ...request, repo })
+                }, { validateParams: validateWith(projectGitBranchesReadParams) })
+                server.register("openade/project/git/summary/read", async (params) => {
+                    const request = projectGitSummaryReadParams(params)
+                    const repo = await readScopedProject(request.repoId)
+                    return scopedHost.readProjectGitSummary({ ...request, repo })
+                }, { validateParams: validateWith(projectGitSummaryReadParams) })
                 server.register("openade/project/process/list", async (params) => {
                     const request = projectProcessListParams(params)
                     const { repo, task } = await readScopedProjectOptionalTask(request.repoId, request.taskId)
@@ -1444,6 +1559,11 @@ export function createOpenADEModule(adapters: OpenADEModuleAdapters): RuntimeMod
                     const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
                     return scopedHost.readTaskGitSummary({ ...request, repo, task })
                 }, { validateParams: validateWith(taskGitSummaryParams) })
+                server.register("openade/task/git/scopes/read", async (params) => {
+                    const request = taskGitScopesReadParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return scopedHost.readTaskGitScopes({ ...request, repo, task })
+                }, { validateParams: validateWith(taskGitScopesReadParams) })
                 server.register("openade/task/diff/read", async (params) => {
                     const request = taskDiffReadParams(params)
                     const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
@@ -1497,6 +1617,41 @@ export function createOpenADEModule(adapters: OpenADEModuleAdapters): RuntimeMod
                     const snapshotEvent = snapshotEventForTask(task, request.eventId)
                     return scopedHost.readTaskSnapshotPatchSlice({ ...request, repo, task, snapshotEvent })
                 }, { validateParams: validateWith(taskSnapshotPatchSliceReadParams) })
+                server.register("openade/task/resourceInventory/read", async (params, context) => {
+                    const request = taskResourceInventoryReadParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    const isRunning = activeOpenADETaskIds(context.server).includes(task.id)
+                    return scopedHost.readTaskResourceInventory({ ...request, repo, task, isRunning })
+                }, { validateParams: validateWith(taskResourceInventoryReadParams) })
+                server.register("openade/task/title/generate", async (params) => {
+                    const request = taskTitleGenerateParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return runIdempotentMutation("openade/task/title/generate", params, async () => {
+                        const result = await scopedHost.generateTaskTitle({ ...request, repo, task })
+                        const title = result.title.trim()
+                        if (!title) throw new Error("Generated task title is empty")
+                        await adapters.updateTaskMetadata({
+                            taskId: task.id,
+                            title,
+                            clientRequestId: request.clientRequestId,
+                        })
+                        return { ...result, title }
+                    })
+                }, { validateParams: validateWith(taskTitleGenerateParams) })
+                server.register("openade/task/environment/prepare", async (params) => {
+                    const request = taskEnvironmentPrepareParams(params)
+                    const { repo, task } = await readScopedProjectTask(request.repoId, request.taskId)
+                    return runIdempotentMutation("openade/task/environment/prepare", params, async () => {
+                        const result = await scopedHost.prepareTaskEnvironment({ ...request, repo, task, createdAt: new Date().toISOString() })
+                        await adapters.setupTaskEnvironment({
+                            taskId: task.id,
+                            deviceEnvironment: result.deviceEnvironment,
+                            setupEvent: result.setupEvent,
+                            clientRequestId: request.clientRequestId,
+                        })
+                        return result
+                    })
+                }, { validateParams: validateWith(taskEnvironmentPrepareParams) })
             }
             server.register("openade/repo/create", (params) => runIdempotentMutation("openade/repo/create", params, () => adapters.createRepo(repoCreateParams(params))), {
                 validateParams: validateWith(repoCreateParams),

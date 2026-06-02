@@ -18,6 +18,7 @@ import { getHarnessDisplayName } from "../settings/harnessStatusUtils"
 interface HyperPlanEventItemProps extends BaseEventItemProps {
     event: ActionEvent
     taskId: string
+    onRequestFullHistory?: () => void
 }
 
 const HARNESS_COLORS: Record<string, { bg: string; text: string; border: string }> = {
@@ -81,11 +82,13 @@ function SubPlanPane({
     taskId,
     actionEventId,
     reconciliationStarted,
+    onRequestFullHistory,
 }: {
     sub: HyperPlanSubExecution
     taskId: string
     actionEventId: string
     reconciliationStarted: boolean
+    onRequestFullHistory?: () => void
 }) {
     const harnessLabel = getHarnessDisplayName(sub.harnessId)
 
@@ -106,7 +109,15 @@ function SubPlanPane({
             {/* Pane content */}
             <div className="max-h-[300px] overflow-y-auto">
                 {sub.events.length > 0 ? (
-                    <InlineMessages events={sub.events} harnessId={sub.harnessId} sourceType="plan" taskId={taskId} actionEventId={actionEventId} />
+                    <InlineMessages
+                        events={sub.events}
+                        omittedEventCount={sub.omittedEventCount}
+                        harnessId={sub.harnessId}
+                        sourceType="plan"
+                        taskId={taskId}
+                        actionEventId={actionEventId}
+                        onRequestFullHistory={onRequestFullHistory}
+                    />
                 ) : (
                     <div className="px-3 py-4 text-center text-xs text-muted">Waiting...</div>
                 )}
@@ -132,7 +143,7 @@ function ReconcileLegend({ subExecutions }: { subExecutions: HyperPlanSubExecuti
     )
 }
 
-export const HyperPlanEventItem = observer(function HyperPlanEventItem({ event, expanded, onToggle, taskId }: HyperPlanEventItemProps) {
+export const HyperPlanEventItem = observer(function HyperPlanEventItem({ event, expanded, onToggle, taskId, onRequestFullHistory }: HyperPlanEventItemProps) {
     const subExecutions = event.hyperplanSubExecutions ?? []
     const terminalEvents = event.execution.events
 
@@ -179,7 +190,14 @@ export const HyperPlanEventItem = observer(function HyperPlanEventItem({ event, 
                 {subExecutions.length > 0 && (
                     <div className="flex gap-2 mb-3">
                         {subExecutions.map((sub) => (
-                            <SubPlanPane key={sub.stepId} sub={sub} taskId={taskId} actionEventId={event.id} reconciliationStarted={reconciliationStarted} />
+                            <SubPlanPane
+                                key={sub.stepId}
+                                sub={sub}
+                                taskId={taskId}
+                                actionEventId={event.id}
+                                reconciliationStarted={reconciliationStarted}
+                                onRequestFullHistory={onRequestFullHistory}
+                            />
                         ))}
                     </div>
                 )}
@@ -204,11 +222,13 @@ export const HyperPlanEventItem = observer(function HyperPlanEventItem({ event, 
                         )}
                         <InlineMessages
                             events={terminalEvents}
+                            omittedEventCount={event.execution.omittedEventCount}
                             harnessId={event.execution.harnessId}
                             sourceType="hyperplan"
                             sessionInfo={sessionInfo}
                             taskId={taskId}
                             actionEventId={event.id}
+                            onRequestFullHistory={onRequestFullHistory}
                         />
                         {reconciliationStarted && (
                             <div className="mt-3">

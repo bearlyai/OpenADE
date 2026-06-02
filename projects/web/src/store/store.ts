@@ -13,6 +13,12 @@ import type {
     OpenADEProjectFileWriteResult,
     OpenADEProjectFilesTreeRequest,
     OpenADEProjectFilesTreeResult,
+    OpenADEProjectGitBranchesReadRequest,
+    OpenADEProjectGitBranchesReadResult,
+    OpenADEProjectGitInfoRequest,
+    OpenADEProjectGitInfoResult,
+    OpenADEProjectGitSummaryReadRequest,
+    OpenADEProjectGitSummaryReadResult,
     OpenADEProjectProcessListRequest,
     OpenADEProjectProcessListResult,
     OpenADEProjectProcessReconnectRequest,
@@ -34,6 +40,8 @@ import type {
     OpenADETask,
     OpenADETaskDeleteRequest,
     OpenADETaskDeleteResult,
+    OpenADETaskEnvironmentPrepareRequest,
+    OpenADETaskEnvironmentPrepareResult,
     OpenADETaskEnvironmentSetupRequest,
     OpenADETaskChangesReadRequest,
     OpenADETaskChangesReadResult,
@@ -49,11 +57,15 @@ import type {
     OpenADETaskGitFileAtTreeishResult,
     OpenADETaskGitLogRequest,
     OpenADETaskGitLogResult,
+    OpenADETaskGitScopesReadRequest,
+    OpenADETaskGitScopesReadResult,
     OpenADETaskGitSummaryRequest,
     OpenADETaskGitSummaryResult,
     OpenADETaskMetadataUpdateRequest,
     OpenADETaskPreview,
     OpenADETaskReadOptions,
+    OpenADETaskResourceInventoryReadRequest,
+    OpenADETaskResourceInventoryReadResult,
     OpenADETaskSnapshotIndexReadRequest,
     OpenADETaskSnapshotIndexReadResult,
     OpenADETaskSnapshotPatchReadRequest,
@@ -68,6 +80,8 @@ import type {
     OpenADETaskTerminalStartResult,
     OpenADETaskTerminalStopRequest,
     OpenADETaskTerminalWriteRequest,
+    OpenADETaskTitleGenerateRequest,
+    OpenADETaskTitleGenerateResult,
     OpenADETurnStartRequest,
     OpenADETurnStartResult,
 } from "../../../openade-module/src"
@@ -86,7 +100,7 @@ import type { McpServerStore } from "../persistence/mcpServerStore"
 import { type McpServerStoreConnection, connectMcpServerStore } from "../persistence/mcpServerStoreBootstrap"
 import type { PersonalSettings, PersonalSettingsStore } from "../persistence/personalSettingsStore"
 import { type PersonalSettingsStoreConnection, connectPersonalSettingsStore } from "../persistence/personalSettingsStoreBootstrap"
-import { type RepoStore, type TaskPreview, getTaskPreview } from "../persistence/repoStore"
+import { type RepoStore, getTaskPreview } from "../persistence/repoStore"
 import { type RepoStoreConnection, connectRepoStore } from "../persistence/repoStoreBootstrap"
 import { type TaskStoreConnection, loadTaskStore } from "../persistence/taskLoader"
 import { computeTaskUsage, needsTaskUsageBackfill, normalizeTaskPreviewUsage } from "../persistence/taskStatsUtils"
@@ -128,22 +142,11 @@ const ANALYTICS_DEVICE_ID_BACKUP_KEY = "openade-analytics-device-id"
 
 export type RuntimeProductStoreStatus = "disabled" | "loading" | "ready" | "error"
 
+const RUNTIME_TASK_UPDATE_REFRESH_DELAY_MS = 150
+const LIGHTWEIGHT_RUNTIME_TASK_READ_OPTIONS: OpenADETaskReadOptions = { hydrateSessionEvents: false }
+
 export interface RuntimeNotificationSource {
     subscribe(listener: (notification: RuntimeNotification) => void): () => void
-}
-
-function toRuntimeTaskPreview(preview: OpenADETaskPreview): TaskPreview {
-    return {
-        id: preview.id,
-        slug: preview.slug,
-        title: preview.title,
-        closed: preview.closed,
-        createdAt: preview.createdAt,
-        lastEvent: preview.lastEvent,
-        usage: preview.usage,
-        lastViewedAt: preview.lastViewedAt,
-        lastEventAt: preview.lastEventAt,
-    }
 }
 
 function notificationRecord(notification: RuntimeNotification): Record<string, unknown> {
@@ -229,6 +232,8 @@ export class CodeStore {
     private envVarsReactionDisposer: (() => void) | null = null
     private runtimeNotificationDisposer: (() => void) | null = null
     private runtimeRefreshQueue: Promise<void> = Promise.resolve()
+    private pendingRuntimeTaskUpdateNotifications: Map<string, RuntimeNotification> = new Map()
+    private runtimeTaskUpdateTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
     private runtimeProductStore: OpenADEProductStore | null = null
     private telemetryReactionDisposer: (() => void) | null = null
     private pingIntervalId: ReturnType<typeof setInterval> | null = null
@@ -429,16 +434,71 @@ export class CodeStore {
         if (!source) return null
 
         return source.subscribe((notification) => {
-            this.runtimeRefreshQueue = this.runtimeRefreshQueue
-                .then(() => this.handleRuntimeNotification(notification))
-                .catch((err) => {
-                    console.warn("[CodeStore] Failed to refresh from runtime notification:", err)
-                })
+            if (this.scheduleCoalescedRuntimeTaskUpdateNotification(notification)) return
+            this.cancelPendingRuntimeTaskUpdateNotification(notification)
+            this.enqueueRuntimeNotification(notification)
         })
+    }
+
+    private enqueueRuntimeNotification(notification: RuntimeNotification): void {
+        this.runtimeRefreshQueue = this.runtimeRefreshQueue
+            .then(() => this.handleRuntimeNotification(notification))
+            .catch((err) => {
+                console.warn("[CodeStore] Failed to refresh from runtime notification:", err)
+            })
+    }
+
+    private runtimeTaskNotificationKey(notification: RuntimeNotification): string | null {
+        const params = notificationRecord(notification)
+        const repoId = typeof params.repoId === "string" ? params.repoId : null
+        const taskId = typeof params.taskId === "string" ? params.taskId : null
+        return repoId && taskId ? `${repoId}\0${taskId}` : null
+    }
+
+    private scheduleCoalescedRuntimeTaskUpdateNotification(notification: RuntimeNotification): boolean {
+        if (notification.method !== "openade/task/updated") return false
+        const key = this.runtimeTaskNotificationKey(notification)
+        if (!key) return false
+
+        this.pendingRuntimeTaskUpdateNotifications.set(key, notification)
+        if (this.runtimeTaskUpdateTimers.has(key)) return true
+
+        const timer = setTimeout(() => {
+            this.runtimeTaskUpdateTimers.delete(key)
+            const pending = this.pendingRuntimeTaskUpdateNotifications.get(key)
+            this.pendingRuntimeTaskUpdateNotifications.delete(key)
+            if (pending) this.enqueueRuntimeNotification(pending)
+        }, RUNTIME_TASK_UPDATE_REFRESH_DELAY_MS)
+
+        this.runtimeTaskUpdateTimers.set(key, timer)
+        return true
+    }
+
+    private cancelPendingRuntimeTaskUpdateNotification(notification: RuntimeNotification): void {
+        if (notification.method !== "openade/task/previewChanged" && notification.method !== "openade/task/deleted") return
+
+        const key = this.runtimeTaskNotificationKey(notification)
+        if (!key) return
+
+        const timer = this.runtimeTaskUpdateTimers.get(key)
+        if (timer) {
+            clearTimeout(timer)
+            this.runtimeTaskUpdateTimers.delete(key)
+        }
+        this.pendingRuntimeTaskUpdateNotifications.delete(key)
+    }
+
+    private clearPendingRuntimeTaskUpdateNotifications(): void {
+        for (const timer of this.runtimeTaskUpdateTimers.values()) {
+            clearTimeout(timer)
+        }
+        this.runtimeTaskUpdateTimers.clear()
+        this.pendingRuntimeTaskUpdateNotifications.clear()
     }
 
     private resetRuntimeNotificationSubscription(): void {
         this.runtimeNotificationDisposer?.()
+        this.clearPendingRuntimeTaskUpdateNotifications()
         this.runtimeNotificationDisposer = this.subscribeToRuntimeNotifications()
     }
 
@@ -451,28 +511,36 @@ export class CodeStore {
         const params = typeof notification.params === "object" && notification.params !== null ? (notification.params as Record<string, unknown>) : {}
 
         const settledTaskIds = this.runtimes.applyNotification(notification)
-        await this.handleRuntimeProductStoreNotification(notification)
+        const wasUsingRuntimeProductReads = this.shouldUseRuntimeProductReads()
+        const runtimeProductNotificationHandled = await this.handleRuntimeProductStoreNotification(notification)
+        const shouldSkipLegacyNotificationRefresh = runtimeProductNotificationHandled && (wasUsingRuntimeProductReads || this.shouldUseRuntimeProductReads())
         for (const taskId of settledTaskIds) {
             await this.notifyRuntimeTaskSettled(taskId)
         }
 
         const queuedTurnTaskId = this.queuedTurns.applyNotification(notification)
         if (queuedTurnTaskId) {
-            await this.refreshProductTaskAfterRuntimeNotification(queuedTurnTaskId)
+            if (!shouldSkipLegacyNotificationRefresh) {
+                await this.refreshProductTaskAfterRuntimeNotification(queuedTurnTaskId)
+            }
             this.queuedTurns.reconcileTaskWithStorage(queuedTurnTaskId, this.tasks.getTaskModel(queuedTurnTaskId)?.queuedTurns ?? [])
             return
         }
 
         if (notification.method === "openade/task/updated" || notification.method === "openade/task/previewChanged") {
-            await this.refreshProductSnapshotAfterRuntimeNotification()
-            if (typeof params.taskId === "string") {
-                await this.refreshProductTaskAfterRuntimeNotification(params.taskId)
+            if (!shouldSkipLegacyNotificationRefresh) {
+                await this.refreshProductSnapshotAfterRuntimeNotification()
+                if (typeof params.taskId === "string") {
+                    await this.refreshProductTaskAfterRuntimeNotification(params.taskId)
+                }
             }
             return
         }
 
         if (notification.method === "openade/task/deleted") {
-            await this.refreshProductSnapshotAfterRuntimeNotification()
+            if (!shouldSkipLegacyNotificationRefresh) {
+                await this.refreshProductSnapshotAfterRuntimeNotification()
+            }
             if (typeof params.taskId === "string") {
                 this.disconnectTaskStore(params.taskId)
                 this.runtimes.removeTask(params.taskId)
@@ -485,7 +553,9 @@ export class CodeStore {
             notification.method === "openade/repo/updated" ||
             notification.method === "openade/repo/deleted"
         ) {
-            await this.refreshProductSnapshotAfterRuntimeNotification()
+            if (!shouldSkipLegacyNotificationRefresh) {
+                await this.refreshProductSnapshotAfterRuntimeNotification()
+            }
         }
     }
 
@@ -627,7 +697,11 @@ export class CodeStore {
         }
     }
 
-    async getRuntimeProductTask(repoId: string, taskId: string, options: OpenADETaskReadOptions = {}): Promise<OpenADETask | null> {
+    async getRuntimeProductTask(
+        repoId: string,
+        taskId: string,
+        options: OpenADETaskReadOptions = LIGHTWEIGHT_RUNTIME_TASK_READ_OPTIONS
+    ): Promise<OpenADETask | null> {
         if (!this.runtimeProductStore) return null
         const task = await this.runtimeProductStore.getTask(repoId, taskId, options)
         runInAction(() => {
@@ -636,14 +710,21 @@ export class CodeStore {
         return task
     }
 
-    async loadRuntimeProductTask(repoId: string, taskId: string, options: OpenADETaskReadOptions = {}): Promise<Task | null> {
+    async loadRuntimeProductTask(
+        repoId: string,
+        taskId: string,
+        options: OpenADETaskReadOptions = LIGHTWEIGHT_RUNTIME_TASK_READ_OPTIONS
+    ): Promise<Task | null> {
         const task = await this.getRuntimeProductTask(repoId, taskId, options)
         const adapted = task ? (this.runtimeProductTasks.get(task.id) ?? null) : null
         if (adapted) this.tasks.getTaskModel(taskId)?.syncHarnessFromHistory()
         return adapted
     }
 
-    async refreshRuntimeProductTaskForTaskId(taskId: string, options: OpenADETaskReadOptions = {}): Promise<OpenADETask | null> {
+    async refreshRuntimeProductTaskForTaskId(
+        taskId: string,
+        options: OpenADETaskReadOptions = LIGHTWEIGHT_RUNTIME_TASK_READ_OPTIONS
+    ): Promise<OpenADETask | null> {
         if (!this.runtimeProductStore || !this.shouldUseRuntimeProductReads()) return null
 
         let repoId = this.runtimeProductTasks.get(taskId)?.repoId ?? this.findRuntimeProductRepoIdForTask(taskId)
@@ -695,12 +776,12 @@ export class CodeStore {
         return this.runtimeProductTaskPreview(repoId, taskId) ?? null
     }
 
-    getRuntimeProductTaskPreviews(repoId: string): TaskPreview[] | null {
+    getRuntimeProductTaskPreviews(repoId: string): OpenADETaskPreview[] | null {
         const project = this.getRuntimeProductProject(repoId)
-        return project ? project.tasks.map(toRuntimeTaskPreview) : null
+        return project ? project.tasks : null
     }
 
-    getTaskPreviewsForRepo(repoId: string): TaskPreview[] {
+    getTaskPreviewsForRepo(repoId: string): OpenADETaskPreview[] {
         const runtimePreviews = this.getRuntimeProductTaskPreviews(repoId)
         if (runtimePreviews) return runtimePreviews
 
@@ -711,22 +792,37 @@ export class CodeStore {
         return legacyPreviews
     }
 
-    getTaskPreviewReposForStats(): Array<{ id: string; name: string; tasks: TaskPreview[] }> {
+    getTaskPreviewReposForStats(): Array<{ id: string; name: string; tasks: OpenADETaskPreview[] }> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductSnapshot) {
             return this.runtimeProductSnapshot.repos.map((repo) => ({
                 id: repo.id,
                 name: repo.name,
-                tasks: repo.tasks.map(toRuntimeTaskPreview),
+                tasks: repo.tasks,
             }))
         }
         return this.repoStore?.repos.all().map((repo) => ({ id: repo.id, name: repo.name, tasks: repo.tasks })) ?? []
     }
 
-    private async handleRuntimeProductStoreNotification(notification: RuntimeNotification): Promise<void> {
-        if (!this.runtimeProductStore) return
+    private syncRuntimeProductStoreCache(taskId?: string): void {
+        const productStore = this.runtimeProductStore
+        runInAction(() => {
+            this.runtimeProductSnapshot = productStore?.snapshot ?? null
+            if (this.runtimeProductSnapshot) this.pruneRuntimeProductTasks(this.runtimeProductSnapshot)
+            if (productStore && taskId) {
+                const repoId = this.findRuntimeProductRepoIdForTask(taskId)
+                const task = repoId ? productStore.getCachedTask(repoId, taskId) : null
+                if (task) this.cacheRuntimeProductTask(task)
+            }
+            if (this.runtimeProductStoreStatus !== "loading") this.runtimeProductStoreStatus = "ready"
+            this.runtimeProductStoreError = null
+        })
+    }
+
+    private async handleRuntimeProductStoreNotification(notification: RuntimeNotification): Promise<boolean> {
+        if (!this.runtimeProductStore) return false
 
         try {
-            await this.runtimeProductStore.handleNotification(notification)
+            const handled = await this.runtimeProductStore.handleNotification(notification)
             runInAction(() => {
                 this.runtimeProductSnapshot = this.runtimeProductStore?.snapshot ?? null
                 if (this.runtimeProductSnapshot) this.pruneRuntimeProductTasks(this.runtimeProductSnapshot)
@@ -742,6 +838,7 @@ export class CodeStore {
                 if (this.runtimeProductStoreStatus !== "loading") this.runtimeProductStoreStatus = "ready"
                 this.runtimeProductStoreError = null
             })
+            return handled
         } catch (err) {
             const message = this.runtimeProductErrorMessage(err)
             runInAction(() => {
@@ -750,6 +847,7 @@ export class CodeStore {
             })
             this.trackRuntimeProductStoreError("notification", err)
             console.warn("[CodeStore] Failed to refresh runtime product store from notification:", err)
+            return false
         }
     }
 
@@ -776,7 +874,7 @@ export class CodeStore {
 
     private async refreshProductTaskAfterRuntimeNotification(taskId: string): Promise<void> {
         if (this.shouldUseRuntimeProductReads()) {
-            await this.refreshRuntimeProductTaskForTaskId(taskId)
+            await this.refreshRuntimeProductTaskForTaskId(taskId, { hydrateSessionEvents: false })
             return
         }
 
@@ -1099,10 +1197,21 @@ export class CodeStore {
     async updateProductTaskMetadata(params: OpenADETaskMetadataUpdateRequest): Promise<void> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
             await this.runtimeProductStore.updateTaskMetadata(params)
+            this.syncRuntimeProductStoreCache(params.taskId)
             return
         }
 
         await localOpenADEClient.updateTaskMetadata(params)
+    }
+
+    async generateProductTaskTitle(params: OpenADETaskTitleGenerateRequest): Promise<OpenADETaskTitleGenerateResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            const result = await this.runtimeProductStore.generateTaskTitle(params)
+            this.syncRuntimeProductStoreCache(params.taskId)
+            return result
+        }
+
+        return localOpenADEClient.generateTaskTitle(params)
     }
 
     async setupProductTaskEnvironment(params: OpenADETaskEnvironmentSetupRequest): Promise<void> {
@@ -1112,6 +1221,14 @@ export class CodeStore {
         }
 
         await localOpenADEClient.setupTaskEnvironment(params)
+    }
+
+    async prepareProductTaskEnvironment(params: OpenADETaskEnvironmentPrepareRequest): Promise<OpenADETaskEnvironmentPrepareResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.prepareTaskEnvironment(params)
+        }
+
+        return localOpenADEClient.prepareTaskEnvironment(params)
     }
 
     async createProductComment(params: OpenADECommentCreateRequest): Promise<OpenADECommentCreateResult> {
@@ -1162,6 +1279,22 @@ export class CodeStore {
         }
 
         return localOpenADEClient.readTaskGitSummary(params)
+    }
+
+    async readProductTaskGitScopes(params: OpenADETaskGitScopesReadRequest): Promise<OpenADETaskGitScopesReadResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readTaskGitScopes(params)
+        }
+
+        return localOpenADEClient.readTaskGitScopes(params)
+    }
+
+    async readProductTaskResourceInventory(params: OpenADETaskResourceInventoryReadRequest): Promise<OpenADETaskResourceInventoryReadResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readTaskResourceInventory(params)
+        }
+
+        return localOpenADEClient.readTaskResourceInventory(params)
     }
 
     async readProductTaskDiff(params: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult> {
@@ -1218,6 +1351,30 @@ export class CodeStore {
         }
 
         return localOpenADEClient.searchProject(params)
+    }
+
+    async readProductProjectGitInfo(params: OpenADEProjectGitInfoRequest): Promise<OpenADEProjectGitInfoResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readProjectGitInfo(params)
+        }
+
+        return localOpenADEClient.readProjectGitInfo(params)
+    }
+
+    async readProductProjectGitBranches(params: OpenADEProjectGitBranchesReadRequest): Promise<OpenADEProjectGitBranchesReadResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readProjectGitBranches(params)
+        }
+
+        return localOpenADEClient.readProjectGitBranches(params)
+    }
+
+    async readProductProjectGitSummary(params: OpenADEProjectGitSummaryReadRequest): Promise<OpenADEProjectGitSummaryReadResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readProjectGitSummary(params)
+        }
+
+        return localOpenADEClient.readProjectGitSummary(params)
     }
 
     async listProductProjectProcesses(params: OpenADEProjectProcessListRequest): Promise<OpenADEProjectProcessListResult> {
@@ -1385,6 +1542,7 @@ export class CodeStore {
             this.runtimeNotificationDisposer()
             this.runtimeNotificationDisposer = null
         }
+        this.clearPendingRuntimeTaskUpdateNotifications()
 
         if (this.repoStoreConnection) {
             this.repoStoreConnection.disconnect()

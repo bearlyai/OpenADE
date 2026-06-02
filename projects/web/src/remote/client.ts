@@ -1,48 +1,5 @@
 import type { RuntimeNotification } from "../../../runtime-protocol/src"
 import type { PairRequest, RemoteDeviceSelfRevokeResult } from "../../../shared/companion/src"
-import type {
-    OpenADECommentCreateRequest,
-    OpenADECommentCreateResult,
-    OpenADECommentDeleteRequest,
-    OpenADECommentEditRequest,
-    OpenADEProjectFileReadRequest,
-    OpenADEProjectFileReadResult,
-    OpenADEProjectFilesTreeRequest,
-    OpenADEProjectFilesTreeResult,
-    OpenADEProjectProcessListRequest,
-    OpenADEProjectProcessListResult,
-    OpenADEProjectProcessReconnectRequest,
-    OpenADEProjectProcessReconnectResult,
-    OpenADEProjectProcessStartRequest,
-    OpenADEProjectProcessStartResult,
-    OpenADEProjectProcessStopRequest,
-    OpenADEProjectProcessStopResult,
-    OpenADEProjectSearchRequest,
-    OpenADEProjectSearchResult,
-    OpenADEQueuedTurnCancelRequest,
-    OpenADEQueuedTurnCancelResult,
-    OpenADEReviewStartRequest,
-    OpenADESnapshot,
-    OpenADETask,
-    OpenADETaskDeleteRequest,
-    OpenADETaskDeleteResult,
-    OpenADETaskChangesReadRequest,
-    OpenADETaskChangesReadResult,
-    OpenADETaskDiffReadRequest,
-    OpenADETaskDiffReadResult,
-    OpenADETaskFilePairReadRequest,
-    OpenADETaskFilePairReadResult,
-    OpenADETaskGitLogRequest,
-    OpenADETaskGitLogResult,
-    OpenADETaskGitSummaryRequest,
-    OpenADETaskGitSummaryResult,
-    OpenADETaskImageReadRequest,
-    OpenADETaskImageReadResult,
-    OpenADETaskMetadataUpdateRequest,
-    OpenADETaskReadOptions,
-    OpenADETurnStartRequest,
-    OpenADETurnStartResult,
-} from "../../../openade-module/src"
 import { RuntimeClientError } from "../../../runtime-client/src"
 import {
     buildPairingTarget,
@@ -138,7 +95,7 @@ function isTransientRuntimeReadError(error: unknown): boolean {
     return /Runtime socket (closed|disconnected|failed|is not connected)|WebSocket/i.test(message)
 }
 
-async function retryTransientRead<T>(read: () => Promise<T>): Promise<T> {
+export async function retryRemoteRead<T>(read: () => Promise<T>): Promise<T> {
     try {
         return await read()
     } catch (error) {
@@ -155,7 +112,7 @@ function runtimeEntry(
     return remoteSessionManager.session(config, onStatus)
 }
 
-function productStore(config: RemoteConfig): OpenADEProductStore {
+export function getRemoteProductStore(config: RemoteConfig): OpenADEProductStore {
     const { entry } = runtimeEntry(config)
     const cached = remoteProductStores.get(config.id)
     if (cached?.openade === entry.openade) return cached.store
@@ -181,105 +138,6 @@ export async function pairRemote(baseUrl: string, token: string): Promise<Remote
     if (!response.ok) throw new Error(await response.text())
     const result = (await response.json()) as { deviceToken: string }
     return saveRemoteConfig({ baseUrl: target.baseUrl, token: result.deviceToken, host: target.host, hostId: target.hostId })
-}
-
-export function getSnapshot(config: RemoteConfig): Promise<OpenADESnapshot> {
-    return retryTransientRead(() => productStore(config).refreshSnapshot())
-}
-
-export function getTask(config: RemoteConfig, repoId: string, taskId: string, options: OpenADETaskReadOptions = {}): Promise<OpenADETask> {
-    return retryTransientRead(() => productStore(config).getTask(repoId, taskId, options))
-}
-
-export function readRemoteTaskImage(config: RemoteConfig, args: OpenADETaskImageReadRequest): Promise<OpenADETaskImageReadResult> {
-    return retryTransientRead(() => productStore(config).readTaskImage(args))
-}
-
-export function readRemoteTaskChanges(config: RemoteConfig, args: OpenADETaskChangesReadRequest): Promise<OpenADETaskChangesReadResult> {
-    return retryTransientRead(() => productStore(config).readTaskChanges(args))
-}
-
-export function readRemoteTaskGitSummary(config: RemoteConfig, args: OpenADETaskGitSummaryRequest): Promise<OpenADETaskGitSummaryResult> {
-    return retryTransientRead(() => productStore(config).readTaskGitSummary(args))
-}
-
-export function readRemoteTaskDiff(config: RemoteConfig, args: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult> {
-    return retryTransientRead(() => productStore(config).readTaskDiff(args))
-}
-
-export function readRemoteTaskFilePair(config: RemoteConfig, args: OpenADETaskFilePairReadRequest): Promise<OpenADETaskFilePairReadResult> {
-    return retryTransientRead(() => productStore(config).readTaskFilePair(args))
-}
-
-export function readRemoteTaskGitLog(config: RemoteConfig, args: OpenADETaskGitLogRequest): Promise<OpenADETaskGitLogResult> {
-    return retryTransientRead(() => productStore(config).readTaskGitLog(args))
-}
-
-export function listRemoteProjectFiles(config: RemoteConfig, args: OpenADEProjectFilesTreeRequest): Promise<OpenADEProjectFilesTreeResult> {
-    return retryTransientRead(() => productStore(config).listProjectFiles(args))
-}
-
-export function readRemoteProjectFile(config: RemoteConfig, args: OpenADEProjectFileReadRequest): Promise<OpenADEProjectFileReadResult> {
-    return retryTransientRead(() => productStore(config).readProjectFile(args))
-}
-
-export function searchRemoteProject(config: RemoteConfig, args: OpenADEProjectSearchRequest): Promise<OpenADEProjectSearchResult> {
-    return retryTransientRead(() => productStore(config).searchProject(args))
-}
-
-export function listRemoteProjectProcesses(config: RemoteConfig, args: OpenADEProjectProcessListRequest): Promise<OpenADEProjectProcessListResult> {
-    return retryTransientRead(() => productStore(config).listProjectProcesses(args))
-}
-
-export function startRemoteProjectProcess(config: RemoteConfig, args: OpenADEProjectProcessStartRequest): Promise<OpenADEProjectProcessStartResult> {
-    return productStore(config).startProjectProcess(args)
-}
-
-export function reconnectRemoteProjectProcess(
-    config: RemoteConfig,
-    args: OpenADEProjectProcessReconnectRequest
-): Promise<OpenADEProjectProcessReconnectResult> {
-    return retryTransientRead(() => productStore(config).reconnectProjectProcess(args))
-}
-
-export function stopRemoteProjectProcess(config: RemoteConfig, args: OpenADEProjectProcessStopRequest): Promise<OpenADEProjectProcessStopResult> {
-    return productStore(config).stopProjectProcess(args)
-}
-
-export function startRemoteTurn(config: RemoteConfig, args: OpenADETurnStartRequest): Promise<OpenADETurnStartResult> {
-    return productStore(config).startTurn(args)
-}
-
-export function abortRemote(config: RemoteConfig, taskId: string): Promise<void> {
-    return productStore(config).interruptTurn(taskId)
-}
-
-export function startRemoteReview(config: RemoteConfig, args: OpenADEReviewStartRequest): Promise<{ taskId: string }> {
-    return productStore(config).startReview(args)
-}
-
-export function cancelRemoteQueuedTurn(config: RemoteConfig, args: OpenADEQueuedTurnCancelRequest): Promise<OpenADEQueuedTurnCancelResult> {
-    return productStore(config).cancelQueuedTurn(args)
-}
-
-export function updateRemoteTaskMetadata(config: RemoteConfig, args: OpenADETaskMetadataUpdateRequest): Promise<void> {
-    return productStore(config).updateTaskMetadata(args)
-}
-
-export function createRemoteComment(config: RemoteConfig, args: OpenADECommentCreateRequest): Promise<OpenADECommentCreateResult> {
-    return productStore(config).createComment(args)
-}
-
-export function editRemoteComment(config: RemoteConfig, args: OpenADECommentEditRequest): Promise<void> {
-    return productStore(config).editComment(args)
-}
-
-export function deleteRemoteComment(config: RemoteConfig, args: OpenADECommentDeleteRequest): Promise<void> {
-    return productStore(config).deleteComment(args)
-}
-
-export function deleteRemoteTask(config: RemoteConfig, args: OpenADETaskDeleteRequest): Promise<OpenADETaskDeleteResult> {
-    return productStore(config).deleteTask(args)
 }
 
 export function selfRevokeRemoteDevice(config: RemoteConfig): Promise<RemoteDeviceSelfRevokeResult> {

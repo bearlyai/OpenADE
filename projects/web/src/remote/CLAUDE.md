@@ -8,8 +8,8 @@ Renderer-side remote control surface shared by the desktop-hosted mobile view an
 - The desktop renderer should listen to runtime OpenADE notifications and refresh cached Yjs documents from storage after server-owned writes.
 - Remote invalidations come from runtime OpenADE notifications; do not reintroduce renderer-origin companion event bridges.
 - `RemoteApp.tsx` is the remote session adapter and should stay thin over `client.ts`, shared session helpers, and shared shell components.
-- `projects/web/src/kernel/session.ts` owns shared pairing URL parsing, private-host validation, runtime WebSocket URL construction, runtime client caching, and OpenADE client construction. `client.ts` owns companion config persistence and remote-specific read/action helpers on top of that shared session layer.
-- `projects/web/src/kernel/productStore.ts` owns runtime-backed product DTO caching and product mutations. RemoteApp product controls must call the helpers in `client.ts`, which route through this store instead of bespoke companion commands.
+- `projects/web/src/kernel/session.ts` owns shared pairing URL parsing, private-host validation, runtime WebSocket URL construction, runtime client caching, and OpenADE client construction. `client.ts` owns companion config persistence, `getRemoteProductStore()`, `retryRemoteRead()`, and remote-only device/session actions on top of that shared session layer.
+- `projects/web/src/kernel/productStore.ts` owns runtime-backed product DTO caching and product mutations. RemoteApp product controls should call `OpenADEProductStore` through `getRemoteProductStore()` instead of bespoke companion commands or per-method `readRemote*`/`startRemote*` aliases.
 - OpenADE product types should be imported directly from `projects/openade-module/src`; `projects/shared/companion` is only for companion-owned pairing/device/service DTOs.
 - client.ts must cache one runtime WebSocket client per paired host id; navigation, refresh, and multiple subscriptions must not create extra sockets for the same saved credentials.
 - Shared `projects/web/src/shell/task/taskEventPresentation.ts` turns task events into message and activity rows; keep remote-specific code limited to image loading and session wiring.
@@ -24,9 +24,9 @@ Renderer-side remote control surface shared by the desktop-hosted mobile view an
 - The desktop renderer is not a companion command adapter. Product commands from remote clients go through runtime WebSocket methods.
 - Remote clients read snapshots, projects, task detail, and runtime updates over the `/v1/runtime` WebSocket.
 - Remote product mutations include turn start/interrupt, review start, queued-turn cancel, comment create/edit/delete, task metadata update, and task delete. Keep them high-level OpenADE methods; never replace them with raw Yjs or host calls.
-- Remote project files and search use scoped `openade/project/files/tree`, `openade/project/files/fuzzySearch`, `openade/project/file/read`, and `openade/project/search` methods through `client.ts` and `OpenADEProductStore`; do not call raw `fs/*`, `host/*`, or direct repo paths from `RemoteApp`.
-- Remote task change views use scoped `openade/task/changes/read`, `openade/task/diff/read`, and `openade/task/git/log` through `client.ts` and `OpenADEProductStore`; do not call raw `git/*` or `fs/*` from `RemoteApp`.
-- Remote project process controls and output viewing use scoped `openade/project/process/*` methods through `client.ts` and `OpenADEProductStore`; do not call raw `process/*` or `host/procs/*` from `RemoteApp`.
+- Remote project files and search use scoped `openade/project/files/tree`, `openade/project/files/fuzzySearch`, `openade/project/file/read`, and `openade/project/search` methods through `OpenADEProductStore`; do not call raw `fs/*`, `host/*`, or direct repo paths from `RemoteApp`.
+- Remote task change views use scoped `openade/task/changes/read`, `openade/task/diff/read`, and `openade/task/git/log` through `OpenADEProductStore`; do not call raw `git/*` or `fs/*` from `RemoteApp`.
+- Remote project process controls and output viewing use scoped `openade/project/process/*` methods through `OpenADEProductStore`; do not call raw `process/*` or `host/procs/*` from `RemoteApp`.
 - Remote settings may call `remote/device/selfRevoke` for the current paired token only. Do not add other device-management methods to the remote shell without explicit admin-role permissions and integration tests.
 - Do not sync Yjs to the phone for the companion MVP.
 - Do not expose raw Electron APIs, filesystem APIs, or shell APIs to RemoteApp.

@@ -2,8 +2,8 @@ import cx from "classnames"
 import { Check, Copy, Loader2 } from "lucide-react"
 import { observer } from "mobx-react"
 import { useCallback, useEffect, useRef, useState } from "react"
+import type { OpenADETaskPreviewUsage } from "../../../../openade-module/src"
 import { normalizeModelClass } from "../../constants"
-import type { TaskPreviewUsage } from "../../persistence/repoStore"
 import { formatDuration, needsTaskUsageBackfill } from "../../persistence/taskStatsUtils"
 import type { CodeStore } from "../../store/store"
 import { StatsShareCard } from "./StatsShareCard"
@@ -41,7 +41,7 @@ function createEmptyStats(label: string, sortKey: string): MonthStats {
     }
 }
 
-function addUsage(stats: MonthStats, usage: TaskPreviewUsage): void {
+function addUsage(stats: MonthStats, usage: OpenADETaskPreviewUsage): void {
     stats.taskCount++
     stats.inputTokens += usage.inputTokens
     stats.outputTokens += usage.outputTokens
@@ -252,7 +252,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     for (const repo of statRepos) {
         for (const task of repo.tasks) {
             totalTasks++
-            const u: TaskPreviewUsage = task.usage ?? { inputTokens: 0, outputTokens: 0, totalCostUsd: 0, eventCount: 0, costByModel: {}, durationMs: 0 }
+            const u: OpenADETaskPreviewUsage = task.usage ?? { inputTokens: 0, outputTokens: 0, totalCostUsd: 0, eventCount: 0, costByModel: {}, durationMs: 0 }
             totalIn += u.inputTokens
             totalOut += u.outputTokens
             totalCost += u.totalCostUsd

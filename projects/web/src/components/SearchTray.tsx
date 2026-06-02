@@ -2,7 +2,7 @@ import { AlertTriangle, FileCode, Loader2, Search, X } from "lucide-react"
 import { observer } from "mobx-react"
 import { useCallback, useEffect, useMemo, useRef } from "react"
 import { twMerge } from "tailwind-merge"
-import type { ContentSearchMatch } from "../electronAPI/files"
+import type { OpenADEProjectSearchMatch } from "../../../openade-module/src"
 import type { ContentSearchManager } from "../store/managers/ContentSearchManager"
 import { type AnnotationSide, type CommentHandlers, FileViewer } from "./FilesAndDiffs"
 import { scrollFileViewerToLine } from "./utils/fileViewerScroll"
@@ -56,7 +56,7 @@ function ContentResultItem({
     onSelect,
     shortPath,
 }: {
-    match: ContentSearchMatch
+    match: OpenADEProjectSearchMatch
     selected: boolean
     onSelect: () => void
     shortPath: string
@@ -78,7 +78,7 @@ function ContentResultItem({
                 "btn w-full text-left px-2 py-2 flex flex-col gap-0.5 transition-colors border-l-2",
                 selected ? "bg-primary/10 text-base-content border-l-primary" : "text-muted hover:text-base-content hover:bg-base-200 border-l-transparent"
             )}
-            title={match.file}
+            title={match.path}
         >
             {/* Match content - main emphasis */}
             <div className="font-mono text-xs truncate text-base-content w-full">
@@ -163,7 +163,7 @@ export const SearchTray = observer(function SearchTray({ contentSearch, taskId, 
 
     // Create comment handlers for the selected file
     const selectedMatch = contentSearch.contentResults[contentSearch.selectedIndex] ?? null
-    const selectedFile = selectedMatch ? `${contentSearch.workingDir}/${selectedMatch.file}` : null
+    const selectedFile = selectedMatch ? `${contentSearch.workingDir}/${selectedMatch.path}` : null
 
     const commentHandlers: CommentHandlers | null = useMemo(() => {
         if (!selectedFile) return null
@@ -185,11 +185,11 @@ export const SearchTray = observer(function SearchTray({ contentSearch, taskId, 
 
     // Compute disambiguated short paths for all results
     const shortPaths = useMemo(() => {
-        return getDisambiguatedPaths(results.map((r) => r.file))
+        return getDisambiguatedPaths(results.map((r) => r.path))
     }, [results])
 
     // Get the file path for the title bar (selectedMatch already defined above)
-    const selectedFilePath = selectedMatch?.file ?? null
+    const selectedFilePath = selectedMatch?.path ?? null
     const selectedLine = selectedMatch?.line ?? null
 
     // Highlight the matched line in the preview
@@ -216,7 +216,7 @@ export const SearchTray = observer(function SearchTray({ contentSearch, taskId, 
         }, 50)
 
         return () => clearTimeout(timeoutId)
-    }, [selectedMatch?.file, selectedMatch?.line, contentSearch.previewData?.content, contentSearch.previewLoading])
+    }, [selectedMatch?.path, selectedMatch?.line, contentSearch.previewData?.content, contentSearch.previewLoading])
 
     return (
         <div className="flex h-full" onKeyDown={handleKeyDown}>
@@ -263,11 +263,11 @@ export const SearchTray = observer(function SearchTray({ contentSearch, taskId, 
                         <div className="flex flex-col py-1">
                             {results.map((match, index) => (
                                 <ContentResultItem
-                                    key={`${match.file}:${match.line}`}
+                                    key={`${match.path}:${match.line}:${match.matchStart}:${match.matchEnd}`}
                                     match={match}
                                     selected={index === contentSearch.selectedIndex}
                                     onSelect={() => handleSelectResult(index)}
-                                    shortPath={shortPaths.get(match.file) ?? match.file}
+                                    shortPath={shortPaths.get(match.path) ?? match.path}
                                 />
                             ))}
                             {contentSearch.contentTruncated && (

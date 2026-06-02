@@ -7,6 +7,7 @@ import type {
     OpenADESnapshot,
     OpenADETask,
     OpenADETaskMetadataUpdateRequest,
+    OpenADETaskReadOptions,
     OpenADETaskPreview,
     OpenADETurnStartRequest,
 } from "../../../openade-module/src/types"
@@ -48,7 +49,7 @@ function createLocalRuntimeClient(server: RuntimeServer): RuntimeLocalClient {
     return new RuntimeLocalClient(transport, { clientName: "product-store-test", clientPlatform: "web" })
 }
 
-function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: RuntimeLocalClient } {
+function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: RuntimeLocalClient; taskReadRequests: OpenADETaskReadOptions[] } {
     const server = new RuntimeServer({ serverName: "product-store-runtime", protocolVersion: 1 })
     const preview: OpenADETaskPreview = {
         id: "task-1",
@@ -93,6 +94,7 @@ function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: Runt
         comments: [],
     }
     const tasks = new Map([[task.id, task]])
+    const taskReadRequests: OpenADETaskReadOptions[] = []
 
     function snapshot(options?: { version?: string; hostName?: string; workingTaskIds?: string[] }): OpenADESnapshot {
         return {
@@ -169,7 +171,8 @@ function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: Runt
         readSnapshot: async (options) => snapshot(options),
         readProjects: async () => [project],
         readTaskList: async () => project.tasks,
-        readTask: async (_repoId, taskId) => {
+        readTask: async (_repoId, taskId, options) => {
+            taskReadRequests.push(options ?? {})
             const current = tasks.get(taskId)
             if (!current) throw new Error(`Task ${taskId} not found`)
             return current
@@ -189,6 +192,32 @@ function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: Runt
             writeProjectFile: async (params) => ({ repoId: params.repoId, path: params.path, size: params.content.length }),
             fuzzySearchProjectFiles: async (params) => ({ repoId: params.repoId, taskId: params.taskId, results: [], truncated: false, source: "filesystem" }),
             searchProject: async (params) => ({ repoId: params.repoId, matches: [], truncated: false }),
+            readProjectGitInfo: async (params) => ({
+                repoId: params.repoId,
+                isGitRepo: true,
+                repoRoot: "/tmp/repo",
+                relativePath: "",
+                mainBranch: "main",
+                hasGhCli: false,
+            }),
+            readProjectGitBranches: async (params) => ({
+                repoId: params.repoId,
+                defaultBranch: "main",
+                branches: [
+                    { name: "main", isDefault: true, isRemote: false },
+                    ...(params.includeRemote ? [{ name: "origin/feature", isDefault: false, isRemote: true }] : []),
+                ],
+            }),
+            readProjectGitSummary: async (params) => ({
+                repoId: params.repoId,
+                branch: "main",
+                headCommit: "abc123",
+                ahead: 0,
+                hasChanges: true,
+                staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                unstaged: { files: [{ path: "README.md", status: "modified" }], stats: { filesChanged: 1, insertions: 1, deletions: 0 } },
+                untracked: [],
+            }),
             listProjectProcesses: async (params) => ({
                 repoId: params.repoId,
                 taskId: params.taskId,
@@ -269,6 +298,43 @@ function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: Runt
                 staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
                 unstaged: { files: [{ path: "README.md", status: "modified" }], stats: { filesChanged: 1, insertions: 1, deletions: 0 } },
                 untracked: [],
+            }),
+            readTaskGitScopes: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                defaultBranch: "main",
+                scopes: [
+                    { id: "branch:HEAD", type: "branch", name: "HEAD", ref: "HEAD", isDefault: false, isRemote: false },
+                    { id: "branch:main", type: "branch", name: "main", ref: "main", isDefault: true, isRemote: false },
+                ],
+            }),
+            readTaskResourceInventory: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                taskTitle: params.task.title,
+                isRunning: params.isRunning,
+                snapshotIds: [],
+                images: [],
+                sessions: [],
+                worktree: null,
+            }),
+            generateTaskTitle: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                title: "Generated task title",
+            }),
+            prepareTaskEnvironment: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                deviceEnvironment: {
+                    id: "runtime-device",
+                    deviceId: "runtime-device",
+                    setupComplete: true,
+                    createdAt: now(),
+                    lastUsedAt: now(),
+                },
+                cwd: "/tmp/repo",
+                rootPath: "/tmp/repo",
             }),
             readTaskDiff: async (params) => ({
                 repoId: params.repoId,
@@ -420,7 +486,11 @@ function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: Runt
     server.registerModule(createOpenADEModule(adapters))
 
     const runtime = createLocalRuntimeClient(server)
-    return { runtime, store: new OpenADEProductStore(new OpenADEClient({ runtime, clientName: "product-store-test", clientPlatform: "web" })) }
+    return {
+        runtime,
+        store: new OpenADEProductStore(new OpenADEClient({ runtime, clientName: "product-store-test", clientPlatform: "web" })),
+        taskReadRequests,
+    }
 }
 
 async function flushAsyncNotifications(): Promise<void> {
@@ -429,6 +499,38 @@ async function flushAsyncNotifications(): Promise<void> {
 }
 
 describe("OpenADEProductStore", () => {
+    it("keeps default task detail refreshes lightweight unless hydration is requested", async () => {
+        const { store, runtime, taskReadRequests } = createRuntimeBackedStore()
+
+        try {
+            await store.getTask("repo-1", "task-1")
+            await store.updateTaskMetadata({ taskId: "task-1", title: "Lightweight metadata refresh" }, { clientRequestId: "metadata-lightweight" })
+            await store.createComment(
+                {
+                    taskId: "task-1",
+                    commentId: "comment-lightweight",
+                    content: "Do not hydrate sessions",
+                    source: { type: "manual" },
+                    selectedText: { text: "hydrate", linesBefore: "", linesAfter: "" },
+                    author: { id: "user-1", email: "user@example.com" },
+                },
+                { clientRequestId: "comment-lightweight" }
+            )
+            await store.generateTaskTitle({ repoId: "repo-1", taskId: "task-1", harnessId: "codex" }, { clientRequestId: "title-lightweight" })
+            await store.startTurn({ repoId: "repo-1", inTaskId: "task-1", type: "do", input: "Run lightweight" }, { clientRequestId: "turn-lightweight" })
+
+            expect(taskReadRequests).not.toHaveLength(0)
+            expect(taskReadRequests.every((options) => options.hydrateSessionEvents === false)).toBe(true)
+
+            taskReadRequests.length = 0
+            await store.getTask("repo-1", "task-1", { hydrateSessionEvents: true })
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: true }])
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
     it("refreshes DTO state and runtime records through a real local runtime client", async () => {
         const { store, runtime } = createRuntimeBackedStore()
         store.subscribe()
@@ -440,11 +542,39 @@ describe("OpenADEProductStore", () => {
         await expect(store.readTaskChanges({ repoId: "repo-1", taskId: "task-1" })).resolves.toMatchObject({
             files: [expect.objectContaining({ path: "README.md", status: "modified" })],
         })
+        await expect(store.readProjectGitInfo({ repoId: "repo-1" })).resolves.toMatchObject({
+            repoId: "repo-1",
+            isGitRepo: true,
+            mainBranch: "main",
+        })
+        await expect(store.readProjectGitBranches({ repoId: "repo-1", includeRemote: true })).resolves.toMatchObject({
+            repoId: "repo-1",
+            defaultBranch: "main",
+            branches: [expect.objectContaining({ name: "main", isDefault: true }), expect.objectContaining({ name: "origin/feature", isRemote: true })],
+        })
+        await expect(store.readProjectGitSummary({ repoId: "repo-1" })).resolves.toMatchObject({
+            repoId: "repo-1",
+            branch: "main",
+            hasChanges: true,
+            unstaged: { files: [expect.objectContaining({ path: "README.md", status: "modified" })] },
+        })
         await expect(store.readTaskGitSummary({ repoId: "repo-1", taskId: "task-1" })).resolves.toMatchObject({
             branch: "main",
             headCommit: "abc123",
             hasChanges: true,
             unstaged: { files: [expect.objectContaining({ path: "README.md", status: "modified" })] },
+        })
+        await expect(store.readTaskGitScopes({ repoId: "repo-1", taskId: "task-1", includeRemote: true })).resolves.toMatchObject({
+            defaultBranch: "main",
+            scopes: [
+                expect.objectContaining({ id: "branch:HEAD", type: "branch", ref: "HEAD" }),
+                expect.objectContaining({ id: "branch:main", type: "branch", ref: "main" }),
+            ],
+        })
+        await expect(store.prepareTaskEnvironment({ repoId: "repo-1", taskId: "task-1" }, { clientRequestId: "prepare-env" })).resolves.toMatchObject({
+            repoId: "repo-1",
+            taskId: "task-1",
+            deviceEnvironment: expect.objectContaining({ id: "runtime-device", setupComplete: true }),
         })
         await expect(store.readTaskDiff({ repoId: "repo-1", taskId: "task-1", filePath: "README.md" })).resolves.toMatchObject({
             filePath: "README.md",
@@ -525,6 +655,16 @@ describe("OpenADEProductStore", () => {
         await store.updateTaskMetadata({ taskId: "task-1", title: "Updated task" }, { clientRequestId: "metadata-update" })
         expect(store.snapshot?.repos[0]?.tasks[0]?.title).toBe("Updated task")
         expect(store.getCachedTask("repo-1", "task-1")?.title).toBe("Updated task")
+
+        await expect(
+            store.generateTaskTitle({ repoId: "repo-1", taskId: "task-1", harnessId: "codex" }, { clientRequestId: "title-generate" })
+        ).resolves.toEqual({
+            repoId: "repo-1",
+            taskId: "task-1",
+            title: "Generated task title",
+        })
+        expect(store.snapshot?.repos[0]?.tasks[0]?.title).toBe("Generated task title")
+        expect(store.getCachedTask("repo-1", "task-1")?.title).toBe("Generated task title")
 
         await store.createComment(
             {
