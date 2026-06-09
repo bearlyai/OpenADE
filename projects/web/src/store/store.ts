@@ -566,7 +566,7 @@ export class CodeStore {
     }
 
     private scheduleCoalescedRuntimeTaskUpdateNotification(notification: RuntimeNotification): boolean {
-        if (notification.method !== "openade/task/updated") return false
+        if (notification.method !== "openade/task/updated" && notification.method !== "openade/queuedTurn/updated") return false
         const key = this.runtimeTaskNotificationKey(notification)
         if (!key) return false
 

@@ -3475,6 +3475,30 @@ describe("CodeStore runtime product store bridge", () => {
             })
             expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
 
+            const queuedTurn: NonNullable<OpenADETask["queuedTurns"]>[number] = {
+                id: "queued-1",
+                type: "do",
+                input: "Follow up after current turn",
+                status: "running",
+                createdAt: "2026-05-31T00:02:00.000Z",
+                updatedAt: "2026-05-31T00:02:01.000Z",
+                eventId: "event-queued-1",
+            }
+            state.task = {
+                ...state.task,
+                queuedTurns: [queuedTurn],
+                updatedAt: "2026-05-31T00:02:01.000Z",
+            }
+            state.taskReadRequests = []
+            server.notify("openade/queuedTurn/updated", { repoId: "repo-1", taskId: "task-1", turn: queuedTurn })
+            server.notify("openade/queuedTurn/updated", { repoId: "repo-1", taskId: "task-1", turn: queuedTurn })
+            server.notify("openade/queuedTurn/updated", { repoId: "repo-1", taskId: "task-1", turn: queuedTurn })
+
+            await waitForRuntimeBridge(() => {
+                expect(codeStore.tasks.getTask("task-1")?.queuedTurns).toEqual([expect.objectContaining({ id: "queued-1", status: "running" })])
+            })
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+
             state.task = {
                 ...state.task,
                 title: "Runtime preview notification task",
