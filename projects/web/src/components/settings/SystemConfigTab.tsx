@@ -450,7 +450,7 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
             const cleanResourcesResult = lastCleanLegacyResourcesResult
             let accepted = false
             if (cleanYjsReport && cleanResourcesResult && shouldAcceptCoreLegacyYjsMigration(cleanYjsReport, cleanResourcesResult)) {
-                await store.markProductLegacyYjsMigrationAccepted()
+                await store.markProductLegacyYjsMigrationAccepted(cleanYjsReport, cleanResourcesResult)
                 accepted = true
                 setLegacyResourceImportMessage(
                     `${formatCoreLegacyResourceImportResult(cleanResourcesResult)}; Core launch accepted after clean data and resources import`
@@ -486,7 +486,7 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
                 const cleanYjsReport = lastCleanLegacyYjsReport
                 let accepted = false
                 if (cleanYjsReport && cleanResources && shouldAcceptCoreLegacyYjsMigration(cleanYjsReport, cleanResources)) {
-                    await store.markProductLegacyYjsMigrationAccepted()
+                    await store.markProductLegacyYjsMigrationAccepted(cleanYjsReport, cleanResources)
                     accepted = true
                 }
                 setLastCleanLegacyResourcesResult(cleanResources)

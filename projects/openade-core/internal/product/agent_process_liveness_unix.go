@@ -24,7 +24,7 @@ func runtimeProcessIsRunning(pid int) bool {
 
 func terminateAgentWorkerProcess(pid *int, pgid *int) bool {
 	if pgid != nil && *pgid > 0 {
-		if err := syscall.Kill(-*pgid, syscall.SIGTERM); err == nil || errors.Is(err, syscall.ESRCH) {
+		if err := syscall.Kill(-*pgid, syscall.SIGTERM); err == nil {
 			return true
 		}
 	}

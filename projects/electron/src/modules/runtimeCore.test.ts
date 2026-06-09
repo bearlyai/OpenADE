@@ -3,12 +3,42 @@ import os from "node:os"
 import path from "node:path"
 import { describe, expect, test } from "vitest"
 import {
+    type OpenADECoreLegacyYjsMigrationAcceptRequest,
     isOpenADECoreLegacyYjsMigrationAccepted,
     legacyYjsMigrationAcceptanceFilePath,
     markOpenADECoreLegacyYjsMigrationAccepted,
+    markOpenADECoreLegacyYjsMigrationAcceptedFromUnknown,
     readOpenADECoreLegacyYjsMigrationAcceptance,
 } from "./openadeCoreMigration"
 import { decideManagedOpenADECoreLaunch, managedOpenADECoreLegacyYjsDocumentsExist, planManagedOpenADECoreLaunch } from "./runtimeCore"
+
+function cleanMigrationAcceptRequest(overrides: Partial<OpenADECoreLegacyYjsMigrationAcceptRequest> = {}): OpenADECoreLegacyYjsMigrationAcceptRequest {
+    return {
+        data: {
+            scannedRepos: 1,
+            importedRepos: 1,
+            scannedTasks: 1,
+            importedTasks: 1,
+            skipped: 0,
+            errors: 0,
+            parityMismatches: 0,
+        },
+        resources: {
+            skipped: 0,
+            issues: 0,
+            images: {
+                scannedTasks: 1,
+                referenced: 1,
+                imported: 1,
+                alreadyImported: 0,
+                missing: 0,
+                conflicted: 0,
+                failed: 0,
+            },
+        },
+        ...overrides,
+    }
+}
 
 describe("managed OpenADE Core launch planning", () => {
     const noPackagedCore = () => null
@@ -328,7 +358,8 @@ describe("managed OpenADE Core legacy Yjs migration acceptance", () => {
         const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openade-core-migration-home-"))
         try {
             expect(isOpenADECoreLegacyYjsMigrationAccepted(homeDir)).toBe(false)
-            const accepted = markOpenADECoreLegacyYjsMigrationAccepted({
+            const evidence = cleanMigrationAcceptRequest()
+            const accepted = markOpenADECoreLegacyYjsMigrationAccepted(evidence, {
                 homeDir,
                 acceptedAt: "2026-06-09T12:00:00.000Z",
                 source: "test",
@@ -341,6 +372,8 @@ describe("managed OpenADE Core legacy Yjs migration acceptance", () => {
                 version: 1,
                 acceptedAt: "2026-06-09T12:00:00.000Z",
                 source: "test",
+                data: evidence.data,
+                resources: evidence.resources,
             })
             expect(readOpenADECoreLegacyYjsMigrationAcceptance(homeDir)).toEqual(accepted)
             expect(isOpenADECoreLegacyYjsMigrationAccepted(homeDir)).toBe(true)
@@ -357,6 +390,49 @@ describe("managed OpenADE Core legacy Yjs migration acceptance", () => {
             fs.writeFileSync(markerPath, JSON.stringify({ version: 2, acceptedAt: "2026-06-09T12:00:00.000Z", source: "test" }))
 
             expect(readOpenADECoreLegacyYjsMigrationAcceptance(homeDir)).toBeNull()
+            expect(isOpenADECoreLegacyYjsMigrationAccepted(homeDir)).toBe(false)
+        } finally {
+            fs.rmSync(homeDir, { recursive: true, force: true })
+        }
+    })
+
+    test("refuses to write accepted-import markers for non-clean summaries", () => {
+        const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openade-core-migration-home-"))
+        try {
+            expect(() =>
+                markOpenADECoreLegacyYjsMigrationAccepted(cleanMigrationAcceptRequest({ data: { ...cleanMigrationAcceptRequest().data, errors: 1 } }), {
+                    homeDir,
+                    acceptedAt: "2026-06-09T12:00:00.000Z",
+                    source: "test",
+                })
+            ).toThrow("legacy Yjs import summary is not clean")
+            expect(isOpenADECoreLegacyYjsMigrationAccepted(homeDir)).toBe(false)
+        } finally {
+            fs.rmSync(homeDir, { recursive: true, force: true })
+        }
+    })
+
+    test("refuses runtime acceptance requests without clean evidence", () => {
+        const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openade-core-migration-home-"))
+        try {
+            const evidence = cleanMigrationAcceptRequest()
+            if (!evidence.resources.images) throw new Error("expected clean evidence to include image summary")
+            expect(() => markOpenADECoreLegacyYjsMigrationAcceptedFromUnknown({}, { homeDir })).toThrow("data is invalid")
+            expect(() =>
+                markOpenADECoreLegacyYjsMigrationAcceptedFromUnknown(
+                    {
+                        ...evidence,
+                        resources: {
+                            ...evidence.resources,
+                            images: {
+                                ...evidence.resources.images,
+                                missing: 1,
+                            },
+                        },
+                    },
+                    { homeDir }
+                )
+            ).toThrow("legacy resource import summary is not clean")
             expect(isOpenADECoreLegacyYjsMigrationAccepted(homeDir)).toBe(false)
         } finally {
             fs.rmSync(homeDir, { recursive: true, force: true })

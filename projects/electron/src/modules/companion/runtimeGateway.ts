@@ -220,7 +220,7 @@ import { cleanupRuntimeHostModule, registerRuntimeHostModule } from "./runtimeHo
 import { createOpenADEYjsStorageAdapter } from "./runtimeYjsAdapter"
 import { configurePowerKeeper } from "./powerKeeper"
 import { createRuntimeNodeCodexAppServerBridge, notifyRuntimeNodeAgentBridgeEvent } from "../../../../runtime-node/src"
-import { markOpenADECoreLegacyYjsMigrationAccepted } from "../openadeCoreMigration"
+import { markOpenADECoreLegacyYjsMigrationAcceptedFromUnknown } from "../openadeCoreMigration"
 
 const agentProviders: AgentProviderSummary[] = [
     {
@@ -851,7 +851,7 @@ function registerTrustedHostMethods(server: RuntimeServer): void {
         })
     })
     server.register("host/capabilities/read", () => getRuntimeCodeCapabilities())
-    server.register("host/core/legacyYjsMigration/accept", () => markOpenADECoreLegacyYjsMigrationAccepted())
+    server.register("host/core/legacyYjsMigration/accept", (params) => markOpenADECoreLegacyYjsMigrationAcceptedFromUnknown(params))
     server.register("agent/sdkCapabilities/read", (params) => {
         const record = runtimeRecordParam(params)
         return getRuntimeSdkCapabilities({

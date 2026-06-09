@@ -7900,6 +7900,102 @@ func TestProductRuntimeStopTerminatesAdoptedLiveAgentWorker(t *testing.T) {
 	waitForProcessExit(t, worker, 2*time.Second)
 }
 
+func TestProductRuntimeStopTerminatesStoredAgentWorkerWithoutMemory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("agent worker process termination is conservative on Windows")
+	}
+	for _, storedStatus := range []string{"running", "orphaned"} {
+		t.Run(storedStatus, func(t *testing.T) {
+			worker, pid, pgid := startLongRunningProcessGroup(t)
+			t.Cleanup(func() {
+				if worker.Process != nil {
+					_ = worker.Process.Kill()
+				}
+				_ = worker.Wait()
+			})
+			startedAt := time.Date(2026, 6, 9, 17, 0, 0, 0, time.UTC)
+			suffix := strings.ReplaceAll(storedStatus, "_", "-")
+			repoID := "repo-stop-stored-agent-" + suffix
+			taskID := "task-stop-stored-agent-" + suffix
+			eventID := "event-stop-stored-agent-" + suffix
+			executionID := "exec-stop-stored-agent-" + suffix
+			harness := newRuntimeHarness(t)
+			ctx := context.Background()
+			if err := harness.store.UpsertRepo(ctx, storage.Repo{
+				ID:        repoID,
+				Name:      "Stop Stored Agent Repo " + storedStatus,
+				Path:      "/tmp/openade-stop-stored-agent-" + suffix,
+				CreatedAt: startedAt,
+				UpdatedAt: startedAt,
+			}); err != nil {
+				t.Fatalf("upsert stop stored agent repo: %v", err)
+			}
+			if err := harness.store.UpsertTask(ctx, storage.Task{
+				ID:            taskID,
+				RepoID:        repoID,
+				Slug:          taskID,
+				Title:         "Stop stored agent " + storedStatus,
+				IsolationJSON: sql.NullString{String: `{"type":"head"}`, Valid: true},
+				CreatedAt:     startedAt,
+				UpdatedAt:     startedAt,
+			}); err != nil {
+				t.Fatalf("upsert stop stored agent task: %v", err)
+			}
+			actionPayload := fmt.Sprintf(`{"id":%q,"type":"action","status":"in_progress","createdAt":"2026-06-09T17:00:00Z","userInput":%q,"source":{"type":"do","userLabel":"Do"},"execution":{"harnessId":"codex","executionId":%q,"events":[]},"includesCommentIds":[]}`, eventID, "stop stored "+storedStatus+" worker", executionID)
+			if err := harness.store.UpsertTaskEvent(ctx, storage.TaskEvent{
+				ID:          eventID,
+				TaskID:      taskID,
+				Seq:         1,
+				Type:        "action",
+				Status:      sql.NullString{String: "in_progress", Valid: true},
+				SourceType:  sql.NullString{String: "do", Valid: true},
+				SourceLabel: sql.NullString{String: "Do", Valid: true},
+				CreatedAt:   startedAt,
+				PayloadJSON: sql.NullString{String: actionPayload, Valid: true},
+			}); err != nil {
+				t.Fatalf("upsert stop stored agent event: %v", err)
+			}
+			scope := fmt.Sprintf(`{"ownerType":"openade-task","ownerId":%q,"repoPath":%q,"rootPath":%q,"labels":{"eventId":%q,"executionId":%q}}`, taskID, "/tmp/openade-stop-stored-agent-"+suffix, "/tmp/openade-stop-stored-agent-"+suffix, eventID, executionID)
+			if err := harness.store.UpsertRuntime(ctx, storage.RuntimeRecord{
+				RuntimeID:      "openade-turn:" + eventID,
+				Kind:           "agent",
+				Status:         storedStatus,
+				ScopeJSON:      sql.NullString{String: scope, Valid: true},
+				StartedAt:      startedAt,
+				UpdatedAt:      startedAt,
+				LastActivityAt: startedAt,
+				PayloadJSON:    sql.NullString{String: fmt.Sprintf(`{"nativeId":%q,"pid":%d,"pgid":%d,"processStartedAt":"2026-06-09T17:00:00Z"}`, executionID, pid, *pgid), Valid: true},
+			}); err != nil {
+				t.Fatalf("upsert stored %s agent runtime: %v", storedStatus, err)
+			}
+
+			notificationStart := len(harness.notifications)
+			stopped := resultObject(t, harness.request(t, "runtime/stop", map[string]any{
+				"runtimeId": "openade-turn:" + eventID,
+				"reason":    "manual stored cleanup",
+			}))
+			if stopped["status"] != "stopped" || stopped["pid"] != float64(pid) || stopped["pgid"] != float64(*pgid) || stopped["error"] != "manual stored cleanup" {
+				t.Fatalf("stopped stored %s agent runtime = %#v", storedStatus, stopped)
+			}
+			stoppedNotification := harness.waitForRuntimeNotification(t, notificationStart, "runtime/stopped", "openade-turn:"+eventID)
+			stoppedParams := objectField(t, stoppedNotification, "params")
+			if stoppedParams["status"] != "stopped" || stoppedParams["pid"] != float64(pid) {
+				t.Fatalf("stored %s agent stopped notification = %#v", storedStatus, stoppedNotification)
+			}
+			task := resultObject(t, harness.request(t, "openade/task/read", map[string]any{
+				"repoId":               repoID,
+				"taskId":               taskID,
+				"hydrateSessionEvents": true,
+			}))
+			action := actionEventFromTask(t, task, eventID)
+			if action["status"] != "stopped" || action["completedAt"] == "" {
+				t.Fatalf("stopped stored %s agent action = %#v", storedStatus, action)
+			}
+			waitForProcessExit(t, worker, 2*time.Second)
+		})
+	}
+}
+
 func TestProductRuntimeStartupStopsVerifiedDeadProcessBackedRuntimes(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("process liveness reconciliation is conservative on Windows")

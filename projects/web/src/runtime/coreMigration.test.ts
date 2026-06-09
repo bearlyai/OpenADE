@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import type { OpenADELegacyResourcesImportResult, OpenADELegacyYjsImportResult } from "../../../openade-module/src"
 import type { OpenADEProductLegacyYjsImportReport } from "../kernel/productStore"
 import {
+    coreLegacyYjsMigrationAcceptRequest,
     coreLegacyResourceImportIssueCount,
     isCoreLegacyResourceImportClean,
     isCoreLegacyYjsImportClean,
@@ -164,6 +165,51 @@ describe("Core migration runtime helpers", () => {
         expect(shouldAcceptCoreLegacyYjsMigration(importReport(), resourceResult({ skipped: [{ kind: "snapshots", code: "source_missing" }] }))).toBe(false)
     })
 
+    it("builds a sanitized acceptance summary from clean import reports", () => {
+        expect(coreLegacyYjsMigrationAcceptRequest(importReport(), resourceResult())).toEqual({
+            data: {
+                scannedRepos: 1,
+                importedRepos: 1,
+                scannedTasks: 1,
+                importedTasks: 1,
+                skipped: 0,
+                errors: 0,
+                parityMismatches: 0,
+            },
+            resources: {
+                skipped: 0,
+                issues: 0,
+                images: {
+                    scannedTasks: 1,
+                    referenced: 1,
+                    imported: 1,
+                    alreadyImported: 0,
+                    missing: 0,
+                    conflicted: 0,
+                    failed: 0,
+                },
+                snapshots: {
+                    scannedTasks: 1,
+                    referenced: 1,
+                    imported: 1,
+                    alreadyImported: 0,
+                    missing: 0,
+                    conflicted: 0,
+                    failed: 0,
+                },
+                sessions: {
+                    scannedTasks: 1,
+                    referenced: 1,
+                    imported: 1,
+                    alreadyImported: 0,
+                    missing: 0,
+                    conflicted: 0,
+                    failed: 0,
+                },
+            },
+        })
+    })
+
     it("marks legacy Yjs migration acceptance through the trusted local runtime", async () => {
         const calls: Array<{ method: string; params: unknown }> = []
         stubOpenADEAPI({
@@ -183,16 +229,20 @@ describe("Core migration runtime helpers", () => {
                             version: 1,
                             acceptedAt: "2026-06-09T12:00:00.000Z",
                             source: "desktop-settings-legacy-yjs-import",
+                            data: coreLegacyYjsMigrationAcceptRequest(importReport(), resourceResult()).data,
+                            resources: coreLegacyYjsMigrationAcceptRequest(importReport(), resourceResult()).resources,
                         },
                     })
                 },
             },
         })
 
-        await expect(markCoreLegacyYjsMigrationAccepted()).resolves.toEqual({
+        await expect(markCoreLegacyYjsMigrationAccepted(importReport(), resourceResult())).resolves.toEqual({
             version: 1,
             acceptedAt: "2026-06-09T12:00:00.000Z",
             source: "desktop-settings-legacy-yjs-import",
+            data: coreLegacyYjsMigrationAcceptRequest(importReport(), resourceResult()).data,
+            resources: coreLegacyYjsMigrationAcceptRequest(importReport(), resourceResult()).resources,
         })
         expect(calls).toEqual([
             {
@@ -203,7 +253,7 @@ describe("Core migration runtime helpers", () => {
                     protocolVersion: 1,
                 },
             },
-            { method: "host/core/legacyYjsMigration/accept", params: {} },
+            { method: "host/core/legacyYjsMigration/accept", params: coreLegacyYjsMigrationAcceptRequest(importReport(), resourceResult()) },
         ])
     })
 
@@ -223,6 +273,8 @@ describe("Core migration runtime helpers", () => {
             },
         })
 
-        await expect(markCoreLegacyYjsMigrationAccepted()).rejects.toThrow("Core legacy Yjs migration marker response is invalid.")
+        await expect(markCoreLegacyYjsMigrationAccepted(importReport(), resourceResult())).rejects.toThrow(
+            "Core legacy Yjs migration marker response is invalid."
+        )
     })
 })

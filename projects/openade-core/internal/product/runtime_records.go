@@ -228,7 +228,7 @@ func (service *Service) handleRuntimeStop(ctx context.Context, _ *core.Connectio
 	if dto.Kind == "pty" && dto.NativeID != "" && dto.Status == "orphaned" {
 		return service.stopStoredTaskTerminalRuntimeRecord(ctx, dto, params.Reason)
 	}
-	if dto.Kind == "agent" && isActiveRuntimeStatus(dto.Status) {
+	if dto.Kind == "agent" && (isActiveRuntimeStatus(dto.Status) || dto.Status == "orphaned") {
 		return service.stopAgentRuntime(ctx, dto, params.Reason)
 	}
 	if isTerminalRuntimeStatus(dto.Status) {
@@ -256,7 +256,22 @@ func (service *Service) handleRuntimeStop(ctx context.Context, _ *core.Connectio
 }
 
 func (service *Service) stopAgentRuntime(ctx context.Context, dto runtimeRecordDTO, reason string) (core.JSONPayload, *core.RuntimeError) {
+	return service.stopStoredAgentRuntimeRecord(ctx, dto, reason)
+}
+
+func (service *Service) stopStoredAgentRuntimeRecord(ctx context.Context, dto runtimeRecordDTO, reason string) (runtimeRecordDTO, *core.RuntimeError) {
+	if dto.PID != nil && agentWorkerProcessIsRunning(*dto.PID) && !terminateAgentWorkerProcess(dto.PID, dto.PGID) {
+		if dto.Status == "orphaned" || !service.hasAgentExecution(dto.RuntimeID) {
+			return runtimeRecordDTO{}, &core.RuntimeError{Code: "stop_failed", Message: "Failed to stop agent runtime"}
+		}
+	}
 	return service.stopAgentRuntimeRecord(ctx, dto, reason)
+}
+
+func (service *Service) hasAgentExecution(runtimeID string) bool {
+	service.agentMu.Lock()
+	defer service.agentMu.Unlock()
+	return service.agentExecutions[runtimeID] != nil
 }
 
 func (service *Service) stopAgentRuntimeRecord(ctx context.Context, dto runtimeRecordDTO, reason string) (runtimeRecordDTO, *core.RuntimeError) {
@@ -729,10 +744,10 @@ func (service *Service) stopStoredLiveOrphanedAgentWorkers(ctx context.Context) 
 		if runtimeErr != nil || dto.Kind != "agent" || dto.Status != "orphaned" || dto.PID == nil {
 			continue
 		}
-		if !agentWorkerProcessIsRunning(*dto.PID) || !terminateAgentWorkerProcess(dto.PID, dto.PGID) {
+		if !agentWorkerProcessIsRunning(*dto.PID) {
 			continue
 		}
-		_, _ = service.stopAgentRuntimeRecord(ctx, dto, orphanedAgentWorkerStartupStopReason)
+		_, _ = service.stopStoredAgentRuntimeRecord(ctx, dto, orphanedAgentWorkerStartupStopReason)
 	}
 }
 

@@ -1407,12 +1407,12 @@ export class CodeStore {
         }
     }
 
-    async markProductLegacyYjsMigrationAccepted(): Promise<void> {
+    async markProductLegacyYjsMigrationAccepted(report: OpenADEProductLegacyYjsImportReport, resources: OpenADELegacyResourcesImportResult): Promise<void> {
         const coreEndpoint = resolveCoreRuntimeEndpoint()
         if (!coreEndpoint) {
             throw new Error("OpenADE Core is not connected.")
         }
-        await markCoreLegacyYjsMigrationAccepted()
+        await markCoreLegacyYjsMigrationAccepted(report, resources)
     }
 
     async startProductReview(params: OpenADEReviewStartRequest): Promise<{ taskId: string }> {

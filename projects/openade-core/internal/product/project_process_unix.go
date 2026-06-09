@@ -26,24 +26,36 @@ func projectProcessGroupID(cmd *exec.Cmd) *int {
 }
 
 func terminateProjectProcess(process *os.Process, pgid *int) error {
+	var groupErr error
 	if pgid != nil && *pgid > 0 {
-		if err := syscall.Kill(-*pgid, syscall.SIGTERM); err == nil || errors.Is(err, syscall.ESRCH) {
+		if err := syscall.Kill(-*pgid, syscall.SIGTERM); err == nil {
 			return nil
+		} else if !errors.Is(err, syscall.ESRCH) {
+			groupErr = err
 		}
 	}
 	if process == nil {
+		if groupErr != nil {
+			return groupErr
+		}
 		return os.ErrProcessDone
 	}
 	return process.Kill()
 }
 
 func terminateProjectProcessID(pid *int, pgid *int) error {
+	var groupErr error
 	if pgid != nil && *pgid > 0 {
-		if err := syscall.Kill(-*pgid, syscall.SIGTERM); err == nil || errors.Is(err, syscall.ESRCH) {
+		if err := syscall.Kill(-*pgid, syscall.SIGTERM); err == nil {
 			return nil
+		} else if !errors.Is(err, syscall.ESRCH) {
+			groupErr = err
 		}
 	}
 	if pid == nil || *pid <= 0 {
+		if groupErr != nil {
+			return groupErr
+		}
 		return os.ErrProcessDone
 	}
 	err := syscall.Kill(*pid, syscall.SIGTERM)
