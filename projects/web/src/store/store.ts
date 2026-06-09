@@ -774,10 +774,10 @@ export class CodeStore {
         }
     }
 
-    async refreshRuntimeProductSnapshot(): Promise<OpenADESnapshot | null> {
+    async refreshRuntimeProductSnapshot(options: OpenADEProductReadOptions = {}): Promise<OpenADESnapshot | null> {
         if (!this.runtimeProductStore) return null
         try {
-            const snapshot = await this.runtimeProductStore.refreshSnapshot()
+            const snapshot = await this.runtimeProductStore.refreshSnapshot(options)
             runInAction(() => {
                 this.runtimeProductSnapshot = snapshot
                 this.pruneRuntimeProductTasks(snapshot)
@@ -1009,7 +1009,7 @@ export class CodeStore {
 
     private async refreshProductSnapshotAfterRuntimeNotification(): Promise<void> {
         if (this.shouldUseRuntimeProductReads()) {
-            await this.refreshRuntimeProductSnapshot()
+            await this.refreshRuntimeProductSnapshot({ bypassCache: true })
             return
         }
 

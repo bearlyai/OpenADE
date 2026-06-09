@@ -60,6 +60,7 @@ function createRuntimeBackedStore(): {
     runtime: RuntimeLocalClient
     taskReadRequests: OpenADETaskReadOptions[]
     writtenImages: Map<string, WrittenImageFixture>
+    snapshotRequestCount(): number
     processListRequestCount(): number
     fuzzySearchRequestCount(): number
     projectSearchRequestCount(): number
@@ -112,6 +113,7 @@ function createRuntimeBackedStore(): {
     const tasks = new Map([[task.id, task]])
     const taskReadRequests: OpenADETaskReadOptions[] = []
     const writtenImages = new Map<string, WrittenImageFixture>()
+    let snapshotRequests = 0
     let processListRequests = 0
     let fuzzySearchRequests = 0
     let projectSearchRequests = 0
@@ -190,7 +192,10 @@ function createRuntimeBackedStore(): {
 
     const adapters: OpenADEModuleAdapters = {
         version: () => "test",
-        readSnapshot: async (options) => snapshot(options),
+        readSnapshot: async (options) => {
+            snapshotRequests += 1
+            return snapshot(options)
+        },
         readProjects: async () => [project],
         readTaskList: async () => project.tasks,
         readTask: async (_repoId, taskId, options) => {
@@ -554,6 +559,7 @@ function createRuntimeBackedStore(): {
         store: new OpenADEProductStore(new OpenADEClient({ runtime, clientName: "product-store-test", clientPlatform: "web" })),
         taskReadRequests,
         writtenImages,
+        snapshotRequestCount: () => snapshotRequests,
         processListRequestCount: () => processListRequests,
         fuzzySearchRequestCount: () => fuzzySearchRequests,
         projectSearchRequestCount: () => projectSearchRequests,
@@ -568,6 +574,37 @@ async function flushAsyncNotifications(): Promise<void> {
 }
 
 describe("OpenADEProductStore", () => {
+    it("reuses fresh snapshot and lightweight task reads while refresh paths bypass cache", async () => {
+        const { store, runtime, snapshotRequestCount, taskReadRequests } = createRuntimeBackedStore()
+
+        try {
+            await store.refreshSnapshot()
+            await store.refreshSnapshot()
+
+            expect(snapshotRequestCount()).toBe(1)
+
+            await store.refreshSnapshot({ bypassCache: true })
+            expect(snapshotRequestCount()).toBe(2)
+
+            await store.getTask("repo-1", "task-1")
+            await store.getTask("repo-1", "task-1")
+
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }])
+
+            await store.refreshTask("repo-1", "task-1")
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }, { hydrateSessionEvents: false }])
+
+            taskReadRequests.length = 0
+            await store.getTask("repo-1", "task-1", { hydrateSessionEvents: true })
+            await store.getTask("repo-1", "task-1", { hydrateSessionEvents: true })
+
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: true }, { hydrateSessionEvents: true }])
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
     it("keeps default task detail refreshes lightweight unless hydration is requested", async () => {
         const { store, runtime, taskReadRequests } = createRuntimeBackedStore()
 

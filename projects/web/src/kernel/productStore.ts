@@ -129,6 +129,8 @@ function notificationRecord(notification: RuntimeNotification): Record<string, u
 }
 
 const LIGHTWEIGHT_TASK_READ_OPTIONS: OpenADETaskReadOptions = { hydrateSessionEvents: false }
+const SNAPSHOT_CACHE_TTL_MS = 1_000
+const LIGHTWEIGHT_TASK_CACHE_TTL_MS = 1_000
 const PROCESS_LIST_CACHE_TTL_MS = 1_000
 const PROJECT_SEARCH_CACHE_TTL_MS = 1_000
 const GIT_SUMMARY_CACHE_TTL_MS = 1_000
@@ -207,6 +209,8 @@ export class OpenADEProductStore {
     snapshot: OpenADESnapshot | null = null
     readonly runtimes = new RuntimeRecordCache()
     private readonly tasks = new Map<string, OpenADETask>()
+    private snapshotLoadedAt = 0
+    private readonly taskLoadedAt = new Map<string, number>()
     private readonly processListCache = new Map<string, CachedProcessList>()
     private readonly fuzzySearchCache = new Map<string, CachedFuzzySearch>()
     private readonly projectSearchCache = new Map<string, CachedProjectSearch>()
@@ -223,9 +227,12 @@ export class OpenADEProductStore {
         return this.tasks.get(taskKey(repoId, taskId)) ?? null
     }
 
-    async refreshSnapshot(): Promise<OpenADESnapshot> {
+    async refreshSnapshot(options: OpenADEProductReadOptions = {}): Promise<OpenADESnapshot> {
+        if (!options.bypassCache && this.snapshot && Date.now() - this.snapshotLoadedAt < SNAPSHOT_CACHE_TTL_MS) return this.snapshot
+
         const snapshot = await this.client.getSnapshot()
         this.snapshot = snapshot
+        this.snapshotLoadedAt = Date.now()
         return snapshot
     }
 
@@ -235,14 +242,27 @@ export class OpenADEProductStore {
         return this.runtimes.list(args)
     }
 
-    async getTask(repoId: string, taskId: string, options: OpenADETaskReadOptions = LIGHTWEIGHT_TASK_READ_OPTIONS): Promise<OpenADETask> {
+    async getTask(
+        repoId: string,
+        taskId: string,
+        options: OpenADETaskReadOptions = LIGHTWEIGHT_TASK_READ_OPTIONS,
+        readOptions: OpenADEProductReadOptions = {}
+    ): Promise<OpenADETask> {
+        const key = taskKey(repoId, taskId)
+        if (options.hydrateSessionEvents !== true && !readOptions.bypassCache) {
+            const loadedAt = this.taskLoadedAt.get(key) ?? 0
+            const cached = this.tasks.get(key)
+            if (cached && Date.now() - loadedAt < LIGHTWEIGHT_TASK_CACHE_TTL_MS) return cached
+        }
+
         const task = await this.client.getTask(repoId, taskId, options)
-        this.tasks.set(taskKey(repoId, taskId), task)
+        this.tasks.set(key, task)
+        this.taskLoadedAt.set(key, Date.now())
         return task
     }
 
     async refreshTask(repoId: string, taskId: string, options: OpenADETaskReadOptions = LIGHTWEIGHT_TASK_READ_OPTIONS): Promise<OpenADETask> {
-        return this.getTask(repoId, taskId, options)
+        return this.getTask(repoId, taskId, options, { bypassCache: true })
     }
 
     async listProjectFiles(args: OpenADEProjectFilesTreeRequest): Promise<OpenADEProjectFilesTreeResult> {
@@ -411,7 +431,7 @@ export class OpenADEProductStore {
 
     async importLegacyResources(args: OpenADELegacyResourcesImportRequest, options: OpenADERequestOptions = {}): Promise<OpenADELegacyResourcesImportResult> {
         const result = await this.client.importLegacyResources(args, options)
-        await this.refreshSnapshot()
+        await this.refreshSnapshot({ bypassCache: true })
         return result
     }
 
@@ -420,7 +440,7 @@ export class OpenADEProductStore {
         if (!writer) throw new Error("OpenADE Core legacy Yjs import writer is not available.")
         const imported = await importOpenADELegacyYjsData(projection, writer, options)
         const parity = await compareOpenADELegacyYjsToCore(projection, this.client, options)
-        await this.refreshSnapshot()
+        await this.refreshSnapshot({ bypassCache: true })
         return { imported, parity }
     }
 
@@ -470,7 +490,7 @@ export class OpenADEProductStore {
     async generateTaskTitle(args: OpenADETaskTitleGenerateRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskTitleGenerateResult> {
         const result = await this.client.generateTaskTitle(args, options)
         await this.refreshTask(args.repoId, args.taskId)
-        await this.refreshSnapshot()
+        await this.refreshSnapshot({ bypassCache: true })
         return result
     }
 
@@ -488,7 +508,7 @@ export class OpenADEProductStore {
 
     async createRepo(args: OpenADERepoCreateRequest, options: OpenADERequestOptions = {}): Promise<OpenADERepoCreateResult> {
         const result = await this.client.createRepo(args, options)
-        await this.refreshSnapshot()
+        await this.refreshSnapshot({ bypassCache: true })
         return result
     }
 
@@ -496,20 +516,20 @@ export class OpenADEProductStore {
         this.clearGitSummaryCacheForScope(args.repoId)
         await this.client.updateRepo(args, options)
         this.clearGitSummaryCacheForScope(args.repoId)
-        await this.refreshSnapshot()
+        await this.refreshSnapshot({ bypassCache: true })
     }
 
     async deleteRepo(args: OpenADERepoDeleteRequest, options: OpenADERequestOptions = {}): Promise<void> {
         this.clearGitSummaryCacheForScope(args.repoId)
         await this.client.deleteRepo(args, options)
         this.clearGitSummaryCacheForScope(args.repoId)
-        await this.refreshSnapshot()
+        await this.refreshSnapshot({ bypassCache: true })
     }
 
     async startTurn(args: OpenADETurnStartRequest, options: OpenADETurnStartOptions = {}): Promise<OpenADETurnStartResult> {
         const result = await this.client.startTurn(args, options)
         this.clearGitSummaryCacheForScope(args.repoId, result.taskId || args.inTaskId || undefined)
-        await this.refreshSnapshot()
+        await this.refreshSnapshot({ bypassCache: true })
         if (result.taskId) await this.refreshTask(args.repoId, result.taskId)
         return result
     }
@@ -538,12 +558,12 @@ export class OpenADEProductStore {
         }
         const cached = [...this.tasks.values()].find((task) => task.id === args.taskId)
         if (cached) await this.refreshTask(cached.repoId, args.taskId)
-        await this.refreshSnapshot()
+        await this.refreshSnapshot({ bypassCache: true })
     }
 
     async backfillTaskUsage(args: OpenADETaskUsageBackfillRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskUsageBackfillResult> {
         const result = await this.client.backfillTaskUsage(args, options)
-        await this.refreshSnapshot()
+        await this.refreshSnapshot({ bypassCache: true })
         return result
     }
 
@@ -551,7 +571,7 @@ export class OpenADEProductStore {
         const result = await this.client.recalculateTaskUsage(args, options)
         const cached = [...this.tasks.values()].find((task) => task.id === args.taskId)
         if (cached) await this.refreshTask(cached.repoId, args.taskId)
-        await this.refreshSnapshot()
+        await this.refreshSnapshot({ bypassCache: true })
         return result
     }
 
@@ -576,8 +596,8 @@ export class OpenADEProductStore {
 
     async deleteTask(args: OpenADETaskDeleteRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskDeleteResult> {
         const result = await this.client.deleteTask(args, options)
-        this.tasks.delete(taskKey(args.repoId, args.taskId))
-        await this.refreshSnapshot()
+        this.clearTaskCache(args.repoId, args.taskId)
+        await this.refreshSnapshot({ bypassCache: true })
         return result
     }
 
@@ -585,7 +605,7 @@ export class OpenADEProductStore {
         await this.client.setupTaskEnvironment(args, options)
         const cached = [...this.tasks.values()].find((task) => task.id === args.taskId)
         if (cached) await this.refreshTask(cached.repoId, args.taskId)
-        await this.refreshSnapshot()
+        await this.refreshSnapshot({ bypassCache: true })
     }
 
     async prepareTaskEnvironment(
@@ -594,7 +614,7 @@ export class OpenADEProductStore {
     ): Promise<OpenADETaskEnvironmentPrepareResult> {
         const result = await this.client.prepareTaskEnvironment(args, options)
         await this.refreshTask(args.repoId, args.taskId)
-        await this.refreshSnapshot()
+        await this.refreshSnapshot({ bypassCache: true })
         return result
     }
 
@@ -609,18 +629,18 @@ export class OpenADEProductStore {
             notification.method === "openade/repo/updated" ||
             notification.method === "openade/repo/deleted"
         ) {
-            await this.refreshSnapshot()
+            await this.refreshSnapshot({ bypassCache: true })
             return true
         }
 
         if (notification.method === "openade/task/deleted" && repoId && taskId) {
-            this.tasks.delete(taskKey(repoId, taskId))
-            await this.refreshSnapshot()
+            this.clearTaskCache(repoId, taskId)
+            await this.refreshSnapshot({ bypassCache: true })
             return true
         }
 
         if (notification.method === "openade/task/previewChanged") {
-            await this.refreshSnapshot()
+            await this.refreshSnapshot({ bypassCache: true })
             return true
         }
 
@@ -662,6 +682,7 @@ export class OpenADEProductStore {
         this.unsubscribe?.()
         this.unsubscribe = null
         this.tasks.clear()
+        this.taskLoadedAt.clear()
         this.processListCache.clear()
         this.fuzzySearchCache.clear()
         this.projectSearchCache.clear()
@@ -683,6 +704,12 @@ export class OpenADEProductStore {
     private clearProjectSearchCachesForScope(repoId: string, taskId?: string): void {
         clearProjectScopedCache(this.fuzzySearchCache, repoId, taskId)
         clearProjectScopedCache(this.projectSearchCache, repoId, taskId)
+    }
+
+    private clearTaskCache(repoId: string, taskId: string): void {
+        const key = taskKey(repoId, taskId)
+        this.tasks.delete(key)
+        this.taskLoadedAt.delete(key)
     }
 
     private clearGitSummaryCacheForScope(repoId: string, taskId?: string): void {
