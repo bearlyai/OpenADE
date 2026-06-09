@@ -315,6 +315,34 @@ describe("SmartEditorManager.searchFileMentions", () => {
         expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
     })
 
+    it("returns frecency favorites for empty mention queries without fuzzy search", async () => {
+        seedStats({
+            "src/favorite.ts": { count: 10, lastUsed: Date.now() },
+            "src/other.ts": { count: 1, lastUsed: Date.now() },
+        })
+        const productAccess: SmartEditorProductFileAccess = {
+            getContext: vi.fn(() => ({ repoId: "repo-1", taskId: "task-1" })),
+            fuzzySearchProjectFiles: vi.fn(),
+        }
+
+        const manager = new SmartEditorManager("task-task-1", WORKSPACE, productAccess)
+        const result = await manager.searchFileMentions("/repo", "   ", 1)
+
+        expect(result).toEqual({ results: ["src/favorite.ts"], treeMatch: null })
+        expect(productAccess.fuzzySearchProjectFiles).not.toHaveBeenCalled()
+        expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
+    })
+
+    it("does not run legacy fuzzy search for empty mention queries", async () => {
+        vi.mocked(filesApi.fuzzySearch).mockRejectedValue(new Error("legacy fuzzy search should not run for empty query"))
+
+        const manager = new SmartEditorManager("scratchpad-pad-1", WORKSPACE)
+        const result = await manager.searchFileMentions("/repo", "", 20)
+
+        expect(result).toEqual({ results: [], treeMatch: null })
+        expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
+    })
+
     it("keeps legacy file search as the unscoped fallback", async () => {
         const productAccess: SmartEditorProductFileAccess = {
             getContext: vi.fn(() => null),

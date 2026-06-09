@@ -361,17 +361,24 @@ export class SmartEditorManager {
     }
 
     async warmFileMentionSearch(dir: string): Promise<void> {
-        if (this.productContextFor(dir)) return
         await this.searchFileMentions(dir, "", 20)
     }
 
     async searchFileMentions(dir: string, query: string, limit = 20): Promise<SmartEditorFileSearchResult> {
+        const normalizedQuery = query.trim()
+        if (normalizedQuery === "") {
+            return {
+                results: this.favorites.slice(0, limit).map((item) => item.path),
+                treeMatch: null,
+            }
+        }
+
         const productContext = this.productContextFor(dir)
         if (productContext) {
             const result = await this.searchProductFiles({
                 repoId: productContext.repoId,
                 taskId: productContext.taskId,
-                query,
+                query: normalizedQuery,
                 matchDirs: false,
                 limit,
                 includeHidden: true,
@@ -389,7 +396,7 @@ export class SmartEditorManager {
 
         const result = await filesApi.fuzzySearch({
             dir,
-            query,
+            query: normalizedQuery,
             matchDirs: false,
             limit,
         })
