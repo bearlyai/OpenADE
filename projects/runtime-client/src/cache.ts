@@ -4,6 +4,7 @@ export interface RuntimeRecordCacheFilter {
     ownerType?: string
     ownerId?: string
     status?: RuntimeStatus
+    statuses?: readonly RuntimeStatus[]
 }
 
 const RUNTIME_RECORD_NOTIFICATION_METHODS = new Set(["runtime/created", "runtime/updated", "runtime/completed", "runtime/failed", "runtime/stopped"])
@@ -12,6 +13,7 @@ function matchesFilter(runtime: RuntimeRecord, filter: RuntimeRecordCacheFilter 
     if (filter.ownerType !== undefined && runtime.scope.ownerType !== filter.ownerType) return false
     if (filter.ownerId !== undefined && runtime.scope.ownerId !== filter.ownerId) return false
     if (filter.status !== undefined && runtime.status !== filter.status) return false
+    if (filter.statuses !== undefined && !filter.statuses.includes(runtime.status)) return false
     return true
 }
 

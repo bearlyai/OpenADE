@@ -15,7 +15,7 @@ import {
     validateRuntimeRecord,
     type RuntimeMessage,
 } from "../../../../runtime-protocol/src"
-import { RuntimeServer } from "../../../../runtime/src"
+import { RuntimeServer, type RuntimeSlowRequestEvent } from "../../../../runtime/src"
 import { notifyRuntimeNodeAgentBridgeEvent, registerRuntimeNodeAgentModule, type RuntimeNodeAgentExecutor } from "../../../../runtime-node/src"
 import { registerRuntimeAgentModule, registerServerProtocolAgentBridge } from "./runtimeAgents"
 import { registerRuntimeHostModule } from "./runtimeHost"
@@ -191,6 +191,29 @@ describe("RuntimeServer", () => {
                 "ownerType": {
                   "minLength": 1,
                   "type": "string",
+                },
+                "status": {
+                  "enum": [
+                    "starting",
+                    "running",
+                    "completed",
+                    "failed",
+                    "stopped",
+                    "orphaned",
+                  ],
+                },
+                "statuses": {
+                  "items": {
+                    "enum": [
+                      "starting",
+                      "running",
+                      "completed",
+                      "failed",
+                      "stopped",
+                      "orphaned",
+                    ],
+                  },
+                  "type": "array",
                 },
               },
               "type": "object",
@@ -450,7 +473,7 @@ describe("RuntimeServer", () => {
     })
 
     it("reports sanitized slow runtime request events", async () => {
-        const events: Array<{ method: string; durationMs: number; connectionId: string; failed: boolean; errorCode?: string }> = []
+        const events: RuntimeSlowRequestEvent[] = []
         const runtime = new RuntimeServer({
             serverName: "test-runtime",
             slowRequestThresholdMs: 0,
@@ -465,12 +488,16 @@ describe("RuntimeServer", () => {
         })
 
         expect(events).toEqual([
-            {
+            expect.objectContaining({
+                service: "test-runtime",
                 method: "test/slow",
+                requestId: "1",
                 durationMs: expect.any(Number),
+                queueWaitMs: expect.any(Number),
+                handlerMs: expect.any(Number),
                 connectionId: "slow-connection",
                 failed: false,
-            },
+            }),
         ])
     })
 

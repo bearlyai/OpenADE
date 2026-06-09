@@ -104,6 +104,8 @@ export interface RuntimeRecord {
 export interface RuntimeListParams {
     ownerType?: string
     ownerId?: string
+    status?: RuntimeStatus
+    statuses?: RuntimeStatus[]
 }
 
 export interface RuntimeIdParams {
@@ -332,6 +334,11 @@ export const RuntimeListParamsSchema = {
     properties: {
         ownerType: { type: "string", minLength: 1 },
         ownerId: { type: "string", minLength: 1 },
+        status: { enum: ["starting", "running", "completed", "failed", "stopped", "orphaned"] },
+        statuses: {
+            type: "array",
+            items: { enum: ["starting", "running", "completed", "failed", "stopped", "orphaned"] },
+        },
     },
 } as const
 
@@ -613,12 +620,23 @@ export function validateRuntimeListParams(value: unknown): RuntimeValidationResu
     if (!ownerType.ok) return ownerType
     const ownerId = optionalString(record.value, "ownerId")
     if (!ownerId.ok) return ownerId
+    const status = record.value.status
+    if (status !== undefined && !isRuntimeStatus(status)) return paramsError("$.status", "status is invalid")
+    const statuses = record.value.statuses
+    if (statuses !== undefined) {
+        if (!Array.isArray(statuses)) return paramsError("$.statuses", "statuses must be an array")
+        for (const [index, value] of statuses.entries()) {
+            if (!isRuntimeStatus(value)) return paramsError(`$.statuses[${index}]`, "status is invalid")
+        }
+    }
 
     return {
         ok: true,
         value: {
             ...(ownerType.value ? { ownerType: ownerType.value } : {}),
             ...(ownerId.value ? { ownerId: ownerId.value } : {}),
+            ...(status !== undefined ? { status } : {}),
+            ...(statuses !== undefined ? { statuses } : {}),
         },
     }
 }

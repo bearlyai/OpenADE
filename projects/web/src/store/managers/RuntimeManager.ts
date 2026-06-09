@@ -4,6 +4,7 @@ import type { RuntimeListParams, RuntimeNotification, RuntimeRecord, RuntimeStat
 import { localRuntimeClient } from "../../runtime/localRuntimeClient"
 
 const ACTIVE_RUNTIME_STATUSES: ReadonlySet<RuntimeStatus> = new Set(["starting", "running"])
+const ACTIVE_RUNTIME_STATUS_FILTERS: readonly RuntimeStatus[] = ["starting", "running"]
 const TERMINAL_RUNTIME_METHODS = new Set(["runtime/completed", "runtime/failed", "runtime/stopped"])
 
 export interface RuntimeListSource {
@@ -80,9 +81,15 @@ export class RuntimeManager {
         if (!runtimeSource) return []
 
         const before = this.runningTaskIds
-        const runtimes = await runtimeSource.listRuntimes({ ownerType: "openade-task" })
+        const runtimes = await runtimeSource.listRuntimes({
+            ownerType: "openade-task",
+            statuses: [...ACTIVE_RUNTIME_STATUS_FILTERS],
+        })
         runInAction(() => {
-            this.cache.replace(runtimes, { ownerType: "openade-task" })
+            this.cache.replace(runtimes, {
+                ownerType: "openade-task",
+                statuses: ACTIVE_RUNTIME_STATUS_FILTERS,
+            })
             this.syncFromCache()
             this.hydrated = true
         })

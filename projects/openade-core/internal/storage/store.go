@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -120,6 +121,13 @@ type RuntimeRecord struct {
 	UpdatedAt      time.Time
 	LastActivityAt time.Time
 	PayloadJSON    sql.NullString
+}
+
+type RuntimeListFilter struct {
+	OwnerType string
+	OwnerID   string
+	Status    string
+	Statuses  []string
 }
 
 type RuntimeOutputChunk struct {
@@ -2304,13 +2312,125 @@ WHERE runtime_id = ?`,
 	return runtime, true, nil
 }
 
+const runtimeRecordSelectSQL = `SELECT runtime_id, kind, status, scope_json, started_at, updated_at, last_activity_at, payload_json
+FROM runtimes`
+
+const runtimeRecordOrderSQL = ` ORDER BY last_activity_at DESC, runtime_id ASC`
+
+const runtimeScopeValidSQL = `scope_json IS NOT NULL AND json_valid(scope_json)`
+
 func (store *Store) ListRuntimes(ctx context.Context) ([]RuntimeRecord, error) {
-	rows, err := store.db.QueryContext(
-		ctx,
-		`SELECT runtime_id, kind, status, scope_json, started_at, updated_at, last_activity_at, payload_json
-FROM runtimes
-ORDER BY last_activity_at DESC, runtime_id ASC`,
-	)
+	return store.ListRuntimesFiltered(ctx, RuntimeListFilter{})
+}
+
+func (store *Store) ListRuntimesFiltered(ctx context.Context, filter RuntimeListFilter) ([]RuntimeRecord, error) {
+	var rows *sql.Rows
+	var err error
+	statusListSQL := runtimeStatusListSQL(filter.Statuses)
+	switch {
+	case filter.OwnerType != "" && filter.OwnerID != "" && filter.Status != "":
+		rows, err = store.db.QueryContext(
+			ctx,
+			runtimeRecordSelectSQL+`
+WHERE `+runtimeScopeValidSQL+`
+  AND json_extract(scope_json, '$.ownerType') = ?
+  AND json_extract(scope_json, '$.ownerId') = ?
+  AND status = ?`+runtimeRecordOrderSQL,
+			filter.OwnerType,
+			filter.OwnerID,
+			filter.Status,
+		)
+	case filter.OwnerType != "" && filter.OwnerID != "" && statusListSQL != "":
+		rows, err = store.db.QueryContext(
+			ctx,
+			runtimeRecordSelectSQL+`
+WHERE `+runtimeScopeValidSQL+`
+  AND json_extract(scope_json, '$.ownerType') = ?
+  AND json_extract(scope_json, '$.ownerId') = ?
+  AND status IN (`+statusListSQL+`)`+runtimeRecordOrderSQL,
+			filter.OwnerType,
+			filter.OwnerID,
+		)
+	case filter.OwnerType != "" && filter.OwnerID != "":
+		rows, err = store.db.QueryContext(
+			ctx,
+			runtimeRecordSelectSQL+`
+WHERE `+runtimeScopeValidSQL+`
+  AND json_extract(scope_json, '$.ownerType') = ?
+  AND json_extract(scope_json, '$.ownerId') = ?`+runtimeRecordOrderSQL,
+			filter.OwnerType,
+			filter.OwnerID,
+		)
+	case filter.OwnerType != "" && filter.Status != "":
+		rows, err = store.db.QueryContext(
+			ctx,
+			runtimeRecordSelectSQL+`
+WHERE `+runtimeScopeValidSQL+`
+  AND json_extract(scope_json, '$.ownerType') = ?
+  AND status = ?`+runtimeRecordOrderSQL,
+			filter.OwnerType,
+			filter.Status,
+		)
+	case filter.OwnerType != "" && statusListSQL != "":
+		rows, err = store.db.QueryContext(
+			ctx,
+			runtimeRecordSelectSQL+`
+WHERE `+runtimeScopeValidSQL+`
+  AND json_extract(scope_json, '$.ownerType') = ?
+  AND status IN (`+statusListSQL+`)`+runtimeRecordOrderSQL,
+			filter.OwnerType,
+		)
+	case filter.OwnerID != "" && filter.Status != "":
+		rows, err = store.db.QueryContext(
+			ctx,
+			runtimeRecordSelectSQL+`
+WHERE `+runtimeScopeValidSQL+`
+  AND json_extract(scope_json, '$.ownerId') = ?
+  AND status = ?`+runtimeRecordOrderSQL,
+			filter.OwnerID,
+			filter.Status,
+		)
+	case filter.OwnerID != "" && statusListSQL != "":
+		rows, err = store.db.QueryContext(
+			ctx,
+			runtimeRecordSelectSQL+`
+WHERE `+runtimeScopeValidSQL+`
+  AND json_extract(scope_json, '$.ownerId') = ?
+  AND status IN (`+statusListSQL+`)`+runtimeRecordOrderSQL,
+			filter.OwnerID,
+		)
+	case filter.OwnerType != "":
+		rows, err = store.db.QueryContext(
+			ctx,
+			runtimeRecordSelectSQL+`
+WHERE `+runtimeScopeValidSQL+`
+  AND json_extract(scope_json, '$.ownerType') = ?`+runtimeRecordOrderSQL,
+			filter.OwnerType,
+		)
+	case filter.OwnerID != "":
+		rows, err = store.db.QueryContext(
+			ctx,
+			runtimeRecordSelectSQL+`
+WHERE `+runtimeScopeValidSQL+`
+  AND json_extract(scope_json, '$.ownerId') = ?`+runtimeRecordOrderSQL,
+			filter.OwnerID,
+		)
+	case filter.Status != "":
+		rows, err = store.db.QueryContext(
+			ctx,
+			runtimeRecordSelectSQL+`
+WHERE status = ?`+runtimeRecordOrderSQL,
+			filter.Status,
+		)
+	case statusListSQL != "":
+		rows, err = store.db.QueryContext(
+			ctx,
+			runtimeRecordSelectSQL+`
+WHERE status IN (`+statusListSQL+`)`+runtimeRecordOrderSQL,
+		)
+	default:
+		rows, err = store.db.QueryContext(ctx, runtimeRecordSelectSQL+runtimeRecordOrderSQL)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list runtimes: %w", err)
 	}
@@ -2328,6 +2448,28 @@ ORDER BY last_activity_at DESC, runtime_id ASC`,
 		return nil, fmt.Errorf("list runtimes rows: %w", err)
 	}
 	return runtimes, nil
+}
+
+func runtimeStatusListSQL(statuses []string) string {
+	if len(statuses) == 0 {
+		return ""
+	}
+	seen := map[string]bool{}
+	quoted := []string{}
+	for _, status := range statuses {
+		if seen[status] {
+			continue
+		}
+		switch status {
+		case "starting", "running", "completed", "failed", "stopped", "orphaned":
+			seen[status] = true
+			quoted = append(quoted, "'"+status+"'")
+		}
+	}
+	if len(quoted) == 0 {
+		return "''"
+	}
+	return strings.Join(quoted, ", ")
 }
 
 func (store *Store) MarkActiveRuntimesOrphaned(ctx context.Context, updatedAt time.Time) error {

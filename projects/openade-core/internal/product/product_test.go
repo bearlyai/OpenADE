@@ -33,7 +33,8 @@ const (
 	boundedTaskReadBudget   = 200 * time.Millisecond
 	gitSummaryReadBudget    = 750 * time.Millisecond
 	processListReadBudget   = 500 * time.Millisecond
-	fuzzySearchReadBudget   = 500 * time.Millisecond
+	fuzzySearchReadBudget   = 150 * time.Millisecond
+	coldFuzzySearchBudget   = 4 * time.Second
 	runtimeOutputReadLimit  = 20
 )
 
@@ -1300,14 +1301,6 @@ func TestProductReadPerformanceBudgetsOverRuntime(t *testing.T) {
 	harness := newRuntimeHarness(t)
 	seedProductPerformanceData(t, harness.store, 180, 1500)
 
-	// Warm SQLite statement caches and the runtime path before measuring budgets.
-	resultObject(t, harness.request(t, "openade/snapshot/read", map[string]any{}))
-	resultObject(t, harness.request(t, "openade/task/read", map[string]any{
-		"repoId":               "repo-perf-0",
-		"taskId":               "task-perf-target",
-		"hydrateSessionEvents": false,
-	}))
-
 	snapshotDuration := measureRuntimeRequest(t, func() {
 		snapshot := resultObject(t, harness.request(t, "openade/snapshot/read", map[string]any{}))
 		repos := arrayField(t, snapshot, "repos")
@@ -1343,19 +1336,7 @@ func TestProductHostOperationPerformanceBudgetsOverRuntime(t *testing.T) {
 	harness := newRuntimeHarness(t)
 	fixture := seedProductHostPerformanceData(t, harness.store)
 
-	resultObject(t, harness.request(t, "openade/project/git/summary/read", map[string]any{
-		"repoId": fixture.repoID,
-	}))
-	resultObject(t, harness.request(t, "openade/project/process/list", map[string]any{
-		"repoId": fixture.repoID,
-	}))
-	resultObject(t, harness.request(t, "openade/project/files/fuzzySearch", map[string]any{
-		"repoId": fixture.repoID,
-		"query":  "needle-hook",
-		"limit":  5,
-	}))
-
-	gitDuration := measureRuntimeRequest(t, func() {
+	assertGitSummary := func() {
 		summary := resultObject(t, harness.request(t, "openade/project/git/summary/read", map[string]any{
 			"repoId": fixture.repoID,
 		}))
@@ -1365,12 +1346,9 @@ func TestProductHostOperationPerformanceBudgetsOverRuntime(t *testing.T) {
 		assertChangedFile(t, arrayField(t, objectField(t, summary, "staged"), "files"), "staged-performance.txt", "added")
 		assertChangedFile(t, arrayField(t, objectField(t, summary, "unstaged"), "files"), "README.md", "modified")
 		assertChangedFile(t, arrayField(t, summary, "untracked"), "untracked-performance.txt", "added")
-	})
-	if gitDuration > gitSummaryReadBudget {
-		t.Fatalf("openade/project/git/summary/read exceeded hard gate: %s > %s", gitDuration, gitSummaryReadBudget)
 	}
 
-	processDuration := measureRuntimeRequest(t, func() {
+	assertProcessList := func() {
 		processList := resultObject(t, harness.request(t, "openade/project/process/list", map[string]any{
 			"repoId": fixture.repoID,
 		}))
@@ -1379,12 +1357,9 @@ func TestProductHostOperationPerformanceBudgetsOverRuntime(t *testing.T) {
 		if len(configs) != fixture.processConfigCount || len(processes) != fixture.processConfigCount {
 			t.Fatalf("performance process list configs/processes = %d/%d, want %d", len(configs), len(processes), fixture.processConfigCount)
 		}
-	})
-	if processDuration > processListReadBudget {
-		t.Fatalf("openade/project/process/list exceeded hard gate: %s > %s", processDuration, processListReadBudget)
 	}
 
-	fuzzyDuration := measureRuntimeRequest(t, func() {
+	assertFuzzySearch := func() {
 		fuzzy := resultObject(t, harness.request(t, "openade/project/files/fuzzySearch", map[string]any{
 			"repoId": fixture.repoID,
 			"query":  "needle-hook",
@@ -1394,7 +1369,24 @@ func TestProductHostOperationPerformanceBudgetsOverRuntime(t *testing.T) {
 		if len(results) == 0 || results[0] != fixture.targetPath {
 			t.Fatalf("performance fuzzy results = %#v, want first %s", results, fixture.targetPath)
 		}
-	})
+	}
+
+	gitDuration := measureRuntimeRequest(t, assertGitSummary)
+	if gitDuration > gitSummaryReadBudget {
+		t.Fatalf("openade/project/git/summary/read exceeded hard gate: %s > %s", gitDuration, gitSummaryReadBudget)
+	}
+
+	processDuration := measureRuntimeRequest(t, assertProcessList)
+	if processDuration > processListReadBudget {
+		t.Fatalf("openade/project/process/list exceeded hard gate: %s > %s", processDuration, processListReadBudget)
+	}
+
+	coldFuzzyDuration := measureRuntimeRequest(t, assertFuzzySearch)
+	if coldFuzzyDuration > coldFuzzySearchBudget {
+		t.Fatalf("openade/project/files/fuzzySearch cold path exceeded hard gate: %s > %s", coldFuzzyDuration, coldFuzzySearchBudget)
+	}
+
+	fuzzyDuration := measureRuntimeRequest(t, assertFuzzySearch)
 	if fuzzyDuration > fuzzySearchReadBudget {
 		t.Fatalf("openade/project/files/fuzzySearch exceeded hard gate: %s > %s", fuzzyDuration, fuzzySearchReadBudget)
 	}
@@ -7445,6 +7437,47 @@ func TestProductTurnStartCreatesTaskActionAndRuntimeOverRuntime(t *testing.T) {
 	}))
 	if len(runtimeList) != 1 || objectValue(t, runtimeList[0])["runtimeId"] != "openade-turn:"+eventID {
 		t.Fatalf("turn runtime list = %#v", runtimeList)
+	}
+	runningRuntimeList := resultArray(t, harness.request(t, "runtime/list", map[string]any{
+		"ownerType": "openade-task",
+		"ownerId":   taskID,
+		"status":    "running",
+	}))
+	if len(runningRuntimeList) != 1 || objectValue(t, runningRuntimeList[0])["runtimeId"] != "openade-turn:"+eventID {
+		t.Fatalf("turn running runtime list = %#v", runningRuntimeList)
+	}
+	activeRuntimeList := resultArray(t, harness.request(t, "runtime/list", map[string]any{
+		"ownerType": "openade-task",
+		"ownerId":   taskID,
+		"statuses":  []string{"starting", "running"},
+	}))
+	if len(activeRuntimeList) != 1 || objectValue(t, activeRuntimeList[0])["runtimeId"] != "openade-turn:"+eventID {
+		t.Fatalf("turn active runtime list = %#v", activeRuntimeList)
+	}
+	intersectedRuntimeList := resultArray(t, harness.request(t, "runtime/list", map[string]any{
+		"ownerType": "openade-task",
+		"ownerId":   taskID,
+		"status":    "running",
+		"statuses":  []string{"completed"},
+	}))
+	if len(intersectedRuntimeList) != 0 {
+		t.Fatalf("turn intersected runtime list = %#v", intersectedRuntimeList)
+	}
+	completedRuntimeList := resultArray(t, harness.request(t, "runtime/list", map[string]any{
+		"ownerType": "openade-task",
+		"ownerId":   taskID,
+		"status":    "completed",
+	}))
+	if len(completedRuntimeList) != 0 {
+		t.Fatalf("turn completed runtime list before stop = %#v", completedRuntimeList)
+	}
+	invalidRuntimeList := harness.request(t, "runtime/list", map[string]any{"status": "active"})
+	if runtimeErrorCode(t, invalidRuntimeList) != "invalid_params" {
+		t.Fatalf("invalid runtime list status = %#v", invalidRuntimeList)
+	}
+	invalidRuntimeStatusesList := harness.request(t, "runtime/list", map[string]any{"statuses": []string{"active"}})
+	if runtimeErrorCode(t, invalidRuntimeStatusesList) != "invalid_params" {
+		t.Fatalf("invalid runtime list statuses = %#v", invalidRuntimeStatusesList)
 	}
 	workingStarted := harness.waitForNotification(t, notificationStart, "openade/workingTasks")
 	workingStartedParams := objectField(t, workingStarted, "params")

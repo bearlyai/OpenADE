@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/openade/openade/projects/openade-core/internal/core"
@@ -79,13 +80,33 @@ const adoptedAgentWorkerTranscriptPollInterval = 100 * time.Millisecond
 
 func (service *Service) handleRuntimeList(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
 	var params struct {
-		OwnerType string `json:"ownerType"`
-		OwnerID   string `json:"ownerId"`
+		OwnerType string   `json:"ownerType"`
+		OwnerID   string   `json:"ownerId"`
+		Status    string   `json:"status"`
+		Statuses  []string `json:"statuses"`
 	}
 	if runtimeErr := decodeObject(raw, &params); runtimeErr != nil {
 		return nil, runtimeErr
 	}
-	records, err := service.store.ListRuntimes(ctx)
+	params.OwnerType = strings.TrimSpace(params.OwnerType)
+	params.OwnerID = strings.TrimSpace(params.OwnerID)
+	params.Status = strings.TrimSpace(params.Status)
+	if params.Status != "" && !isRuntimeRecordStatus(params.Status) {
+		return nil, invalidParams("status is invalid")
+	}
+	statuses, runtimeErr := normalizeRuntimeStatusList(params.Statuses)
+	if runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	if params.Status != "" && len(statuses) > 0 && !runtimeStatusListContains(statuses, params.Status) {
+		return []runtimeRecordDTO{}, nil
+	}
+	records, err := service.store.ListRuntimesFiltered(ctx, storage.RuntimeListFilter{
+		OwnerType: params.OwnerType,
+		OwnerID:   params.OwnerID,
+		Status:    params.Status,
+		Statuses:  statuses,
+	})
 	if err != nil {
 		return nil, handlerError(err)
 	}
@@ -95,15 +116,60 @@ func (service *Service) handleRuntimeList(ctx context.Context, _ *core.Connectio
 		if runtimeErr != nil {
 			return nil, runtimeErr
 		}
-		if params.OwnerType != "" && dto.Scope.OwnerType != params.OwnerType {
-			continue
-		}
-		if params.OwnerID != "" && dto.Scope.OwnerID != params.OwnerID {
-			continue
-		}
 		results = append(results, dto)
 	}
 	return results, nil
+}
+
+func (service *Service) listActiveOpenADETaskRuntimeRecords(ctx context.Context, taskID string) ([]runtimeRecordDTO, *core.RuntimeError) {
+	records, err := service.store.ListRuntimesFiltered(ctx, storage.RuntimeListFilter{
+		OwnerType: "openade-task",
+		OwnerID:   strings.TrimSpace(taskID),
+		Statuses:  []string{"running", "starting"},
+	})
+	if err != nil {
+		return nil, handlerError(err)
+	}
+	results := []runtimeRecordDTO{}
+	for _, record := range records {
+		dto, runtimeErr := runtimeRecordToDTO(record)
+		if runtimeErr != nil {
+			return nil, runtimeErr
+		}
+		if dto.Scope.OwnerType == "openade-task" && dto.Scope.OwnerID != "" && isActiveRuntimeStatus(dto.Status) {
+			results = append(results, dto)
+		}
+	}
+	return results, nil
+}
+
+func normalizeRuntimeStatusList(values []string) ([]string, *core.RuntimeError) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	seen := map[string]bool{}
+	statuses := []string{}
+	for _, value := range values {
+		status := strings.TrimSpace(value)
+		if !isRuntimeRecordStatus(status) {
+			return nil, invalidParams("statuses contains invalid status")
+		}
+		if seen[status] {
+			continue
+		}
+		seen[status] = true
+		statuses = append(statuses, status)
+	}
+	return statuses, nil
+}
+
+func runtimeStatusListContains(statuses []string, expected string) bool {
+	for _, status := range statuses {
+		if status == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func (service *Service) handleRuntimeRead(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
@@ -915,23 +981,11 @@ func (service *Service) reconcileStoredAgentActionEvents(ctx context.Context, up
 }
 
 func (service *Service) taskHasActiveRuntime(ctx context.Context, taskID string) (bool, *core.RuntimeError) {
-	records, err := service.store.ListRuntimes(ctx)
-	if err != nil {
-		return false, handlerError(err)
+	runtimes, runtimeErr := service.listActiveOpenADETaskRuntimeRecords(ctx, taskID)
+	if runtimeErr != nil {
+		return false, runtimeErr
 	}
-	for _, record := range records {
-		if !isActiveRuntimeStatus(record.Status) {
-			continue
-		}
-		scope, runtimeErr := runtimeScopeFromRecord(record)
-		if runtimeErr != nil {
-			return false, runtimeErr
-		}
-		if scope.OwnerType == "openade-task" && scope.OwnerID == taskID {
-			return true, nil
-		}
-	}
-	return false, nil
+	return len(runtimes) > 0, nil
 }
 
 func runtimeRecordToDTO(record storage.RuntimeRecord) (runtimeRecordDTO, *core.RuntimeError) {
@@ -1050,6 +1104,10 @@ func runtimeStateForStatus(status string) string {
 
 func isActiveRuntimeStatus(status string) bool {
 	return status == "starting" || status == "running"
+}
+
+func isRuntimeRecordStatus(status string) bool {
+	return isActiveRuntimeStatus(status) || status == "completed" || status == "failed" || status == "stopped" || status == "orphaned"
 }
 
 func isTerminalRuntimeStatus(status string) bool {

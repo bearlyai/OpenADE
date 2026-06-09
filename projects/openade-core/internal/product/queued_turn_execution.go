@@ -41,16 +41,12 @@ func (service *Service) drainNextQueuedTurn(ctx context.Context, taskID string) 
 }
 
 func (service *Service) taskHasActiveAgentRuntime(ctx context.Context, taskID string) (bool, *core.RuntimeError) {
-	records, err := service.store.ListRuntimes(ctx)
-	if err != nil {
-		return false, handlerError(err)
+	runtimes, runtimeErr := service.listActiveOpenADETaskRuntimeRecords(ctx, taskID)
+	if runtimeErr != nil {
+		return false, runtimeErr
 	}
-	for _, record := range records {
-		dto, runtimeErr := runtimeRecordToDTO(record)
-		if runtimeErr != nil {
-			return false, runtimeErr
-		}
-		if dto.Kind == "agent" && dto.Scope.OwnerType == "openade-task" && dto.Scope.OwnerID == taskID && isActiveRuntimeStatus(dto.Status) {
+	for _, dto := range runtimes {
+		if dto.Kind == "agent" && dto.Scope.OwnerID == taskID {
 			return true, nil
 		}
 	}

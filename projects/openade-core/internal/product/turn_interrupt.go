@@ -44,19 +44,12 @@ func (service *Service) interruptTurn(ctx context.Context, raw json.RawMessage) 
 }
 
 func (service *Service) activeAgentRuntimeForTask(ctx context.Context, taskID string) (runtimeRecordDTO, bool, *core.RuntimeError) {
-	records, err := service.store.ListRuntimes(ctx)
-	if err != nil {
-		return runtimeRecordDTO{}, false, handlerError(err)
+	runtimes, runtimeErr := service.listActiveOpenADETaskRuntimeRecords(ctx, taskID)
+	if runtimeErr != nil {
+		return runtimeRecordDTO{}, false, runtimeErr
 	}
-	for _, record := range records {
-		dto, runtimeErr := runtimeRecordToDTO(record)
-		if runtimeErr != nil {
-			return runtimeRecordDTO{}, false, runtimeErr
-		}
-		if dto.Kind != "agent" || dto.Scope.OwnerType != "openade-task" || dto.Scope.OwnerID != taskID {
-			continue
-		}
-		if isActiveRuntimeStatus(dto.Status) {
+	for _, dto := range runtimes {
+		if dto.Kind == "agent" && dto.Scope.OwnerID == taskID {
 			return dto, true, nil
 		}
 	}

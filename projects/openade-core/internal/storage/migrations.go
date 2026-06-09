@@ -227,4 +227,34 @@ CREATE INDEX IF NOT EXISTS idx_runtime_output_chunks_runtime
 ON runtime_output_chunks(runtime_id, id ASC);
 `,
 	},
+	{
+		Version: 6,
+		Name:    "runtime_scope_indexes",
+		SQL: `
+CREATE INDEX IF NOT EXISTS idx_runtimes_scope_status_activity
+ON runtimes(
+    json_extract(scope_json, '$.ownerType'),
+    json_extract(scope_json, '$.ownerId'),
+    status,
+    last_activity_at DESC
+)
+WHERE scope_json IS NOT NULL AND json_valid(scope_json);
+
+CREATE INDEX IF NOT EXISTS idx_runtimes_scope_type_status_activity
+ON runtimes(
+    json_extract(scope_json, '$.ownerType'),
+    status,
+    last_activity_at DESC
+)
+WHERE scope_json IS NOT NULL AND json_valid(scope_json);
+
+CREATE INDEX IF NOT EXISTS idx_runtimes_scope_owner_activity
+ON runtimes(
+    json_extract(scope_json, '$.ownerId'),
+    status,
+    last_activity_at DESC
+)
+WHERE scope_json IS NOT NULL AND json_valid(scope_json);
+`,
+	},
 }

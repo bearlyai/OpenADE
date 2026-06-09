@@ -1,10 +1,28 @@
 import { describe, expect, it } from "vitest"
+import type { RuntimeRecord, RuntimeStatus } from "../../runtime-protocol/src"
 import { RuntimeHandlerError, RuntimeServer, type RuntimeConnection, type RuntimeSlowRequestEvent } from "./server"
 
 function connection(): RuntimeConnection {
     return {
         id: "connection-1",
         send: () => undefined,
+    }
+}
+
+const startedAt = "2026-06-09T00:00:00.000Z"
+
+function runtimeRecord(runtimeId: string, status: RuntimeStatus, ownerId: string): RuntimeRecord {
+    return {
+        runtimeId,
+        kind: "agent",
+        status,
+        scope: {
+            ownerType: "openade-task",
+            ownerId,
+        },
+        startedAt,
+        updatedAt: startedAt,
+        lastActivityAt: startedAt,
     }
 }
 
@@ -69,5 +87,91 @@ describe("RuntimeServer slow request observer", () => {
                 errorCode: "test_failed",
             }),
         ])
+    })
+})
+
+describe("RuntimeServer runtime records", () => {
+    it("filters runtime/list by runtime status", async () => {
+        const server = new RuntimeServer({})
+        server.supervisor.register(runtimeRecord("runtime-running", "running", "task-1"))
+        server.supervisor.register(runtimeRecord("runtime-completed", "completed", "task-1"))
+        server.supervisor.register(runtimeRecord("runtime-other", "running", "task-2"))
+        server.supervisor.register(runtimeRecord("runtime-starting", "starting", "task-1"))
+
+        const response = await server.handleRequest(
+            {
+                id: 1,
+                method: "runtime/list",
+                params: {
+                    ownerType: "openade-task",
+                    ownerId: "task-1",
+                    status: "running",
+                },
+            },
+            connection()
+        )
+
+        expect(response).toEqual({
+            id: 1,
+            result: [runtimeRecord("runtime-running", "running", "task-1")],
+        })
+
+        const statusesResponse = await server.handleRequest(
+            {
+                id: 2,
+                method: "runtime/list",
+                params: {
+                    ownerType: "openade-task",
+                    ownerId: "task-1",
+                    statuses: ["starting", "running"],
+                },
+            },
+            connection()
+        )
+
+        expect(statusesResponse).toEqual({
+            id: 2,
+            result: [
+                runtimeRecord("runtime-running", "running", "task-1"),
+                runtimeRecord("runtime-starting", "starting", "task-1"),
+            ],
+        })
+
+        const intersected = await server.handleRequest(
+            {
+                id: 3,
+                method: "runtime/list",
+                params: {
+                    ownerType: "openade-task",
+                    ownerId: "task-1",
+                    status: "running",
+                    statuses: ["completed"],
+                },
+            },
+            connection()
+        )
+
+        expect(intersected).toEqual({ id: 3, result: [] })
+
+        const invalid = await server.handleRequest({ id: 4, method: "runtime/list", params: { status: "active" } }, connection())
+
+        expect(invalid).toMatchObject({
+            id: 4,
+            error: {
+                code: "invalid_params",
+            },
+        })
+
+        const invalidStatuses = await server.handleRequest(
+            { id: 5, method: "runtime/list", params: { statuses: ["active"] } },
+            connection()
+        )
+
+        expect(invalidStatuses).toMatchObject({
+            id: 5,
+            error: {
+                code: "invalid_params",
+            },
+        })
     })
 })

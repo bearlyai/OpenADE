@@ -204,20 +204,13 @@ type workingTasksNotificationDTO struct {
 }
 
 func (service *Service) notifyWorkingTasks(ctx context.Context, at time.Time) {
-	records, err := service.store.ListRuntimes(ctx)
-	if err != nil {
+	runtimes, runtimeErr := service.listActiveOpenADETaskRuntimeRecords(ctx, "")
+	if runtimeErr != nil {
 		return
 	}
 	seen := map[string]bool{}
 	taskIDs := []string{}
-	for _, record := range records {
-		dto, runtimeErr := runtimeRecordToDTO(record)
-		if runtimeErr != nil {
-			continue
-		}
-		if dto.Scope.OwnerType != "openade-task" || dto.Scope.OwnerID == "" || !isActiveRuntimeStatus(dto.Status) {
-			continue
-		}
+	for _, dto := range runtimes {
 		if seen[dto.Scope.OwnerID] {
 			continue
 		}

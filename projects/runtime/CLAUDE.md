@@ -68,6 +68,7 @@
 - Runtime records carry caller ownership and path context in `scope`, not as flat top-level owner/path fields.
 - Preserve older flat checkpoint records by normalizing their owner/path fields into `scope` during checkpoint hydration.
 - Runtime wall-clock timestamps are ISO strings.
+- `runtime/list` supports filtering by scoped `ownerType`, scoped `ownerId`, `status`, and `statuses`; active-only UI/product callers should use those filters instead of listing every runtime and filtering later.
 - Persist only minimal runtime checkpoints.
 - Active checkpointed runtimes should reload as `orphaned` unless a host adapter verifies an alive adoptable process group plus process identity metadata.
 - Runtime reconciliation may use a host liveness probe to mark verified-dead runtimes terminal.

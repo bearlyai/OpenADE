@@ -574,6 +574,8 @@ export class RuntimeServer {
         return this.supervisor.list({
             ownerType: params.ownerType,
             ownerId: params.ownerId,
+            status: params.status,
+            statuses: params.statuses,
         })
     }
 

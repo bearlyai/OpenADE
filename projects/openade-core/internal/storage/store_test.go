@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -428,6 +429,17 @@ func TestRuntimeRecordRoundTripAndOrphaning(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("upsert completed runtime: %v", err)
 	}
+	if err := store.UpsertRuntime(ctx, RuntimeRecord{
+		RuntimeID:      "process:bad-scope",
+		Kind:           "process",
+		Status:         "running",
+		ScopeJSON:      sql.NullString{String: `{`, Valid: true},
+		StartedAt:      startedAt,
+		UpdatedAt:      updatedAt,
+		LastActivityAt: updatedAt,
+	}); err != nil {
+		t.Fatalf("upsert bad-scope runtime: %v", err)
+	}
 
 	loaded, ok, err := store.GetRuntime(ctx, "process:proc-1")
 	if err != nil {
@@ -474,8 +486,63 @@ func TestRuntimeRecordRoundTripAndOrphaning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list runtimes: %v", err)
 	}
-	if len(runtimes) != 2 {
-		t.Fatalf("runtime count = %d, want 2", len(runtimes))
+	if len(runtimes) != 3 {
+		t.Fatalf("runtime count = %d, want 3", len(runtimes))
+	}
+	filtered, err := store.ListRuntimesFiltered(ctx, RuntimeListFilter{
+		OwnerType: "process",
+		OwnerID:   "proc-1",
+		Status:    "running",
+	})
+	if err != nil {
+		t.Fatalf("list filtered runtimes: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].RuntimeID != "process:proc-1" {
+		t.Fatalf("filtered runtimes = %#v", filtered)
+	}
+	completedFiltered, err := store.ListRuntimesFiltered(ctx, RuntimeListFilter{
+		OwnerType: "process",
+		Status:    "completed",
+	})
+	if err != nil {
+		t.Fatalf("list completed runtimes: %v", err)
+	}
+	if len(completedFiltered) != 1 || completedFiltered[0].RuntimeID != "process:proc-2" {
+		t.Fatalf("completed filtered runtimes = %#v", completedFiltered)
+	}
+	activeOrCompletedFiltered, err := store.ListRuntimesFiltered(ctx, RuntimeListFilter{
+		OwnerType: "process",
+		Statuses:  []string{"running", "completed"},
+	})
+	if err != nil {
+		t.Fatalf("list active or completed runtimes: %v", err)
+	}
+	if len(activeOrCompletedFiltered) != 2 || activeOrCompletedFiltered[0].RuntimeID != "process:proc-1" || activeOrCompletedFiltered[1].RuntimeID != "process:proc-2" {
+		t.Fatalf("active or completed filtered runtimes = %#v", activeOrCompletedFiltered)
+	}
+	noStatusMatches, err := store.ListRuntimesFiltered(ctx, RuntimeListFilter{
+		OwnerType: "process",
+		Statuses:  []string{"not-a-status"},
+	})
+	if err != nil {
+		t.Fatalf("list invalid status filter runtimes: %v", err)
+	}
+	if len(noStatusMatches) != 0 {
+		t.Fatalf("invalid status filter returned runtimes = %#v", noStatusMatches)
+	}
+	activeTaskFilteredPlan := runtimeListQueryPlan(t, store, `EXPLAIN QUERY PLAN `+runtimeRecordSelectSQL+`
+WHERE `+runtimeScopeValidSQL+`
+  AND json_extract(scope_json, '$.ownerType') = ?
+  AND status = ?`+runtimeRecordOrderSQL, "openade-task", "running")
+	if !strings.Contains(activeTaskFilteredPlan, "idx_runtimes_scope_type_status_activity") {
+		t.Fatalf("active task runtime filter did not use ownerType/status index: %s", activeTaskFilteredPlan)
+	}
+	activeTaskStatusListPlan := runtimeListQueryPlan(t, store, `EXPLAIN QUERY PLAN `+runtimeRecordSelectSQL+`
+WHERE `+runtimeScopeValidSQL+`
+  AND json_extract(scope_json, '$.ownerType') = ?
+  AND status IN ('starting', 'running')`+runtimeRecordOrderSQL, "openade-task")
+	if !strings.Contains(activeTaskStatusListPlan, "idx_runtimes_scope_type_status_activity") {
+		t.Fatalf("active task runtime status-list filter did not use ownerType/status index: %s", activeTaskStatusListPlan)
 	}
 
 	orphanedAt := updatedAt.Add(5 * time.Minute)
@@ -496,6 +563,35 @@ func TestRuntimeRecordRoundTripAndOrphaning(t *testing.T) {
 	if !ok || completed.Status != "completed" || !completed.UpdatedAt.Equal(updatedAt) {
 		t.Fatalf("completed runtime after orphaning = %#v", completed)
 	}
+}
+
+func runtimeListQueryPlan(t *testing.T, store *Store, query string, args ...string) string {
+	t.Helper()
+	queryArgs := make([]interface{}, 0, len(args))
+	for _, arg := range args {
+		queryArgs = append(queryArgs, arg)
+	}
+	rows, err := store.db.QueryContext(context.Background(), query, queryArgs...)
+	if err != nil {
+		t.Fatalf("explain runtime query plan: %v", err)
+	}
+	defer rows.Close()
+
+	details := []string{}
+	for rows.Next() {
+		var id int
+		var parent int
+		var notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatalf("scan runtime query plan: %v", err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate runtime query plan: %v", err)
+	}
+	return strings.Join(details, "\n")
 }
 
 func TestRuntimeOutputChunksRoundTripPruneAndCascade(t *testing.T) {

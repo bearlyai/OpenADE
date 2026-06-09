@@ -14,6 +14,7 @@ export interface RuntimeListFilter {
     ownerType?: string
     ownerId?: string
     status?: RuntimeStatus
+    statuses?: RuntimeStatus[]
 }
 
 export interface RuntimeCheckpointStore {
@@ -149,6 +150,7 @@ export class RuntimeSupervisor {
             if (filter.ownerType && runtime.scope.ownerType !== filter.ownerType) return false
             if (filter.ownerId && runtime.scope.ownerId !== filter.ownerId) return false
             if (filter.status && runtime.status !== filter.status) return false
+            if (filter.statuses && !filter.statuses.includes(runtime.status)) return false
             return true
         })
     }
