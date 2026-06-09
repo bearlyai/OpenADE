@@ -63,6 +63,8 @@ function createRuntimeBackedStore(): {
     processListRequestCount(): number
     fuzzySearchRequestCount(): number
     projectSearchRequestCount(): number
+    projectGitSummaryRequestCount(): number
+    taskGitSummaryRequestCount(): number
 } {
     const server = new RuntimeServer({ serverName: "product-store-runtime", protocolVersion: 1 })
     const preview: OpenADETaskPreview = {
@@ -113,6 +115,8 @@ function createRuntimeBackedStore(): {
     let processListRequests = 0
     let fuzzySearchRequests = 0
     let projectSearchRequests = 0
+    let projectGitSummaryRequests = 0
+    let taskGitSummaryRequests = 0
 
     function snapshot(options?: { version?: string; hostName?: string; workingTaskIds?: string[] }): OpenADESnapshot {
         return {
@@ -244,16 +248,19 @@ function createRuntimeBackedStore(): {
                     ...(params.includeRemote ? [{ name: "origin/feature", isDefault: false, isRemote: true }] : []),
                 ],
             }),
-            readProjectGitSummary: async (params) => ({
-                repoId: params.repoId,
-                branch: "main",
-                headCommit: "abc123",
-                ahead: 0,
-                hasChanges: true,
-                staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
-                unstaged: { files: [{ path: "README.md", status: "modified" }], stats: { filesChanged: 1, insertions: 1, deletions: 0 } },
-                untracked: [],
-            }),
+            readProjectGitSummary: async (params) => {
+                projectGitSummaryRequests += 1
+                return {
+                    repoId: params.repoId,
+                    branch: "main",
+                    headCommit: "abc123",
+                    ahead: 0,
+                    hasChanges: true,
+                    staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                    unstaged: { files: [{ path: "README.md", status: "modified" }], stats: { filesChanged: 1, insertions: 1, deletions: 0 } },
+                    untracked: [],
+                }
+            },
             listProjectProcesses: async (params) => {
                 processListRequests += 1
                 return {
@@ -327,17 +334,20 @@ function createRuntimeBackedStore(): {
                 toTreeish: "",
                 files: [{ path: "README.md", status: "modified" }],
             }),
-            readTaskGitSummary: async (params) => ({
-                repoId: params.repoId,
-                taskId: params.taskId,
-                branch: "main",
-                headCommit: "abc123",
-                ahead: 1,
-                hasChanges: true,
-                staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
-                unstaged: { files: [{ path: "README.md", status: "modified" }], stats: { filesChanged: 1, insertions: 1, deletions: 0 } },
-                untracked: [],
-            }),
+            readTaskGitSummary: async (params) => {
+                taskGitSummaryRequests += 1
+                return {
+                    repoId: params.repoId,
+                    taskId: params.taskId,
+                    branch: "main",
+                    headCommit: "abc123",
+                    ahead: 1,
+                    hasChanges: true,
+                    staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                    unstaged: { files: [{ path: "README.md", status: "modified" }], stats: { filesChanged: 1, insertions: 1, deletions: 0 } },
+                    untracked: [],
+                }
+            },
             readTaskGitScopes: async (params) => ({
                 repoId: params.repoId,
                 taskId: params.taskId,
@@ -547,6 +557,8 @@ function createRuntimeBackedStore(): {
         processListRequestCount: () => processListRequests,
         fuzzySearchRequestCount: () => fuzzySearchRequests,
         projectSearchRequestCount: () => projectSearchRequests,
+        projectGitSummaryRequestCount: () => projectGitSummaryRequests,
+        taskGitSummaryRequestCount: () => taskGitSummaryRequests,
     }
 }
 
@@ -661,6 +673,36 @@ describe("OpenADEProductStore", () => {
 
             expect(fuzzySearchRequestCount()).toBe(2)
             expect(projectSearchRequestCount()).toBe(2)
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("reuses fresh git summary reads while preserving explicit bypass and write invalidation", async () => {
+        const { store, runtime, projectGitSummaryRequestCount, taskGitSummaryRequestCount } = createRuntimeBackedStore()
+
+        try {
+            await store.readProjectGitSummary({ repoId: "repo-1" })
+            await store.readProjectGitSummary({ repoId: "repo-1" })
+            await store.readTaskGitSummary({ repoId: "repo-1", taskId: "task-1" })
+            await store.readTaskGitSummary({ repoId: "repo-1", taskId: "task-1" })
+
+            expect(projectGitSummaryRequestCount()).toBe(1)
+            expect(taskGitSummaryRequestCount()).toBe(1)
+
+            await store.readTaskGitSummary({ repoId: "repo-1", taskId: "task-1" }, { bypassCache: true })
+            expect(taskGitSummaryRequestCount()).toBe(2)
+
+            await store.writeProjectFile(
+                { repoId: "repo-1", taskId: "task-1", path: "src/runtime.ts", content: "runtime product search\n" },
+                { clientRequestId: "git-summary-cache-write" }
+            )
+            await store.readProjectGitSummary({ repoId: "repo-1" })
+            await store.readTaskGitSummary({ repoId: "repo-1", taskId: "task-1" })
+
+            expect(projectGitSummaryRequestCount()).toBe(2)
+            expect(taskGitSummaryRequestCount()).toBe(3)
         } finally {
             store.destroy()
             await runtime.close()

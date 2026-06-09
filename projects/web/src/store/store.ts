@@ -112,7 +112,7 @@ import { setGlobalEnv } from "../electronAPI/subprocess"
 import { isRuntimeBackedProductStoreEnabled } from "../featureFlags"
 import { crossReviewStrategy, ensembleStrategy, peerReviewStrategy, standardStrategy } from "../hyperplan/strategies"
 import type { AgentCouplet, HyperPlanStrategy } from "../hyperplan/types"
-import { type OpenADEProductLegacyYjsImportReport, OpenADEProductStore } from "../kernel/productStore"
+import { type OpenADEProductLegacyYjsImportReport, type OpenADEProductReadOptions, OpenADEProductStore } from "../kernel/productStore"
 import { taskFromRuntimeProduct } from "../kernel/taskAdapter"
 import type { McpServerStore } from "../persistence/mcpServerStore"
 import { type McpServerStoreConnection, connectMcpServerStore, createEphemeralMcpServerStoreConnection } from "../persistence/mcpServerStoreBootstrap"
@@ -1538,9 +1538,9 @@ export class CodeStore {
         return localOpenADEClient.readTaskChanges(params)
     }
 
-    async readProductTaskGitSummary(params: OpenADETaskGitSummaryRequest): Promise<OpenADETaskGitSummaryResult> {
+    async readProductTaskGitSummary(params: OpenADETaskGitSummaryRequest, options: OpenADEProductReadOptions = {}): Promise<OpenADETaskGitSummaryResult> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
-            return this.runtimeProductStore.readTaskGitSummary(params)
+            return this.runtimeProductStore.readTaskGitSummary(params, options)
         }
 
         return localOpenADEClient.readTaskGitSummary(params)
@@ -1666,9 +1666,12 @@ export class CodeStore {
         return localOpenADEClient.readProjectGitBranches(params)
     }
 
-    async readProductProjectGitSummary(params: OpenADEProjectGitSummaryReadRequest): Promise<OpenADEProjectGitSummaryReadResult> {
+    async readProductProjectGitSummary(
+        params: OpenADEProjectGitSummaryReadRequest,
+        options: OpenADEProductReadOptions = {}
+    ): Promise<OpenADEProjectGitSummaryReadResult> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
-            return this.runtimeProductStore.readProjectGitSummary(params)
+            return this.runtimeProductStore.readProjectGitSummary(params, options)
         }
 
         return localOpenADEClient.readProjectGitSummary(params)

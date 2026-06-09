@@ -336,8 +336,8 @@ export class TaskModel {
         return this.store.readProductTaskChanges({ repoId: this.repoId, taskId: this.taskId, ...params })
     }
 
-    readProductTaskGitSummary(): Promise<OpenADETaskGitSummaryResult> {
-        return this.store.readProductTaskGitSummary({ repoId: this.repoId, taskId: this.taskId })
+    readProductTaskGitSummary(options: { bypassCache?: boolean } = {}): Promise<OpenADETaskGitSummaryResult> {
+        return this.store.readProductTaskGitSummary({ repoId: this.repoId, taskId: this.taskId }, options)
     }
 
     readProductTaskDiff(params: Omit<OpenADETaskDiffReadRequest, "repoId" | "taskId">): Promise<OpenADETaskDiffReadResult> {
@@ -625,7 +625,7 @@ export class TaskModel {
 
         if (this.usesRuntimeProductReads && this.repoId) {
             try {
-                const result = await this.readProductTaskGitSummary()
+                const result = await this.readProductTaskGitSummary({ bypassCache: options.force === true })
                 runInAction(() => {
                     this.gitStatus = gitSummaryFromProductSummary(result)
                     this.gitStateLoadedAt = Date.now()

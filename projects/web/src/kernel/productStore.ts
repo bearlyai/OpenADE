@@ -131,6 +131,7 @@ function notificationRecord(notification: RuntimeNotification): Record<string, u
 const LIGHTWEIGHT_TASK_READ_OPTIONS: OpenADETaskReadOptions = { hydrateSessionEvents: false }
 const PROCESS_LIST_CACHE_TTL_MS = 1_000
 const PROJECT_SEARCH_CACHE_TTL_MS = 1_000
+const GIT_SUMMARY_CACHE_TTL_MS = 1_000
 const LEGACY_YJS_IMPORT_WRITER_METHODS = [
     "createRepo",
     "updateRepo",
@@ -167,6 +168,20 @@ interface CachedProjectSearch {
     result: OpenADEProjectSearchResult
 }
 
+interface CachedProjectGitSummary {
+    expiresAt: number
+    result: OpenADEProjectGitSummaryReadResult
+}
+
+interface CachedTaskGitSummary {
+    expiresAt: number
+    result: OpenADETaskGitSummaryResult
+}
+
+export interface OpenADEProductReadOptions {
+    bypassCache?: boolean
+}
+
 export interface OpenADEProductLegacyYjsImportReport {
     imported: OpenADELegacyYjsImportResult
     parity: OpenADELegacyYjsCoreParityReport
@@ -195,6 +210,8 @@ export class OpenADEProductStore {
     private readonly processListCache = new Map<string, CachedProcessList>()
     private readonly fuzzySearchCache = new Map<string, CachedFuzzySearch>()
     private readonly projectSearchCache = new Map<string, CachedProjectSearch>()
+    private readonly projectGitSummaryCache = new Map<string, CachedProjectGitSummary>()
+    private readonly taskGitSummaryCache = new Map<string, CachedTaskGitSummary>()
     private unsubscribe: (() => void) | null = null
 
     constructor(
@@ -249,6 +266,7 @@ export class OpenADEProductStore {
     async writeProjectFile(args: OpenADEProjectFileWriteRequest, options: OpenADERequestOptions = {}): Promise<OpenADEProjectFileWriteResult> {
         const result = await this.client.writeProjectFile(args, options)
         this.clearProjectSearchCachesForScope(args.repoId, args.taskId)
+        this.clearGitSummaryCacheForScope(args.repoId, args.taskId)
         if (isOpenADETomlPath(args.path)) this.clearProcessListCacheForScope(args.repoId, args.taskId)
         return result
     }
@@ -271,8 +289,16 @@ export class OpenADEProductStore {
         return this.client.readProjectGitBranches(args)
     }
 
-    async readProjectGitSummary(args: OpenADEProjectGitSummaryReadRequest): Promise<OpenADEProjectGitSummaryReadResult> {
-        return this.client.readProjectGitSummary(args)
+    async readProjectGitSummary(
+        args: OpenADEProjectGitSummaryReadRequest,
+        options: OpenADEProductReadOptions = {}
+    ): Promise<OpenADEProjectGitSummaryReadResult> {
+        const cached = this.projectGitSummaryCache.get(args.repoId)
+        if (!options.bypassCache && cached && cached.expiresAt > Date.now()) return cached.result
+
+        const result = await this.client.readProjectGitSummary(args)
+        this.projectGitSummaryCache.set(args.repoId, { result, expiresAt: Date.now() + GIT_SUMMARY_CACHE_TTL_MS })
+        return result
     }
 
     async listProjectProcesses(args: OpenADEProjectProcessListRequest): Promise<OpenADEProjectProcessListResult> {
@@ -318,8 +344,14 @@ export class OpenADEProductStore {
         return this.client.readTaskChanges(args)
     }
 
-    async readTaskGitSummary(args: OpenADETaskGitSummaryRequest): Promise<OpenADETaskGitSummaryResult> {
-        return this.client.readTaskGitSummary(args)
+    async readTaskGitSummary(args: OpenADETaskGitSummaryRequest, options: OpenADEProductReadOptions = {}): Promise<OpenADETaskGitSummaryResult> {
+        const key = taskKey(args.repoId, args.taskId)
+        const cached = this.taskGitSummaryCache.get(key)
+        if (!options.bypassCache && cached && cached.expiresAt > Date.now()) return cached.result
+
+        const result = await this.client.readTaskGitSummary(args)
+        this.taskGitSummaryCache.set(key, { result, expiresAt: Date.now() + GIT_SUMMARY_CACHE_TTL_MS })
+        return result
     }
 
     async readTaskGitScopes(args: OpenADETaskGitScopesReadRequest): Promise<OpenADETaskGitScopesReadResult> {
@@ -351,7 +383,10 @@ export class OpenADEProductStore {
     }
 
     async commitTaskGit(args: OpenADETaskGitCommitRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskGitCommitResult> {
-        return this.client.commitTaskGit(args, options)
+        this.clearGitSummaryCacheForScope(args.repoId, args.taskId)
+        const result = await this.client.commitTaskGit(args, options)
+        this.clearGitSummaryCacheForScope(args.repoId, args.taskId)
+        return result
     }
 
     async startTaskTerminal(args: OpenADETaskTerminalStartRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskTerminalStartResult> {
@@ -458,17 +493,22 @@ export class OpenADEProductStore {
     }
 
     async updateRepo(args: OpenADERepoUpdateRequest, options: OpenADERequestOptions = {}): Promise<void> {
+        this.clearGitSummaryCacheForScope(args.repoId)
         await this.client.updateRepo(args, options)
+        this.clearGitSummaryCacheForScope(args.repoId)
         await this.refreshSnapshot()
     }
 
     async deleteRepo(args: OpenADERepoDeleteRequest, options: OpenADERequestOptions = {}): Promise<void> {
+        this.clearGitSummaryCacheForScope(args.repoId)
         await this.client.deleteRepo(args, options)
+        this.clearGitSummaryCacheForScope(args.repoId)
         await this.refreshSnapshot()
     }
 
     async startTurn(args: OpenADETurnStartRequest, options: OpenADETurnStartOptions = {}): Promise<OpenADETurnStartResult> {
         const result = await this.client.startTurn(args, options)
+        this.clearGitSummaryCacheForScope(args.repoId, result.taskId || args.inTaskId || undefined)
         await this.refreshSnapshot()
         if (result.taskId) await this.refreshTask(args.repoId, result.taskId)
         return result
@@ -585,6 +625,7 @@ export class OpenADEProductStore {
         }
 
         if ((notification.method === "openade/task/updated" || notification.method === "openade/queuedTurn/updated") && repoId && taskId) {
+            this.clearGitSummaryCacheForScope(repoId, taskId)
             await this.refreshTask(repoId, taskId, LIGHTWEIGHT_TASK_READ_OPTIONS)
             return true
         }
@@ -624,6 +665,8 @@ export class OpenADEProductStore {
         this.processListCache.clear()
         this.fuzzySearchCache.clear()
         this.projectSearchCache.clear()
+        this.projectGitSummaryCache.clear()
+        this.taskGitSummaryCache.clear()
         this.runtimes.clear()
     }
 
@@ -640,6 +683,17 @@ export class OpenADEProductStore {
     private clearProjectSearchCachesForScope(repoId: string, taskId?: string): void {
         clearProjectScopedCache(this.fuzzySearchCache, repoId, taskId)
         clearProjectScopedCache(this.projectSearchCache, repoId, taskId)
+    }
+
+    private clearGitSummaryCacheForScope(repoId: string, taskId?: string): void {
+        this.projectGitSummaryCache.delete(repoId)
+        if (taskId !== undefined) {
+            this.taskGitSummaryCache.delete(taskKey(repoId, taskId))
+            return
+        }
+        for (const key of this.taskGitSummaryCache.keys()) {
+            if (key.startsWith(`${repoId}\0`)) this.taskGitSummaryCache.delete(key)
+        }
     }
 }
 

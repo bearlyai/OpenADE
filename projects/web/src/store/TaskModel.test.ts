@@ -99,6 +99,8 @@ describe("TaskModel harness lock", () => {
         await model.refreshGitState({ force: true })
 
         expect(readProductTaskGitSummary).toHaveBeenCalledTimes(2)
+        expect(readProductTaskGitSummary).toHaveBeenNthCalledWith(1, { repoId: "repo-1", taskId: "task-1" }, { bypassCache: false })
+        expect(readProductTaskGitSummary).toHaveBeenNthCalledWith(2, { repoId: "repo-1", taskId: "task-1" }, { bypassCache: true })
     })
 
     it("hydrates harness/model from latest action event", () => {
