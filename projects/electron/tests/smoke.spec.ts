@@ -459,19 +459,8 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
     let app: Awaited<ReturnType<typeof electron.launch>> | undefined
     let passed = false
 
-    try {
-        writeFileSync(join(repoDir, "README.md"), "OpenADE managed Core smoke fixture\n")
-        writeFileSync(
-            join(repoDir, "openade.toml"),
-            '[[process]]\nname = "Managed Core Echo"\ncommand = "echo managed core scoped process ok"\ntype = "task"\n'
-        )
-        execFileSync("git", ["init"], { cwd: repoDir, stdio: "ignore" })
-        execFileSync("git", ["config", "user.email", "managed-core-smoke@example.com"], { cwd: repoDir, stdio: "ignore" })
-        execFileSync("git", ["config", "user.name", "OpenADE Managed Core Smoke"], { cwd: repoDir, stdio: "ignore" })
-        execFileSync("git", ["add", "README.md", "openade.toml"], { cwd: repoDir, stdio: "ignore" })
-        execFileSync("git", ["commit", "-m", "Initial managed Core smoke fixture"], { cwd: repoDir, stdio: "ignore" })
-
-        app = await electron.launch({
+    const launchManagedCoreSmokeApp = async () => {
+        const launchedApp = await electron.launch({
             executablePath,
             timeout: 60_000,
             args: [`--user-data-dir=${userDataDir}`],
@@ -489,9 +478,27 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
             },
         })
 
-        const page = await app.firstWindow({ timeout: 30_000 })
-        await page.waitForURL(/dist\/web\/index\.html|web\/index\.html/, { timeout: 30_000 })
-        await page.waitForFunction(() => "openadeAPI" in window, null, { timeout: 30_000 })
+        const smokePage = await launchedApp.firstWindow({ timeout: 30_000 })
+        await smokePage.waitForURL(/dist\/web\/index\.html|web\/index\.html/, { timeout: 30_000 })
+        await smokePage.waitForFunction(() => "openadeAPI" in window, null, { timeout: 30_000 })
+        return { app: launchedApp, page: smokePage }
+    }
+
+    try {
+        writeFileSync(join(repoDir, "README.md"), "OpenADE managed Core smoke fixture\n")
+        writeFileSync(
+            join(repoDir, "openade.toml"),
+            '[[process]]\nname = "Managed Core Echo"\ncommand = "echo managed core scoped process ok"\ntype = "task"\n'
+        )
+        execFileSync("git", ["init"], { cwd: repoDir, stdio: "ignore" })
+        execFileSync("git", ["config", "user.email", "managed-core-smoke@example.com"], { cwd: repoDir, stdio: "ignore" })
+        execFileSync("git", ["config", "user.name", "OpenADE Managed Core Smoke"], { cwd: repoDir, stdio: "ignore" })
+        execFileSync("git", ["add", "README.md", "openade.toml"], { cwd: repoDir, stdio: "ignore" })
+        execFileSync("git", ["commit", "-m", "Initial managed Core smoke fixture"], { cwd: repoDir, stdio: "ignore" })
+
+        const launched = await launchManagedCoreSmokeApp()
+        app = launched.app
+        const page = launched.page
 
         const coreSmoke = await page.evaluate(async ({ hostPlatform, smokeRepoId, smokeRepoPath }) => {
             type RuntimeResponse<T> = { id: number; result?: T; error?: { code?: string; message?: string } }
@@ -1118,6 +1125,39 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
         })
         const rawSmokeTelemetry = await page.evaluate((storageKey) => window.localStorage.getItem(storageKey), SMOKE_ANALYTICS_STORAGE_KEY)
         await reviewSmokeTelemetry(test.info(), rawSmokeTelemetry, userDataDir, "managed-core-runtime-product-smoke-telemetry")
+
+        await page.evaluate(({ smokeRepoId, smokeTaskId }) => {
+            window.location.hash = `/dashboard/code/workspace/${smokeRepoId}/task/${smokeTaskId}`
+        }, { smokeRepoId: repoId, smokeTaskId: coreSmoke.taskCreate.taskId })
+        const classicCoreTask = page.locator('[data-openade-surface="desktop-classic-task"]')
+        await expect(classicCoreTask).toBeVisible({ timeout: 30_000 })
+        await expect(classicCoreTask).toContainText("Run managed Core packaged turn smoke")
+        await expect(page.locator('[data-openade-surface="desktop-shared-project"]')).toHaveCount(0)
+        await expect(page.locator('[data-openade-surface="desktop-shared-task"]')).toHaveCount(0)
+
+        await app.close()
+        app = undefined
+
+        const relaunched = await launchManagedCoreSmokeApp()
+        app = relaunched.app
+        const relaunchRolloutState = await relaunched.page.evaluate(() => window.openadeAPI?.core?.rolloutState)
+        expect(relaunchRolloutState).toEqual({
+            status: "connected",
+            source: "managed",
+            reason: "managed-core",
+            automatic: true,
+            legacyYjsDocumentsPresent: false,
+            legacyYjsMigrationAccepted: false,
+        })
+        await relaunched.page.evaluate(({ smokeRepoId, smokeTaskId }) => {
+            window.location.hash = `/dashboard/code/workspace/${smokeRepoId}/task/${smokeTaskId}`
+        }, { smokeRepoId: repoId, smokeTaskId: coreSmoke.taskCreate.taskId })
+        const relaunchedClassicCoreTask = relaunched.page.locator('[data-openade-surface="desktop-classic-task"]')
+        await expect(relaunchedClassicCoreTask).toBeVisible({ timeout: 30_000 })
+        await expect(relaunchedClassicCoreTask).toContainText("Run managed Core packaged turn smoke")
+        await expect(relaunched.page.locator('[data-openade-surface="desktop-shared-project"]')).toHaveCount(0)
+        await expect(relaunched.page.locator('[data-openade-surface="desktop-shared-task"]')).toHaveCount(0)
+
         passed = true
     } finally {
         if (app) {
