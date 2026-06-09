@@ -359,6 +359,33 @@ describe("CronManager scheduling", () => {
         manager.stop()
     })
 
+    it("coalesces overlapping same-repo config refreshes", async () => {
+        const cronDef = makeCronDef()
+        const store = makeMockStore([{ id: "repo-1", path: "/repo" }])
+        const manager = new CronManager(store)
+        let resolveRead!: (value: ReadProcsResult) => void
+        vi.mocked(readProcs).mockImplementation(
+            () =>
+                new Promise((resolve) => {
+                    resolveRead = resolve
+                })
+        )
+
+        const addRepo = manager.addRepo("repo-1", "/repo")
+        await vi.waitFor(() => expect(readProcs).toHaveBeenCalledTimes(1))
+        const ensureLoaded = manager.ensureRepoConfigLoaded("repo-1")
+
+        expect(readProcs).toHaveBeenCalledTimes(1)
+
+        resolveRead(makeReadProcsResult([cronDef]))
+        await Promise.all([addRepo, ensureLoaded])
+
+        expect(readProcs).toHaveBeenCalledTimes(1)
+        expect(manager.getCronsForRepo("repo-1")).toEqual([expect.objectContaining({ repoId: "repo-1", def: cronDef })])
+
+        manager.stop()
+    })
+
     it("loads and saves runtime cron install state through product APIs", async () => {
         vi.setSystemTime(new Date("2026-01-01T00:05:30.000Z"))
 

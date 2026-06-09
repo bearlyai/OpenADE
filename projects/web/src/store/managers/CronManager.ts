@@ -146,18 +146,9 @@ export class CronManager {
 
         const repoState = await this.ensureRepoState(repo.id, repo.path)
         if (repoState.configLoaded) return
-        const existing = this._configLoadInFlight.get(repoId)
-        if (existing) return existing
 
-        const promise = this.refreshRepoConfig(repoState)
-            .then(() => {
-                this.rescheduleRepo(repoState)
-            })
-            .finally(() => {
-                this._configLoadInFlight.delete(repoId)
-            })
-        this._configLoadInFlight.set(repoId, promise)
-        return promise
+        await this.refreshRepoConfig(repoState)
+        this.rescheduleRepo(repoState)
     }
 
     stop(): void {
@@ -335,6 +326,17 @@ export class CronManager {
     }
 
     private async refreshRepoConfig(repoState: RepoState): Promise<void> {
+        const existing = this._configLoadInFlight.get(repoState.repoId)
+        if (existing) return existing
+
+        const promise = this.refreshRepoConfigUncoalesced(repoState).finally(() => {
+            this._configLoadInFlight.delete(repoState.repoId)
+        })
+        this._configLoadInFlight.set(repoState.repoId, promise)
+        return promise
+    }
+
+    private async refreshRepoConfigUncoalesced(repoState: RepoState): Promise<void> {
         try {
             if (this.store.shouldUseRuntimeProductReads()) {
                 const result = await this.store.listProductProjectProcesses({ repoId: repoState.repoId })
