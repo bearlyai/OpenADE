@@ -25,6 +25,19 @@ type SlowRequestEvent struct {
 	ErrorCode  string
 }
 
+type NotificationBurstEvent struct {
+	Service string
+	Method  string
+	Count   int
+	Window  time.Duration
+}
+
+type notificationBurstEntry struct {
+	startedAt       time.Time
+	count           int
+	lastWarnedCount int
+}
+
 type Capabilities struct {
 	Methods        []string        `json:"methods"`
 	Notifications  []string        `json:"notifications"`
@@ -46,16 +59,18 @@ type ServerStatusResult struct {
 }
 
 type Runtime struct {
-	cfg             Config
-	logger          *slog.Logger
-	handlers        map[string]Handler
-	notifications   map[string]struct{}
-	mu              sync.RWMutex
-	connections     map[*Connection]struct{}
-	nextConnID      int64
-	nextCursor      int64
-	notificationLog []RuntimeNotification
-	onSlowRequest   func(SlowRequestEvent)
+	cfg                 Config
+	logger              *slog.Logger
+	handlers            map[string]Handler
+	notifications       map[string]struct{}
+	mu                  sync.RWMutex
+	connections         map[*Connection]struct{}
+	nextConnID          int64
+	nextCursor          int64
+	notificationLog     []RuntimeNotification
+	onSlowRequest       func(SlowRequestEvent)
+	onNotificationBurst func(NotificationBurstEvent)
+	notificationBursts  map[string]notificationBurstEntry
 }
 
 func NewRuntime(cfg Config, logger *slog.Logger) *Runtime {
@@ -63,14 +78,16 @@ func NewRuntime(cfg Config, logger *slog.Logger) *Runtime {
 		logger = slog.Default()
 	}
 	rt := &Runtime{
-		cfg:             cfg,
-		logger:          logger,
-		handlers:        map[string]Handler{},
-		notifications:   map[string]struct{}{},
-		connections:     map[*Connection]struct{}{},
-		notificationLog: []RuntimeNotification{},
+		cfg:                cfg,
+		logger:             logger,
+		handlers:           map[string]Handler{},
+		notifications:      map[string]struct{}{},
+		connections:        map[*Connection]struct{}{},
+		notificationLog:    []RuntimeNotification{},
+		notificationBursts: map[string]notificationBurstEntry{},
 	}
 	rt.onSlowRequest = rt.logSlowRequest
+	rt.onNotificationBurst = rt.logNotificationBurst
 
 	rt.Register("initialize", rt.handleInitialize)
 	rt.Register("server/status/read", rt.handleServerStatus)
@@ -85,6 +102,14 @@ func (rt *Runtime) SetSlowRequestObserver(observer func(SlowRequestEvent)) {
 		return
 	}
 	rt.onSlowRequest = observer
+}
+
+func (rt *Runtime) SetNotificationBurstObserver(observer func(NotificationBurstEvent)) {
+	if observer == nil {
+		rt.onNotificationBurst = rt.logNotificationBurst
+		return
+	}
+	rt.onNotificationBurst = observer
 }
 
 func (rt *Runtime) Register(method string, handler Handler) {
@@ -187,6 +212,7 @@ func (rt *Runtime) handleRequest(ctx context.Context, conn *Connection, request 
 func (rt *Runtime) Notify(method string, params JSONPayload) {
 	rt.mu.Lock()
 	rt.nextCursor++
+	burstEvent := rt.recordNotificationBurstLocked(method, time.Now())
 	notification := RuntimeNotification{
 		Method: method,
 		Params: params,
@@ -204,9 +230,37 @@ func (rt *Runtime) Notify(method string, params JSONPayload) {
 	}
 	rt.mu.Unlock()
 
+	if burstEvent != nil && rt.onNotificationBurst != nil {
+		rt.onNotificationBurst(*burstEvent)
+	}
 	for _, conn := range connections {
 		conn.Send(notification)
 	}
+}
+
+func (rt *Runtime) recordNotificationBurstLocked(method string, now time.Time) *NotificationBurstEvent {
+	if rt.cfg.NotificationBurstCount <= 0 || rt.cfg.NotificationBurstWindow <= 0 {
+		return nil
+	}
+	burst, ok := rt.notificationBursts[method]
+	if !ok || now.Sub(burst.startedAt) > rt.cfg.NotificationBurstWindow {
+		burst = notificationBurstEntry{startedAt: now}
+	}
+	burst.count++
+
+	var event *NotificationBurstEvent
+	if burst.count >= rt.cfg.NotificationBurstCount && burst.count-burst.lastWarnedCount >= rt.cfg.NotificationBurstCount {
+		burst.lastWarnedCount = burst.count
+		event = &NotificationBurstEvent{
+			Service: rt.serviceName(),
+			Method:  method,
+			Count:   burst.count,
+			Window:  now.Sub(burst.startedAt),
+		}
+	}
+
+	rt.notificationBursts[method] = burst
+	return event
 }
 
 func (rt *Runtime) capabilitiesFor(conn *Connection) Capabilities {
@@ -413,6 +467,19 @@ func (rt *Runtime) logSlowRequest(event SlowRequestEvent) {
 		"connectionId", event.Connection,
 		"failed", event.Failed,
 		"errorCode", event.ErrorCode,
+	)
+}
+
+func (rt *Runtime) logNotificationBurst(event NotificationBurstEvent) {
+	if rt.logger == nil {
+		return
+	}
+	rt.logger.Warn(
+		"runtime notification burst",
+		"service", event.Service,
+		"method", event.Method,
+		"count", event.Count,
+		"windowMs", event.Window.Milliseconds(),
 	)
 }
 

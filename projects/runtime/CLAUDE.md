@@ -75,7 +75,7 @@
 - `runtime/stop` is a lifecycle method, not just a state mutation; host adapters should register stop handlers with `RuntimeServer.registerRuntimeStopHandler` so agent/process/PTY/watch runtimes are stopped at the source before the supervisor marks them stopped.
 - Do not treat PID existence alone as proof that OpenADE still owns a process; weak host evidence should return `unknown`.
 - Mutating low-level method calls may carry `clientRequestId`. RuntimeServer deduplicates successful mutating method calls by principal, method, and request id while preserving the caller's current JSON-RPC response id; failures are not retained.
-- RuntimeServer may receive a product/host-owned `onSlowRequest` observer and threshold. Keep that hook generic and sanitized: service name, method name, sanitized/truncated request id, total duration, queue wait, handler time, connection id, failed flag, and error code are allowed; request params, file paths, prompts, task content, tokens, raw unbounded client-controlled ids, or product-specific payload fields are not.
+- RuntimeServer may receive product/host-owned `onSlowRequest` and `onNotificationBurst` observers. Keep those hooks generic and sanitized: slow requests may include service name, method name, sanitized/truncated request id, total duration, queue wait, handler time, connection id, failed flag, and error code; notification bursts may include service name, notification method, count, and window duration. Request params, notification params, file paths, prompts, task content, tokens, raw unbounded client-controlled ids, or product-specific payload fields are not allowed in these observer events.
 
 ## Agent Providers
 

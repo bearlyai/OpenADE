@@ -3765,6 +3765,9 @@ export function getRuntimeServer(): RuntimeServer {
             onSlowRequest: (event) => {
                 logger.warn("[Runtime] Slow request", JSON.stringify(event))
             },
+            onNotificationBurst: (event) => {
+                logger.warn("[Runtime] Notification burst", JSON.stringify(event))
+            },
         })
         registerTrustedHostMethods(runtimeServer)
         registerOpenADEProductModule(runtimeServer)

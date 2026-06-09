@@ -273,3 +273,71 @@ func TestSlowRequestDefaultLoggerIncludesSanitizedOperationalFields(t *testing.T
 		t.Fatalf("slow log leaked raw request id: %s", logged)
 	}
 }
+
+func TestNotificationBurstObserverUsesNotificationMethodOnly(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.NotificationBurstWindow = time.Second
+	cfg.NotificationBurstCount = 3
+	runtime := NewRuntime(cfg, slog.New(slog.NewTextHandler(&strings.Builder{}, nil)))
+	events := []NotificationBurstEvent{}
+	runtime.SetNotificationBurstObserver(func(event NotificationBurstEvent) {
+		events = append(events, event)
+	})
+	conn := runtime.NewConnection(nil)
+	sent := []RuntimeNotification{}
+	conn.SetSender(func(notification RuntimeNotification) {
+		sent = append(sent, notification)
+	})
+
+	for i := 0; i < 3; i++ {
+		runtime.Notify("openade/task/updated", map[string]string{
+			"repoId": "repo-secret",
+			"prompt": "do not log this prompt",
+		})
+	}
+
+	if len(sent) != 3 {
+		t.Fatalf("sent notifications = %#v", sent)
+	}
+	if len(events) != 1 {
+		t.Fatalf("notification burst events = %#v", events)
+	}
+	if events[0].Service != DefaultServerName || events[0].Method != "openade/task/updated" || events[0].Count != 3 {
+		t.Fatalf("notification burst event identity fields = %#v", events[0])
+	}
+	eventJSON, err := json.Marshal(events[0])
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	if strings.Contains(string(eventJSON), "repo-secret") || strings.Contains(string(eventJSON), "do not log this prompt") {
+		t.Fatalf("notification burst event leaked payload: %s", string(eventJSON))
+	}
+}
+
+func TestNotificationBurstDefaultLoggerIncludesSanitizedOperationalFields(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ServerName = "openade-core-test"
+	cfg.NotificationBurstWindow = time.Second
+	cfg.NotificationBurstCount = 2
+	var logs strings.Builder
+	runtime := NewRuntime(cfg, slog.New(slog.NewTextHandler(&logs, nil)))
+
+	runtime.Notify("connection/lagged", map[string]string{"token": "secret-token"})
+	runtime.Notify("connection/lagged", map[string]string{"token": "secret-token"})
+
+	logged := logs.String()
+	for _, expected := range []string{
+		"runtime notification burst",
+		"service=openade-core-test",
+		"method=connection/lagged",
+		"count=2",
+		"windowMs=",
+	} {
+		if !strings.Contains(logged, expected) {
+			t.Fatalf("notification burst log missing %q: %s", expected, logged)
+		}
+	}
+	if strings.Contains(logged, "secret-token") {
+		t.Fatalf("notification burst log leaked payload: %s", logged)
+	}
+}

@@ -20,6 +20,8 @@ func TestConfigFromEnvMap(t *testing.T) {
 		"OPENADE_CORE_PERMISSION_PROFILE=paired",
 		"OPENADE_CORE_ALLOW_UNAUTHENTICATED_LOOPBACK=false",
 		"OPENADE_CORE_SLOW_REQUEST_MS=75",
+		"OPENADE_CORE_NOTIFICATION_BURST_WINDOW_MS=1500",
+		"OPENADE_CORE_NOTIFICATION_BURST_COUNT=7",
 		"OPENADE_CORE_PERMISSIONS=initialize,server/*,notify:connection/*",
 		`OPENADE_CORE_AGENT_WORKER_COMMAND=["node","worker.mjs"]`,
 	})
@@ -56,6 +58,9 @@ func TestConfigFromEnvMap(t *testing.T) {
 	}
 	if cfg.SlowRequestThreshold != 75*time.Millisecond {
 		t.Fatalf("slow threshold = %s", cfg.SlowRequestThreshold)
+	}
+	if cfg.NotificationBurstWindow != 1500*time.Millisecond || cfg.NotificationBurstCount != 7 {
+		t.Fatalf("notification burst config = %s %d", cfg.NotificationBurstWindow, cfg.NotificationBurstCount)
 	}
 	if !reflect.DeepEqual(cfg.Permissions, []string{"initialize", "server/*", "notify:connection/*"}) {
 		t.Fatalf("permissions = %#v", cfg.Permissions)

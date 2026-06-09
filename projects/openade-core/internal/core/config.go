@@ -30,6 +30,8 @@ type Config struct {
 	PermissionProfile            string
 	Permissions                  []string
 	SlowRequestThreshold         time.Duration
+	NotificationBurstWindow      time.Duration
+	NotificationBurstCount       int
 	AgentWorkerCommand           []string
 }
 
@@ -45,6 +47,8 @@ func DefaultConfig() Config {
 		ServerName:                   DefaultServerName,
 		ProtocolVersion:              DefaultProtocolVersion,
 		SlowRequestThreshold:         500 * time.Millisecond,
+		NotificationBurstWindow:      2 * time.Second,
+		NotificationBurstCount:       12,
 	}
 }
 
@@ -105,6 +109,16 @@ func ConfigFromEnvMap(environ []string) Config {
 	if value := strings.TrimSpace(values["OPENADE_CORE_SLOW_REQUEST_MS"]); value != "" {
 		if ms, err := strconv.Atoi(value); err == nil && ms >= 0 {
 			cfg.SlowRequestThreshold = time.Duration(ms) * time.Millisecond
+		}
+	}
+	if value := strings.TrimSpace(values["OPENADE_CORE_NOTIFICATION_BURST_WINDOW_MS"]); value != "" {
+		if ms, err := strconv.Atoi(value); err == nil && ms >= 0 {
+			cfg.NotificationBurstWindow = time.Duration(ms) * time.Millisecond
+		}
+	}
+	if value := strings.TrimSpace(values["OPENADE_CORE_NOTIFICATION_BURST_COUNT"]); value != "" {
+		if count, err := strconv.Atoi(value); err == nil && count >= 0 {
+			cfg.NotificationBurstCount = count
 		}
 	}
 	if value := strings.TrimSpace(values["OPENADE_CORE_PERMISSIONS"]); value != "" {

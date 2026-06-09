@@ -77,6 +77,13 @@ export interface RuntimeSlowRequestEvent {
     errorCode?: string
 }
 
+export interface RuntimeNotificationBurstEvent {
+    service: string
+    method: string
+    count: number
+    windowMs: number
+}
+
 export interface RuntimeServerOptions {
     serverName: string
     serverVersion?: string
@@ -88,6 +95,9 @@ export interface RuntimeServerOptions {
     clientRequestRetentionMs?: number
     slowRequestThresholdMs?: number
     onSlowRequest?: (event: RuntimeSlowRequestEvent) => void
+    notificationBurstWindowMs?: number
+    notificationBurstCount?: number
+    onNotificationBurst?: (event: RuntimeNotificationBurstEvent) => void
 }
 
 interface ConnectedRuntimeConnection {
@@ -100,8 +110,16 @@ interface RegisteredRuntimeHandler {
     validateParams?: RuntimeParamsValidator
 }
 
+interface RuntimeNotificationBurstEntry {
+    startedAt: number
+    count: number
+    lastWarnedCount: number
+}
+
 const DEFAULT_NOTIFICATION_LOG_SIZE = 1000
 const DEFAULT_CLIENT_REQUEST_RETENTION_MS = 2 * 60 * 1000
+const DEFAULT_NOTIFICATION_BURST_WINDOW_MS = 2 * 1000
+const DEFAULT_NOTIFICATION_BURST_COUNT = 12
 const IDEMPOTENT_METHOD_SEGMENTS = new Set([
     "append",
     "block",
@@ -171,9 +189,13 @@ export class RuntimeServer {
     private readonly clientRequestRetentionMs: number
     private readonly slowRequestThresholdMs: number | null
     private readonly onSlowRequest?: (event: RuntimeSlowRequestEvent) => void
+    private readonly notificationBurstWindowMs: number
+    private readonly notificationBurstCount: number
+    private readonly onNotificationBurst?: (event: RuntimeNotificationBurstEvent) => void
     private readonly notificationLog: RuntimeNotification[] = []
     private readonly initializedConnections = new Set<string>()
     private readonly clientRequests = new Map<string, RetainedRuntimeRequest>()
+    private readonly notificationBursts = new Map<string, RuntimeNotificationBurstEntry>()
     private nextNotificationCursor = 1
     readonly supervisor: RuntimeSupervisor
 
@@ -185,6 +207,9 @@ export class RuntimeServer {
         this.clientRequestRetentionMs = Math.max(0, Math.floor(options.clientRequestRetentionMs ?? DEFAULT_CLIENT_REQUEST_RETENTION_MS))
         this.slowRequestThresholdMs = typeof options.slowRequestThresholdMs === "number" ? Math.max(0, Math.floor(options.slowRequestThresholdMs)) : null
         this.onSlowRequest = options.onSlowRequest
+        this.notificationBurstWindowMs = Math.max(0, Math.floor(options.notificationBurstWindowMs ?? DEFAULT_NOTIFICATION_BURST_WINDOW_MS))
+        this.notificationBurstCount = Math.max(0, Math.floor(options.notificationBurstCount ?? DEFAULT_NOTIFICATION_BURST_COUNT))
+        this.onNotificationBurst = options.onNotificationBurst
         this.agentProviders = options.agentProviders ?? []
         this.supervisor = new RuntimeSupervisor({ checkpointStore: options.checkpointStore, livenessProbe: options.livenessProbe })
 
@@ -434,6 +459,7 @@ export class RuntimeServer {
 
     notify(method: string, params?: unknown): void {
         const notification = this.recordNotification(method, params)
+        this.recordNotificationBurst(method)
         for (const entry of this.connections.values()) {
             if (this.matchesSubscription(notification, entry)) {
                 entry.connection.send(notification)
@@ -449,6 +475,30 @@ export class RuntimeServer {
             while (this.notificationLog.length > this.notificationLogSize) this.notificationLog.shift()
         }
         return notification
+    }
+
+    private recordNotificationBurst(method: string): void {
+        if (!this.onNotificationBurst || this.notificationBurstWindowMs <= 0 || this.notificationBurstCount <= 0) return
+
+        const now = Date.now()
+        const existing = this.notificationBursts.get(method)
+        const burst =
+            existing && now - existing.startedAt <= this.notificationBurstWindowMs
+                ? existing
+                : { startedAt: now, count: 0, lastWarnedCount: 0 }
+        burst.count += 1
+
+        if (burst.count >= this.notificationBurstCount && burst.count - burst.lastWarnedCount >= this.notificationBurstCount) {
+            burst.lastWarnedCount = burst.count
+            this.onNotificationBurst({
+                service: this.serverName,
+                method,
+                count: burst.count,
+                windowMs: now - burst.startedAt,
+            })
+        }
+
+        this.notificationBursts.set(method, burst)
     }
 
     private matchesPattern(method: string, pattern: string): boolean {

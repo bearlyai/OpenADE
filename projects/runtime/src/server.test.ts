@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { RuntimeRecord, RuntimeStatus } from "../../runtime-protocol/src"
-import { RuntimeHandlerError, RuntimeServer, type RuntimeConnection, type RuntimeSlowRequestEvent } from "./server"
+import { RuntimeHandlerError, RuntimeServer, type RuntimeConnection, type RuntimeNotificationBurstEvent, type RuntimeSlowRequestEvent } from "./server"
 
 function connection(): RuntimeConnection {
     return {
@@ -87,6 +87,44 @@ describe("RuntimeServer slow request observer", () => {
                 errorCode: "test_failed",
             }),
         ])
+    })
+})
+
+describe("RuntimeServer notification burst observer", () => {
+    it("reports notification bursts through the real fanout path without payload data", () => {
+        const events: RuntimeNotificationBurstEvent[] = []
+        const sent: unknown[] = []
+        const server = new RuntimeServer({
+            serverName: "test-runtime",
+            notificationBurstCount: 3,
+            notificationBurstWindowMs: 1_000,
+            onNotificationBurst: (event) => events.push(event),
+        })
+        server.registerNotification("openade/task/updated")
+        server.connect({
+            id: "connection-1",
+            send: (message) => sent.push(message),
+        })
+
+        for (let index = 0; index < 3; index++) {
+            server.notify("openade/task/updated", {
+                repoId: "repo-secret",
+                taskId: `task-${index}`,
+                prompt: "do not log this prompt",
+            })
+        }
+
+        expect(sent).toHaveLength(3)
+        expect(events).toEqual([
+            {
+                service: "test-runtime",
+                method: "openade/task/updated",
+                count: 3,
+                windowMs: expect.any(Number),
+            },
+        ])
+        expect(JSON.stringify(events)).not.toContain("repo-secret")
+        expect(JSON.stringify(events)).not.toContain("do not log this prompt")
     })
 })
 
