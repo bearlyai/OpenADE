@@ -1,9 +1,10 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import logger from "electron-log"
 import * as Y from "yjs"
-import { afterEach, describe, expect, it } from "vitest"
-import { loadYjsDocument, saveYjsDocument } from "./yjsStorage"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { loadYjsDocument, runWithYjsDocumentOperationContext, saveYjsDocument } from "./yjsStorage"
 
 let storageDir = ""
 
@@ -37,6 +38,7 @@ function wait(ms: number): Promise<void> {
 
 describe("Yjs filesystem storage", () => {
     afterEach(() => {
+        vi.restoreAllMocks()
         delete process.env.OPENADE_YJS_STORAGE_DIR
         if (storageDir) fs.rmSync(storageDir, { recursive: true, force: true })
         storageDir = ""
@@ -89,5 +91,36 @@ describe("Yjs filesystem storage", () => {
         const loaded = await loadYjsDocument(id)
         if (!loaded) throw new Error("Expected cached-refresh-loop document")
         expect(valueFromUpdate(loaded, "value")).toBe("before")
+    })
+
+    it("adds runtime method context to slow document load logs", async () => {
+        storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "openade-yjs-storage-"))
+        process.env.OPENADE_YJS_STORAGE_DIR = storageDir
+
+        const id = "code:context-load"
+        fs.writeFileSync(docPath(id), updateWithValue("from-disk"))
+        const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
+        let now = 1_000
+        vi.spyOn(Date, "now").mockImplementation(() => {
+            const current = now
+            now += 300
+            return current
+        })
+
+        const loaded = await runWithYjsDocumentOperationContext({ runtimeMethod: "openade/task/read" }, () =>
+            loadYjsDocument(id, { operation: "readDocumentUpdate" })
+        )
+
+        if (!loaded) throw new Error("Expected context-load document")
+        expect(valueFromUpdate(loaded, "value")).toBe("from-disk")
+        const slowLoad = warn.mock.calls.find(([message]) => message === "[YjsStorage] Slow document load")
+        expect(slowLoad).toBeDefined()
+        const details = JSON.parse(String(slowLoad?.[1]))
+        expect(details).toMatchObject({
+            id,
+            runtimeMethod: "openade/task/read",
+            operation: "readDocumentUpdate",
+        })
+        expect(JSON.stringify(details)).not.toContain("from-disk")
     })
 })

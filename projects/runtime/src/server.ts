@@ -40,6 +40,7 @@ export interface RuntimeHandlerContext {
 }
 
 export type RuntimeHandler = (params: unknown, context: RuntimeHandlerContext) => Promise<unknown> | unknown
+export type RuntimeHandlerRunner = <T>(event: RuntimeHandlerRunEvent, run: () => Promise<T> | T) => Promise<T> | T
 
 export type RuntimeStopHandler = (runtime: RuntimeRecord, params: RuntimeStopParams, context: RuntimeHandlerContext) => Promise<boolean> | boolean
 
@@ -84,6 +85,13 @@ export interface RuntimeNotificationBurstEvent {
     windowMs: number
 }
 
+export interface RuntimeHandlerRunEvent {
+    service: string
+    method: string
+    requestId: string
+    connectionId: string
+}
+
 export interface RuntimeServerOptions {
     serverName: string
     serverVersion?: string
@@ -98,6 +106,7 @@ export interface RuntimeServerOptions {
     notificationBurstWindowMs?: number
     notificationBurstCount?: number
     onNotificationBurst?: (event: RuntimeNotificationBurstEvent) => void
+    runHandlerWithContext?: RuntimeHandlerRunner
 }
 
 interface ConnectedRuntimeConnection {
@@ -192,6 +201,7 @@ export class RuntimeServer {
     private readonly notificationBurstWindowMs: number
     private readonly notificationBurstCount: number
     private readonly onNotificationBurst?: (event: RuntimeNotificationBurstEvent) => void
+    private readonly runHandlerWithContext?: RuntimeHandlerRunner
     private readonly notificationLog: RuntimeNotification[] = []
     private readonly initializedConnections = new Set<string>()
     private readonly clientRequests = new Map<string, RetainedRuntimeRequest>()
@@ -210,6 +220,7 @@ export class RuntimeServer {
         this.notificationBurstWindowMs = Math.max(0, Math.floor(options.notificationBurstWindowMs ?? DEFAULT_NOTIFICATION_BURST_WINDOW_MS))
         this.notificationBurstCount = Math.max(0, Math.floor(options.notificationBurstCount ?? DEFAULT_NOTIFICATION_BURST_COUNT))
         this.onNotificationBurst = options.onNotificationBurst
+        this.runHandlerWithContext = options.runHandlerWithContext
         this.agentProviders = options.agentProviders ?? []
         this.supervisor = new RuntimeSupervisor({ checkpointStore: options.checkpointStore, livenessProbe: options.livenessProbe })
 
@@ -381,7 +392,7 @@ export class RuntimeServer {
                 }
                 params = validation.value
             }
-            const result = await entry.handler(params, { connection, server: this })
+            const result = await this.runHandler(request, connection, () => entry.handler(params, { connection, server: this }))
             if (request.method === "initialize") this.initializedConnections.add(connection.id)
             response = { id: request.id, result: result === undefined ? null : result }
         } catch (error) {
@@ -400,6 +411,19 @@ export class RuntimeServer {
         }
         this.recordSlowRequest(request, connection, queuedAtMs, handlerStartedAt, response)
         return response
+    }
+
+    private runHandler<T>(request: RuntimeRequest, connection: RuntimeConnection, run: () => Promise<T> | T): Promise<T> | T {
+        if (!this.runHandlerWithContext) return run()
+        return this.runHandlerWithContext(
+            {
+                service: this.serverName,
+                method: request.method,
+                requestId: runtimeRequestLogValue(request.id),
+                connectionId: connection.id,
+            },
+            run
+        )
     }
 
     private recordSlowRequest(

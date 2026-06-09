@@ -128,6 +128,30 @@ describe("RuntimeServer notification burst observer", () => {
     })
 })
 
+describe("RuntimeServer handler context runner", () => {
+    it("wraps real handler execution with sanitized request context", async () => {
+        let observed: unknown
+        const server = new RuntimeServer({
+            serverName: "test-runtime",
+            runHandlerWithContext: (event, run) => {
+                observed = event
+                return run()
+            },
+        })
+        server.register("test/context", () => ({ ok: true }))
+
+        const response = await server.handleRequest({ id: "context\nrequest", method: "test/context" }, connection())
+
+        expect(response).toEqual({ id: "context\nrequest", result: { ok: true } })
+        expect(observed).toEqual({
+            service: "test-runtime",
+            method: "test/context",
+            requestId: "context?request",
+            connectionId: "connection-1",
+        })
+    })
+})
+
 describe("RuntimeServer runtime records", () => {
     it("filters runtime/list by runtime status", async () => {
         const server = new RuntimeServer({})

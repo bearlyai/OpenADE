@@ -524,6 +524,8 @@ Update docs in the same change when behavior changes:
 
 ## Decision Log
 
+- 2026-06-09: Yjs slow/repeated document load logs now include bounded caller context for runtime-backed Electron handlers: `runtimeMethod` plus the Yjs storage operation label. The generic TypeScript `RuntimeServer` exposes a sanitized `runHandlerWithContext` wrapper event with service, method, bounded request id, and connection id only; Electron uses it to set async Yjs storage context around actual handler execution. Focused RuntimeServer and Yjs storage tests prove the hook wraps real handler calls and slow load logs carry method/operation labels without logging document payloads.
+
 - 2026-06-09: Runtime notification-burst telemetry now exists in both the TypeScript `RuntimeServer` and Go Core runtime. The observer/log shape is sanitized to service, notification method, count, and window duration only; notification params are intentionally excluded. Electron wires the TypeScript observer into `[Runtime] Notification burst`, and Go Core logs `runtime notification burst` by default with env-tunable burst window/count. Focused real runtime tests prove bursts are detected through actual notification fanout and payload data does not enter the event/log.
 
 - 2026-06-09: Classic desktop `CodeStore` runtime notification coalescing now includes `openade/queuedTurn/updated` alongside `openade/task/updated`, so queued-turn bursts in the runtime-backed desktop path do one lightweight task-detail refresh instead of one read per notification. The real `RuntimeServer`/`OpenADEClient` desktop bridge test now publishes three queued-turn notifications and proves the classic store refreshes the task DTO once while preserving queued-turn state.

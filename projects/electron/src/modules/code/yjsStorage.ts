@@ -6,6 +6,7 @@
  */
 
 import logger from "electron-log"
+import { AsyncLocalStorage } from "node:async_hooks"
 import * as fs from "fs/promises"
 import * as path from "path"
 import * as os from "os"
@@ -48,9 +49,15 @@ interface LoadBurstEntry {
     lastWarnedCount: number
 }
 
+export interface YjsDocumentOperationContext {
+    runtimeMethod?: string
+    operation?: string
+}
+
 const loadQueues = new Map<string, Promise<Uint8Array | null>>()
 const loadCache = new Map<string, LoadCacheEntry>()
 const loadBursts = new Map<string, LoadBurstEntry>()
+const operationContext = new AsyncLocalStorage<YjsDocumentOperationContext>()
 
 // ============================================================================
 // Helper Functions
@@ -141,10 +148,37 @@ function getCachedLoadedDocument(id: string): Uint8Array | null | undefined {
     return cached.data
 }
 
-function recordYjsLoad(id: string, data: Uint8Array | null, durationMs: number): void {
+function sanitizeLogLabel(value: string | undefined): string | undefined {
+    const trimmed = value?.trim()
+    if (!trimmed) return undefined
+    const printable = trimmed.replace(/[^\x20-\x7E]/g, "?")
+    return printable.length > 120 ? `${printable.slice(0, 120)}...` : printable
+}
+
+function currentOperationContext(options: YjsDocumentOperationContext = {}): YjsDocumentOperationContext {
+    const stored = operationContext.getStore()
+    return {
+        runtimeMethod: sanitizeLogLabel(options.runtimeMethod ?? stored?.runtimeMethod),
+        operation: sanitizeLogLabel(options.operation ?? stored?.operation),
+    }
+}
+
+function operationContextFields(context: YjsDocumentOperationContext): Record<string, string> {
+    return {
+        ...(context.runtimeMethod ? { runtimeMethod: context.runtimeMethod } : {}),
+        ...(context.operation ? { operation: context.operation } : {}),
+    }
+}
+
+export function runWithYjsDocumentOperationContext<T>(context: YjsDocumentOperationContext, run: () => T): T {
+    return operationContext.run(currentOperationContext(context), run)
+}
+
+function recordYjsLoad(id: string, data: Uint8Array | null, durationMs: number, context: YjsDocumentOperationContext): void {
     const size = data?.length ?? 0
+    const contextFields = operationContextFields(context)
     if (durationMs >= SLOW_YJS_LOAD_MS) {
-        logger.warn("[YjsStorage] Slow document load", JSON.stringify({ id, size, durationMs }))
+        logger.warn("[YjsStorage] Slow document load", JSON.stringify({ id, size, durationMs, ...contextFields }))
     }
 
     const now = Date.now()
@@ -157,15 +191,15 @@ function recordYjsLoad(id: string, data: Uint8Array | null, durationMs: number):
         burst.lastWarnedCount = burst.count
         logger.warn(
             "[YjsStorage] Repeated document loads",
-            JSON.stringify({ id, count: burst.count, windowMs: now - burst.startedAt, size })
+            JSON.stringify({ id, count: burst.count, windowMs: now - burst.startedAt, size, ...contextFields })
         )
     }
     loadBursts.set(id, burst)
 }
 
-function recordYjsSave(id: string, size: number, durationMs: number): void {
+function recordYjsSave(id: string, size: number, durationMs: number, context: YjsDocumentOperationContext): void {
     if (durationMs < SLOW_YJS_SAVE_MS) return
-    logger.warn("[YjsStorage] Slow document save", JSON.stringify({ id, size, durationMs }))
+    logger.warn("[YjsStorage] Slow document save", JSON.stringify({ id, size, durationMs, ...operationContextFields(context) }))
 }
 
 function expectedTaskMetaId(id: string): string | null {
@@ -210,7 +244,8 @@ async function writeMigratedDoc(filePath: string, data: Uint8Array): Promise<voi
  * Merges incoming data with existing disk state to never lose data.
  * Serializes saves per document to prevent race conditions.
  */
-async function handleSave(id: string, data: Uint8Array): Promise<void> {
+async function handleSave(id: string, data: Uint8Array, options: YjsDocumentOperationContext = {}): Promise<void> {
+    const logContext = currentOperationContext(options)
     const pendingLoad = loadQueues.get(id) ?? Promise.resolve()
     const startedAt = Date.now()
     // Chain this save after any pending save for the same document
@@ -269,7 +304,7 @@ async function handleSave(id: string, data: Uint8Array): Promise<void> {
             await fs.writeFile(tempPath, mergedState)
             await fs.rename(tempPath, filePath)
             cacheLoadedDocument(id, mergedState)
-            recordYjsSave(id, mergedState.length, Date.now() - startedAt)
+            recordYjsSave(id, mergedState.length, Date.now() - startedAt, logContext)
 
             logger.debug(`[YjsStorage] Saved document: ${id} (${mergedState.length} bytes)`)
         } catch (error) {
@@ -298,15 +333,16 @@ async function handleSave(id: string, data: Uint8Array): Promise<void> {
     return currentSave
 }
 
-export async function saveYjsDocument(id: string, data: Uint8Array): Promise<void> {
-    await handleSave(id, data)
+export async function saveYjsDocument(id: string, data: Uint8Array, options: YjsDocumentOperationContext = {}): Promise<void> {
+    await handleSave(id, data, options)
 }
 
 /**
  * Load a YJS document from disk.
  * Returns null if the document doesn't exist.
  */
-async function handleLoad(id: string): Promise<Uint8Array | null> {
+async function handleLoad(id: string, options: YjsDocumentOperationContext = {}): Promise<Uint8Array | null> {
+    const logContext = currentOperationContext(options)
     const startedAt = Date.now()
     await awaitPendingSave(id)
     const cached = getCachedLoadedDocument(id)
@@ -367,12 +403,12 @@ async function handleLoad(id: string): Promise<Uint8Array | null> {
 
     loadQueues.set(id, load)
     const data = await load
-    recordYjsLoad(id, data, Date.now() - startedAt)
+    recordYjsLoad(id, data, Date.now() - startedAt, logContext)
     return data
 }
 
-export async function loadYjsDocument(id: string): Promise<Uint8Array | null> {
-    return handleLoad(id)
+export async function loadYjsDocument(id: string, options: YjsDocumentOperationContext = {}): Promise<Uint8Array | null> {
+    return handleLoad(id, options)
 }
 
 /**

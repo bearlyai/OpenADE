@@ -213,6 +213,7 @@ import {
     type McpServerConfig as RuntimeMcpServerConfig,
 } from "../code/mcp"
 import { createRuntimeDirectory } from "../code/shell"
+import { runWithYjsDocumentOperationContext } from "../code/yjsStorage"
 import { registerRuntimeAgentModule, registerServerProtocolAgentBridge } from "./runtimeAgents"
 import { createRuntimeCheckpointStore } from "./runtimeCheckpoint"
 import { registerRemoteDeviceRuntimeMethods } from "./deviceRuntime"
@@ -3768,6 +3769,7 @@ export function getRuntimeServer(): RuntimeServer {
             onNotificationBurst: (event) => {
                 logger.warn("[Runtime] Notification burst", JSON.stringify(event))
             },
+            runHandlerWithContext: (event, run) => runWithYjsDocumentOperationContext({ runtimeMethod: event.method }, run),
         })
         registerTrustedHostMethods(runtimeServer)
         registerOpenADEProductModule(runtimeServer)

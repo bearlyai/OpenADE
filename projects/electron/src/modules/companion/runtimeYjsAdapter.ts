@@ -49,8 +49,8 @@ function applyYjsUpdate(data: Uint8Array): Y.Doc {
     return doc
 }
 
-async function loadDoc(id: string): Promise<Y.Doc | null> {
-    const data = await loadYjsDocument(id)
+async function loadDoc(id: string, operation: string): Promise<Y.Doc | null> {
+    const data = await loadYjsDocument(id, { operation })
     return data ? applyYjsUpdate(data) : null
 }
 
@@ -58,16 +58,16 @@ export function createOpenADEYjsStorageAdapter(options: { hostName?: () => strin
     return {
         hostName: options.hostName,
         listDocuments: listYjsDocuments,
-        readDocumentUpdate: loadYjsDocument,
-        saveDocumentUpdate: saveYjsDocument,
+        readDocumentUpdate: (id) => loadYjsDocument(id, { operation: "readDocumentUpdate" }),
+        saveDocumentUpdate: (id, data) => saveYjsDocument(id, data, { operation: "saveDocumentUpdate" }),
         deleteDocument: deleteYjsDocument,
         async readDocumentBase64(id) {
-            const data = await loadYjsDocument(id)
+            const data = await loadYjsDocument(id, { operation: "readDocumentBase64" })
             if (!data) return null
             return { id, data: Buffer.from(data).toString("base64") }
         },
         async readMapObject(documentId, mapName) {
-            const doc = await loadDoc(documentId)
+            const doc = await loadDoc(documentId, "readMapObject")
             if (!doc) return null
             try {
                 const value = toPlain(doc.getMap(mapName))
@@ -77,7 +77,7 @@ export function createOpenADEYjsStorageAdapter(options: { hostName?: () => strin
             }
         },
         async readOrderedArray<T extends Record<string, unknown>>(documentId: string, name: string): Promise<T[] | null> {
-            const doc = await loadDoc(documentId)
+            const doc = await loadDoc(documentId, "readOrderedArray")
             if (!doc) return null
             try {
                 const dataMap = doc.getMap(`${name}:data`)
