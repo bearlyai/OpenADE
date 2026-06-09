@@ -524,6 +524,8 @@ Update docs in the same change when behavior changes:
 
 ## Decision Log
 
+- 2026-06-09: `OpenADEProductStore.listProjectProcesses()` now keeps a one-second completed-read cache keyed by repo/task scope, in addition to the typed client's in-flight coalescing. Process start/stop and scoped `openade.toml` writes invalidate the cache so real instance/config changes are visible on the next read. A real `RuntimeServer`/`OpenADEClient` product-store regression proves back-to-back process-list reads hit the runtime once, then hit it again after a process start and after an `openade.toml` write.
+
 - 2026-06-09: Optional Electron data-folder loads now return `null` silently when a file is absent, instead of logging `File not found` with the full local path. This removes expected legacy cron/image miss noise from startup/idle logs while keeping invalid params and real read failures logged. A focused Electron test uses a real temp data directory and mocked logger to prove missing cron state is silent and existing data-folder files still load.
 
 - 2026-06-09: Cold repo git-info detection now coalesces per repo in `RepoManager.getGitInfo()`, preventing concurrent environment setup, task creation, and sidebar reads from issuing duplicate `openade/project/git/info/read` or legacy `gitApi.isGitDirectory()` calls. A real `RuntimeServer`/`OpenADEClient` bridge regression calls `getGitInfo("repo-1")` twice concurrently and proves one product git-info read while branch, summary, and gh-status reads still use product APIs.

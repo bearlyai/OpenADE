@@ -60,6 +60,7 @@ function createRuntimeBackedStore(): {
     runtime: RuntimeLocalClient
     taskReadRequests: OpenADETaskReadOptions[]
     writtenImages: Map<string, WrittenImageFixture>
+    processListRequestCount(): number
 } {
     const server = new RuntimeServer({ serverName: "product-store-runtime", protocolVersion: 1 })
     const preview: OpenADETaskPreview = {
@@ -107,6 +108,7 @@ function createRuntimeBackedStore(): {
     const tasks = new Map([[task.id, task]])
     const taskReadRequests: OpenADETaskReadOptions[] = []
     const writtenImages = new Map<string, WrittenImageFixture>()
+    let processListRequests = 0
 
     function snapshot(options?: { version?: string; hostName?: string; workingTaskIds?: string[] }): OpenADESnapshot {
         return {
@@ -230,25 +232,28 @@ function createRuntimeBackedStore(): {
                 unstaged: { files: [{ path: "README.md", status: "modified" }], stats: { filesChanged: 1, insertions: 1, deletions: 0 } },
                 untracked: [],
             }),
-            listProjectProcesses: async (params) => ({
-                repoId: params.repoId,
-                taskId: params.taskId,
-                searchRoot: "/tmp/repo",
-                repoRoot: "/tmp/repo",
-                isWorktree: false,
-                processes: [
-                    {
-                        id: "openade.toml::Echo",
-                        name: "Echo",
-                        command: "printf 'runtime process\\n'",
-                        type: "task",
-                        configPath: "openade.toml",
-                        cwd: "/tmp/repo",
-                    },
-                ],
-                errors: [],
-                instances: [],
-            }),
+            listProjectProcesses: async (params) => {
+                processListRequests += 1
+                return {
+                    repoId: params.repoId,
+                    taskId: params.taskId,
+                    searchRoot: "/tmp/repo",
+                    repoRoot: "/tmp/repo",
+                    isWorktree: false,
+                    processes: [
+                        {
+                            id: "openade.toml::Echo",
+                            name: "Echo",
+                            command: "printf 'runtime process\\n'",
+                            type: "task",
+                            configPath: "openade.toml",
+                            cwd: "/tmp/repo",
+                        },
+                    ],
+                    errors: [],
+                    instances: [],
+                }
+            },
             startProjectProcess: async (params) => ({
                 repoId: params.repoId,
                 taskId: params.taskId,
@@ -517,6 +522,7 @@ function createRuntimeBackedStore(): {
         store: new OpenADEProductStore(new OpenADEClient({ runtime, clientName: "product-store-test", clientPlatform: "web" })),
         taskReadRequests,
         writtenImages,
+        processListRequestCount: () => processListRequests,
     }
 }
 
@@ -572,6 +578,34 @@ describe("OpenADEProductStore", () => {
             expect(taskReadRequests).toEqual([])
             expect(store.snapshot?.repos[0]?.tasks[0]?.lastViewedAt).toBe(lastViewedAt)
             expect(store.getCachedTask("repo-1", "task-1")?.lastViewedAt).toBe(lastViewedAt)
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("reuses fresh process-list reads and invalidates them after process config mutations", async () => {
+        const { store, runtime, processListRequestCount } = createRuntimeBackedStore()
+
+        try {
+            await store.listProjectProcesses({ repoId: "repo-1" })
+            await store.listProjectProcesses({ repoId: "repo-1" })
+
+            expect(processListRequestCount()).toBe(1)
+
+            await store.startProjectProcess({ repoId: "repo-1", definitionId: "openade.toml::Echo" }, { clientRequestId: "process-cache-start" })
+            await store.listProjectProcesses({ repoId: "repo-1" })
+            await store.listProjectProcesses({ repoId: "repo-1" })
+
+            expect(processListRequestCount()).toBe(2)
+
+            await store.writeProjectFile(
+                { repoId: "repo-1", path: "nested/openade.toml", content: '[process.echo]\ncmd = "echo hi"\n' },
+                { clientRequestId: "process-cache-config-write" }
+            )
+            await store.listProjectProcesses({ repoId: "repo-1" })
+
+            expect(processListRequestCount()).toBe(3)
         } finally {
             store.destroy()
             await runtime.close()

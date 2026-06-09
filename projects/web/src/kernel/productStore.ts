@@ -129,6 +129,7 @@ function notificationRecord(notification: RuntimeNotification): Record<string, u
 }
 
 const LIGHTWEIGHT_TASK_READ_OPTIONS: OpenADETaskReadOptions = { hydrateSessionEvents: false }
+const PROCESS_LIST_CACHE_TTL_MS = 1_000
 const LEGACY_YJS_IMPORT_WRITER_METHODS = [
     "createRepo",
     "updateRepo",
@@ -149,6 +150,11 @@ const LEGACY_YJS_IMPORT_WRITER_METHODS = [
 ] as const
 
 type LegacyYjsImportWriterMethod = (typeof LEGACY_YJS_IMPORT_WRITER_METHODS)[number]
+
+interface CachedProcessList {
+    expiresAt: number
+    result: OpenADEProjectProcessListResult
+}
 
 export interface OpenADEProductLegacyYjsImportReport {
     imported: OpenADELegacyYjsImportResult
@@ -175,6 +181,7 @@ export class OpenADEProductStore {
     snapshot: OpenADESnapshot | null = null
     readonly runtimes = new RuntimeRecordCache()
     private readonly tasks = new Map<string, OpenADETask>()
+    private readonly processListCache = new Map<string, CachedProcessList>()
     private unsubscribe: (() => void) | null = null
 
     constructor(
@@ -221,7 +228,9 @@ export class OpenADEProductStore {
     }
 
     async writeProjectFile(args: OpenADEProjectFileWriteRequest, options: OpenADERequestOptions = {}): Promise<OpenADEProjectFileWriteResult> {
-        return this.client.writeProjectFile(args, options)
+        const result = await this.client.writeProjectFile(args, options)
+        if (isOpenADETomlPath(args.path)) this.clearProcessListCacheForScope(args.repoId, args.taskId)
+        return result
     }
 
     async searchProject(args: OpenADEProjectSearchRequest): Promise<OpenADEProjectSearchResult> {
@@ -241,11 +250,20 @@ export class OpenADEProductStore {
     }
 
     async listProjectProcesses(args: OpenADEProjectProcessListRequest): Promise<OpenADEProjectProcessListResult> {
-        return this.client.listProjectProcesses(args)
+        const key = processListCacheKey(args.repoId, args.taskId)
+        const cached = this.processListCache.get(key)
+        if (cached && cached.expiresAt > Date.now()) return cached.result
+
+        const result = await this.client.listProjectProcesses(args)
+        this.processListCache.set(key, { result, expiresAt: Date.now() + PROCESS_LIST_CACHE_TTL_MS })
+        return result
     }
 
     async startProjectProcess(args: OpenADEProjectProcessStartRequest, options: OpenADERequestOptions = {}): Promise<OpenADEProjectProcessStartResult> {
-        return this.client.startProjectProcess(args, options)
+        this.clearProcessListCacheForScope(args.repoId, args.taskId)
+        const result = await this.client.startProjectProcess(args, options)
+        this.clearProcessListCacheForScope(args.repoId, args.taskId)
+        return result
     }
 
     async reconnectProjectProcess(args: OpenADEProjectProcessReconnectRequest): Promise<OpenADEProjectProcessReconnectResult> {
@@ -253,7 +271,10 @@ export class OpenADEProductStore {
     }
 
     async stopProjectProcess(args: OpenADEProjectProcessStopRequest, options: OpenADERequestOptions = {}): Promise<OpenADEProjectProcessStopResult> {
-        return this.client.stopProjectProcess(args, options)
+        this.clearProcessListCacheForScope(args.repoId, args.taskId)
+        const result = await this.client.stopProjectProcess(args, options)
+        this.clearProcessListCacheForScope(args.repoId, args.taskId)
+        return result
     }
 
     async readCronInstallState(args: OpenADECronInstallStateReadRequest): Promise<OpenADECronInstallStateReadResult> {
@@ -574,8 +595,23 @@ export class OpenADEProductStore {
         this.unsubscribe?.()
         this.unsubscribe = null
         this.tasks.clear()
+        this.processListCache.clear()
         this.runtimes.clear()
     }
+
+    private clearProcessListCacheForScope(repoId: string, taskId?: string): void {
+        this.processListCache.delete(processListCacheKey(repoId, taskId))
+    }
+}
+
+function processListCacheKey(repoId: string, taskId?: string): string {
+    return `${repoId}\0${taskId ?? ""}`
+}
+
+function isOpenADETomlPath(path: string): boolean {
+    const normalized = path.replace(/\\/g, "/")
+    const segments = normalized.split("/")
+    return segments[segments.length - 1] === "openade.toml"
 }
 
 function legacyYjsImportWriterFromClient(client: OpenADEProductClient): OpenADELegacyYjsImportWriter | null {
