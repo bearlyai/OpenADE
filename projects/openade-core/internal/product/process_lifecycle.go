@@ -639,7 +639,7 @@ func (service *Service) reconnectStoredProjectProcess(repoID string, taskID stri
 		return result
 	}
 	dto, runtimeErr := runtimeRecordToDTO(record)
-	if runtimeErr != nil || dto.Kind != "process" || dto.NativeID != processID || dto.Status == "stopped" || !storedProjectProcessMatchesScope(dto, repoID, taskID) {
+	if runtimeErr != nil || dto.Kind != "process" || dto.NativeID != processID || !storedProjectProcessStatusIsReconnectable(dto) || !storedProjectProcessMatchesScope(dto, repoID, taskID) {
 		return result
 	}
 	chunks, err := service.store.ListRuntimeOutputChunks(context.Background(), "process:"+processID, projectProcessMaxOutput)
@@ -662,6 +662,10 @@ func (service *Service) reconnectStoredProjectProcess(repoID string, taskID stri
 	result.OutputCount = len(output)
 	result.Output = output
 	return result
+}
+
+func storedProjectProcessStatusIsReconnectable(dto runtimeRecordDTO) bool {
+	return dto.Status != "stopped" || dto.Error == orphanedProjectProcessStartupStopReason
 }
 
 func (service *Service) adoptStoredProjectProcesses(ctx context.Context) {

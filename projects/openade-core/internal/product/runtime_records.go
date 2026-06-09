@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"time"
 
@@ -73,6 +74,7 @@ type runtimeReconcileDTO struct {
 }
 
 const orphanedAgentWorkerStartupStopReason = "agent worker process was orphaned during core startup"
+const orphanedProjectProcessStartupStopReason = "process was orphaned during core startup"
 const adoptedAgentWorkerTranscriptPollInterval = 100 * time.Millisecond
 
 func (service *Service) handleRuntimeList(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
@@ -190,29 +192,41 @@ func (service *Service) handleRuntimeStop(ctx context.Context, _ *core.Connectio
 	}
 	if dto.Kind == "process" && dto.NativeID != "" && isActiveRuntimeStatus(dto.Status) {
 		stop := service.stopProjectProcessByRuntime(dto.NativeID, params.Reason)
-		if !stop.OK {
+		if stop.OK {
+			updated, ok, err := service.store.GetRuntime(ctx, params.RuntimeID)
+			if err != nil {
+				return nil, handlerError(err)
+			}
+			if ok {
+				return runtimeRecordToDTO(updated)
+			}
+		}
+		if dto.PID == nil {
 			return nil, &core.RuntimeError{Code: "stop_failed", Message: firstNonEmptyString(stop.Error, "Failed to stop process runtime")}
 		}
-		updated, ok, err := service.store.GetRuntime(ctx, params.RuntimeID)
-		if err != nil {
-			return nil, handlerError(err)
-		}
-		if ok {
-			return runtimeRecordToDTO(updated)
-		}
+		return service.stopStoredProjectProcessRuntimeRecord(ctx, dto, firstNonEmptyString(params.Reason, stop.Error))
+	}
+	if dto.Kind == "process" && dto.NativeID != "" && dto.Status == "orphaned" {
+		return service.stopStoredProjectProcessRuntimeRecord(ctx, dto, params.Reason)
 	}
 	if dto.Kind == "pty" && dto.NativeID != "" && isActiveRuntimeStatus(dto.Status) {
 		stop := service.stopTaskTerminalByRuntime(dto.NativeID, params.Reason)
-		if !stop.OK {
+		if stop.OK {
+			updated, ok, err := service.store.GetRuntime(ctx, params.RuntimeID)
+			if err != nil {
+				return nil, handlerError(err)
+			}
+			if ok {
+				return runtimeRecordToDTO(updated)
+			}
+		}
+		if dto.PID == nil {
 			return nil, &core.RuntimeError{Code: "stop_failed", Message: "Failed to stop PTY runtime"}
 		}
-		updated, ok, err := service.store.GetRuntime(ctx, params.RuntimeID)
-		if err != nil {
-			return nil, handlerError(err)
-		}
-		if ok {
-			return runtimeRecordToDTO(updated)
-		}
+		return service.stopStoredTaskTerminalRuntimeRecord(ctx, dto, params.Reason)
+	}
+	if dto.Kind == "pty" && dto.NativeID != "" && dto.Status == "orphaned" {
+		return service.stopStoredTaskTerminalRuntimeRecord(ctx, dto, params.Reason)
 	}
 	if dto.Kind == "agent" && isActiveRuntimeStatus(dto.Status) {
 		return service.stopAgentRuntime(ctx, dto, params.Reason)
@@ -365,7 +379,9 @@ func (service *Service) markActiveRuntimesOrphaned() {
 	}
 	service.recoverOrAdoptStoredAgentWorkers(ctx)
 	service.adoptStoredProjectProcesses(ctx)
+	service.stopStoredLiveUnadoptableProjectProcesses(ctx)
 	service.stopStoredLiveOrphanedAgentWorkers(ctx)
+	service.stopStoredLiveOrphanedTaskTerminals(ctx)
 	service.reconcileStoredDeadProcessBackedRuntimes(ctx)
 	service.reconcileStoredAgentActionEvents(ctx, updatedAt)
 }
@@ -717,6 +733,94 @@ func (service *Service) stopStoredLiveOrphanedAgentWorkers(ctx context.Context) 
 			continue
 		}
 		_, _ = service.stopAgentRuntimeRecord(ctx, dto, orphanedAgentWorkerStartupStopReason)
+	}
+}
+
+func (service *Service) stopStoredProjectProcessRuntimeRecord(ctx context.Context, dto runtimeRecordDTO, reason string) (runtimeRecordDTO, *core.RuntimeError) {
+	if dto.PID != nil {
+		if err := terminateProjectProcessID(dto.PID, dto.PGID); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return runtimeRecordDTO{}, handlerError(err)
+		}
+	}
+	updatedAt := time.Now().UTC()
+	dto.Status = "stopped"
+	dto.UpdatedAt = formatTime(updatedAt)
+	dto.LastActivityAt = dto.UpdatedAt
+	dto.ExitedAt = dto.UpdatedAt
+	signal := "stopped"
+	dto.Signal = &signal
+	if reason != "" {
+		dto.Error = reason
+	}
+	record, runtimeErr := runtimeDTOToStorage(dto)
+	if runtimeErr != nil {
+		return runtimeRecordDTO{}, runtimeErr
+	}
+	if err := service.store.UpsertRuntime(ctx, record); err != nil {
+		return runtimeRecordDTO{}, handlerError(err)
+	}
+	service.runtime.Notify("runtime/stopped", dto)
+	return dto, nil
+}
+
+func (service *Service) stopStoredLiveUnadoptableProjectProcesses(ctx context.Context) {
+	records, err := service.store.ListRuntimes(ctx)
+	if err != nil {
+		return
+	}
+	for _, record := range records {
+		dto, runtimeErr := runtimeRecordToDTO(record)
+		if runtimeErr != nil || dto.Kind != "process" || dto.Status != "orphaned" || dto.PID == nil {
+			continue
+		}
+		if !runtimeProcessIsRunning(*dto.PID) {
+			continue
+		}
+		_, _ = service.stopStoredProjectProcessRuntimeRecord(ctx, dto, orphanedProjectProcessStartupStopReason)
+	}
+}
+
+func (service *Service) stopStoredTaskTerminalRuntimeRecord(ctx context.Context, dto runtimeRecordDTO, reason string) (runtimeRecordDTO, *core.RuntimeError) {
+	if dto.PID != nil {
+		if err := terminateProjectProcessID(dto.PID, dto.PGID); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return runtimeRecordDTO{}, handlerError(err)
+		}
+	}
+	updatedAt := time.Now().UTC()
+	dto.Status = "stopped"
+	dto.UpdatedAt = formatTime(updatedAt)
+	dto.LastActivityAt = dto.UpdatedAt
+	dto.ExitedAt = dto.UpdatedAt
+	signal := "stopped"
+	dto.Signal = &signal
+	if reason != "" {
+		dto.Error = reason
+	}
+	record, runtimeErr := runtimeDTOToStorage(dto)
+	if runtimeErr != nil {
+		return runtimeRecordDTO{}, runtimeErr
+	}
+	if err := service.store.UpsertRuntime(ctx, record); err != nil {
+		return runtimeRecordDTO{}, handlerError(err)
+	}
+	service.runtime.Notify("runtime/stopped", dto)
+	return dto, nil
+}
+
+func (service *Service) stopStoredLiveOrphanedTaskTerminals(ctx context.Context) {
+	records, err := service.store.ListRuntimes(ctx)
+	if err != nil {
+		return
+	}
+	for _, record := range records {
+		dto, runtimeErr := runtimeRecordToDTO(record)
+		if runtimeErr != nil || dto.Kind != "pty" || dto.Status != "orphaned" || dto.PID == nil {
+			continue
+		}
+		if !runtimeProcessIsRunning(*dto.PID) {
+			continue
+		}
+		_, _ = service.stopStoredTaskTerminalRuntimeRecord(ctx, dto, orphanedTaskTerminalStopReason)
 	}
 }
 

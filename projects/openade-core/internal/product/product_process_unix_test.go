@@ -239,6 +239,305 @@ type = "daemon"
 	}
 }
 
+func TestProductRuntimeStartupTerminatesLiveUnadoptableProjectProcess(t *testing.T) {
+	worker, pid, pgid := startLongRunningProcessGroup(t)
+	t.Cleanup(func() {
+		if worker.Process != nil {
+			_ = worker.Process.Kill()
+		}
+		_ = worker.Wait()
+	})
+	startedAt := time.Date(2026, 6, 9, 17, 0, 0, 0, time.UTC)
+	repoPath := t.TempDir()
+	processID := "proc-live-unadoptable"
+
+	harness := newRuntimeHarnessWithStoreSetup(t, func(ctx context.Context, store *storage.Store) {
+		if err := store.UpsertRepo(ctx, storage.Repo{
+			ID:        "repo-live-unadoptable-process",
+			Name:      "Live Unadoptable Process Repo",
+			Path:      repoPath,
+			CreatedAt: startedAt,
+			UpdatedAt: startedAt,
+		}); err != nil {
+			t.Fatalf("upsert live unadoptable process repo: %v", err)
+		}
+		scopeJSON, err := json.Marshal(map[string]any{
+			"ownerType": "process",
+			"ownerId":   processID,
+			"rootPath":  repoPath,
+			"labels":    map[string]string{"repoId": "repo-live-unadoptable-process", "taskId": ""},
+		})
+		if err != nil {
+			t.Fatalf("marshal live unadoptable process scope: %v", err)
+		}
+		payloadJSON, err := json.Marshal(map[string]any{
+			"nativeId":            processID,
+			"pid":                 pid,
+			"pgid":                *pgid,
+			"processLabel":        "unadoptable process",
+			"processDefinitionId": "openade.toml::Unadoptable",
+			"processStartedAt":    startedAt.Format(time.RFC3339Nano),
+		})
+		if err != nil {
+			t.Fatalf("marshal live unadoptable process payload: %v", err)
+		}
+		if err := store.UpsertRuntime(ctx, storage.RuntimeRecord{
+			RuntimeID:      "process:" + processID,
+			Kind:           "process",
+			Status:         "running",
+			ScopeJSON:      sql.NullString{String: string(scopeJSON), Valid: true},
+			StartedAt:      startedAt,
+			UpdatedAt:      startedAt,
+			LastActivityAt: startedAt,
+			PayloadJSON:    sql.NullString{String: string(payloadJSON), Valid: true},
+		}); err != nil {
+			t.Fatalf("upsert live unadoptable process runtime: %v", err)
+		}
+		if err := store.AppendRuntimeOutputChunk(ctx, storage.RuntimeOutputChunk{
+			RuntimeID:   "process:" + processID,
+			Stream:      "stdout",
+			Data:        "live unadoptable process output\n",
+			TimestampMs: startedAt.UnixMilli(),
+		}, runtimeOutputReadLimit); err != nil {
+			t.Fatalf("append live unadoptable process output: %v", err)
+		}
+	})
+
+	runtimeDTO := resultObject(t, harness.request(t, "runtime/read", map[string]any{
+		"runtimeId": "process:" + processID,
+	}))
+	if runtimeDTO["status"] != "stopped" || runtimeDTO["pid"] != float64(pid) || runtimeDTO["pgid"] != float64(*pgid) || runtimeDTO["error"] != "process was orphaned during core startup" {
+		t.Fatalf("startup stopped live unadoptable process runtime = %#v", runtimeDTO)
+	}
+	reconnect := resultObject(t, harness.request(t, "openade/project/process/reconnect", map[string]any{
+		"repoId":    "repo-live-unadoptable-process",
+		"processId": processID,
+	}))
+	if reconnect["found"] != true || reconnect["completed"] != true || reconnect["outputCount"] != float64(1) {
+		t.Fatalf("startup unadoptable process reconnect = %#v", reconnect)
+	}
+	if !strings.Contains(projectProcessOutputText(arrayField(t, reconnect, "output")), "live unadoptable process output") {
+		t.Fatalf("startup unadoptable process output = %#v", reconnect)
+	}
+	waitForProcessExit(t, worker, 2*time.Second)
+	if unixProcessGroupIsRunning(*pgid) {
+		t.Fatalf("unadoptable process group %d survived startup cleanup", *pgid)
+	}
+}
+
+func TestProductRuntimeStopTerminatesStoredOrphanedProjectProcess(t *testing.T) {
+	worker, pid, pgid := startLongRunningProcessGroup(t)
+	t.Cleanup(func() {
+		if worker.Process != nil {
+			_ = worker.Process.Kill()
+		}
+		_ = worker.Wait()
+	})
+	startedAt := time.Date(2026, 6, 9, 17, 15, 0, 0, time.UTC)
+	processID := "proc-runtime-stop-stored"
+	repoPath := t.TempDir()
+	harness := newRuntimeHarness(t)
+	ctx := context.Background()
+	scopeJSON, err := json.Marshal(map[string]any{
+		"ownerType": "process",
+		"ownerId":   processID,
+		"rootPath":  repoPath,
+	})
+	if err != nil {
+		t.Fatalf("marshal runtime stop stored process scope: %v", err)
+	}
+	payloadJSON, err := json.Marshal(map[string]any{
+		"nativeId":         processID,
+		"pid":              pid,
+		"pgid":             *pgid,
+		"processLabel":     "stored orphan process",
+		"processStartedAt": startedAt.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("marshal runtime stop stored process payload: %v", err)
+	}
+	if err := harness.store.UpsertRuntime(ctx, storage.RuntimeRecord{
+		RuntimeID:      "process:" + processID,
+		Kind:           "process",
+		Status:         "orphaned",
+		ScopeJSON:      sql.NullString{String: string(scopeJSON), Valid: true},
+		StartedAt:      startedAt,
+		UpdatedAt:      startedAt,
+		LastActivityAt: startedAt,
+		PayloadJSON:    sql.NullString{String: string(payloadJSON), Valid: true},
+	}); err != nil {
+		t.Fatalf("upsert runtime stop stored process: %v", err)
+	}
+
+	stopped := resultObject(t, harness.request(t, "runtime/stop", map[string]any{
+		"runtimeId": "process:" + processID,
+		"reason":    "runtime stop stored process",
+	}))
+	if stopped["status"] != "stopped" || stopped["pid"] != float64(pid) || stopped["pgid"] != float64(*pgid) || stopped["error"] != "runtime stop stored process" {
+		t.Fatalf("runtime stop stored process = %#v", stopped)
+	}
+	waitForProcessExit(t, worker, 2*time.Second)
+	if unixProcessGroupIsRunning(*pgid) {
+		t.Fatalf("stored process group %d survived runtime stop", *pgid)
+	}
+}
+
+func TestProductRuntimeStopTerminatesStoredOrphanedTaskTerminal(t *testing.T) {
+	worker, pid, pgid := startLongRunningProcessGroup(t)
+	t.Cleanup(func() {
+		if worker.Process != nil {
+			_ = worker.Process.Kill()
+		}
+		_ = worker.Wait()
+	})
+	startedAt := time.Date(2026, 6, 9, 17, 20, 0, 0, time.UTC)
+	repoPath := t.TempDir()
+	terminalID := taskTerminalIDForTest("repo-runtime-stop-terminal", "task-runtime-stop-terminal")
+	harness := newRuntimeHarness(t)
+	ctx := context.Background()
+	scopeJSON, err := json.Marshal(map[string]any{
+		"ownerType": "pty",
+		"ownerId":   terminalID,
+		"rootPath":  repoPath,
+		"labels":    map[string]string{"repoId": "repo-runtime-stop-terminal", "taskId": "task-runtime-stop-terminal"},
+	})
+	if err != nil {
+		t.Fatalf("marshal runtime stop stored terminal scope: %v", err)
+	}
+	payloadJSON, err := json.Marshal(map[string]any{
+		"nativeId":         terminalID,
+		"pid":              pid,
+		"pgid":             *pgid,
+		"processLabel":     "/bin/bash",
+		"processStartedAt": startedAt.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("marshal runtime stop stored terminal payload: %v", err)
+	}
+	if err := harness.store.UpsertRuntime(ctx, storage.RuntimeRecord{
+		RuntimeID:      "pty:" + terminalID,
+		Kind:           "pty",
+		Status:         "orphaned",
+		ScopeJSON:      sql.NullString{String: string(scopeJSON), Valid: true},
+		StartedAt:      startedAt,
+		UpdatedAt:      startedAt,
+		LastActivityAt: startedAt,
+		PayloadJSON:    sql.NullString{String: string(payloadJSON), Valid: true},
+	}); err != nil {
+		t.Fatalf("upsert runtime stop stored terminal: %v", err)
+	}
+
+	stopped := resultObject(t, harness.request(t, "runtime/stop", map[string]any{
+		"runtimeId": "pty:" + terminalID,
+		"reason":    "runtime stop stored terminal",
+	}))
+	if stopped["status"] != "stopped" || stopped["pid"] != float64(pid) || stopped["pgid"] != float64(*pgid) || stopped["error"] != "runtime stop stored terminal" {
+		t.Fatalf("runtime stop stored terminal = %#v", stopped)
+	}
+	waitForProcessExit(t, worker, 2*time.Second)
+	if unixProcessGroupIsRunning(*pgid) {
+		t.Fatalf("stored terminal process group %d survived runtime stop", *pgid)
+	}
+}
+
+func TestProductRuntimeStartupTerminatesLiveOrphanedTaskTerminal(t *testing.T) {
+	worker, pid, pgid := startLongRunningProcessGroup(t)
+	t.Cleanup(func() {
+		if worker.Process != nil {
+			_ = worker.Process.Kill()
+		}
+		_ = worker.Wait()
+	})
+	startedAt := time.Date(2026, 6, 9, 17, 30, 0, 0, time.UTC)
+	repoPath := t.TempDir()
+	terminalID := taskTerminalIDForTest("repo-live-orphan-terminal", "task-live-orphan-terminal")
+
+	harness := newRuntimeHarnessWithStoreSetup(t, func(ctx context.Context, store *storage.Store) {
+		if err := store.UpsertRepo(ctx, storage.Repo{
+			ID:        "repo-live-orphan-terminal",
+			Name:      "Live Orphan Terminal Repo",
+			Path:      repoPath,
+			CreatedAt: startedAt,
+			UpdatedAt: startedAt,
+		}); err != nil {
+			t.Fatalf("upsert live orphan terminal repo: %v", err)
+		}
+		if err := store.UpsertTask(ctx, storage.Task{
+			ID:            "task-live-orphan-terminal",
+			RepoID:        "repo-live-orphan-terminal",
+			Slug:          "task-live-orphan-terminal",
+			Title:         "Live orphan terminal",
+			IsolationJSON: sql.NullString{String: `{"type":"head"}`, Valid: true},
+			CreatedAt:     startedAt,
+			UpdatedAt:     startedAt,
+		}); err != nil {
+			t.Fatalf("upsert live orphan terminal task: %v", err)
+		}
+		scopeJSON, err := json.Marshal(map[string]any{
+			"ownerType": "pty",
+			"ownerId":   terminalID,
+			"rootPath":  repoPath,
+			"labels":    map[string]string{"repoId": "repo-live-orphan-terminal", "taskId": "task-live-orphan-terminal"},
+		})
+		if err != nil {
+			t.Fatalf("marshal live orphan terminal scope: %v", err)
+		}
+		payloadJSON, err := json.Marshal(map[string]any{
+			"nativeId":         terminalID,
+			"pid":              pid,
+			"pgid":             *pgid,
+			"processLabel":     "/bin/bash",
+			"processStartedAt": startedAt.Format(time.RFC3339Nano),
+		})
+		if err != nil {
+			t.Fatalf("marshal live orphan terminal payload: %v", err)
+		}
+		if err := store.UpsertRuntime(ctx, storage.RuntimeRecord{
+			RuntimeID:      "pty:" + terminalID,
+			Kind:           "pty",
+			Status:         "running",
+			ScopeJSON:      sql.NullString{String: string(scopeJSON), Valid: true},
+			StartedAt:      startedAt,
+			UpdatedAt:      startedAt,
+			LastActivityAt: startedAt,
+			PayloadJSON:    sql.NullString{String: string(payloadJSON), Valid: true},
+		}); err != nil {
+			t.Fatalf("upsert live orphan terminal runtime: %v", err)
+		}
+		if err := store.AppendRuntimeOutputChunk(ctx, storage.RuntimeOutputChunk{
+			RuntimeID:   "pty:" + terminalID,
+			Stream:      "pty",
+			Data:        "live orphan terminal output\n",
+			TimestampMs: startedAt.UnixMilli(),
+		}, runtimeOutputReadLimit); err != nil {
+			t.Fatalf("append live orphan terminal output: %v", err)
+		}
+	})
+
+	runtimeDTO := resultObject(t, harness.request(t, "runtime/read", map[string]any{
+		"runtimeId": "pty:" + terminalID,
+	}))
+	if runtimeDTO["status"] != "stopped" || runtimeDTO["pid"] != float64(pid) || runtimeDTO["pgid"] != float64(*pgid) || runtimeDTO["error"] != "terminal process was orphaned during core startup" {
+		t.Fatalf("startup stopped live orphaned terminal runtime = %#v", runtimeDTO)
+	}
+	reconnect := resultObject(t, harness.request(t, "openade/task/terminal/reconnect", map[string]any{
+		"repoId":     "repo-live-orphan-terminal",
+		"taskId":     "task-live-orphan-terminal",
+		"terminalId": terminalID,
+	}))
+	if reconnect["found"] != true || reconnect["exited"] != true || reconnect["outputCount"] != float64(1) {
+		t.Fatalf("startup orphan terminal reconnect = %#v", reconnect)
+	}
+	output := arrayField(t, reconnect, "output")
+	if objectValue(t, output[0])["data"] != "live orphan terminal output\n" {
+		t.Fatalf("startup orphan terminal output = %#v", output)
+	}
+	waitForProcessExit(t, worker, 2*time.Second)
+	if unixProcessGroupIsRunning(*pgid) {
+		t.Fatalf("terminal process group %d survived startup orphan cleanup", *pgid)
+	}
+}
+
 func shellQuoteForUnixTest(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }

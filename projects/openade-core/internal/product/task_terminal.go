@@ -25,6 +25,7 @@ const (
 	taskTerminalMaxOutput           = 2000
 	taskTerminalCleanupDelay        = 30 * time.Minute
 	taskTerminalProcessMissingError = "terminal process is no longer running"
+	orphanedTaskTerminalStopReason  = "terminal process was orphaned during core startup"
 )
 
 type taskTerminalOutputChunkDTO struct {
@@ -461,7 +462,7 @@ func (service *Service) reconnectStoredTaskTerminal(repoID string, taskID string
 }
 
 func storedTaskTerminalStatusIsReconnectable(dto runtimeRecordDTO) bool {
-	return dto.Status != "stopped" || dto.Error == taskTerminalProcessMissingError
+	return dto.Status != "stopped" || dto.Error == taskTerminalProcessMissingError || dto.Error == orphanedTaskTerminalStopReason
 }
 
 func storedTaskTerminalMatchesScope(dto runtimeRecordDTO, repoID string, taskID string) bool {
