@@ -130,6 +130,7 @@ function notificationRecord(notification: RuntimeNotification): Record<string, u
 
 const LIGHTWEIGHT_TASK_READ_OPTIONS: OpenADETaskReadOptions = { hydrateSessionEvents: false }
 const PROCESS_LIST_CACHE_TTL_MS = 1_000
+const PROJECT_SEARCH_CACHE_TTL_MS = 1_000
 const LEGACY_YJS_IMPORT_WRITER_METHODS = [
     "createRepo",
     "updateRepo",
@@ -154,6 +155,16 @@ type LegacyYjsImportWriterMethod = (typeof LEGACY_YJS_IMPORT_WRITER_METHODS)[num
 interface CachedProcessList {
     expiresAt: number
     result: OpenADEProjectProcessListResult
+}
+
+interface CachedFuzzySearch {
+    expiresAt: number
+    result: OpenADEProjectFilesFuzzySearchResult
+}
+
+interface CachedProjectSearch {
+    expiresAt: number
+    result: OpenADEProjectSearchResult
 }
 
 export interface OpenADEProductLegacyYjsImportReport {
@@ -182,6 +193,8 @@ export class OpenADEProductStore {
     readonly runtimes = new RuntimeRecordCache()
     private readonly tasks = new Map<string, OpenADETask>()
     private readonly processListCache = new Map<string, CachedProcessList>()
+    private readonly fuzzySearchCache = new Map<string, CachedFuzzySearch>()
+    private readonly projectSearchCache = new Map<string, CachedProjectSearch>()
     private unsubscribe: (() => void) | null = null
 
     constructor(
@@ -224,17 +237,30 @@ export class OpenADEProductStore {
     }
 
     async fuzzySearchProjectFiles(args: OpenADEProjectFilesFuzzySearchRequest): Promise<OpenADEProjectFilesFuzzySearchResult> {
-        return this.client.fuzzySearchProjectFiles(args)
+        const key = stableProjectReadCacheKey("fuzzy", args)
+        const cached = this.fuzzySearchCache.get(key)
+        if (cached && cached.expiresAt > Date.now()) return cached.result
+
+        const result = await this.client.fuzzySearchProjectFiles(args)
+        this.fuzzySearchCache.set(key, { result, expiresAt: Date.now() + PROJECT_SEARCH_CACHE_TTL_MS })
+        return result
     }
 
     async writeProjectFile(args: OpenADEProjectFileWriteRequest, options: OpenADERequestOptions = {}): Promise<OpenADEProjectFileWriteResult> {
         const result = await this.client.writeProjectFile(args, options)
+        this.clearProjectSearchCachesForScope(args.repoId, args.taskId)
         if (isOpenADETomlPath(args.path)) this.clearProcessListCacheForScope(args.repoId, args.taskId)
         return result
     }
 
     async searchProject(args: OpenADEProjectSearchRequest): Promise<OpenADEProjectSearchResult> {
-        return this.client.searchProject(args)
+        const key = stableProjectReadCacheKey("content", args)
+        const cached = this.projectSearchCache.get(key)
+        if (cached && cached.expiresAt > Date.now()) return cached.result
+
+        const result = await this.client.searchProject(args)
+        this.projectSearchCache.set(key, { result, expiresAt: Date.now() + PROJECT_SEARCH_CACHE_TTL_MS })
+        return result
     }
 
     async readProjectGitInfo(args: OpenADEProjectGitInfoRequest): Promise<OpenADEProjectGitInfoResult> {
@@ -596,11 +622,24 @@ export class OpenADEProductStore {
         this.unsubscribe = null
         this.tasks.clear()
         this.processListCache.clear()
+        this.fuzzySearchCache.clear()
+        this.projectSearchCache.clear()
         this.runtimes.clear()
     }
 
     private clearProcessListCacheForScope(repoId: string, taskId?: string): void {
-        this.processListCache.delete(processListCacheKey(repoId, taskId))
+        if (taskId !== undefined) {
+            this.processListCache.delete(processListCacheKey(repoId, taskId))
+            return
+        }
+        for (const key of this.processListCache.keys()) {
+            if (key.startsWith(`${repoId}\0`)) this.processListCache.delete(key)
+        }
+    }
+
+    private clearProjectSearchCachesForScope(repoId: string, taskId?: string): void {
+        clearProjectScopedCache(this.fuzzySearchCache, repoId, taskId)
+        clearProjectScopedCache(this.projectSearchCache, repoId, taskId)
     }
 }
 
@@ -612,6 +651,22 @@ function isOpenADETomlPath(path: string): boolean {
     const normalized = path.replace(/\\/g, "/")
     const segments = normalized.split("/")
     return segments[segments.length - 1] === "openade.toml"
+}
+
+function stableProjectReadCacheKey(prefix: string, args: OpenADEProjectFilesFuzzySearchRequest | OpenADEProjectSearchRequest): string {
+    const sorted = Object.fromEntries(
+        Object.keys(args)
+            .sort()
+            .map((key) => [key, args[key as keyof typeof args]])
+    )
+    return `${prefix}\0${args.repoId}\0${args.taskId ?? ""}\0${JSON.stringify(sorted)}`
+}
+
+function clearProjectScopedCache<T>(cache: Map<string, T>, repoId: string, taskId?: string): void {
+    const scope = taskId === undefined ? `\0${repoId}\0` : `\0${repoId}\0${taskId}\0`
+    for (const key of cache.keys()) {
+        if (key.includes(scope)) cache.delete(key)
+    }
 }
 
 function legacyYjsImportWriterFromClient(client: OpenADEProductClient): OpenADELegacyYjsImportWriter | null {

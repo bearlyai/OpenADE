@@ -61,6 +61,8 @@ function createRuntimeBackedStore(): {
     taskReadRequests: OpenADETaskReadOptions[]
     writtenImages: Map<string, WrittenImageFixture>
     processListRequestCount(): number
+    fuzzySearchRequestCount(): number
+    projectSearchRequestCount(): number
 } {
     const server = new RuntimeServer({ serverName: "product-store-runtime", protocolVersion: 1 })
     const preview: OpenADETaskPreview = {
@@ -109,6 +111,8 @@ function createRuntimeBackedStore(): {
     const taskReadRequests: OpenADETaskReadOptions[] = []
     const writtenImages = new Map<string, WrittenImageFixture>()
     let processListRequests = 0
+    let fuzzySearchRequests = 0
+    let projectSearchRequests = 0
 
     function snapshot(options?: { version?: string; hostName?: string; workingTaskIds?: string[] }): OpenADESnapshot {
         return {
@@ -203,9 +207,27 @@ function createRuntimeBackedStore(): {
                 tooLarge: false,
                 content: "",
             }),
-            writeProjectFile: async (params) => ({ repoId: params.repoId, path: params.path, size: params.content.length }),
-            fuzzySearchProjectFiles: async (params) => ({ repoId: params.repoId, taskId: params.taskId, results: [], truncated: false, source: "filesystem" }),
-            searchProject: async (params) => ({ repoId: params.repoId, matches: [], truncated: false }),
+            writeProjectFile: async (params) => ({ repoId: params.repoId, taskId: params.taskId, path: params.path, size: params.content.length }),
+            fuzzySearchProjectFiles: async (params) => {
+                fuzzySearchRequests += 1
+                return { repoId: params.repoId, taskId: params.taskId, results: ["src/runtime.ts"], truncated: false, source: "filesystem" }
+            },
+            searchProject: async (params) => {
+                projectSearchRequests += 1
+                return {
+                    repoId: params.repoId,
+                    matches: [
+                        {
+                            path: "src/runtime.ts",
+                            line: 1,
+                            content: "runtime product search",
+                            matchStart: 0,
+                            matchEnd: params.query.length,
+                        },
+                    ],
+                    truncated: false,
+                }
+            },
             readProjectGitInfo: async (params) => ({
                 repoId: params.repoId,
                 isGitRepo: true,
@@ -523,6 +545,8 @@ function createRuntimeBackedStore(): {
         taskReadRequests,
         writtenImages,
         processListRequestCount: () => processListRequests,
+        fuzzySearchRequestCount: () => fuzzySearchRequests,
+        projectSearchRequestCount: () => projectSearchRequests,
     }
 }
 
@@ -606,6 +630,37 @@ describe("OpenADEProductStore", () => {
             await store.listProjectProcesses({ repoId: "repo-1" })
 
             expect(processListRequestCount()).toBe(3)
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("reuses fresh project search reads and invalidates them after scoped file writes", async () => {
+        const { store, runtime, fuzzySearchRequestCount, projectSearchRequestCount } = createRuntimeBackedStore()
+
+        try {
+            const fuzzyArgs = { repoId: "repo-1", taskId: "task-1", query: "runtime", limit: 10 }
+            const searchArgs = { repoId: "repo-1", taskId: "task-1", query: "runtime", limit: 10, caseSensitive: false }
+
+            await expect(store.fuzzySearchProjectFiles(fuzzyArgs)).resolves.toMatchObject({ results: ["src/runtime.ts"] })
+            await expect(store.fuzzySearchProjectFiles(fuzzyArgs)).resolves.toMatchObject({ results: ["src/runtime.ts"] })
+            await expect(store.searchProject(searchArgs)).resolves.toMatchObject({ matches: [expect.objectContaining({ path: "src/runtime.ts" })] })
+            await expect(store.searchProject(searchArgs)).resolves.toMatchObject({ matches: [expect.objectContaining({ path: "src/runtime.ts" })] })
+
+            expect(fuzzySearchRequestCount()).toBe(1)
+            expect(projectSearchRequestCount()).toBe(1)
+
+            await store.writeProjectFile(
+                { repoId: "repo-1", taskId: "task-1", path: "src/runtime.ts", content: "runtime product search\n" },
+                { clientRequestId: "search-cache-write" }
+            )
+
+            await store.fuzzySearchProjectFiles(fuzzyArgs)
+            await store.searchProject(searchArgs)
+
+            expect(fuzzySearchRequestCount()).toBe(2)
+            expect(projectSearchRequestCount()).toBe(2)
         } finally {
             store.destroy()
             await runtime.close()

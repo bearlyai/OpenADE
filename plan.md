@@ -524,6 +524,8 @@ Update docs in the same change when behavior changes:
 
 ## Decision Log
 
+- 2026-06-09: `OpenADEProductStore.fuzzySearchProjectFiles()` and `searchProject()` now keep one-second completed-result caches for identical scoped repo/task queries, complementing the typed client's in-flight coalescing and the host path-walk cache. Scoped file writes invalidate fuzzy/content search caches for the affected repo/task scope, and repo-root writes clear all scopes for that repo. A real `RuntimeServer`/`OpenADEClient` product-store regression proves back-to-back fuzzy/content searches hit the runtime once and hit it again after a scoped file write.
+
 - 2026-06-09: `OpenADEProductStore.listProjectProcesses()` now keeps a one-second completed-read cache keyed by repo/task scope, in addition to the typed client's in-flight coalescing. Process start/stop and scoped `openade.toml` writes invalidate the cache so real instance/config changes are visible on the next read. A real `RuntimeServer`/`OpenADEClient` product-store regression proves back-to-back process-list reads hit the runtime once, then hit it again after a process start and after an `openade.toml` write.
 
 - 2026-06-09: Optional Electron data-folder loads now return `null` silently when a file is absent, instead of logging `File not found` with the full local path. This removes expected legacy cron/image miss noise from startup/idle logs while keeping invalid params and real read failures logged. A focused Electron test uses a real temp data directory and mocked logger to prove missing cron state is silent and existing data-folder files still load.
