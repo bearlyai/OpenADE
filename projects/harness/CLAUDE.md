@@ -124,6 +124,8 @@ Core sends one JSON `start` envelope on stdin with protocol version `1`, repo/ta
 
 Keep this worker protocol boring and typed. Do not add Electron-specific IPC, renderer callbacks, raw host access, or mocked clients here. MCP server config and task image/blob expansion must come from Core-owned product state before payloads reach the start envelope.
 
+For packaged Electron smoke only, the worker may use its deterministic smoke harness when both `OPENADE_SMOKE_TEST=1` and `OPENADE_SMOKE_DETERMINISTIC_HARNESS=1` are set. That still exercises the real Core command-executor subprocess protocol; it only replaces the external Claude/Codex CLI so packaged smoke does not require auth or network. Do not enable that mode outside smoke tests.
+
 ## Session Management
 
 The `Harness<M>` interface includes methods for reading, writing, and deleting session data from each CLI's on-disk storage. This enables session reload after disconnect, unloading/reloading event data, bidirectional sync, and session continuation.

@@ -1,10 +1,13 @@
 /// <reference types="vitest" />
 import { defineConfig } from "vite"
+import { fileURLToPath } from "node:url"
 import react from "@vitejs/plugin-react"
 import tsconfigPaths from "vite-tsconfig-paths"
 import svgr from "vite-plugin-svgr"
 // @ts-ignore
 import tailwindcss from "@tailwindcss/vite"
+
+const yjsBundlePath = fileURLToPath(new URL("./node_modules/yjs/dist/yjs.mjs", import.meta.url))
 
 export default defineConfig({
     base: "./", // Relative paths for file:// compatibility in Electron
@@ -18,6 +21,12 @@ export default defineConfig({
     },
     worker: {
         format: "es",
+    },
+    resolve: {
+        alias: {
+            yjs: yjsBundlePath,
+        },
+        dedupe: ["yjs"],
     },
     plugins: [
         tailwindcss(),

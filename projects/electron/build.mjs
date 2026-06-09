@@ -41,8 +41,15 @@ function buildOpenADECore() {
   console.timeEnd("building OpenADE Core.")
 }
 
+function copyHarnessWorker() {
+  console.time("copying OpenADE harness worker.")
+  copySync(path.resolve("../harness/dist"), path.resolve("dist", "harness-worker"), { overwrite: true })
+  console.timeEnd("copying OpenADE harness worker.")
+}
+
 async function make() {
   buildOpenADECore()
+  copyHarnessWorker()
 
   // For the main process we only want to bundle the local files, no deps.
   console.time("building main process.")

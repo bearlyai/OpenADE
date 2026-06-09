@@ -13,6 +13,10 @@ import { decideManagedOpenADECoreLaunch, managedOpenADECoreLegacyYjsDocumentsExi
 describe("managed OpenADE Core launch planning", () => {
     const noPackagedCore = () => null
     const packagedCore = () => "/Applications/OpenADE.app/Contents/Resources/dist/openade-core/openade-core"
+    const packagedAgentWorker = () => [
+        "/Applications/OpenADE.app/Contents/MacOS/OpenADE",
+        "/Applications/OpenADE.app/Contents/Resources/dist/harness-worker/worker.js",
+    ]
 
     test("does not auto-launch in development or without a packaged Core binary", () => {
         expect(planManagedOpenADECoreLaunch({}, "/repo", () => "token", packagedCore, { isDev: true })).toBeNull()
@@ -221,6 +225,54 @@ describe("managed OpenADE Core launch planning", () => {
         if (!plan) throw new Error("expected launch plan")
         expect(plan.command).toBe(packagedCore())
         expect(plan.args).toEqual([])
+    })
+
+    test("wires the packaged harness worker into managed Core when no worker override exists", () => {
+        const plan = planManagedOpenADECoreLaunch({}, "/app", () => "token", packagedCore, {
+            isDev: false,
+            legacyYjsDocumentsExist: () => false,
+            agentWorkerCommand: packagedAgentWorker,
+        })
+
+        expect(plan).not.toBeNull()
+        if (!plan) throw new Error("expected launch plan")
+        expect(plan.env.OPENADE_CORE_AGENT_WORKER_COMMAND).toBe(JSON.stringify(packagedAgentWorker()))
+        expect(plan.env.ELECTRON_RUN_AS_NODE).toBe("1")
+    })
+
+    test("preserves an explicit Core worker command override", () => {
+        const plan = planManagedOpenADECoreLaunch(
+            {
+                OPENADE_CORE_AGENT_WORKER_COMMAND: `["node","custom-worker.js"]`,
+                OPENADE_USE_OPENADE_CORE: "1",
+            },
+            "/app",
+            () => "token",
+            packagedCore,
+            {
+                isDev: true,
+                legacyYjsDocumentsExist: () => true,
+                agentWorkerCommand: packagedAgentWorker,
+            }
+        )
+
+        expect(plan).not.toBeNull()
+        if (!plan) throw new Error("expected launch plan")
+        expect(plan.env.OPENADE_CORE_AGENT_WORKER_COMMAND).toBe(`["node","custom-worker.js"]`)
+        expect(plan.env.ELECTRON_RUN_AS_NODE).toBeUndefined()
+    })
+
+    test("launches managed Core without a worker command when the packaged worker is unavailable", () => {
+        const plan = planManagedOpenADECoreLaunch({}, "/app", () => "token", packagedCore, {
+            isDev: false,
+            legacyYjsDocumentsExist: () => false,
+            agentWorkerCommand: () => null,
+        })
+
+        expect(plan).not.toBeNull()
+        if (!plan) throw new Error("expected launch plan")
+        expect(plan.env.OPENADE_CORE_AGENT_WORKER_COMMAND).toBeUndefined()
+        expect(plan.env.ELECTRON_RUN_AS_NODE).toBeUndefined()
     })
 
     test("keeps explicit command override ahead of the packaged Core binary", () => {

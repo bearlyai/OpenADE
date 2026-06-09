@@ -215,4 +215,65 @@ describe("runCommandAgentWorker", () => {
 
         expect(capturedQueries[0].mode).toBe("read-only")
     })
+
+    it("uses the deterministic smoke harness only when smoke env is enabled", async () => {
+        const output = new MemoryWritable()
+        const previousSmokeTest = process.env.OPENADE_SMOKE_TEST
+        const previousDeterministicHarness = process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS
+        process.env.OPENADE_SMOKE_TEST = "1"
+        process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS = "1"
+        try {
+            const exitCode = await runCommandAgentWorker({
+                input: Readable.from([startEnvelope()]),
+                output,
+                now: () => new Date("2026-06-07T10:02:00.000Z"),
+                eventId: () => "smoke-stream",
+                gitRefs: async () => undefined,
+            })
+
+            expect(exitCode).toBe(0)
+            const messages = parseLines(output)
+            expect(messages).toHaveLength(5)
+            expect(messages[0]).toMatchObject({
+                type: "stream",
+                event: {
+                    type: "session_started",
+                    harnessId: "codex",
+                    sessionId: "smoke-codex-session",
+                },
+            })
+            expect(messages[1]).toMatchObject({
+                type: "stream",
+                event: {
+                    type: "raw_message",
+                    message: {
+                        type: "item.completed",
+                        item: {
+                            type: "agent_message",
+                            text: "Deterministic Core smoke response.",
+                        },
+                    },
+                },
+            })
+            expect(messages[2]).toMatchObject({ type: "stream", event: { type: "complete", usage: { inputTokens: 1, outputTokens: 1 } } })
+            expect(messages[3]).toMatchObject({ type: "execution", sessionId: "smoke-codex-session" })
+            expect(messages[4]).toMatchObject({
+                type: "result",
+                status: "completed",
+                success: true,
+                completedAt: "2026-06-07T10:02:00.000Z",
+            })
+        } finally {
+            if (previousSmokeTest === undefined) {
+                delete process.env.OPENADE_SMOKE_TEST
+            } else {
+                process.env.OPENADE_SMOKE_TEST = previousSmokeTest
+            }
+            if (previousDeterministicHarness === undefined) {
+                delete process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS
+            } else {
+                process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS = previousDeterministicHarness
+            }
+        }
+    })
 })

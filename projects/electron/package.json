@@ -62,7 +62,8 @@
     "extraResources": [
       "dist/pages/**",
       "dist/web/**",
-      "dist/openade-core/**"
+      "dist/openade-core/**",
+      "dist/harness-worker/**"
     ],
     "afterPack": "build/afterPack.js",
     "afterSign": "build/notarize.js",

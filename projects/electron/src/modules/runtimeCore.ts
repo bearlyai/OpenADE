@@ -12,6 +12,8 @@ const DEFAULT_MANAGED_CORE_RUNTIME_PATH = "/v1/runtime"
 const DEFAULT_MANAGED_CORE_HOST = "127.0.0.1"
 const MANAGED_CORE_DEFAULT_COMMAND = ["go", "run", "../openade-core/cmd/openade-core"]
 const PACKAGED_CORE_DIR = path.join("dist", "openade-core")
+const PACKAGED_HARNESS_WORKER_DIR = path.join("dist", "harness-worker")
+const HARNESS_WORKER_ENTRY = "worker.js"
 const OPENADE_DIR = ".openade"
 const DATA_DIR = "data"
 const YJS_DIR = "yjs"
@@ -31,6 +33,7 @@ export interface ManagedOpenADECoreLaunchOptions {
     isDev?: boolean
     legacyYjsDocumentsExist?: () => boolean
     legacyYjsMigrationAccepted?: () => boolean
+    agentWorkerCommand?: () => string[] | null
 }
 
 export type ManagedOpenADECoreRolloutReason =
@@ -117,6 +120,35 @@ function defaultOpenADECoreCommand(): string | null {
     return packagedOpenADECoreCommand() ?? builtOpenADECoreCommand()
 }
 
+function packagedHarnessWorkerPath(
+    resourcesPath: string = process.resourcesPath,
+    pathExists: (targetPath: string) => boolean = fs.existsSync
+): string | null {
+    if (!resourcesPath) return null
+    const workerPath = path.join(resourcesPath, PACKAGED_HARNESS_WORKER_DIR, HARNESS_WORKER_ENTRY)
+    return pathExists(workerPath) ? workerPath : null
+}
+
+function builtHarnessWorkerPath(mainBundleDir: string = __dirname, pathExists: (targetPath: string) => boolean = fs.existsSync): string | null {
+    const workerPath = path.join(mainBundleDir, "harness-worker", HARNESS_WORKER_ENTRY)
+    return pathExists(workerPath) ? workerPath : null
+}
+
+function defaultHarnessWorkerPath(): string | null {
+    return packagedHarnessWorkerPath() ?? builtHarnessWorkerPath()
+}
+
+function defaultAgentWorkerCommand(): string[] | null {
+    const workerPath = defaultHarnessWorkerPath()
+    return workerPath ? [process.execPath, workerPath] : null
+}
+
+function normalizedOptionalCommandParts(parts: string[] | null | undefined): string[] | null {
+    if (!parts) return null
+    const command = parts.map((part) => part.trim()).filter(Boolean)
+    return command.length > 0 ? command : null
+}
+
 function managedCoreCommand(env: NodeJS.ProcessEnv, resolveBuiltCommand: () => string | null): string[] {
     if (env.OPENADE_CORE_COMMAND?.trim()) {
         return parseManagedCoreCommand(env.OPENADE_CORE_COMMAND)
@@ -165,17 +197,29 @@ function buildManagedOpenADECoreLaunchPlan({
     cwd,
     createToken,
     commandParts,
+    resolveAgentWorkerCommand,
 }: {
     env: NodeJS.ProcessEnv
     cwd: string
     createToken: () => string
     commandParts: string[]
+    resolveAgentWorkerCommand: () => string[] | null
 }): ManagedOpenADECoreLaunchPlan {
     const host = env.OPENADE_CORE_HOST?.trim() || DEFAULT_MANAGED_CORE_HOST
     const port = normalizedRuntimePort(env.OPENADE_CORE_PORT)
     const runtimePath = normalizedRuntimePath(env.OPENADE_CORE_RUNTIME_PATH)
     const token = env.OPENADE_CORE_TOKEN?.trim() || createToken()
     const url = runtimeEndpointURL(host, port, runtimePath)
+    const inheritedAgentWorkerCommand = env.OPENADE_CORE_AGENT_WORKER_COMMAND?.trim()
+    const managedAgentWorkerCommand = inheritedAgentWorkerCommand ? null : normalizedOptionalCommandParts(resolveAgentWorkerCommand())
+    const agentWorkerEnv: NodeJS.ProcessEnv = inheritedAgentWorkerCommand
+        ? {}
+        : managedAgentWorkerCommand
+          ? {
+                OPENADE_CORE_AGENT_WORKER_COMMAND: JSON.stringify(managedAgentWorkerCommand),
+                ELECTRON_RUN_AS_NODE: "1",
+            }
+          : {}
 
     return {
         command: commandParts[0],
@@ -190,6 +234,7 @@ function buildManagedOpenADECoreLaunchPlan({
             OPENADE_CORE_PORT: port,
             OPENADE_CORE_RUNTIME_PATH: runtimePath,
             OPENADE_CORE_RUNTIME_URL: url,
+            ...agentWorkerEnv,
         },
         runtimeEndpoint: { url, token },
     }
@@ -253,8 +298,9 @@ export function decideManagedOpenADECoreLaunch(
         return { plan: null, reason: "invalid-managed-command", automatic: false, legacyYjsDocumentsPresent, legacyYjsMigrationAccepted }
     }
 
+    const resolveAgentWorkerCommand = options.agentWorkerCommand ?? defaultAgentWorkerCommand
     return {
-        plan: buildManagedOpenADECoreLaunchPlan({ env, cwd, createToken, commandParts }),
+        plan: buildManagedOpenADECoreLaunchPlan({ env, cwd, createToken, commandParts, resolveAgentWorkerCommand }),
         reason: legacyYjsDocumentsPresent && legacyYjsMigrationAccepted ? "legacy-yjs-migration-accepted" : "managed-core",
         automatic,
         legacyYjsDocumentsPresent,

@@ -482,6 +482,7 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
                 OPENADE_CORE_PORT: String(corePort),
                 OPENADE_CORE_TOKEN: "managed-core-smoke-token",
                 OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER: "1",
+                OPENADE_SMOKE_DETERMINISTIC_HARNESS: "1",
                 OPENADE_SMOKE_TEST: "1",
                 OPENADE_YJS_STORAGE_DIR: yjsStorageDir,
                 USERPROFILE: userDataDir,
@@ -506,13 +507,26 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
             }
             type RepoCreateResult = { repoId: string; createdAt: string }
             type TaskCreateResult = { taskId: string; title: string; createdAt: string }
+            type TaskEvent = {
+                id?: string
+                status?: string
+                source?: { type?: string }
+                userInput?: string
+                execution?: {
+                    sessionId?: string
+                    events?: Array<{ type?: string; usage?: { inputTokens?: number; outputTokens?: number; durationMs?: number } }>
+                }
+            }
             type TaskReadResult = {
                 id: string
                 repoId: string
                 title: string
                 closed?: boolean
                 comments: Array<{ id: string; body: string }>
+                events: TaskEvent[]
             }
+            type TurnStartResult = { taskId: string; eventId?: string; queued?: boolean }
+            type RuntimeReadResult = { runtimeId: string; kind?: string; status?: string; processStartedAt?: string }
             type ProjectFilesTreeResult = { entries: Array<{ path: string; type: string }>; truncated: boolean }
             type ProjectFileReadResult = { content: string | null; tooLarge: boolean }
             type ProjectFileWriteResult = { path: string; size: number }
@@ -531,7 +545,7 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
             }
             type TaskChangesResult = { files: GitChangedFile[]; fromTreeish: string; toTreeish: string }
             type TaskDiffResult = { filePath: string; patch: string; truncated: boolean }
-            type TaskFilePairResult = { filePath: string; before: string; after: string; tooLarge: boolean }
+            type TaskFilePairResult = { filePath: string; before: string; after: string; tooLarge?: boolean }
             type TaskGitLogResult = { commits: Array<{ sha: string; message: string }>; hasMore: boolean }
             type TaskGitCommitResult = { committed: boolean; status: string; sha?: string }
             type ProjectProcessListResult = {
@@ -683,6 +697,28 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
                 }
                 throw new Error(`Managed Core terminal ${terminalId} did not produce ${expectedOutput}; last result: ${JSON.stringify(lastResult)}`)
             }
+            const waitForTurnCompletion = async (taskId: string, eventId: string): Promise<TaskReadResult> => {
+                let lastEventStates: Array<{ id?: string; status?: string; sourceType?: string }> = []
+                for (let attempt = 0; attempt < 80; attempt++) {
+                    const task = await request<TaskReadResult>("openade/task/read", {
+                        repoId: smokeRepoId,
+                        taskId,
+                        hydrateSessionEvents: true,
+                    })
+                    lastEventStates = task.events.map((candidate) => ({
+                        id: candidate.id,
+                        status: candidate.status,
+                        sourceType: candidate.source?.type,
+                    }))
+                    const event = task.events.find((candidate) => candidate.id === eventId)
+                    if (event?.status === "completed") return task
+                    if (event?.status === "error" || event?.status === "stopped") {
+                        throw new Error(`Managed Core turn event ${eventId} settled as ${event.status}`)
+                    }
+                    await sleep(250)
+                }
+                throw new Error(`Managed Core turn event ${eventId} did not complete; last events: ${JSON.stringify(lastEventStates)}`)
+            }
 
             const createdBy = { id: "managed-core-smoke-user", email: "managed-core-smoke@example.com" }
             const initialize = await request<InitializeResult>("initialize", {
@@ -752,6 +788,18 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
                 deviceId: "managed-core-smoke-device",
                 clientRequestId: `${smokeRepoId}-task-create`,
             })
+            const turnStart = await request<TurnStartResult>("openade/turn/start", {
+                repoId: repoCreate.repoId,
+                inTaskId: taskCreate.taskId,
+                type: "ask",
+                input: "Run managed Core packaged turn smoke",
+                harnessId: "codex",
+                modelId: "gpt-smoke",
+                clientRequestId: `${smokeRepoId}-turn-start`,
+            })
+            if (!turnStart.eventId) throw new Error(`Managed Core turn did not return an event id${turnStart.queued ? " because it queued" : ""}`)
+            const turnTask = await waitForTurnCompletion(turnStart.taskId, turnStart.eventId)
+            const turnRuntime = await request<RuntimeReadResult>("runtime/read", { runtimeId: `openade-turn:${turnStart.eventId}` })
             const taskGitSummary = await request<GitSummaryResult>("openade/task/git/summary/read", {
                 repoId: repoCreate.repoId,
                 taskId: taskCreate.taskId,
@@ -884,6 +932,9 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
                 processOutput,
                 processStop,
                 taskCreate,
+                turnStart,
+                turnTask,
+                turnRuntime,
                 taskGitSummary,
                 taskChanges,
                 taskDiff,
@@ -919,7 +970,9 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
                 "openade/snapshot/read",
                 "openade/repo/create",
                 "openade/task/create",
+                "openade/turn/start",
                 "openade/comment/create",
+                "runtime/read",
                 "openade/project/files/fuzzySearch",
                 "openade/project/git/branches/read",
                 "openade/project/git/summary/read",
@@ -970,6 +1023,27 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
         expect(coreSmoke.processOutput.output?.map((chunk) => chunk.data).join("")).toContain("managed core scoped process ok")
         expect(coreSmoke.processStop.ok).toBe(true)
         expect(coreSmoke.taskCreate.title).toBe("Managed Core Smoke Task")
+        expect(coreSmoke.turnStart).toMatchObject({
+            taskId: coreSmoke.taskCreate.taskId,
+        })
+        expect(coreSmoke.turnStart.eventId).toBeTruthy()
+        expect(coreSmoke.turnRuntime).toMatchObject({
+            runtimeId: `openade-turn:${coreSmoke.turnStart.eventId}`,
+            kind: "agent",
+            status: "completed",
+        })
+        expect(coreSmoke.turnRuntime.processStartedAt).toBeTruthy()
+        const turnEvent = coreSmoke.turnTask.events.find((event) => event.id === coreSmoke.turnStart.eventId)
+        expect(turnEvent).toMatchObject({
+            id: coreSmoke.turnStart.eventId,
+            status: "completed",
+            source: { type: "ask" },
+            userInput: "Run managed Core packaged turn smoke",
+            execution: { sessionId: "smoke-codex-session" },
+        })
+        expect(turnEvent?.execution?.events).toEqual(
+            expect.arrayContaining([expect.objectContaining({ type: "complete", usage: expect.objectContaining({ inputTokens: 1, outputTokens: 1 }) })])
+        )
         expect(coreSmoke.taskGitSummary.hasChanges).toBe(true)
         expect(coreSmoke.taskGitSummary.untracked).toEqual(
             expect.arrayContaining([expect.objectContaining({ path: "notes/managed-core.txt" })])
@@ -981,8 +1055,8 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
             filePath: "notes/managed-core.txt",
             before: "",
             after: "managed Core scoped write smoke\n",
-            tooLarge: false,
         })
+        expect(coreSmoke.taskFilePair.tooLarge).not.toBe(true)
         expect(coreSmoke.taskGitLog.commits[0]?.message).toBe("Initial managed Core smoke fixture")
         expect(coreSmoke.taskGitCommit).toMatchObject({
             committed: true,

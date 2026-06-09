@@ -130,7 +130,7 @@ export async function runCommandAgentWorker(options: CommandAgentWorkerOptions):
     }
 
     const request = envelope.request
-    const harness = (options.harnesses ?? defaultHarnesses())[request.harnessId]
+    const harness = workerHarnesses(options.harnesses)[request.harnessId]
     if (!harness) {
         await write({
             type: "result",
@@ -299,6 +299,51 @@ function defaultHarnesses(): Record<HarnessId, WorkerHarness> {
     return {
         "claude-code": adaptHarness(new ClaudeCodeHarness()),
         codex: adaptHarness(new CodexHarness()),
+    }
+}
+
+function workerHarnesses(harnesses: Partial<Record<HarnessId, WorkerHarness>> | undefined): Partial<Record<HarnessId, WorkerHarness>> {
+    if (harnesses) return harnesses
+    return deterministicSmokeHarnessEnabled() ? deterministicSmokeHarnesses() : defaultHarnesses()
+}
+
+function deterministicSmokeHarnessEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.OPENADE_SMOKE_TEST === "1" && env.OPENADE_SMOKE_DETERMINISTIC_HARNESS === "1"
+}
+
+function deterministicSmokeHarnesses(): Record<HarnessId, WorkerHarness> {
+    return {
+        "claude-code": deterministicSmokeHarness("claude-code"),
+        codex: deterministicSmokeHarness("codex"),
+    }
+}
+
+function deterministicSmokeHarness(harnessId: HarnessId): WorkerHarness {
+    return {
+        async *query(): AsyncGenerator<HarnessEvent<unknown>> {
+            yield { type: "session_started", sessionId: `smoke-${harnessId}-session` }
+            yield { type: "message", message: deterministicSmokeMessage(harnessId) }
+            yield { type: "complete", usage: { inputTokens: 1, outputTokens: 1, durationMs: 1 } }
+        },
+    }
+}
+
+function deterministicSmokeMessage(harnessId: HarnessId): unknown {
+    if (harnessId === "codex") {
+        return {
+            type: "item.completed",
+            item: {
+                type: "agent_message",
+                text: "Deterministic Core smoke response.",
+            },
+        }
+    }
+
+    return {
+        type: "assistant",
+        message: {
+            content: [{ type: "text", text: "Deterministic Core smoke response." }],
+        },
     }
 }
 
