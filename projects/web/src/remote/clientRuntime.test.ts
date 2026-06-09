@@ -38,6 +38,7 @@ class OpenADEClient {
             server: { version: "test", hostName: "test", theme: { setting: "system", className: "code-theme-light" } },
         })
     )
+    listRuntimes = vi.fn(async () => [])
     getTask = vi.fn(async (): Promise<OpenADETask> => {
         if (getTaskFailures > 0) {
             getTaskFailures -= 1

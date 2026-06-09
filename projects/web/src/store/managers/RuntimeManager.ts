@@ -1,10 +1,14 @@
 import { makeAutoObservable, runInAction } from "mobx"
 import { RuntimeRecordCache } from "../../../../runtime-client/src"
-import type { RuntimeNotification, RuntimeRecord, RuntimeStatus } from "../../../../runtime-protocol/src"
+import type { RuntimeListParams, RuntimeNotification, RuntimeRecord, RuntimeStatus } from "../../../../runtime-protocol/src"
 import { localRuntimeClient } from "../../runtime/localRuntimeClient"
 
 const ACTIVE_RUNTIME_STATUSES: ReadonlySet<RuntimeStatus> = new Set(["starting", "running"])
 const TERMINAL_RUNTIME_METHODS = new Set(["runtime/completed", "runtime/failed", "runtime/stopped"])
+
+export interface RuntimeListSource {
+    listRuntimes(params: RuntimeListParams): Promise<RuntimeRecord[]>
+}
 
 function taskIdForRuntime(runtime: RuntimeRecord): string | null {
     if (runtime.scope.ownerType !== "openade-task") return null
@@ -71,17 +75,25 @@ export class RuntimeManager {
         )
     }
 
-    async hydrateOpenADETasks(): Promise<string[]> {
-        if (typeof window === "undefined" || !window.openadeAPI?.runtime) return []
+    async hydrateOpenADETasks(source?: RuntimeListSource | null): Promise<string[]> {
+        const runtimeSource = source === undefined ? this.legacyRuntimeListSource() : source
+        if (!runtimeSource) return []
 
         const before = this.runningTaskIds
-        const runtimes = await localRuntimeClient.request<unknown[]>("runtime/list", { ownerType: "openade-task" })
+        const runtimes = await runtimeSource.listRuntimes({ ownerType: "openade-task" })
         runInAction(() => {
             this.cache.replace(runtimes, { ownerType: "openade-task" })
             this.syncFromCache()
             this.hydrated = true
         })
         return removedIds(before, this.runningTaskIds)
+    }
+
+    private legacyRuntimeListSource(): RuntimeListSource | null {
+        if (typeof window === "undefined" || !window.openadeAPI?.runtime) return null
+        return {
+            listRuntimes: (params) => localRuntimeClient.request<RuntimeRecord[]>("runtime/list", params),
+        }
     }
 
     applyNotification(notification: RuntimeNotification): string[] {

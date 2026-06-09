@@ -21,7 +21,7 @@ import type {
     OpenADETurnStartRequest,
 } from "../../../openade-module/src/types"
 import { RuntimeLocalClient, type RuntimeLocalTransport } from "../../../runtime-client/src"
-import type { RuntimeMessage, RuntimeRecord, RuntimeRequest } from "../../../runtime-protocol/src"
+import type { RuntimeMessage, RuntimeRecord, RuntimeRequest, RuntimeResponse } from "../../../runtime-protocol/src"
 import { type RuntimeConnection, RuntimeServer } from "../../../runtime/src"
 import { analytics } from "../analytics"
 import { EnvironmentSetupView } from "../components/EnvironmentSetupView"
@@ -1096,6 +1096,14 @@ function runtimeRecord(status: RuntimeRecord["status"], updatedAt: string): Runt
     }
 }
 
+function runtimeRequestFromUnknown(value: unknown): RuntimeRequest {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Invalid runtime request")
+    const record = value as Record<string, unknown>
+    const id = record.id
+    if ((typeof id !== "string" && typeof id !== "number") || typeof record.method !== "string") throw new Error("Invalid runtime request")
+    return { id, method: record.method, params: record.params }
+}
+
 async function waitForRuntimeBridge(assertion: () => void): Promise<void> {
     await vi.waitFor(assertion, { timeout: 1000, interval: 10 })
 }
@@ -1171,7 +1179,7 @@ describe("CodeStore runtime product store bridge", () => {
     it("starts clean managed Core product reads without opening the legacy repo Yjs document", async () => {
         subprocessMocks.setGlobalEnv.mockClear()
         const restoreOpenADEAPI = installCleanCoreRolloutState()
-        const { client, runtime, state } = createRuntimeBackedClient({
+        const { client, runtime, server, state } = createRuntimeBackedClient({
             ...createBridgeState(),
             personalSettings: {
                 envVars: { OPENADE_TEST_ENV: "core" },
@@ -1179,6 +1187,37 @@ describe("CodeStore runtime product store bridge", () => {
                 renderMarkdownMessages: false,
                 newTaskHarnessId: "codex",
                 newTaskModelId: "gpt-5.3-codex",
+            },
+        })
+        server.supervisor.register(runtimeRecord("running", "2026-05-31T00:01:00.000Z"))
+        const legacyRuntimeRequests: RuntimeRequest[] = []
+        const legacyRuntimeRequest = vi.fn(async (rawRequest: unknown): Promise<RuntimeResponse> => {
+            const runtimeRequest = runtimeRequestFromUnknown(rawRequest)
+            legacyRuntimeRequests.push(runtimeRequest)
+            if (runtimeRequest.method === "runtime/list") throw new Error("legacy local runtime should not hydrate clean managed Core tasks")
+            if (runtimeRequest.method === "initialize") {
+                return {
+                    id: runtimeRequest.id,
+                    result: {
+                        protocolVersion: 1,
+                        serverName: "legacy-ipc-test-runtime",
+                        capabilities: { methods: ["runtime/list"], notifications: [], agentProviders: [] },
+                    },
+                }
+            }
+            return { id: runtimeRequest.id, result: null }
+        })
+        Object.defineProperty(window, "openadeAPI", {
+            configurable: true,
+            writable: true,
+            value: {
+                ...window.openadeAPI,
+                runtime: {
+                    connect: vi.fn(),
+                    disconnect: vi.fn(),
+                    request: legacyRuntimeRequest,
+                    onMessage: vi.fn(() => vi.fn()),
+                },
             },
         })
         let repoConnectCount = 0
@@ -1221,6 +1260,8 @@ describe("CodeStore runtime product store bridge", () => {
             expect(subprocessMocks.setGlobalEnv).not.toHaveBeenCalled()
             expect(codeStore.runtimeProductSnapshot?.repos).toHaveLength(1)
             expect(codeStore.repos.repos.map((repo) => repo.id)).toEqual(["repo-1"])
+            expect(codeStore.runtimes.isTaskRunning("task-1")).toBe(true)
+            expect(legacyRuntimeRequests.filter((request) => request.method === "runtime/list")).toHaveLength(0)
         } finally {
             codeStore.disconnectAllStores()
             await runtime.close()

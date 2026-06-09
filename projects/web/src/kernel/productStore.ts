@@ -116,7 +116,7 @@ import type { OpenADELegacyYjsImportOptions, OpenADELegacyYjsImportResult, OpenA
 import { type OpenADELegacyYjsCoreParityReport, compareOpenADELegacyYjsToCore } from "../../../openade-module/src/yjsImportParity"
 import type { OpenADEYjsProjection } from "../../../openade-module/src/yjsProjection"
 import { RuntimeRecordCache } from "../../../runtime-client/src"
-import type { RuntimeNotification } from "../../../runtime-protocol/src"
+import type { RuntimeListParams, RuntimeNotification, RuntimeRecord } from "../../../runtime-protocol/src"
 
 function taskKey(repoId: string, taskId: string): string {
     return `${repoId}\0${taskId}`
@@ -190,6 +190,12 @@ export class OpenADEProductStore {
         const snapshot = await this.client.getSnapshot()
         this.snapshot = snapshot
         return snapshot
+    }
+
+    async listRuntimes(args: RuntimeListParams = {}): Promise<RuntimeRecord[]> {
+        const runtimes = await this.client.listRuntimes(args)
+        this.runtimes.replace(runtimes, args)
+        return this.runtimes.list(args)
     }
 
     async getTask(repoId: string, taskId: string, options: OpenADETaskReadOptions = LIGHTWEIGHT_TASK_READ_OPTIONS): Promise<OpenADETask> {
@@ -580,6 +586,7 @@ function legacyYjsImportWriterFromClient(client: OpenADEProductClient): OpenADEL
 
 export interface OpenADEProductClient {
     getSnapshot(): Promise<OpenADESnapshot>
+    listRuntimes(args?: RuntimeListParams): Promise<RuntimeRecord[]>
     getTask(repoId: string, taskId: string, options?: OpenADETaskReadOptions): Promise<OpenADETask>
     listProjectFiles(args: OpenADEProjectFilesTreeRequest): Promise<OpenADEProjectFilesTreeResult>
     readProjectFile(args: OpenADEProjectFileReadRequest): Promise<OpenADEProjectFileReadResult>

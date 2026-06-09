@@ -489,7 +489,8 @@ export class CodeStore {
                 this.storeInitializing = false
             })
             await this.mcpServers.initializeProductSettingsProjection()
-            await this.runtimes.hydrateOpenADETasks().catch((err) => {
+            const runtimeHydrationSource = this.shouldUseRuntimeProductReads() ? this.runtimeProductStore : null
+            await this.runtimes.hydrateOpenADETasks(runtimeHydrationSource).catch((err) => {
                 console.warn("[CodeStore] Failed to hydrate runtime state:", err)
             })
 

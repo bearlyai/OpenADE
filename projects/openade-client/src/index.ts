@@ -143,7 +143,7 @@ import type {
     OpenADETurnStartRequest,
     OpenADETurnStartResult,
 } from "../../openade-module/src/types"
-import type { RuntimeNotification } from "../../runtime-protocol/src"
+import type { RuntimeListParams, RuntimeNotification, RuntimeRecord } from "../../runtime-protocol/src"
 import type { RuntimeClientStatus } from "../../runtime-client/src"
 import {
     OPENADE_READ_METHODS_TO_COALESCE as GENERATED_OPENADE_READ_METHODS_TO_COALESCE,
@@ -236,6 +236,10 @@ export class OpenADEClient {
 
     async getSnapshot(): Promise<OpenADESnapshot> {
         return this.request("openade/snapshot/read")
+    }
+
+    async listRuntimes(args: RuntimeListParams = {}): Promise<RuntimeRecord[]> {
+        return this.options.runtime.request<RuntimeRecord[]>("runtime/list", args)
     }
 
     async getTask(repoId: string, taskId: string, options: OpenADETaskReadOptions = {}): Promise<OpenADETask> {
