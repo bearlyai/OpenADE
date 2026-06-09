@@ -134,7 +134,6 @@ async function handleLoad(params: LoadDataFileParams): Promise<string | Buffer |
 	}
 
 	if (!fs.existsSync(filePath)) {
-		logger.debug("[DataFolder] File not found:", filePath)
 		return null
 	}
 
