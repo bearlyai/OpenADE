@@ -24,6 +24,8 @@ const DEFAULT_SCOPED_TREE_MAX_DEPTH = 4
 const DEFAULT_SCOPED_TREE_MAX_ENTRIES = 1000
 const DEFAULT_SCOPED_SEARCH_LIMIT = 100
 const MAX_SCOPED_SEARCH_FILE_BYTES = 1024 * 1024
+const SCOPED_PROJECT_PATH_CACHE_TTL_MS = 20 * 1000
+const SCOPED_PROJECT_PATH_CACHE_MAX_ENTRIES = 16
 const SCOPED_PROJECT_ALWAYS_SKIP_DIRS = new Set([".git"])
 const SCOPED_PROJECT_GENERATED_SKIP_DIRS = new Set(["node_modules", "dist", "build", ".next"])
 
@@ -39,6 +41,15 @@ interface ScopedPathTreeNode {
     fullPath: string
     children: Map<string, ScopedPathTreeNode>
 }
+
+type ScopedProjectPathEntry = { fullPath: string; relativePath: string; isDir: boolean }
+
+interface ScopedProjectPathCacheEntry {
+    promise: Promise<ScopedProjectPathEntry[]>
+    expiresAt: number
+}
+
+const scopedProjectPathCache = new Map<string, ScopedProjectPathCacheEntry>()
 
 function scopedGit(args: string[], cwd: string): Promise<ScopedGitResult> {
     return new Promise((resolve) => {
@@ -217,8 +228,57 @@ function getScopedTreeChildren(root: ScopedPathTreeNode, treePath: string): Open
 async function walkOpenADEProjectPaths(
     root: string,
     options: { includeDirs?: boolean; includeFiles?: boolean; includeHidden?: boolean; includeGenerated?: boolean } = {}
-): Promise<Array<{ fullPath: string; relativePath: string; isDir: boolean }>> {
-    const entries: Array<{ fullPath: string; relativePath: string; isDir: boolean }> = []
+): Promise<ScopedProjectPathEntry[]> {
+    const cacheKey = scopedProjectPathCacheKey(root, options)
+    const now = Date.now()
+    const cached = scopedProjectPathCache.get(cacheKey)
+    if (cached && cached.expiresAt > now) return cached.promise
+
+    const promise = walkOpenADEProjectPathsUncached(root, options)
+    scopedProjectPathCache.set(cacheKey, { promise, expiresAt: now + SCOPED_PROJECT_PATH_CACHE_TTL_MS })
+    promise.catch(() => {
+        if (scopedProjectPathCache.get(cacheKey)?.promise === promise) scopedProjectPathCache.delete(cacheKey)
+    })
+    trimScopedProjectPathCache()
+    return promise
+}
+
+function scopedProjectPathCacheKey(
+    root: string,
+    options: { includeDirs?: boolean; includeFiles?: boolean; includeHidden?: boolean; includeGenerated?: boolean }
+): string {
+    return [
+        path.resolve(root),
+        options.includeDirs === true ? "dirs" : "no-dirs",
+        options.includeFiles !== false ? "files" : "no-files",
+        options.includeHidden === true ? "hidden" : "no-hidden",
+        options.includeGenerated === true ? "generated" : "no-generated",
+    ].join("\0")
+}
+
+function trimScopedProjectPathCache(): void {
+    if (scopedProjectPathCache.size <= SCOPED_PROJECT_PATH_CACHE_MAX_ENTRIES) return
+    const entries = Array.from(scopedProjectPathCache.entries()).sort((a, b) => a[1].expiresAt - b[1].expiresAt)
+    for (const [key] of entries.slice(0, scopedProjectPathCache.size - SCOPED_PROJECT_PATH_CACHE_MAX_ENTRIES)) {
+        scopedProjectPathCache.delete(key)
+    }
+}
+
+function invalidateScopedProjectPathCache(root: string): void {
+    const prefix = `${path.resolve(root)}\0`
+    for (const key of scopedProjectPathCache.keys()) {
+        if (key.startsWith(prefix)) scopedProjectPathCache.delete(key)
+    }
+}
+
+async function walkOpenADEProjectPathsUncached(
+    root: string,
+    options: { includeDirs?: boolean; includeFiles?: boolean; includeHidden?: boolean; includeGenerated?: boolean } = {}
+): Promise<ScopedProjectPathEntry[]> {
+    const ripgrepEntries = await listOpenADEProjectPathsWithRipgrep(root, options)
+    if (ripgrepEntries) return ripgrepEntries
+
+    const entries: ScopedProjectPathEntry[] = []
     const queue = [root]
     const includeHidden = options.includeHidden === true
     const includeGenerated = options.includeGenerated === true
@@ -243,6 +303,62 @@ async function walkOpenADEProjectPaths(
         }
     }
     return entries
+}
+
+function listOpenADEProjectPathsWithRipgrep(
+    root: string,
+    options: { includeDirs?: boolean; includeFiles?: boolean; includeHidden?: boolean; includeGenerated?: boolean } = {}
+): Promise<ScopedProjectPathEntry[] | null> {
+    const args = ["--files"]
+    if (options.includeHidden === true) args.push("--hidden")
+    if (options.includeGenerated === true) {
+        args.push("--no-ignore")
+    } else {
+        for (const dir of SCOPED_PROJECT_GENERATED_SKIP_DIRS) {
+            args.push("--glob", `!${dir}/**`)
+        }
+    }
+    for (const dir of SCOPED_PROJECT_ALWAYS_SKIP_DIRS) {
+        args.push("--glob", `!${dir}/**`)
+    }
+
+    return new Promise((resolve) => {
+        execFile("rg", args, { cwd: root, maxBuffer: 50 * 1024 * 1024 }, (error, stdout) => {
+            if (error) {
+                resolve(null)
+                return
+            }
+
+            const includeFiles = options.includeFiles !== false
+            const includeDirs = options.includeDirs === true
+            const entries: ScopedProjectPathEntry[] = []
+            const dirs = new Set<string>()
+            const files = String(stdout)
+                .split("\n")
+                .map((line) => normalizeScopedTreeQuery(line))
+                .filter((line) => line.length > 0)
+                .slice(0, 10_000)
+
+            for (const relativePath of files) {
+                if (includeFiles) entries.push({ fullPath: path.join(root, relativePath), relativePath, isDir: false })
+                if (!includeDirs) continue
+                const parts = relativePath.split("/").filter(Boolean)
+                let current = ""
+                for (let index = 0; index < parts.length - 1; index++) {
+                    current = current ? `${current}/${parts[index]}` : parts[index]
+                    dirs.add(current)
+                }
+            }
+
+            if (includeDirs) {
+                for (const relativePath of Array.from(dirs).sort()) {
+                    entries.push({ fullPath: path.join(root, relativePath), relativePath, isDir: true })
+                }
+            }
+
+            resolve(entries)
+        })
+    })
 }
 
 export async function listOpenADEProjectFiles(
@@ -334,6 +450,7 @@ export async function writeOpenADEProjectFile(
     if (params.createDirs) await fs.mkdir(path.dirname(target), { recursive: true })
     const data = params.encoding === "base64" ? Buffer.from(params.content, "base64") : Buffer.from(params.content, "utf8")
     await fs.writeFile(target, data)
+    invalidateScopedProjectPathCache(root)
     return { repoId: params.repoId, taskId: params.taskId, path: params.path, size: data.byteLength }
 }
 

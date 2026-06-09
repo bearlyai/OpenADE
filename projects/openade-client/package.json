@@ -4,7 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "../electron/node_modules/.bin/tsgo --noEmit"
+    "generate:contracts": "node ../../scripts/generate-openade-contracts.mjs",
+    "check:contracts": "node ../../scripts/generate-openade-contracts.mjs --check",
+    "check:no-any": "node ../../scripts/check-no-explicit-any.mjs --self-test .",
+    "typecheck": "npm run check:contracts && npm run check:no-any && ../electron/node_modules/.bin/tsgo --noEmit",
+    "test": "../electron/node_modules/.bin/vitest run --reporter=verbose"
   },
   "exports": {
     ".": "./src/index.ts",

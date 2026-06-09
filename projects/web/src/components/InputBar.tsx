@@ -18,7 +18,7 @@ import type { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesMa
 import type { SmartEditorManager } from "../store/managers/SmartEditorManager"
 import type { TrayManager } from "../store/managers/TrayManager"
 import type { Comment } from "../types"
-import { processImageBlob } from "../utils/imageAttachment"
+import { type ImagePersistencePayload, processImageBlob } from "../utils/imageAttachment"
 import {
     getMetaDigitShortcutIndex,
     isMetaOnlyShortcut,
@@ -208,6 +208,7 @@ export const InputBar = observer(function InputBar({
         },
         [input, tray]
     )
+    const persistImage = useCallback((payload: ImagePersistencePayload) => input.persistImage(payload), [input])
     const focusEditorAtEnd = useCallback(() => {
         if (input.isDisabled) return
 
@@ -398,6 +399,7 @@ export const InputBar = observer(function InputBar({
                         fileMentionsDir={fileMentionsDir}
                         slashCommandsDir={slashCommandsDir}
                         sdkCapabilities={sdkCapabilities}
+                        persistImage={persistImage}
                         onKeyDown={handleEditorKeyDown}
                         allowGlobalShortcutsWhenEmpty
                         placeholder={input.isDisabled ? "Task is closed. Click Reopen to continue." : "What would you like to do?"}
@@ -411,12 +413,13 @@ export const InputBar = observer(function InputBar({
                     <input
                         ref={fileInputRef}
                         type="file"
+                        aria-label="Attach image"
                         accept="image/jpeg,image/png,image/gif,image/webp"
                         className="hidden"
                         onChange={(e) => {
                             const file = e.target.files?.[0]
                             if (file) {
-                                processImageBlob(file)
+                                processImageBlob(file, { persistImage })
                                     .then(({ attachment, dataUrl }) => editorManager.addImage(attachment, dataUrl))
                                     .catch((err) => console.error("[InputBar] Failed to process image:", err))
                                 e.target.value = ""
@@ -430,6 +433,7 @@ export const InputBar = observer(function InputBar({
                             input.isDisabled && "opacity-50 pointer-events-none"
                         )}
                         onClick={() => fileInputRef.current?.click()}
+                        aria-label="Attach image"
                         title="Attach image"
                     >
                         <ImagePlus size={14} />
@@ -452,6 +456,7 @@ export const InputBar = observer(function InputBar({
                                     type="button"
                                     className="btn absolute -top-1.5 -right-1.5 bg-base-300 p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
                                     onClick={() => editorManager.removeImage(img.id)}
+                                    aria-label="Remove image"
                                 >
                                     <X size={12} />
                                 </button>
@@ -467,6 +472,7 @@ export const InputBar = observer(function InputBar({
                         <input
                             type="text"
                             value={input.repeatState.stopOnText}
+                            aria-label="Stop on text"
                             onChange={(e) => input.repeatState!.setStopOnText(e.target.value)}
                             placeholder="optional"
                             className="btn flex-1 bg-transparent border border-border px-2 py-1 text-sm text-base-content placeholder:text-muted/50 outline-none focus:border-primary"
@@ -476,6 +482,7 @@ export const InputBar = observer(function InputBar({
                             type="number"
                             min={1}
                             value={input.repeatState.maxRuns}
+                            aria-label="Max runs"
                             onChange={(e) => input.repeatState!.setMaxRuns(Number.parseInt(e.target.value) || 1)}
                             className="btn w-16 bg-transparent border border-border px-2 py-1 text-sm text-base-content outline-none focus:border-primary"
                         />

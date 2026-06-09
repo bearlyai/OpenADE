@@ -65,6 +65,18 @@ export interface RuntimeRegisterOptions {
     validateParams?: RuntimeParamsValidator
 }
 
+export interface RuntimeSlowRequestEvent {
+    service: string
+    method: string
+    requestId: string
+    durationMs: number
+    queueWaitMs: number
+    handlerMs: number
+    connectionId: string
+    failed: boolean
+    errorCode?: string
+}
+
 export interface RuntimeServerOptions {
     serverName: string
     serverVersion?: string
@@ -74,6 +86,8 @@ export interface RuntimeServerOptions {
     livenessProbe?: RuntimeLivenessProbe
     notificationLogSize?: number
     clientRequestRetentionMs?: number
+    slowRequestThresholdMs?: number
+    onSlowRequest?: (event: RuntimeSlowRequestEvent) => void
 }
 
 interface ConnectedRuntimeConnection {
@@ -133,6 +147,11 @@ function isActiveRuntimeStatus(status: string | undefined): boolean {
     return status === "starting" || status === "running" || status === "orphaned"
 }
 
+function runtimeRequestLogValue(id: RuntimeRequest["id"]): string {
+    const value = String(id).replace(/[^\x20-\x7E]/g, "?")
+    return value.length > 80 ? `${value.slice(0, 80)}...` : value
+}
+
 interface RetainedRuntimeRequest {
     promise: Promise<RuntimeResponse>
     cleanupTimer: ReturnType<typeof setTimeout> | null
@@ -150,6 +169,8 @@ export class RuntimeServer {
     private readonly serverVersion?: string
     private readonly notificationLogSize: number
     private readonly clientRequestRetentionMs: number
+    private readonly slowRequestThresholdMs: number | null
+    private readonly onSlowRequest?: (event: RuntimeSlowRequestEvent) => void
     private readonly notificationLog: RuntimeNotification[] = []
     private readonly initializedConnections = new Set<string>()
     private readonly clientRequests = new Map<string, RetainedRuntimeRequest>()
@@ -162,6 +183,8 @@ export class RuntimeServer {
         this.protocolVersion = options.protocolVersion ?? 1
         this.notificationLogSize = Math.max(0, Math.floor(options.notificationLogSize ?? DEFAULT_NOTIFICATION_LOG_SIZE))
         this.clientRequestRetentionMs = Math.max(0, Math.floor(options.clientRequestRetentionMs ?? DEFAULT_CLIENT_REQUEST_RETENTION_MS))
+        this.slowRequestThresholdMs = typeof options.slowRequestThresholdMs === "number" ? Math.max(0, Math.floor(options.slowRequestThresholdMs)) : null
+        this.onSlowRequest = options.onSlowRequest
         this.agentProviders = options.agentProviders ?? []
         this.supervisor = new RuntimeSupervisor({ checkpointStore: options.checkpointStore, livenessProbe: options.livenessProbe })
 
@@ -232,6 +255,7 @@ export class RuntimeServer {
     }
 
     async handleMessage(connection: RuntimeConnection, raw: string): Promise<void> {
+        const queuedAtMs = Date.now()
         let message: unknown
         try {
             message = JSON.parse(raw)
@@ -253,11 +277,11 @@ export class RuntimeServer {
             return
         }
 
-        const response = await this.handleRequest(request.value, connection, { requireInitialized: true })
+        const response = await this.handleRequest(request.value, connection, { requireInitialized: true, queuedAtMs })
         connection.send(response)
     }
 
-    async handleRequest(request: RuntimeRequest, connection: RuntimeConnection, options: { requireInitialized?: boolean } = {}): Promise<RuntimeResponse> {
+    async handleRequest(request: RuntimeRequest, connection: RuntimeConnection, options: { requireInitialized?: boolean; queuedAtMs?: number } = {}): Promise<RuntimeResponse> {
         if (options.requireInitialized && request.method !== "initialize" && !this.initializedConnections.has(connection.id)) {
             return {
                 id: request.id,
@@ -284,7 +308,7 @@ export class RuntimeServer {
             const retained = this.clientRequests.get(clientKey)
             if (retained) return retained.promise.then((response) => this.responseWithId(response, request.id))
 
-            const requestPromise = this.invokeHandler(request, connection, entry).then((response) => {
+            const requestPromise = this.invokeHandler(request, connection, entry, options.queuedAtMs).then((response) => {
                 if ("error" in response) {
                     this.clientRequests.delete(clientKey)
                     return response
@@ -303,41 +327,82 @@ export class RuntimeServer {
             return requestPromise
         }
 
-        return this.invokeHandler(request, connection, entry)
+        return this.invokeHandler(request, connection, entry, options.queuedAtMs)
     }
 
     private responseWithId(response: RuntimeResponse, id: RuntimeRequest["id"]): RuntimeResponse {
         return "error" in response ? { id, error: response.error } : { id, result: response.result }
     }
 
-    private async invokeHandler(request: RuntimeRequest, connection: RuntimeConnection, entry: RegisteredRuntimeHandler): Promise<RuntimeResponse> {
+    private async invokeHandler(
+        request: RuntimeRequest,
+        connection: RuntimeConnection,
+        entry: RegisteredRuntimeHandler,
+        queuedAtMs = Date.now()
+    ): Promise<RuntimeResponse> {
+        const handlerStartedAt = Date.now()
+        let response: RuntimeResponse
         try {
             let params = request.params
             if (entry.validateParams) {
                 const validation = entry.validateParams(params)
                 if (!validation.ok) {
-                    return {
+                    response = {
                         id: request.id,
                         error: runtimeError(validation.error.code, validation.error.message, { path: validation.error.path }),
                     }
+                    this.recordSlowRequest(request, connection, queuedAtMs, handlerStartedAt, response)
+                    return response
                 }
                 params = validation.value
             }
             const result = await entry.handler(params, { connection, server: this })
             if (request.method === "initialize") this.initializedConnections.add(connection.id)
-            return { id: request.id, result: result === undefined ? null : result }
+            response = { id: request.id, result: result === undefined ? null : result }
         } catch (error) {
             if (error instanceof RuntimeHandlerError) {
-                return {
+                response = {
                     id: request.id,
                     error: runtimeError(error.code, error.message, error.data),
                 }
+                this.recordSlowRequest(request, connection, queuedAtMs, handlerStartedAt, response)
+                return response
             }
-            return {
+            response = {
                 id: request.id,
                 error: runtimeError("handler_error", error instanceof Error ? error.message : "Runtime handler failed"),
             }
         }
+        this.recordSlowRequest(request, connection, queuedAtMs, handlerStartedAt, response)
+        return response
+    }
+
+    private recordSlowRequest(
+        request: RuntimeRequest,
+        connection: RuntimeConnection,
+        queuedAtMs: number,
+        handlerStartedAt: number,
+        response: RuntimeResponse
+    ): void {
+        if (!this.onSlowRequest || this.slowRequestThresholdMs === null) return
+
+        const finishedAt = Date.now()
+        const durationMs = Math.max(0, finishedAt - queuedAtMs)
+        if (durationMs < this.slowRequestThresholdMs) return
+
+        const error = "error" in response ? response.error : undefined
+        const errorCode = error?.code
+        this.onSlowRequest({
+            service: this.serverName,
+            method: request.method,
+            requestId: runtimeRequestLogValue(request.id),
+            durationMs,
+            queueWaitMs: Math.max(0, handlerStartedAt - queuedAtMs),
+            handlerMs: Math.max(0, finishedAt - handlerStartedAt),
+            connectionId: connection.id,
+            failed: errorCode !== undefined,
+            ...(errorCode ? { errorCode } : {}),
+        })
     }
 
     private clientRequestKey(request: RuntimeRequest, connection: RuntimeConnection): string | undefined {

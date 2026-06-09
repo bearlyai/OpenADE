@@ -1,30 +1,69 @@
+import NiceModal from "@ebay/nice-modal-react"
+import { runInAction } from "mobx"
+import { act, createElement } from "react"
+import { createRoot } from "react-dom/client"
 import { describe, expect, it, vi } from "vitest"
+import * as Y from "yjs"
 import { OpenADEClient } from "../../../openade-client/src"
 import { type OpenADEModuleAdapters, createOpenADEModule } from "../../../openade-module/src/module"
 import { buildOpenADETaskResourceInventory } from "../../../openade-module/src/taskResourceInventory"
-import type { OpenADEProject, OpenADESnapshotPatchIndex, OpenADETask, OpenADETaskPreview, OpenADETaskPreviewUsage } from "../../../openade-module/src/types"
-import { act, createElement } from "react"
-import { createRoot } from "react-dom/client"
+import type {
+    OpenADECronInstallState,
+    OpenADELegacyResourcesImportRequest,
+    OpenADEMCPServer,
+    OpenADEPersonalSettings,
+    OpenADEProject,
+    OpenADEProjectFileWriteRequest,
+    OpenADESnapshotPatchIndex,
+    OpenADETask,
+    OpenADETaskPreview,
+    OpenADETaskPreviewUsage,
+    OpenADETurnStartRequest,
+} from "../../../openade-module/src/types"
 import { RuntimeLocalClient, type RuntimeLocalTransport } from "../../../runtime-client/src"
 import type { RuntimeMessage, RuntimeRecord, RuntimeRequest } from "../../../runtime-protocol/src"
 import { type RuntimeConnection, RuntimeServer } from "../../../runtime/src"
 import { analytics } from "../analytics"
 import { EnvironmentSetupView } from "../components/EnvironmentSetupView"
-import { SnapshotEventItem } from "../components/events/SnapshotEventItem"
 import { GitLogTray } from "../components/GitLogTray"
 import { ProcessesTray } from "../components/ProcessesTray"
 import { ViewPatch } from "../components/ViewPatch"
+import { ImageAttachments } from "../components/events/ImageAttachments"
+import { SnapshotEventItem } from "../components/events/SnapshotEventItem"
+import {
+    loadProcsEditorFile,
+    parseProcsEditorRaw,
+    readProcsEditorConfigs,
+    saveProcsEditorFile,
+    serializeProcsEditorRaw,
+} from "../components/procs/ProcsEditorModal"
+import { importCoreLegacyResourcesFromSelection } from "../components/settings/coreResourceMigration"
+import { CronsSidebarContent } from "../components/sidebar/CronList"
+import { dataFolderApi } from "../electronAPI/dataFolder"
 import { filesApi } from "../electronAPI/files"
 import { gitApi } from "../electronAPI/git"
 import { ProcessHandle } from "../electronAPI/process"
 import { snapshotsApi } from "../electronAPI/snapshots"
 import { OpenADEProductStore } from "../kernel/productStore"
-import { CodeStoreProvider } from "./context"
+import { createMcpServerStore } from "../persistence/mcpServerStore"
+import { createPersonalSettingsStore } from "../persistence/personalSettingsStore"
+import { createRepoStore } from "../persistence/repoStore"
+import type { ImageAttachment } from "../types"
 import type { SnapshotEventModel } from "./EventModel"
-import { CodeStore } from "./store"
 import { TaskEnvironment } from "./TaskEnvironment"
+import { CodeStoreProvider } from "./context"
+import type { ProductProjectProcessAccess } from "./managers/RepoProcessesManager"
+import { readProcsResultFromProductProcesses } from "./projectProcessReadResult"
+import { CodeStore, type CodeStoreLegacyStoreConnectors } from "./store"
 
 const now = "2026-05-31T00:00:00.000Z"
+const subprocessMocks = vi.hoisted(() => ({
+    setGlobalEnv: vi.fn(async () => ({ success: true })),
+}))
+
+vi.mock("../electronAPI/subprocess", () => ({
+    setGlobalEnv: subprocessMocks.setGlobalEnv,
+}))
 
 const project: OpenADEProject = {
     id: "repo-1",
@@ -138,8 +177,13 @@ interface RuntimeBridgeState {
     project: OpenADEProject | null
     task: OpenADETask | null
     taskUsage?: OpenADETaskPreviewUsage
+    usageBackfillRequests?: Array<{ repoId?: string; taskIds?: string[]; force?: boolean }>
+    usageRecalculateRequests?: Array<{ repoId: string; taskId: string }>
     resourceInventoryBranchMerged?: boolean | null
     taskReadRequests?: Array<{ repoId: string; taskId: string; hydrateSessionEvents: boolean | undefined }>
+    projectFiles?: Map<string, { content: string; encoding: "utf8" | "base64" }>
+    projectFileWrites?: OpenADEProjectFileWriteRequest[]
+    writtenImages?: Map<string, { data: string; ext: string; mediaType: string }>
     terminal?: {
         terminalId: string
         output: string[]
@@ -153,6 +197,12 @@ interface RuntimeBridgeState {
         output: string[]
         stopped: boolean
     }
+    personalSettings?: OpenADEPersonalSettings
+    mcpServers?: OpenADEMCPServer[]
+    cronInstallStates?: Record<string, Record<string, OpenADECronInstallState>>
+    legacyImportRequests?: OpenADELegacyResourcesImportRequest[]
+    turnStartRequests?: OpenADETurnStartRequest[]
+    snapshotReadCount?: number
 }
 
 function cloneProject(value: OpenADEProject): OpenADEProject {
@@ -193,6 +243,13 @@ function createBridgeState(): RuntimeBridgeState {
     return {
         project: cloneProject(project),
         task: cloneTask(task),
+        personalSettings: {
+            envVars: {},
+            theme: "system",
+            renderMarkdownMessages: true,
+        },
+        mcpServers: [],
+        cronInstallStates: {},
     }
 }
 
@@ -223,6 +280,10 @@ function requireStateTask(state: RuntimeBridgeState, taskId: string): OpenADETas
     return state.task
 }
 
+function taskEventRecord(value: unknown): value is Record<string, unknown> & { id: string } {
+    return typeof value === "object" && value !== null && !Array.isArray(value) && "id" in value && typeof value.id === "string"
+}
+
 function requireStateProject(state: RuntimeBridgeState, repoId: string): OpenADEProject {
     if (!state.project || state.project.id !== repoId) throw new Error(`Repo ${repoId} not found`)
     return state.project
@@ -236,15 +297,18 @@ const runtimeSearchFixture = {
 function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapters {
     return {
         version: () => "bridge-test-version",
-        readSnapshot: async () => ({
-            server: {
-                version: "bridge-test-version",
-                hostName: "bridge-test-host",
-                theme: { setting: "system", className: "code-theme-light" },
-            },
-            repos: projectsFromState(state),
-            workingTaskIds: [],
-        }),
+        readSnapshot: async () => {
+            state.snapshotReadCount = (state.snapshotReadCount ?? 0) + 1
+            return {
+                server: {
+                    version: "bridge-test-version",
+                    hostName: "bridge-test-host",
+                    theme: { setting: "system", className: "code-theme-light" },
+                },
+                repos: projectsFromState(state),
+                workingTaskIds: [],
+            }
+        },
         readProjects: async () => projectsFromState(state),
         readTaskList: async () => projectFromState(state)?.tasks ?? [],
         readTask: async (repoId, taskId, options) => {
@@ -256,6 +320,56 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
         readDataDocumentBase64: async () => null,
         saveDataDocumentBase64: unsupportedMutation("saveDataDocumentBase64"),
         deleteDataDocument: unsupportedMutation("deleteDataDocument"),
+        readMcpServers: async () => ({ servers: (state.mcpServers ?? []).map((server) => structuredClone(server)) }),
+        replaceMcpServers: async (params) => {
+            state.mcpServers = params.servers.map((server) => structuredClone(server))
+            return { servers: state.mcpServers.map((server) => structuredClone(server)), replacedServers: state.mcpServers.length }
+        },
+        upsertMcpServer: async (params) => {
+            const currentServers = state.mcpServers ?? []
+            const index = currentServers.findIndex((server) => server.id === params.server.id)
+            const created = index === -1
+            if (created) {
+                state.mcpServers = [...currentServers, structuredClone(params.server)]
+            } else {
+                state.mcpServers = currentServers.map((server) => (server.id === params.server.id ? structuredClone(params.server) : server))
+            }
+            return { server: structuredClone(params.server), created }
+        },
+        deleteMcpServer: async (params) => {
+            const currentServers = state.mcpServers ?? []
+            const deleted = currentServers.some((server) => server.id === params.serverId)
+            state.mcpServers = currentServers.filter((server) => server.id !== params.serverId)
+            return { serverId: params.serverId, deleted }
+        },
+        readPersonalSettings: async () => ({
+            settings: structuredClone(
+                state.personalSettings ?? {
+                    envVars: {},
+                    theme: "system",
+                    renderMarkdownMessages: true,
+                }
+            ),
+        }),
+        replacePersonalSettings: async (params) => {
+            state.personalSettings = structuredClone(params.settings)
+            return { settings: structuredClone(params.settings) }
+        },
+        readCronInstallState: async (params) => ({
+            repoId: params.repoId,
+            installations: structuredClone(state.cronInstallStates?.[params.repoId] ?? {}),
+        }),
+        replaceCronInstallState: async (params) => {
+            state.cronInstallStates = {
+                ...(state.cronInstallStates ?? {}),
+                [params.repoId]: structuredClone(params.installations),
+            }
+            return {
+                repoId: params.repoId,
+                installations: structuredClone(params.installations),
+                replacedInstallations: Object.keys(params.installations).length,
+            }
+        },
         createRepo: async (params) => {
             const repoId = params.repoId ?? "repo-created"
             const createdAt = params.createdAt ?? now
@@ -280,6 +394,7 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
             if (!state.task) state.taskUsage = undefined
         },
         startTurn: async (params) => {
+            state.turnStartRequests = [...(state.turnStartRequests ?? []), structuredClone(params)]
             const existingTaskId = params.inTaskId ?? state.task?.id
             const taskId = existingTaskId ?? "task-started"
             const repoId = params.repoId
@@ -381,6 +496,57 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
             state.taskUsage = undefined
             return { repoId: params.repoId, taskId: params.taskId, deleted: true }
         },
+        importLegacyResources: async (params) => {
+            state.legacyImportRequests = [...(state.legacyImportRequests ?? []), structuredClone(params)]
+            return {
+                images: {
+                    scannedTasks: 1,
+                    referencedImages: 1,
+                    importedImages: 1,
+                    alreadyImportedImages: 0,
+                    missingImages: [],
+                    conflictedImages: [],
+                    failedImages: [],
+                },
+                snapshots: null,
+                sessions: {
+                    scannedTasks: 1,
+                    referencedSessions: 1,
+                    importedSessions: 1,
+                    alreadyImportedSessions: 0,
+                    missingSessions: [],
+                    conflictedSessions: [],
+                    failedSessions: [],
+                },
+                skipped: [{ kind: "snapshots", code: "source_missing" }],
+            }
+        },
+        writeTaskImage: async (params) => {
+            const writtenImages = state.writtenImages ?? new Map<string, { data: string; ext: string; mediaType: string }>()
+            state.writtenImages = writtenImages
+            writtenImages.set(`${params.imageId}.${params.ext}`, {
+                data: params.data,
+                ext: params.ext,
+                mediaType: params.mediaType,
+            })
+            return {
+                imageId: params.imageId,
+                ext: params.ext,
+                mediaType: params.mediaType,
+                size: 3,
+                sha256: "runtime-code-store-image-sha256",
+            }
+        },
+        readStagedTaskImage: async (params) => {
+            const key = `${params.imageId}.${params.ext}`
+            const image = state.writtenImages?.get(key)
+            return {
+                imageId: params.imageId,
+                ext: params.ext,
+                mediaType: image?.mediaType,
+                data: image?.data ?? null,
+            }
+        },
         setupTaskEnvironment: async (params) => {
             const current = requireStateTask(state, params.taskId)
             state.task = {
@@ -460,6 +626,40 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
             }
             state.taskUsage = params.usage ?? state.taskUsage
         },
+        backfillTaskUsage: async (params) => {
+            state.usageBackfillRequests = [...(state.usageBackfillRequests ?? []), { repoId: params.repoId, taskIds: params.taskIds, force: params.force }]
+            const requestedTaskIds = params.taskIds ?? (state.task ? [state.task.id] : [])
+            const tasks = requestedTaskIds.map((taskId) => {
+                const current = requireStateTask(state, taskId)
+                const usage: OpenADETaskPreviewUsage = {
+                    usageVersion: 2,
+                    inputTokens: 34,
+                    outputTokens: 21,
+                    totalCostUsd: 0.002,
+                    eventCount: current.events.length,
+                    costByModel: { "gpt-bulk": 0.002 },
+                    durationMs: 233,
+                }
+                state.taskUsage = usage
+                return { repoId: params.repoId ?? current.repoId, taskId, usage }
+            })
+            return { updatedTasks: tasks.length, skippedTasks: 0, tasks }
+        },
+        recalculateTaskUsage: async (params) => {
+            const current = requireStateTask(state, params.taskId)
+            state.usageRecalculateRequests = [...(state.usageRecalculateRequests ?? []), { repoId: params.repoId, taskId: params.taskId }]
+            const usage: OpenADETaskPreviewUsage = {
+                usageVersion: 2,
+                inputTokens: 21,
+                outputTokens: 13,
+                totalCostUsd: 0.001,
+                eventCount: current.events.length,
+                costByModel: { "gpt-test": 0.001 },
+                durationMs: 144,
+            }
+            state.taskUsage = usage
+            return { usage }
+        },
         scopedHost: {
             listProjectFiles: async (params) => {
                 requireStateProject(state, params.repoId)
@@ -475,18 +675,47 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
             },
             readProjectFile: async (params) => {
                 requireStateProject(state, params.repoId)
-                if (params.path !== runtimeSearchFixture.path) throw new Error(`Project file ${params.path} not found`)
-                const tooLarge = runtimeSearchFixture.content.length > (params.maxBytes ?? Number.POSITIVE_INFINITY)
+                const configuredFile = state.projectFiles?.get(params.path)
+                const content =
+                    configuredFile?.content ??
+                    (params.path === runtimeSearchFixture.path
+                        ? runtimeSearchFixture.content
+                        : params.path === "openade.toml"
+                          ? [
+                                "[[process]]",
+                                'name = "Runtime Process"',
+                                'type = "task"',
+                                'command = "printf runtime-process"',
+                                "",
+                                "[[cron]]",
+                                'name = "Runtime Cron"',
+                                'schedule = "0 9 * * *"',
+                                'type = "do"',
+                                'prompt = "Run runtime cron"',
+                                "reuse_task = false",
+                                "",
+                            ].join("\n")
+                          : null)
+                if (content === null) throw new Error(`Project file ${params.path} not found`)
+                const tooLarge = content.length > (params.maxBytes ?? Number.POSITIVE_INFINITY)
                 return {
                     repoId: params.repoId,
                     path: params.path,
                     encoding: params.encoding ?? "utf8",
-                    size: runtimeSearchFixture.content.length,
+                    size: content.length,
                     tooLarge,
-                    content: tooLarge ? null : runtimeSearchFixture.content,
+                    content: tooLarge ? null : content,
                 }
             },
-            writeProjectFile: unsupportedMutation("writeProjectFile"),
+            writeProjectFile: async (params) => {
+                requireStateProject(state, params.repoId)
+                const encoding = params.encoding ?? "utf8"
+                state.projectFiles ??= new Map()
+                state.projectFileWrites ??= []
+                state.projectFiles.set(params.path, { content: params.content, encoding })
+                state.projectFileWrites.push({ ...params, encoding })
+                return { repoId: params.repoId, taskId: params.taskId, path: params.path, size: params.content.length }
+            },
             fuzzySearchProjectFiles: async (params) => {
                 requireStateProject(state, params.repoId)
                 return {
@@ -691,7 +920,19 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
                 state.terminal.exited = true
                 return { repoId: params.repoId, taskId: params.taskId, terminalId: params.terminalId, ok: true }
             },
-            readTaskImage: unsupportedMutation("readTaskImage"),
+            readTaskImage: async (params) => {
+                requireStateTask(state, params.taskId)
+                const key = `${params.imageId}.${params.ext}`
+                const image = state.writtenImages?.get(key)
+                return {
+                    repoId: params.repoId,
+                    taskId: params.taskId,
+                    imageId: params.imageId,
+                    ext: params.ext,
+                    mediaType: image?.mediaType,
+                    data: image?.data ?? null,
+                }
+            },
             readTaskGitSummary: async (params) => ({
                 repoId: params.repoId,
                 taskId: params.taskId,
@@ -859,7 +1100,282 @@ async function waitForRuntimeBridge(assertion: () => void): Promise<void> {
     await vi.waitFor(assertion, { timeout: 1000, interval: 10 })
 }
 
+function createInMemoryLegacyStoreConnectors(
+    onRepoConnect?: () => void,
+    onMcpConnect?: () => void,
+    onPersonalSettingsConnect?: () => void
+): CodeStoreLegacyStoreConnectors {
+    return {
+        async connectRepoStore() {
+            onRepoConnect?.()
+            const store = createRepoStore(new Y.Doc())
+            return {
+                store,
+                sync: async () => undefined,
+                refresh: async () => true,
+                disconnect: () => undefined,
+            }
+        },
+        async connectMcpServerStore() {
+            onMcpConnect?.()
+            const store = createMcpServerStore(new Y.Doc())
+            return {
+                store,
+                sync: async () => undefined,
+                disconnect: () => undefined,
+            }
+        },
+        async connectPersonalSettingsStore() {
+            onPersonalSettingsConnect?.()
+            const store = createPersonalSettingsStore(new Y.Doc())
+            return {
+                store,
+                sync: async () => undefined,
+                disconnect: () => undefined,
+            }
+        },
+    }
+}
+
+function installCleanCoreRolloutState(): () => void {
+    const previous = window.openadeAPI
+    Object.defineProperty(window, "openadeAPI", {
+        configurable: true,
+        writable: true,
+        value: {
+            ...previous,
+            app: {
+                ...previous?.app,
+                smokeTest: false,
+            },
+            core: {
+                ...previous?.core,
+                rolloutState: {
+                    status: "connected",
+                    source: "managed",
+                    reason: "managed-core",
+                    automatic: true,
+                    legacyYjsDocumentsPresent: false,
+                    legacyYjsMigrationAccepted: false,
+                },
+            },
+        },
+    })
+
+    return () => {
+        window.openadeAPI = previous
+    }
+}
+
 describe("CodeStore runtime product store bridge", () => {
+    it("starts clean managed Core product reads without opening the legacy repo Yjs document", async () => {
+        subprocessMocks.setGlobalEnv.mockClear()
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            personalSettings: {
+                envVars: { OPENADE_TEST_ENV: "core" },
+                theme: "code-theme-clean",
+                renderMarkdownMessages: false,
+                newTaskHarnessId: "codex",
+                newTaskModelId: "gpt-5.3-codex",
+            },
+        })
+        let repoConnectCount = 0
+        let mcpConnectCount = 0
+        let personalSettingsConnectCount = 0
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(
+                () => {
+                    repoConnectCount += 1
+                },
+                () => {
+                    mcpConnectCount += 1
+                },
+                () => {
+                    personalSettingsConnectCount += 1
+                }
+            ),
+        })
+
+        try {
+            await codeStore.initializeStores()
+
+            expect(repoConnectCount).toBe(0)
+            expect(mcpConnectCount).toBe(0)
+            expect(personalSettingsConnectCount).toBe(0)
+            expect(codeStore.repoStore).toBeNull()
+            expect(codeStore.personalSettingsStore?.settings.current.theme).toBe("code-theme-clean")
+            expect(codeStore.personalSettingsStore?.settings.current.renderMarkdownMessages).toBe(false)
+            expect(codeStore.defaultHarnessId).toBe("codex")
+            expect(codeStore.defaultModel).toBe("gpt-5.3-codex")
+            codeStore.personalSettingsStore?.settings.set({ theme: "code-theme-black" })
+            await vi.waitFor(() => expect(state.personalSettings?.theme).toBe("code-theme-black"))
+            expect(codeStore.mcpServerStore).not.toBeNull()
+            expect(codeStore.crons.started).toBe(false)
+            expect(subprocessMocks.setGlobalEnv).not.toHaveBeenCalled()
+            expect(codeStore.runtimeProductSnapshot?.repos).toHaveLength(1)
+            expect(codeStore.repos.repos.map((repo) => repo.id)).toEqual(["repo-1"])
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("projects runtime MCP settings into the classic manager and persists mutations", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            mcpServers: [
+                {
+                    id: "mcp-http-1",
+                    name: "Runtime HTTP",
+                    transportType: "http",
+                    enabled: true,
+                    url: "https://mcp.example.test/mcp",
+                    headers: { "X-Test": "runtime" },
+                    oauthTokens: { accessToken: "token-1", tokenType: "Bearer" },
+                    healthStatus: "healthy",
+                    createdAt: now,
+                    updatedAt: now,
+                },
+                {
+                    id: "mcp-stdio-1",
+                    name: "Runtime Stdio",
+                    transportType: "stdio",
+                    enabled: true,
+                    command: "node",
+                    args: ["server.js"],
+                    envVars: { NODE_ENV: "test" },
+                    cwd: "/tmp/runtime-mcp",
+                    healthStatus: "unknown",
+                    createdAt: now,
+                    updatedAt: now,
+                },
+            ],
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        runInAction(() => {
+            codeStore.mcpServerStore = createMcpServerStore(new Y.Doc())
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.mcpServers.initializeProductSettingsProjection()
+
+            expect(codeStore.mcpServers.servers).toEqual([
+                expect.objectContaining({ id: "mcp-http-1", name: "Runtime HTTP", transportType: "http" }),
+                expect.objectContaining({ id: "mcp-stdio-1", cwd: "/tmp/runtime-mcp" }),
+            ])
+
+            await codeStore.mcpServers.updateServer("mcp-stdio-1", { enabled: false, cwd: "/tmp/updated-mcp" })
+            expect((state.mcpServers ?? []).find((server) => server.id === "mcp-stdio-1")).toMatchObject({
+                enabled: false,
+                cwd: "/tmp/updated-mcp",
+            })
+
+            await codeStore.mcpServers.deleteServer("mcp-http-1")
+            expect((state.mcpServers ?? []).map((server) => server.id)).toEqual(["mcp-stdio-1"])
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("imports legacy MCP rows when runtime settings are empty", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const legacyMcpStore = createMcpServerStore(new Y.Doc())
+        legacyMcpStore.servers.push({
+            id: "legacy-mcp-1",
+            name: "Legacy MCP",
+            transportType: "stdio",
+            enabled: true,
+            command: "node",
+            args: ["legacy.js"],
+            envVars: { LEGACY: "1" },
+            cwd: "/tmp/legacy-mcp",
+            healthStatus: "unknown",
+            createdAt: now,
+            updatedAt: now,
+        })
+        runInAction(() => {
+            codeStore.mcpServerStore = legacyMcpStore
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.mcpServers.initializeProductSettingsProjection()
+
+            expect(state.mcpServers).toEqual([expect.objectContaining({ id: "legacy-mcp-1", cwd: "/tmp/legacy-mcp" })])
+            expect(codeStore.mcpServers.servers).toEqual([expect.objectContaining({ id: "legacy-mcp-1", cwd: "/tmp/legacy-mcp" })])
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("routes legacy resource imports through the runtime product API and refreshes cached snapshot state", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            const initialSnapshotReads = state.snapshotReadCount ?? 0
+            const legacyTaskRefresh = vi.spyOn(codeStore, "refreshTaskStoreFromStorage")
+            const legacyRepoRefresh = vi.spyOn(codeStore, "refreshRepoStoreFromStorage")
+
+            const result = await importCoreLegacyResourcesFromSelection({
+                store: codeStore,
+                selectDataDir: async () => "/tmp/legacy-openade-data",
+                importSessions: true,
+            })
+
+            if (!result) throw new Error("expected selected legacy resource import to run")
+            expect(state.legacyImportRequests).toHaveLength(1)
+            expect(state.legacyImportRequests?.[0]).toMatchObject({
+                dataDir: "/tmp/legacy-openade-data",
+                importSessions: true,
+            })
+            expect(state.legacyImportRequests?.[0]?.clientRequestId).toEqual(expect.any(String))
+            expect(result.images?.importedImages).toBe(1)
+            expect(result.sessions?.importedSessions).toBe(1)
+            expect(result.skipped).toEqual([{ kind: "snapshots", code: "source_missing" }])
+            expect(state.snapshotReadCount ?? 0).toBeGreaterThan(initialSnapshotReads)
+            expect(legacyTaskRefresh).not.toHaveBeenCalled()
+            expect(legacyRepoRefresh).not.toHaveBeenCalled()
+
+            legacyTaskRefresh.mockRestore()
+            legacyRepoRefresh.mockRestore()
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
     it("hydrates a desktop runtime-backed snapshot and task through a real local runtime client", async () => {
         const { client, runtime } = createRuntimeBackedClient()
         const codeStore = new CodeStore({
@@ -919,6 +1435,185 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
+    it("coalesces duplicate runtime task reads while preserving explicit full-history hydration", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            taskReadRequests: [],
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            state.taskReadRequests = []
+            const [first, second, third] = await Promise.all([
+                codeStore.loadRuntimeProductTask("repo-1", "task-1"),
+                codeStore.loadRuntimeProductTask("repo-1", "task-1"),
+                codeStore.getRuntimeProductTask("repo-1", "task-1"),
+            ])
+
+            expect(first?.id).toBe("task-1")
+            expect(second?.id).toBe("task-1")
+            expect(third?.id).toBe("task-1")
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+
+            state.taskReadRequests = []
+            await Promise.all([
+                codeStore.loadRuntimeProductTask("repo-1", "task-1", { hydrateSessionEvents: false }),
+                codeStore.loadRuntimeProductTask("repo-1", "task-1", { hydrateSessionEvents: true }),
+            ])
+
+            expect(state.taskReadRequests).toEqual(
+                expect.arrayContaining([
+                    { repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false },
+                    { repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: true },
+                ])
+            )
+            expect(state.taskReadRequests).toHaveLength(2)
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("renders classic action images through the runtime product API without reading legacy image files", async () => {
+        const image = {
+            id: "runtime-image-1",
+            mediaType: "image/png",
+            ext: "png",
+            originalWidth: 2,
+            originalHeight: 1,
+            resizedWidth: 2,
+            resizedHeight: 1,
+        }
+        const imageData = "cnVudGltZS1pbWFnZQ=="
+        const taskWithImage: OpenADETask = {
+            ...cloneTask(task),
+            events: task.events.map((event) => (taskEventRecord(event) && event.id === "event-1" ? { ...event, images: [image] } : event)),
+        }
+        const { client, runtime } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            task: taskWithImage,
+            writtenImages: new Map([[`${image.id}.${image.ext}`, { data: imageData, ext: image.ext, mediaType: image.mediaType }]]),
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const legacyImageLoad = vi.spyOn(dataFolderApi, "load").mockRejectedValue(new Error("legacy image data folder should not be used"))
+        const createObjectURL = vi.fn(() => "blob:runtime-image")
+        const revokeObjectURL = vi.fn()
+        const originalCreateObjectURL = URL.createObjectURL
+        const originalRevokeObjectURL = URL.revokeObjectURL
+        Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL })
+        Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL })
+        ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+        const container = document.createElement("div")
+        document.body.appendChild(container)
+        const root = createRoot(container)
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            await expect(
+                codeStore.readProductTaskImage({
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    imageId: image.id,
+                    ext: image.ext,
+                })
+            ).resolves.toMatchObject({
+                repoId: "repo-1",
+                taskId: "task-1",
+                imageId: image.id,
+                ext: image.ext,
+                mediaType: image.mediaType,
+                data: imageData,
+            })
+
+            await act(async () => {
+                root.render(createElement(CodeStoreProvider, { store: codeStore }, createElement(ImageAttachments, { images: [image], taskId: "task-1" })))
+                await new Promise((resolve) => setTimeout(resolve, 20))
+            })
+            expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:runtime-image")
+            expect(createObjectURL).toHaveBeenCalledTimes(1)
+            expect(legacyImageLoad).not.toHaveBeenCalled()
+        } finally {
+            act(() => root.unmount())
+            container.remove()
+            legacyImageLoad.mockRestore()
+            Object.defineProperty(URL, "createObjectURL", { configurable: true, value: originalCreateObjectURL })
+            Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: originalRevokeObjectURL })
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("restores SmartEditor stashed image previews through runtime staged image reads", async () => {
+        const stashKey = "code:stashedDrafts:repo-1:task-create"
+        localStorage.removeItem(stashKey)
+        const { client, runtime, state } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const image: ImageAttachment = {
+            id: "staged-preview",
+            mediaType: "image/png",
+            ext: "png",
+            originalWidth: 2,
+            originalHeight: 1,
+            resizedWidth: 2,
+            resizedHeight: 1,
+        }
+        const legacyImageLoad = vi.spyOn(dataFolderApi, "load").mockRejectedValue(new Error("legacy staged image data folder should not be used"))
+        const createObjectURL = vi.fn(() => "blob:runtime-staged-image")
+        const originalCreateObjectURL = URL.createObjectURL
+        Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.persistProductTaskImage({
+                id: image.id,
+                ext: image.ext,
+                mediaType: image.mediaType,
+                data: new Uint8Array([4, 5, 6]).buffer,
+            })
+            expect(state.writtenImages?.get("staged-preview.png")).toEqual({ data: "BAUG", ext: "png", mediaType: "image/png" })
+
+            const manager = codeStore.smartEditors.getManager("task-create", "repo-1")
+            manager.addImage(image, "blob:pending-staged-preview")
+            expect(manager.stashCurrentDraft()).not.toBeNull()
+
+            codeStore.smartEditors.disposeManager("task-create", "repo-1")
+            const restoredManager = codeStore.smartEditors.getManager("task-create", "repo-1")
+            await vi.waitFor(() => {
+                expect(restoredManager.stashedDrafts[0]?.snapshot.pendingImageDataUrls.get(image.id)).toBe("blob:runtime-staged-image")
+            })
+
+            expect(createObjectURL).toHaveBeenCalledTimes(1)
+            expect(legacyImageLoad).not.toHaveBeenCalled()
+        } finally {
+            localStorage.removeItem(stashKey)
+            legacyImageLoad.mockRestore()
+            Object.defineProperty(URL, "createObjectURL", { configurable: true, value: originalCreateObjectURL })
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
     it("refreshes runtime task state after a mutation without using legacy store refreshes", async () => {
         const { client, runtime, state } = createRuntimeBackedClient()
         const codeStore = new CodeStore({
@@ -971,7 +1666,7 @@ describe("CodeStore runtime product store bridge", () => {
             await codeStore.tasks.markTaskViewed("task-1")
 
             expect(codeStore.getTaskPreviewsForRepo("repo-1")[0]?.lastViewedAt).toBeDefined()
-            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+            expect(state.taskReadRequests).toEqual([])
             expect(legacyTaskRefresh).not.toHaveBeenCalled()
             expect(legacyRepoRefresh).not.toHaveBeenCalled()
         } finally {
@@ -1052,6 +1747,44 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
+    it("uses the Core bulk usage backfill method for clean managed-Core stats backfill", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            const legacyTaskRead = vi.spyOn(codeStore, "getTaskStore")
+            const legacyRepoRefresh = vi.spyOn(codeStore, "refreshRepoStoreFromStorage")
+
+            state.taskReadRequests = []
+            state.usageBackfillRequests = []
+            state.usageRecalculateRequests = []
+            await codeStore.backfillTaskUsagePreviews([{ repoId: "repo-1", taskId: "task-1" }])
+
+            expect(state.usageBackfillRequests).toEqual([{ repoId: "repo-1", taskIds: ["task-1"], force: undefined }])
+            expect(state.usageRecalculateRequests).toEqual([])
+            expect(state.taskReadRequests).toEqual([])
+            expect(legacyTaskRead).not.toHaveBeenCalled()
+            expect(legacyRepoRefresh).not.toHaveBeenCalled()
+            expect(codeStore.getTaskPreviewReposForStats()[0]?.tasks[0]?.usage).toMatchObject({
+                usageVersion: 2,
+                inputTokens: 34,
+                eventCount: 1,
+            })
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
     it("refreshes runtime repo state after repo mutations without using legacy store refreshes", async () => {
         const { client, runtime } = createRuntimeBackedClient({ project: null, task: null })
         const codeStore = new CodeStore({
@@ -1089,7 +1822,7 @@ describe("CodeStore runtime product store bridge", () => {
     })
 
     it("routes classic task, comment, review, and turn mutations through the runtime product store", async () => {
-        const { client, runtime } = createRuntimeBackedClient()
+        const { client, runtime, state } = createRuntimeBackedClient()
         const codeStore = new CodeStore({
             getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
             navigateToTask: () => undefined,
@@ -1126,6 +1859,14 @@ describe("CodeStore runtime product store bridge", () => {
 
             await codeStore.tasks.setSessionId({ taskId: "task-1", key: "review", sessionId: "session-runtime" })
             expect(codeStore.tasks.getTask("task-1")?.sessionIds).toEqual(expect.objectContaining({ review: "session-runtime" }))
+
+            await codeStore.persistProductTaskImage({
+                id: "runtime-upload",
+                ext: "png",
+                mediaType: "image/png",
+                data: new Uint8Array([1, 2, 3]).buffer,
+            })
+            expect(state.writtenImages?.get("runtime-upload.png")).toEqual({ data: "AQID", ext: "png", mediaType: "image/png" })
 
             await codeStore.tasks.addDeviceEnvironment("task-1", {
                 id: "device-1",
@@ -1172,6 +1913,73 @@ describe("CodeStore runtime product store bridge", () => {
             expect(legacyTaskRefresh).not.toHaveBeenCalled()
             expect(legacyRepoRefresh).not.toHaveBeenCalled()
         } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("runs classic repeat turns through the runtime product store without legacy task reads", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+            const taskModel = codeStore.tasks.getTaskModel("task-1")
+            expect(taskModel).not.toBeNull()
+            taskModel?.input.setValue("Repeat through runtime product store")
+
+            const legacyTaskRead = vi.spyOn(codeStore, "getTaskStore")
+            const legacyTaskRefresh = vi.spyOn(codeStore, "refreshTaskStoreFromStorage")
+            const legacyRepoRefresh = vi.spyOn(codeStore, "refreshRepoStoreFromStorage")
+
+            codeStore.repeat.setMaxRuns(2)
+            codeStore.repeat.start("task-1")
+
+            await waitForRuntimeBridge(() => {
+                expect(state.turnStartRequests).toHaveLength(1)
+            })
+            expect(state.turnStartRequests?.[0]).toMatchObject({
+                repoId: "repo-1",
+                type: "do",
+                input: "Repeat through runtime product store",
+                inTaskId: "task-1",
+                label: "Repeat",
+                includeComments: false,
+            })
+            expect(codeStore.repeat.iterationCount).toBe(1)
+
+            codeStore.execution.notifyAfterEvent("task-1", "do", true)
+            await waitForRuntimeBridge(() => {
+                expect(state.turnStartRequests).toHaveLength(2)
+            })
+            expect(state.turnStartRequests?.[1]).toMatchObject({
+                repoId: "repo-1",
+                type: "do",
+                input: "Repeat through runtime product store",
+                inTaskId: "task-1",
+                label: "Repeat",
+                includeComments: false,
+            })
+            expect(codeStore.repeat.iterationCount).toBe(2)
+
+            codeStore.execution.notifyAfterEvent("task-1", "do", true)
+            expect(codeStore.repeat.isActive).toBe(false)
+            expect(state.turnStartRequests).toHaveLength(2)
+            expect(codeStore.tasks.getTask("task-1")?.events).toEqual(
+                expect.arrayContaining([expect.objectContaining({ userInput: "Repeat through runtime product store" })])
+            )
+            expect(legacyTaskRead).not.toHaveBeenCalled()
+            expect(legacyTaskRefresh).not.toHaveBeenCalled()
+            expect(legacyRepoRefresh).not.toHaveBeenCalled()
+        } finally {
+            codeStore.repeat.stop()
             codeStore.disconnectAllStores()
             await runtime.close()
         }
@@ -1504,6 +2312,7 @@ describe("CodeStore runtime product store bridge", () => {
             const runtimeProcessList = vi.spyOn(codeStore, "listProductProjectProcesses")
 
             await codeStore.crons.startAll()
+            await codeStore.crons.ensureRepoConfigLoaded("repo-1")
 
             expect(runtimeProcessList).toHaveBeenCalledWith({ repoId: "repo-1" })
             expect(codeStore.crons.getCronsForRepo("repo-1")).toEqual([
@@ -1520,6 +2329,266 @@ describe("CodeStore runtime product store bridge", () => {
             runtimeProcessList.mockRestore()
         } finally {
             codeStore.crons.stop()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("persists classic cron install state through runtime product APIs without data-folder reads", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient({
+            project: { ...project, path: "/tmp/runtime-repo" },
+            task: { ...task, isolationStrategy: { type: "head" } },
+            cronInstallStates: {
+                "repo-1": {
+                    "openade.toml::Runtime Cron": {
+                        cronId: "openade.toml::Runtime Cron",
+                        enabled: false,
+                        installedAt: "2026-05-30T00:00:00.000Z",
+                    },
+                },
+            },
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const legacyLoad = vi.spyOn(dataFolderApi, "load").mockRejectedValue(new Error("legacy cron data folder should not be used"))
+        const legacySave = vi.spyOn(dataFolderApi, "save").mockRejectedValue(new Error("legacy cron data folder should not be used"))
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            await codeStore.crons.ensureRepoConfigLoaded("repo-1")
+            expect(codeStore.crons.getCronsForRepo("repo-1")).toEqual([
+                expect.objectContaining({
+                    def: expect.objectContaining({ id: "openade.toml::Runtime Cron" }),
+                    installed: true,
+                    enabled: false,
+                }),
+            ])
+
+            await codeStore.crons.toggleCron("repo-1", "openade.toml::Runtime Cron", true)
+            expect(state.cronInstallStates?.["repo-1"]?.["openade.toml::Runtime Cron"]).toEqual(
+                expect.objectContaining({
+                    cronId: "openade.toml::Runtime Cron",
+                    enabled: true,
+                    installedAt: "2026-05-30T00:00:00.000Z",
+                })
+            )
+            expect(legacyLoad).not.toHaveBeenCalled()
+            expect(legacySave).not.toHaveBeenCalled()
+        } finally {
+            legacyLoad.mockRestore()
+            legacySave.mockRestore()
+            codeStore.crons.stop()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("opens the classic cron editor with repo-scoped runtime process config access", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient({
+            project: { ...project, path: "/tmp/runtime-repo" },
+            task: { ...task, isolationStrategy: { type: "head" } },
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const runtimeProcessList = vi.spyOn(codeStore, "listProductProjectProcesses")
+        const runtimeProcessStop = vi.spyOn(codeStore, "stopProductProjectProcess")
+        const modalShow = vi.spyOn(NiceModal, "show").mockResolvedValue(undefined)
+        ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+        const container = document.createElement("div")
+        document.body.appendChild(container)
+        const root = createRoot(container)
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            await act(async () => {
+                root.render(createElement(CodeStoreProvider, { store: codeStore }, createElement(CronsSidebarContent, { workspaceId: "repo-1" })))
+            })
+
+            await vi.waitFor(() => {
+                expect(container.textContent).toContain("Runtime Cron")
+                expect(runtimeProcessList).toHaveBeenCalledWith({ repoId: "repo-1" })
+            })
+
+            const cronLabel = Array.from(container.querySelectorAll("span")).find((candidate) => candidate.textContent === "Runtime Cron")
+            if (!(cronLabel instanceof HTMLSpanElement)) throw new Error("Runtime cron row was not rendered")
+
+            await act(async () => {
+                cronLabel.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }))
+            })
+
+            type CronEditorModalProps = {
+                initialTab?: string
+                initialFilePath?: string
+                productScope?: { repoId: string; taskId?: string } | null
+                productAccess?: ProductProjectProcessAccess | null
+            }
+            const shownProps = modalShow.mock.calls.at(-1)?.[1] as CronEditorModalProps | undefined
+            expect(shownProps).toEqual(
+                expect.objectContaining({
+                    initialTab: "crons",
+                    initialFilePath: "/tmp/runtime-repo/openade.toml",
+                    productScope: { repoId: "repo-1" },
+                    productAccess: expect.any(Object),
+                })
+            )
+
+            state.projectProcess = {
+                processId: "process-runtime-test",
+                running: true,
+                output: [],
+                stopped: false,
+            }
+            await shownProps?.productAccess?.stopProjectProcess({ processId: "process-runtime-test" })
+
+            expect(runtimeProcessStop).toHaveBeenCalledWith({ repoId: "repo-1", taskId: undefined, processId: "process-runtime-test" })
+            expect(state.projectProcess.stopped).toBe(true)
+        } finally {
+            act(() => root.unmount())
+            container.remove()
+            runtimeProcessList.mockRestore()
+            runtimeProcessStop.mockRestore()
+            modalShow.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("loads classic process editor files through scoped runtime project reads", async () => {
+        const { client, runtime } = createRuntimeBackedClient({
+            project: { ...project, path: "/tmp/runtime-repo" },
+            task: { ...task, isolationStrategy: { type: "head" } },
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const runtimeProcessList = vi.spyOn(codeStore, "listProductProjectProcesses")
+        const runtimeFileRead = vi.spyOn(codeStore, "readProductProjectFile")
+        const productScope = { repoId: "repo-1" }
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            const configs = await readProcsEditorConfigs({
+                codeStore,
+                searchPath: "/tmp/runtime-repo",
+                productScope,
+            })
+            expect(runtimeProcessList).toHaveBeenCalledWith({ repoId: "repo-1", taskId: undefined })
+            expect(configs.configs[0]?.relativePath).toBe("openade.toml")
+
+            const editable = await loadProcsEditorFile({
+                codeStore,
+                filePath: "/tmp/runtime-repo/openade.toml",
+                repoRoot: configs.repoRoot,
+                searchPath: "/tmp/runtime-repo",
+                productScope,
+            })
+
+            expect(runtimeFileRead).toHaveBeenCalledWith({ repoId: "repo-1", taskId: undefined, path: "openade.toml", encoding: "utf8" })
+            expect(editable).toEqual(
+                expect.objectContaining({
+                    filePath: "/tmp/runtime-repo/openade.toml",
+                    relativePath: "openade.toml",
+                    processes: [expect.objectContaining({ name: "Runtime Process", command: "printf runtime-process", type: "task" })],
+                    crons: [expect.objectContaining({ name: "Runtime Cron", prompt: "Run runtime cron", reuseTask: false })],
+                    rawContent: expect.stringContaining("[[cron]]"),
+                })
+            )
+
+            await expect(
+                parseProcsEditorRaw({
+                    rawContent: editable.rawContent,
+                    relativePath: editable.relativePath,
+                    productScope,
+                })
+            ).resolves.toEqual(
+                expect.objectContaining({
+                    processes: [expect.objectContaining({ name: "Runtime Process" })],
+                    crons: [expect.objectContaining({ name: "Runtime Cron" })],
+                })
+            )
+
+            await expect(
+                serializeProcsEditorRaw({
+                    processes: editable.processes,
+                    crons: editable.crons,
+                    productScope,
+                })
+            ).resolves.toContain('command = "printf runtime-process"')
+        } finally {
+            runtimeProcessList.mockRestore()
+            runtimeFileRead.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("saves classic process config edits through scoped runtime project file writes", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient({
+            project: { ...project, path: "/tmp/runtime-repo" },
+            task: { ...task, isolationStrategy: { type: "head" } },
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const runtimeFileWrite = vi.spyOn(codeStore, "writeProductProjectFile")
+        const runtimeProcessList = vi.spyOn(codeStore, "listProductProjectProcesses")
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            const result = await saveProcsEditorFile({
+                codeStore,
+                selectedFilePath: "/tmp/runtime-repo/openade.toml",
+                relativePath: "openade.toml",
+                processes: [{ name: "Runtime Process", type: "task", command: "npm test" }],
+                crons: [{ name: "Runtime Cron", schedule: "0 9 * * *", type: "do", prompt: "Run runtime cron", reuseTask: false }],
+                searchPath: "/tmp/runtime-repo",
+                productScope: { repoId: "repo-1", taskId: "task-1" },
+            })
+
+            expect(runtimeFileWrite).toHaveBeenCalledWith({
+                repoId: "repo-1",
+                taskId: "task-1",
+                path: "openade.toml",
+                encoding: "utf8",
+                content: expect.stringContaining("[[process]]"),
+                createDirs: true,
+            })
+            expect(runtimeProcessList).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1" })
+            expect(state.projectFileWrites).toEqual([
+                expect.objectContaining({
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    path: "openade.toml",
+                    encoding: "utf8",
+                    createDirs: true,
+                }),
+            ])
+            expect(state.projectFiles?.get("openade.toml")?.content).toContain('command = "npm test"')
+            expect(result?.configs[0]?.relativePath).toBe("openade.toml")
+        } finally {
+            runtimeFileWrite.mockRestore()
+            runtimeProcessList.mockRestore()
             codeStore.disconnectAllStores()
             await runtime.close()
         }
@@ -1676,6 +2745,58 @@ describe("CodeStore runtime product store bridge", () => {
             container.remove()
             rawProcessStart.mockRestore()
             runtimeProcessReconnect.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("stops stale runtime-owned processes through scoped runtime methods after config edits", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient({
+            project: { ...project, path: "/tmp/runtime-repo" },
+            task: { ...task, isolationStrategy: { type: "head" } },
+        })
+        state.projectProcess = {
+            processId: "process-runtime-test",
+            running: true,
+            output: ["existing runtime process output\n"],
+            stopped: false,
+        }
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const runtimeProcessStop = vi.spyOn(codeStore, "stopProductProjectProcess")
+        const context = { type: "repo" as const, root: "/tmp/runtime-repo" }
+        const productAccess = {
+            startProjectProcess: (args: { definitionId: string }) =>
+                codeStore.startProductProjectProcess({ repoId: "repo-1", taskId: "task-1", definitionId: args.definitionId }),
+            reconnectProjectProcess: (args: { processId: string }) =>
+                codeStore.reconnectProductProjectProcess({ repoId: "repo-1", taskId: "task-1", processId: args.processId }),
+            stopProjectProcess: (args: { processId: string }) =>
+                codeStore.stopProductProjectProcess({ repoId: "repo-1", taskId: "task-1", processId: args.processId }),
+        }
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            const result = await codeStore.listProductProjectProcesses({ repoId: "repo-1", taskId: "task-1" })
+            codeStore.repoProcesses.syncProductProcesses(context, readProcsResultFromProductProcesses(result), result)
+
+            expect(codeStore.repoProcesses.getProcessesForContext(context).map((instance) => instance.id)).toEqual(["openade.toml::Runtime Process"])
+
+            await codeStore.repoProcesses.stopProcessesMissingFromConfig({
+                context,
+                validProcessIds: new Set(),
+                productAccess,
+            })
+
+            expect(runtimeProcessStop).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1", processId: "process-runtime-test" })
+            expect(state.projectProcess.stopped).toBe(true)
+            expect(codeStore.repoProcesses.getProcessesForContext(context)).toEqual([])
+        } finally {
+            runtimeProcessStop.mockRestore()
             codeStore.disconnectAllStores()
             await runtime.close()
         }
@@ -2343,7 +3464,7 @@ describe("CodeStore runtime product store bridge", () => {
                     }),
                 ])
             })
-            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+            expect(state.taskReadRequests).toEqual([])
 
             state.task = null
             state.taskReadRequests = []

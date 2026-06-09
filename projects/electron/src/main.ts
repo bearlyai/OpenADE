@@ -60,6 +60,10 @@ const main = () => {
     }
     logger.info("OpenADE starting with versions:", process.versions)
     loadSentry() // Register IPC handlers for device config
+    // The preload reads OPENADE_CORE_RUNTIME_URL synchronously while the window boots.
+    // Start/publish managed Core before creating the BrowserWindow so Core-backed
+    // product reads do not depend on startup timing.
+    loadRuntimeCore({ isDev })
     loadExecutorWindow()
     loadMoveToApplications()
     loadAutoUpdater()
@@ -74,7 +78,6 @@ const main = () => {
     loadDataFolder()
     loadCodeWindowFrame()
     loadFilePreviewProtocol()
-    loadRuntimeCore()
     if (companionEnabled) {
         loadCompanion()
     }

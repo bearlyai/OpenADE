@@ -40,6 +40,8 @@ npx @biomejs/biome lint --write --diagnostic-level=error src/  # lint
 src/
 ├── types.ts                    # All shared types (HarnessQuery, HarnessEvent, ModelEntry, MCP config/OAuth bridge DTOs, etc.)
 ├── harness.ts                  # Harness<M> interface — the unified contract
+├── agent-worker.ts             # OpenADE Core process worker: stdin start envelope → stdout NDJSON stream/execution/result
+├── worker.ts                   # CLI entrypoint for the `openade-harness-worker` bin
 ├── structured.ts               # runStructuredQuery() — shared structured output orchestration
 ├── models.ts                   # Model catalog — pure data, browser-safe (MODEL_REGISTRY, helpers, single source of truth for model version bumps)
 ├── errors.ts                   # HarnessError, HarnessNotInstalledError, HarnessAuthError
@@ -109,6 +111,18 @@ Before changing MCP config/OAuth DTO ownership or harness-host bridge contracts,
 7. Parsed events are wrapped in `HarnessEvent<M>` and yielded to the caller
 8. For structured queries, `complete.structuredOutput` is normalized and parsed by `structured.ts`
 9. On process exit, cleanup runs (temp files, tool server shutdown)
+
+## OpenADE Core Worker Boundary
+
+`src/agent-worker.ts` is the TypeScript harness worker used by the Go OpenADE Core `CommandAgentExecutor`. It is exposed as the `openade-harness-worker` package bin and can also be run as `node dist/worker.js` after `yarn build`.
+
+Core sends one JSON `start` envelope on stdin with protocol version `1`, repo/task/execution identifiers, harness/model/turn fields, prompt text, optional `readOnly`, optional `mcpServerConfigs`, and optional image content blocks. Image blocks must already be expanded by Core into base64 sources (`source.kind="base64"` or the legacy `source.type="base64"` shape). The worker runs the selected harness through the normal `HarnessQuery` interface, mapping `readOnly: true` to `mode: "read-only"` and all other requests to `mode: "yolo"`, then writes NDJSON messages to stdout:
+
+- `stream` with existing persisted execution-event shapes: `raw_message`, `session_started`, `stderr`, `complete`, and `error`
+- `execution` with session id and best-effort final git refs
+- `result` with `completed`, `failed`, or `stopped`
+
+Keep this worker protocol boring and typed. Do not add Electron-specific IPC, renderer callbacks, raw host access, or mocked clients here. MCP server config and task image/blob expansion must come from Core-owned product state before payloads reach the start envelope.
 
 ## Session Management
 

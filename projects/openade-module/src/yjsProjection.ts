@@ -1,3 +1,4 @@
+import * as Y from "yjs"
 import type {
     OpenADEIsolationStrategy,
     OpenADEProject,
@@ -11,9 +12,21 @@ import type {
 export interface OpenADEYjsStorageAdapter {
     hostName?: () => string | undefined
     listDocuments(): Promise<string[]>
+    readDocumentUpdate?(id: string): Promise<Uint8Array | null>
     readDocumentBase64(id: string): Promise<{ id: string; data: string } | null>
     readMapObject(documentId: string, mapName: string): Promise<Record<string, unknown> | null>
     readOrderedArray<T extends Record<string, unknown>>(documentId: string, name: string): Promise<T[] | null>
+}
+
+type JsonPrimitive = string | number | boolean | null
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
+type JsonRecord = { [key: string]: JsonValue }
+
+interface ProjectedTaskDocument {
+    meta: Record<string, unknown> | null
+    events: Record<string, unknown>[] | null
+    comments: Record<string, unknown>[] | null
+    deviceEnvironments: Record<string, unknown>[] | null
 }
 
 export interface OpenADEYjsProjection {
@@ -43,6 +56,63 @@ const LIGHTWEIGHT_STREAM_EVENT_TAIL_COUNT = 360
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function toPlain(value: unknown): JsonValue | undefined {
+    if (value instanceof Y.Map) {
+        const result: JsonRecord = {}
+        value.forEach((nested: unknown, key: string) => {
+            const converted = toPlain(nested)
+            if (converted !== undefined) result[key] = converted
+        })
+        return result
+    }
+
+    if (value instanceof Y.Array) {
+        return value.toArray().map(toPlain).filter((nested): nested is JsonValue => nested !== undefined)
+    }
+
+    if (value === null || typeof value === "string" || typeof value === "boolean") return value
+    if (typeof value === "number") return Number.isFinite(value) ? value : undefined
+
+    if (Array.isArray(value)) {
+        return value.map(toPlain).filter((nested): nested is JsonValue => nested !== undefined)
+    }
+
+    if (isRecord(value)) {
+        const result: JsonRecord = {}
+        for (const [key, nested] of Object.entries(value)) {
+            const converted = toPlain(nested)
+            if (converted !== undefined) result[key] = converted
+        }
+        return result
+    }
+
+    return undefined
+}
+
+function applyYjsUpdate(data: Uint8Array): Y.Doc {
+    const doc = new Y.Doc()
+    Y.applyUpdate(doc, data)
+    return doc
+}
+
+function readMapObjectFromDoc(doc: Y.Doc, mapName: string): Record<string, unknown> {
+    const value = toPlain(doc.getMap(mapName))
+    return isRecord(value) ? value : {}
+}
+
+function readOrderedArrayFromDoc<T extends Record<string, unknown>>(doc: Y.Doc, name: string): T[] {
+    const dataMap = doc.getMap(`${name}:data`)
+    const orderArray = doc.getArray<string>(`${name}:order`)
+    const rows: T[] = []
+
+    for (const id of orderArray.toArray()) {
+        const row = toPlain(dataMap.get(id))
+        if (isRecord(row)) rows.push(row as T)
+    }
+
+    return rows
 }
 
 function stringValue(value: unknown, fallback = ""): string {
@@ -136,6 +206,41 @@ function boundTaskSessionPayloads(events: Record<string, unknown>[], options: Op
 
     const tailStart = Math.max(0, events.length - LIGHTWEIGHT_TASK_EVENT_TAIL_COUNT)
     return events.map((event, index) => boundedTaskEvent(event, index >= tailStart))
+}
+
+async function readProjectedTaskDocument(storage: OpenADEYjsStorageAdapter, documentId: string): Promise<ProjectedTaskDocument> {
+    const data = await storage.readDocumentUpdate?.(documentId)
+    if (data) {
+        const doc = applyYjsUpdate(data)
+        try {
+            return {
+                meta: readMapObjectFromDoc(doc, "task:meta"),
+                events: readOrderedArrayFromDoc<Record<string, unknown>>(doc, "task:events"),
+                comments: readOrderedArrayFromDoc<Record<string, unknown>>(doc, "task:comments"),
+                deviceEnvironments: readOrderedArrayFromDoc<Record<string, unknown>>(doc, "task:deviceEnvironments"),
+            }
+        } finally {
+            doc.destroy()
+        }
+    }
+
+    if (data === null) {
+        return {
+            meta: null,
+            events: null,
+            comments: null,
+            deviceEnvironments: null,
+        }
+    }
+
+    const [meta, events, comments, deviceEnvironments] = await Promise.all([
+        storage.readMapObject(documentId, "task:meta"),
+        storage.readOrderedArray<Record<string, unknown>>(documentId, "task:events"),
+        storage.readOrderedArray<Record<string, unknown>>(documentId, "task:comments"),
+        storage.readOrderedArray<Record<string, unknown>>(documentId, "task:deviceEnvironments"),
+    ])
+
+    return { meta, events, comments, deviceEnvironments }
 }
 
 function isolationStrategy(value: unknown): OpenADEIsolationStrategy {
@@ -266,30 +371,31 @@ export function createOpenADEYjsProjection(storage: OpenADEYjsStorageAdapter): O
         return repos.find((repo) => repo.id === repoId)?.tasks ?? []
     }
 
+    async function readTaskPreview(repoId: string, taskId: string): Promise<OpenADETaskPreview | undefined> {
+        const repos = await readRepos(storage, { workingTaskIds: [], pinnedTaskIds: [] })
+        return repos.find((repo) => repo.id === repoId)?.tasks.find((task) => task.id === taskId)
+    }
+
     async function readTask(repoId: string, taskId: string, options: OpenADETaskReadOptions = {}): Promise<OpenADETask> {
         const documentId = `code:task:${taskId}`
-        const [meta, events, comments, deviceEnvironments, preview] = await Promise.all([
-            storage.readMapObject(documentId, "task:meta"),
-            storage.readOrderedArray<Record<string, unknown>>(documentId, "task:events"),
-            storage.readOrderedArray<Record<string, unknown>>(documentId, "task:comments"),
-            storage.readOrderedArray<Record<string, unknown>>(documentId, "task:deviceEnvironments"),
-            readTaskList(repoId).then((tasks) => tasks.find((task) => task.id === taskId)),
-        ])
+        const taskDocument = await readProjectedTaskDocument(storage, documentId)
+        const { meta, events, comments, deviceEnvironments } = taskDocument
 
         if (!meta) {
-            if (!preview) throw new Error(`Task ${taskId} not found`)
+            const fallbackPreview = await readTaskPreview(repoId, taskId)
+            if (!fallbackPreview) throw new Error(`Task ${taskId} not found`)
             return {
-                id: preview.id,
+                id: fallbackPreview.id,
                 repoId,
-                slug: preview.slug,
-                title: preview.title,
+                slug: fallbackPreview.slug,
+                title: fallbackPreview.title,
                 description: "",
                 isolationStrategy: { type: "head" },
-                closed: preview.closed,
-                createdAt: preview.createdAt,
-                updatedAt: preview.lastEventAt ?? preview.createdAt,
-                lastViewedAt: preview.lastViewedAt,
-                lastEventAt: preview.lastEventAt,
+                closed: fallbackPreview.closed,
+                createdAt: fallbackPreview.createdAt,
+                updatedAt: fallbackPreview.lastEventAt ?? fallbackPreview.createdAt,
+                lastViewedAt: fallbackPreview.lastViewedAt,
+                lastEventAt: fallbackPreview.lastEventAt,
                 unavailableReason: "Task data is unavailable on the desktop host.",
                 deviceEnvironments: [],
                 events: [],
@@ -302,11 +408,18 @@ export function createOpenADEYjsProjection(storage: OpenADEYjsStorageAdapter): O
             throw new Error(`Task document ${taskId} has mismatched metadata id ${metaId || "<empty>"}`)
         }
 
+        const metaSlug = optionalString(meta.slug)
+        const metaTitle = optionalString(meta.title)
+        const metaCreatedAt = optionalString(meta.createdAt)
+        const metaUpdatedAt = optionalString(meta.updatedAt)
+        const metaLastEventAt = optionalString(meta.lastEventAt)
+        const preview = metaTitle === undefined || (metaSlug === undefined && metaCreatedAt === undefined) ? await readTaskPreview(repoId, taskId) : undefined
+
         return {
             id: metaId,
             repoId: stringValue(meta.repoId, repoId),
-            slug: stringValue(meta.slug, preview?.slug ?? ""),
-            title: stringValue(meta.title, preview?.title ?? "Untitled task"),
+            slug: metaSlug ?? preview?.slug ?? "",
+            title: metaTitle ?? preview?.title ?? "Untitled task",
             description: stringValue(meta.description),
             isolationStrategy: isolationStrategy(meta.isolationStrategy),
             enabledMcpServerIds: Array.isArray(meta.enabledMcpServerIds)
@@ -317,10 +430,10 @@ export function createOpenADEYjsProjection(storage: OpenADEYjsStorageAdapter): O
             cancelledPlanEventId: optionalString(meta.cancelledPlanEventId),
             deviceEnvironments: (deviceEnvironments ?? []) as unknown as OpenADETask["deviceEnvironments"],
             createdBy: isRecord(meta.createdBy) ? (meta.createdBy as unknown as OpenADETask["createdBy"]) : undefined,
-            createdAt: stringValue(meta.createdAt, preview?.createdAt ?? zeroTime),
-            updatedAt: stringValue(meta.updatedAt, preview?.lastEventAt ?? preview?.createdAt ?? zeroTime),
+            createdAt: metaCreatedAt ?? preview?.createdAt ?? zeroTime,
+            updatedAt: metaUpdatedAt ?? metaLastEventAt ?? preview?.lastEventAt ?? preview?.createdAt ?? metaCreatedAt ?? zeroTime,
             lastViewedAt: optionalString(meta.lastViewedAt),
-            lastEventAt: optionalString(meta.lastEventAt),
+            lastEventAt: metaLastEventAt,
             closed: optionalBoolean(meta.closed),
             pullRequest: isRecord(meta.pullRequest) ? (meta.pullRequest as OpenADETask["pullRequest"]) : undefined,
             events: boundTaskSessionPayloads(events ?? [], options),

@@ -50,6 +50,10 @@ export async function loadYjsDoc(id: string): Promise<Uint8Array | null> {
     return result ? base64ToUint8Array(result.data) : null
 }
 
+export async function listYjsDocs(): Promise<string[]> {
+    return localRuntimeClient.request<string[]>("data/yjs/list", {})
+}
+
 /**
  * Delete a YJS document from the filesystem.
  * @param id Document ID (e.g., "code:repos", "code:task:abc123")

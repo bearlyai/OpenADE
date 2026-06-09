@@ -2,9 +2,10 @@ import NiceModal from "@ebay/nice-modal-react"
 import cx from "classnames"
 import { Clock, Loader2, Pause, Play, Plus, RotateCw } from "lucide-react"
 import { observer } from "mobx-react"
-import { useCallback } from "react"
+import { useCallback, useEffect } from "react"
 import { useCodeStore } from "../../store/context"
 import type { CronViewModel } from "../../store/managers/CronManager"
+import { type ProductProjectScope, createProductProjectProcessAccess } from "../../store/productProjectProcessAccess"
 import { ProcsEditorModal } from "../procs/ProcsEditorModal"
 
 function formatNextRun(date: Date | null): string {
@@ -97,6 +98,12 @@ export const CronsSidebarContent = observer(({ workspaceId }: CronsSidebarConten
     const codeStore = useCodeStore()
     const crons = codeStore.crons.getCronsForRepo(workspaceId)
     const repoPath = codeStore.repos.getRepo(workspaceId)?.path ?? "."
+    const productScope: ProductProjectScope | null = codeStore.shouldUseRuntimeProductReads() ? { repoId: workspaceId } : null
+    const productAccess = productScope ? createProductProjectProcessAccess(codeStore, productScope) : null
+
+    useEffect(() => {
+        void codeStore.crons.ensureRepoConfigLoaded(workspaceId)
+    }, [codeStore.crons, workspaceId])
 
     const handleEditConfig = useCallback(
         (filePath?: string) => {
@@ -106,9 +113,11 @@ export const CronsSidebarContent = observer(({ workspaceId }: CronsSidebarConten
                 context: { type: "repo", root: repoPath },
                 initialTab: "crons",
                 initialFilePath: filePath,
+                productScope,
+                productAccess,
             })
         },
-        [workspaceId, repoPath]
+        [workspaceId, repoPath, productScope, productAccess]
     )
 
     if (crons.length === 0) {

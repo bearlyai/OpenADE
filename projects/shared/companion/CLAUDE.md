@@ -7,6 +7,7 @@ Shared TypeScript contracts for companion-only device, pairing, and service stat
 - This package defines companion-specific wire contracts. Keep it browser-safe and Node-free.
 - Types here are consumed by Electron main, the renderer remote controller, and the Capacitor shell.
 - Do not mirror OpenADE product DTOs here. Import product/session/task/file/git/process types directly from `projects/openade-module/src`.
+- Do not use explicit `any` in non-test source. Run `npm run typecheck` from this directory after changing shared companion contracts; it runs the self-tested no-`any` scanner before strict TypeScript. The root `scripts/check-no-explicit-any.mjs --self-test projects scripts` release guard also covers this package.
 
 ## Contract Choices
 

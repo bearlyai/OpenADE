@@ -2,6 +2,7 @@ import os from "node:os"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { execFile } from "node:child_process"
+import { createHash } from "node:crypto"
 import { openADETaskIdForClientRequest } from "./clientRequestIds"
 import {
     buildOpenADEHyperPlanStepPrompt,
@@ -53,6 +54,7 @@ import {
     OPENADE_TASK_TITLE_SYSTEM_PROMPT,
     titleFromStructuredOutput,
 } from "./taskTitle"
+import { deleteYjsMcpServer, readYjsMcpServers, replaceYjsMcpServers, upsertYjsMcpServer } from "./yjsMutation"
 import type {
     OpenADEActionEventCreateRequest,
     OpenADEActionEventSource,
@@ -79,6 +81,11 @@ import type {
     OpenADEProjectProcessStopResult,
     OpenADEReviewStartRequest,
     OpenADESnapshotPatchIndex,
+    OpenADECronInstallState,
+    OpenADECronInstallStateReadRequest,
+    OpenADECronInstallStateReadResult,
+    OpenADECronInstallStateReplaceRequest,
+    OpenADECronInstallStateReplaceResult,
     OpenADETask,
     OpenADETaskChangesReadRequest,
     OpenADETaskChangesReadResult,
@@ -111,6 +118,10 @@ import type {
     OpenADETaskImageReadRequest,
     OpenADETaskImageReadResult,
     OpenADETaskImageReference,
+    OpenADETaskImageStagedReadRequest,
+    OpenADETaskImageStagedReadResult,
+    OpenADETaskImageWriteRequest,
+    OpenADETaskImageWriteResult,
     OpenADETaskEnvironmentPrepareRequest,
     OpenADETaskEnvironmentPrepareResult,
     OpenADETaskResourceInventoryReadRequest,
@@ -159,6 +170,83 @@ function defaultDataDir(): string {
 
 function now(): string {
     return new Date().toISOString()
+}
+
+interface CronInstallStateDocument {
+    installations: Record<string, OpenADECronInstallState>
+}
+
+function nodeErrorCode(error: unknown): string | undefined {
+    if (typeof error !== "object" || error === null || !("code" in error)) return undefined
+    const code = (error as { code?: unknown }).code
+    return typeof code === "string" ? code : undefined
+}
+
+function cronInstallStateFromUnknown(key: string, value: unknown): OpenADECronInstallState | null {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return null
+    const record = value as Record<string, unknown>
+    const cronId = typeof record.cronId === "string" && record.cronId.trim() ? record.cronId.trim() : key
+    const installedAt = typeof record.installedAt === "string" ? record.installedAt : ""
+    if (!cronId || !installedAt) return null
+    return {
+        cronId,
+        enabled: record.enabled === true,
+        installedAt,
+        lastRunAt: typeof record.lastRunAt === "string" && record.lastRunAt ? record.lastRunAt : undefined,
+        lastTaskId: typeof record.lastTaskId === "string" && record.lastTaskId ? record.lastTaskId : undefined,
+    }
+}
+
+function parseCronInstallStateDocument(raw: string): CronInstallStateDocument {
+    let parsed: unknown
+    try {
+        parsed = JSON.parse(raw)
+    } catch {
+        return { installations: {} }
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { installations: {} }
+    const document = parsed as Record<string, unknown>
+    const source = typeof document.installations === "object" && document.installations !== null && !Array.isArray(document.installations) ? document.installations : parsed
+    const sourceRecord = source as Record<string, unknown>
+    const installations: Record<string, OpenADECronInstallState> = {}
+    for (const [key, value] of Object.entries(sourceRecord)) {
+        const state = cronInstallStateFromUnknown(key, value)
+        if (state) installations[state.cronId] = state
+    }
+    return { installations }
+}
+
+function cronInstallStateFilePath(cronDir: string, repoId: string): string {
+    if (!/^[a-zA-Z0-9_-]+$/.test(repoId)) throw new Error("repoId is invalid")
+    return path.join(cronDir, `${repoId}.json`)
+}
+
+async function readNodeCronInstallState(cronDir: string, params: OpenADECronInstallStateReadRequest): Promise<OpenADECronInstallStateReadResult> {
+    const filePath = cronInstallStateFilePath(cronDir, params.repoId)
+    try {
+        const raw = await fs.readFile(filePath, "utf8")
+        return { repoId: params.repoId, installations: parseCronInstallStateDocument(raw).installations }
+    } catch (error) {
+        if (nodeErrorCode(error) === "ENOENT") return { repoId: params.repoId, installations: {} }
+        throw error
+    }
+}
+
+async function replaceNodeCronInstallState(
+    cronDir: string,
+    params: OpenADECronInstallStateReplaceRequest
+): Promise<OpenADECronInstallStateReplaceResult> {
+    const filePath = cronInstallStateFilePath(cronDir, params.repoId)
+    await fs.mkdir(cronDir, { recursive: true })
+    const document: CronInstallStateDocument = { installations: params.installations }
+    const tempPath = `${filePath}.tmp`
+    await fs.writeFile(tempPath, JSON.stringify(document, null, 2), "utf8")
+    await fs.rename(tempPath, filePath)
+    return {
+        repoId: params.repoId,
+        installations: params.installations,
+        replacedInstallations: Object.keys(params.installations).length,
+    }
 }
 
 type ScopedGitResult = {
@@ -1332,6 +1420,54 @@ async function readNodeTaskImage(
     }
 }
 
+function nodeTaskImageMediaType(ext: string): OpenADETaskImageStagedReadResult["mediaType"] {
+    switch (ext) {
+        case "gif":
+            return "image/gif"
+        case "jpeg":
+        case "jpg":
+            return "image/jpeg"
+        case "png":
+            return "image/png"
+        case "webp":
+            return "image/webp"
+        default:
+            return undefined
+    }
+}
+
+async function readNodeStagedTaskImage(params: OpenADETaskImageStagedReadRequest & { imageDir: string }): Promise<OpenADETaskImageStagedReadResult> {
+    const filePath = nodeDataFilePath(params.imageDir, params.imageId, params.ext)
+    const data = await fs.readFile(filePath).catch(() => null)
+    return {
+        imageId: params.imageId,
+        ext: params.ext,
+        mediaType: nodeTaskImageMediaType(params.ext),
+        data: data ? data.toString("base64") : null,
+    }
+}
+
+async function writeNodeTaskImage(params: OpenADETaskImageWriteRequest & { imageDir: string }): Promise<OpenADETaskImageWriteResult> {
+    const data = Buffer.from(params.data, "base64")
+    const filePath = nodeDataFilePath(params.imageDir, params.imageId, params.ext)
+    await fs.mkdir(path.dirname(filePath), { recursive: true })
+    const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`
+    try {
+        await fs.writeFile(tempPath, data)
+        await fs.rename(tempPath, filePath)
+    } catch (error) {
+        await fs.unlink(tempPath).catch(() => undefined)
+        throw error
+    }
+    return {
+        imageId: params.imageId,
+        ext: params.ext,
+        mediaType: params.mediaType,
+        size: data.byteLength,
+        sha256: createHash("sha256").update(data).digest("hex"),
+    }
+}
+
 type NodeProjectProcessProcsResult = {
     repoRoot: string
     searchRoot: string
@@ -1805,6 +1941,7 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
     const dataDir = options.dataDir ?? defaultDataDir()
     const snapshotDir = path.join(path.dirname(dataDir), "snapshots")
     const imageDir = path.join(path.dirname(dataDir), "images")
+    const cronDir = path.join(path.dirname(dataDir), "cron")
     const storage = createOpenADENodeYjsStorage(dataDir)
     const projection = createOpenADEYjsProjection({
         ...storage,
@@ -2225,6 +2362,12 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
         readTask: (repoId, taskId, params) => projection.readTask(repoId, taskId, params),
         listDataDocuments: () => projection.listDataDocuments(),
         readDataDocumentBase64: (id) => projection.readDataDocumentBase64(id),
+        readMcpServers: () => readYjsMcpServers(storage),
+        replaceMcpServers: (params) => replaceYjsMcpServers(storage, params.servers),
+        upsertMcpServer: (params) => upsertYjsMcpServer(storage, params.server),
+        deleteMcpServer: (params) => deleteYjsMcpServer(storage, params.serverId),
+        readCronInstallState: (params) => readNodeCronInstallState(cronDir, params),
+        replaceCronInstallState: (params) => replaceNodeCronInstallState(cronDir, params),
         scopedHost: {
             listProjectFiles: listOpenADEProjectFiles,
             readProjectFile: readOpenADEProjectFile,
@@ -2273,6 +2416,8 @@ export function createRuntimeNodeOpenADEAdapters(options: RuntimeNodeOpenADEOpti
                     store: snapshotPatchStore,
                 }),
         },
+        writeTaskImage: (params) => writeNodeTaskImage({ ...params, imageDir }),
+        readStagedTaskImage: (params) => readNodeStagedTaskImage({ ...params, imageDir }),
         saveDataDocumentBase64: (id, data) => storage.saveDocumentUpdate(id, Buffer.from(data, "base64")),
         deleteDataDocument: (id) => storage.deleteDocument(id),
         createRepo: async (params) => {

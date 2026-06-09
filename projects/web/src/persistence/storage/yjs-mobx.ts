@@ -4,9 +4,8 @@ import { asJavascriptObject, asYObject, mutate } from "./y-utils"
 
 // ============ Types ============
 
-// Relaxed type constraint - any object that can be JSON-serialized
-// biome-ignore lint/suspicious/noExplicitAny: Necessary for flexible type constraints
-type JSONSerializable = Record<string, any>
+// Relaxed type constraint for objects that can be JSON-serialized through y-utils.
+type JSONSerializable = object
 
 export interface YObjectHandle<T extends JSONSerializable> {
     /** Current value as plain JS (observable.ref - changes trigger MobX reactions) */

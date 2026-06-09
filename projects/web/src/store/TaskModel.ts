@@ -34,6 +34,8 @@ import type { CodeStore } from "./store"
 
 export type ThinkingLevel = "low" | "med" | "high" | "max"
 
+const GIT_STATE_FRESH_MS = 5_000
+
 function legacyWorktreeDirFromSetupEvent(event: SetupEnvironmentEvent): string | null {
     const setupOutput = event.setupOutput ?? ""
     const worktreeLine = setupOutput
@@ -74,6 +76,7 @@ export class TaskModel {
     fastMode = false
     harnessId: HarnessId = "claude-code"
     private gitStateLoading = false
+    private gitStateLoadedAt = 0
     private _environmentCache: TaskEnvironment | null = null
     private _environmentDeviceId: string | null = null
     private _environmentLoadPromise: Promise<TaskEnvironment | null> | null = null
@@ -615,8 +618,9 @@ export class TaskModel {
 
     // === Actions ===
 
-    async refreshGitState(): Promise<void> {
+    async refreshGitState(options: { force?: boolean } = {}): Promise<void> {
         if (this.gitStateLoading) return
+        if (!options.force && this.gitStateLoadedAt > 0 && Date.now() - this.gitStateLoadedAt < GIT_STATE_FRESH_MS) return
         this.gitStateLoading = true
 
         if (this.usesRuntimeProductReads && this.repoId) {
@@ -624,6 +628,7 @@ export class TaskModel {
                 const result = await this.readProductTaskGitSummary()
                 runInAction(() => {
                     this.gitStatus = gitSummaryFromProductSummary(result)
+                    this.gitStateLoadedAt = Date.now()
                 })
             } catch (err) {
                 console.error("[TaskModel] Failed to refresh runtime git state:", err)
@@ -644,6 +649,7 @@ export class TaskModel {
             if (!env?.taskWorkingDir) {
                 runInAction(() => {
                     this.gitStatus = null
+                    this.gitStateLoadedAt = Date.now()
                     this.gitStateLoading = false
                 })
                 return
@@ -652,6 +658,7 @@ export class TaskModel {
             const result = await env.getGitSummary()
             runInAction(() => {
                 this.gitStatus = result
+                this.gitStateLoadedAt = Date.now()
             })
         } catch (err) {
             console.error("[TaskModel] Failed to refresh git state:", err)

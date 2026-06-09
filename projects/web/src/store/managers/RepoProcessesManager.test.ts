@@ -72,4 +72,50 @@ describe("RepoProcessesManager", () => {
         expect(legacyHandle.cleanup).toHaveBeenCalledTimes(1)
         expect(manager.getProcessesForContext(context)).toEqual([])
     })
+
+    it("stops stale product-managed processes through scoped product access after config edits", async () => {
+        const manager = new RepoProcessesManager()
+        const legacyHandle = {
+            kill: vi.fn(async () => undefined),
+            cleanup: vi.fn(),
+        }
+        const productAccess: ProductProjectProcessAccess = {
+            startProjectProcess: vi.fn(),
+            reconnectProjectProcess: vi.fn(),
+            stopProjectProcess: vi.fn(async (args) => ({ repoId: "repo-1", taskId: "task-1", processId: args.processId, ok: true })),
+        }
+
+        manager.runningProcesses.set(
+            "product-daemon",
+            processInstance({
+                id: "product-daemon",
+                productProcessId: "process-runtime-1",
+            })
+        )
+        manager.runningProcesses.set(
+            "legacy-daemon",
+            processInstance({
+                id: "legacy-daemon",
+                processHandle: legacyHandle,
+            })
+        )
+        manager.runningProcesses.set(
+            "kept-daemon",
+            processInstance({
+                id: "kept-daemon",
+                productProcessId: "process-runtime-2",
+            })
+        )
+
+        await manager.stopProcessesMissingFromConfig({
+            context,
+            validProcessIds: new Set(["kept-daemon"]),
+            productAccess,
+        })
+
+        expect(productAccess.stopProjectProcess).toHaveBeenCalledWith({ processId: "process-runtime-1" })
+        expect(legacyHandle.kill).toHaveBeenCalledTimes(1)
+        expect(legacyHandle.cleanup).toHaveBeenCalledTimes(1)
+        expect(manager.getProcessesForContext(context).map((instance) => instance.id)).toEqual(["kept-daemon"])
+    })
 })

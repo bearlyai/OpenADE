@@ -112,6 +112,76 @@ describe("OpenADEClient", () => {
         })
     })
 
+    it("logs sanitized slow OpenADE runtime requests", async () => {
+        const runtime = fakeRuntime()
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+        const nowSpy = vi.spyOn(Date, "now")
+        nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValueOnce(751)
+        const client = new OpenADEClient({ runtime, clientName: "test-client", clientPlatform: "web" })
+
+        try {
+            await client.readProjectGitSummary({ repoId: "repo-secret-path-not-logged" })
+            expect(warnSpy).toHaveBeenCalledWith("[OpenADEClient] Slow runtime request", {
+                method: "openade/project/git/summary/read",
+                durationMs: 751,
+                failed: false,
+                clientName: "test-client",
+                clientPlatform: "web",
+            })
+        } finally {
+            nowSpy.mockRestore()
+            warnSpy.mockRestore()
+        }
+    })
+
+    it("logs sanitized OpenADE runtime request bursts", async () => {
+        const runtime = fakeRuntime()
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+        const client = new OpenADEClient({ runtime, clientName: "burst-client", clientPlatform: "web" })
+
+        try {
+            await Promise.all(Array.from({ length: 12 }, () => client.getTask("repo-1", "task-1", { hydrateSessionEvents: false })))
+            expect(warnSpy).toHaveBeenCalledWith("[OpenADEClient] Runtime request burst", {
+                method: "openade/task/read",
+                count: 12,
+                windowMs: expect.any(Number),
+                clientName: "burst-client",
+                clientPlatform: "web",
+            })
+        } finally {
+            warnSpy.mockRestore()
+        }
+    })
+
+    it("coalesces identical in-flight OpenADE read requests", async () => {
+        const runtime = fakeRuntime()
+        let resolveRequest = (_value: unknown): void => {
+            throw new Error("request was not started")
+        }
+        runtime.request.mockImplementation(
+            () =>
+                new Promise((resolve) => {
+                    resolveRequest = resolve
+                })
+        )
+        const client = new OpenADEClient({ runtime })
+
+        const first = client.listProjectProcesses({ repoId: "repo-1" })
+        const second = client.listProjectProcesses({ repoId: "repo-1" })
+
+        expect(runtime.request).toHaveBeenCalledTimes(1)
+        expect(runtime.request).toHaveBeenCalledWith("openade/project/process/list", { repoId: "repo-1" })
+        resolveRequest({ repoId: "repo-1", configs: [], processes: [], errors: [], instances: [] })
+        await expect(Promise.all([first, second])).resolves.toEqual([
+            { repoId: "repo-1", configs: [], processes: [], errors: [], instances: [] },
+            { repoId: "repo-1", configs: [], processes: [], errors: [], instances: [] },
+        ])
+
+        runtime.request.mockResolvedValueOnce({ repoId: "repo-1", configs: [], processes: [], errors: [], instances: [] })
+        await client.listProjectProcesses({ repoId: "repo-1" })
+        expect(runtime.request).toHaveBeenCalledTimes(2)
+    })
+
     it("maps unsupported protocol errors to a clear desktop-update message", () => {
         const error = new RuntimeClientError("unsupported_protocol_version", "client protocol 1 is not compatible", {
             clientProtocolVersion: 1,

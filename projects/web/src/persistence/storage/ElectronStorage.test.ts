@@ -45,4 +45,27 @@ describe("ElectronStorage", () => {
         Y.applyUpdate(roundTrip, saved)
         expect(roundTrip.getMap("meta").toJSON()).toEqual({ existing: "yes", new: "yes" })
     })
+
+    it("does not skip changed refresh bytes", async () => {
+        const loadedDoc = new Y.Doc()
+        loadedDoc.getMap("meta").set("value", "before")
+        const loadedUpdate = Y.encodeStateAsUpdate(loadedDoc)
+        loadedDoc.destroy()
+
+        const changedDoc = new Y.Doc()
+        changedDoc.getMap("meta").set("value", "after")
+        const changedUpdate = Y.encodeStateAsUpdate(changedDoc)
+        changedDoc.destroy()
+
+        vi.mocked(loadYjsDoc).mockResolvedValueOnce(loadedUpdate).mockResolvedValueOnce(loadedUpdate).mockResolvedValueOnce(changedUpdate)
+
+        const storage = new ElectronStorage()
+        const connection = await storage.getYDoc("code:test")
+
+        await expect(connection.refresh()).resolves.toBe(true)
+        expect(connection.doc.getMap("meta").get("value")).toBe("before")
+
+        await expect(connection.refresh()).resolves.toBe(true)
+        expect(connection.doc.getMap("meta").get("value")).toBe("after")
+    })
 })

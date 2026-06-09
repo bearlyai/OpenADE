@@ -9,7 +9,12 @@
  */
 
 import { type IpcRendererEvent, contextBridge, ipcRenderer } from "electron"
-import type { OpenADEAPI as OpenADEPreloadAPI } from "./preload-api"
+import type {
+    OpenADEAPI as OpenADEPreloadAPI,
+    OpenADECoreRolloutReason,
+    OpenADECoreRolloutState,
+    OpenADECoreRuntimeEndpoint,
+} from "./preload-api"
 
 // Helper to create event listener with cleanup
 const createListener = (channel: string, callback: (...args: unknown[]) => void) => {
@@ -24,6 +29,65 @@ function envFlag(value: string | undefined): boolean {
 
 const activeWorkUnloadBlockerDisabled = envFlag(process.env.OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER) || envFlag(process.env.OPENADE_SMOKE_TEST)
 const smokeTest = envFlag(process.env.OPENADE_SMOKE_TEST)
+
+function coreRuntimeEndpointFromEnv(): OpenADECoreRuntimeEndpoint | undefined {
+    if (envFlag(process.env.OPENADE_DISABLE_OPENADE_CORE)) return undefined
+
+    const rawUrl = process.env.OPENADE_CORE_RUNTIME_URL?.trim()
+    if (!rawUrl) return undefined
+
+    let url: URL
+    try {
+        url = new URL(rawUrl)
+    } catch {
+        return undefined
+    }
+    if (url.protocol !== "ws:" && url.protocol !== "wss:") return undefined
+
+    return {
+        url: url.toString(),
+        token: process.env.OPENADE_CORE_TOKEN?.trim() ?? "",
+    }
+}
+
+function isCoreRolloutReason(value: string): value is OpenADECoreRolloutReason {
+    return (
+        value === "managed-core" ||
+        value === "legacy-yjs-migration-accepted" ||
+        value === "external-endpoint" ||
+        value === "disabled" ||
+        value === "legacy-yjs-documents" ||
+        value === "development-default-off" ||
+        value === "missing-core-binary" ||
+        value === "invalid-managed-command" ||
+        value === "unconfigured"
+    )
+}
+
+function coreRolloutReasonFromEnv(endpoint: OpenADECoreRuntimeEndpoint | undefined): OpenADECoreRolloutReason {
+    const configuredReason = process.env.OPENADE_CORE_ROLLOUT_REASON?.trim()
+    if (configuredReason && isCoreRolloutReason(configuredReason)) {
+        return configuredReason
+    }
+    if (envFlag(process.env.OPENADE_DISABLE_OPENADE_CORE)) return "disabled"
+    if (endpoint) return envFlag(process.env.OPENADE_CORE_MANAGED) ? "managed-core" : "external-endpoint"
+    return "unconfigured"
+}
+
+function coreRolloutStateFromEnv(endpoint: OpenADECoreRuntimeEndpoint | undefined): OpenADECoreRolloutState {
+    const connected = endpoint !== undefined
+    const managed = connected && envFlag(process.env.OPENADE_CORE_MANAGED)
+    return {
+        status: connected ? "connected" : "legacy-ipc",
+        source: connected ? (managed ? "managed" : "external") : "legacy-ipc",
+        reason: coreRolloutReasonFromEnv(endpoint),
+        automatic: envFlag(process.env.OPENADE_CORE_ROLLOUT_AUTOMATIC),
+        legacyYjsDocumentsPresent: envFlag(process.env.OPENADE_CORE_ROLLOUT_LEGACY_YJS_DOCUMENTS),
+        legacyYjsMigrationAccepted: envFlag(process.env.OPENADE_CORE_ROLLOUT_LEGACY_YJS_MIGRATION_ACCEPTED),
+    }
+}
+
+const coreRuntimeEndpoint = coreRuntimeEndpointFromEnv()
 
 const openadeAPI = {
     // ========================================================================
@@ -98,6 +162,14 @@ const openadeAPI = {
         setEnabled: (enabled: boolean) => ipcRenderer.invoke("companion:setEnabled", enabled),
         setKeepAwakeMode: (mode: string) => ipcRenderer.invoke("companion:setKeepAwakeMode", mode),
         startPairing: () => ipcRenderer.invoke("companion:startPairing"),
+    },
+
+    // ========================================================================
+    // OpenADE Core product runtime endpoint
+    // ========================================================================
+    core: {
+        runtimeEndpoint: coreRuntimeEndpoint,
+        rolloutState: coreRolloutStateFromEnv(coreRuntimeEndpoint),
     },
 
     // ========================================================================

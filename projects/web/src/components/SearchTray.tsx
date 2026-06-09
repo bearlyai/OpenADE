@@ -228,6 +228,7 @@ export const SearchTray = observer(function SearchTray({ contentSearch, taskId, 
                     <input
                         ref={searchInputRef}
                         type="text"
+                        aria-label="Search content"
                         value={contentSearch.query}
                         onChange={(e) => contentSearch.setQuery(e.target.value)}
                         placeholder="Search content..."

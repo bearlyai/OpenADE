@@ -10,6 +10,7 @@
  */
 
 import { computed, makeAutoObservable, runInAction } from "mobx"
+import type { OpenADEMCPServer } from "../../../../openade-module/src"
 import { track } from "../../analytics"
 import {
     buildMcpServerConfigs,
@@ -40,7 +41,16 @@ export interface AddStdioMcpServerInput {
     command: string
     args?: string[]
     envVars?: Record<string, string>
+    cwd?: string
     presetId?: string
+}
+
+function productMcpServerToLocal(server: OpenADEMCPServer): McpServerItem {
+    return server
+}
+
+function localMcpServerToProduct(server: McpServerItem): OpenADEMCPServer {
+    return server
 }
 
 // ============================================================================
@@ -64,6 +74,14 @@ class McpServerRepository {
 
     getAllServers(): McpServerItem[] {
         return this.store?.servers.all() ?? []
+    }
+
+    replaceServers(servers: McpServerItem[]): void {
+        if (!this.store) return
+        this.store.servers.clear()
+        for (const server of servers) {
+            this.store.servers.push(server)
+        }
     }
 
     addHttpServer(input: AddHttpMcpServerInput): string | null {
@@ -100,6 +118,7 @@ class McpServerRepository {
             command: input.command,
             args: input.args,
             envVars: input.envVars,
+            cwd: input.cwd,
             presetId: input.presetId,
             healthStatus: "unknown",
             createdAt: now,
@@ -136,7 +155,8 @@ class McpOAuthManager {
     constructor(
         private repo: McpServerRepository,
         private onPendingChange: (serverId: string | null) => void,
-        private onTokensReceived: (serverId: string, tokens: McpOAuthTokens) => void
+        private onTokensReceived: (serverId: string, tokens: McpOAuthTokens) => void,
+        private onServerChanged: (serverId: string) => void
     ) {}
 
     /**
@@ -250,6 +270,7 @@ class McpOAuthManager {
 
         if (result.success && result.tokens) {
             this.repo.updateServer(id, { oauthTokens: result.tokens })
+            this.onServerChanged(id)
             return true
         }
 
@@ -393,6 +414,7 @@ export class McpServerManager {
     serversLoading = false
     testingServerId: string | null = null
     oauthPendingServerId: string | null = null
+    productSettingsError: string | null = null
 
     // Internal components
     private readonly repo: McpServerRepository
@@ -409,7 +431,10 @@ export class McpServerManager {
                 runInAction(() => {
                     this.oauthPendingServerId = serverId
                 }),
-            (serverId, tokens) => this.completeOAuth(serverId, tokens)
+            (serverId, tokens) => this.completeOAuth(serverId, tokens),
+            (serverId) => {
+                this.persistServerToProductStore(serverId).catch((err) => this.recordProductSettingsError("persist refreshed OAuth tokens", err))
+            }
         )
 
         this.health = new McpHealthChecker(
@@ -447,6 +472,59 @@ export class McpServerManager {
         return this.servers.filter((s) => s.enabled)
     }
 
+    // ==================== Runtime Product Settings Projection ====================
+
+    private canUseProductSettings(): boolean {
+        return this.store.shouldUseRuntimeProductReads()
+    }
+
+    private recordProductSettingsError(action: string, err: unknown): void {
+        const message = err instanceof Error ? err.message : String(err)
+        runInAction(() => {
+            this.productSettingsError = message
+        })
+        console.warn(`[McpServerManager] Failed to ${action}:`, err)
+    }
+
+    private async persistServerToProductStore(serverId: string): Promise<void> {
+        if (!this.canUseProductSettings()) return
+        const server = this.repo.getServer(serverId)
+        if (!server) return
+        await this.store.upsertProductMcpServer({ server: localMcpServerToProduct(server) })
+        runInAction(() => {
+            this.productSettingsError = null
+        })
+    }
+
+    async initializeProductSettingsProjection(): Promise<void> {
+        if (!this.canUseProductSettings()) return
+
+        runInAction(() => {
+            this.serversLoading = true
+            this.productSettingsError = null
+        })
+
+        try {
+            const productServers = await this.store.readProductMcpServers()
+            const localServers = this.repo.getAllServers()
+            const projectedServers =
+                productServers.servers.length === 0 && localServers.length > 0
+                    ? (await this.store.replaceProductMcpServers({ servers: localServers.map(localMcpServerToProduct) })).servers
+                    : productServers.servers
+
+            this.repo.replaceServers(projectedServers.map(productMcpServerToLocal))
+            runInAction(() => {
+                this.productSettingsError = null
+            })
+        } catch (err) {
+            this.recordProductSettingsError("initialize product settings projection", err)
+        } finally {
+            runInAction(() => {
+                this.serversLoading = false
+            })
+        }
+    }
+
     // ==================== CRUD Operations (delegated to repo) ====================
 
     getServer(id: string): McpServerItem | undefined {
@@ -457,42 +535,53 @@ export class McpServerManager {
         return this.repo.getServersByIds(ids)
     }
 
-    addHttpServer(input: AddHttpMcpServerInput): string | null {
+    async addHttpServer(input: AddHttpMcpServerInput): Promise<string | null> {
         const id = this.repo.addHttpServer(input)
         if (id) {
             track("mcp_server_added", { transportType: "http", isPreset: !!input.presetId })
+            await this.persistServerToProductStore(id)
         }
         return id
     }
 
-    addStdioServer(input: AddStdioMcpServerInput): string | null {
+    async addStdioServer(input: AddStdioMcpServerInput): Promise<string | null> {
         const id = this.repo.addStdioServer(input)
         if (id) {
             track("mcp_server_added", { transportType: "stdio", isPreset: !!input.presetId })
+            await this.persistServerToProductStore(id)
         }
         return id
     }
 
-    updateServer(id: string, updates: McpServerUpdate): void {
+    async updateServer(id: string, updates: McpServerUpdate): Promise<void> {
         this.repo.updateServer(id, updates)
+        await this.persistServerToProductStore(id)
     }
 
-    deleteServer(id: string): void {
+    async deleteServer(id: string): Promise<void> {
         this.repo.deleteServer(id)
+        if (this.canUseProductSettings()) {
+            await this.store.deleteProductMcpServer({ serverId: id })
+            runInAction(() => {
+                this.productSettingsError = null
+            })
+        }
         track("mcp_server_removed")
     }
 
-    toggleServerEnabled(id: string): void {
+    async toggleServerEnabled(id: string): Promise<void> {
         const server = this.getServer(id)
         if (server) {
-            this.updateServer(id, { enabled: !server.enabled })
+            await this.updateServer(id, { enabled: !server.enabled })
         }
     }
 
     // ==================== Connection Testing (delegated to health) ====================
 
     async testConnection(id: string): Promise<{ success: boolean; requiresAuth?: boolean }> {
-        return this.health.testConnection(id)
+        const result = await this.health.testConnection(id)
+        await this.persistServerToProductStore(id)
+        return result
     }
 
     // ==================== OAuth Flow (delegated to oauth) ====================
@@ -505,7 +594,7 @@ export class McpServerManager {
         this.updateServer(id, {
             oauthTokens: tokens,
             healthStatus: "unknown", // Reset so user can re-test
-        })
+        }).catch((err) => this.recordProductSettingsError("persist OAuth tokens", err))
 
         runInAction(() => {
             if (this.oauthPendingServerId === id) {
@@ -518,8 +607,8 @@ export class McpServerManager {
         await this.oauth.cancelOAuth(id ?? this.oauthPendingServerId)
     }
 
-    disconnectOAuth(id: string): void {
-        this.updateServer(id, {
+    async disconnectOAuth(id: string): Promise<void> {
+        await this.updateServer(id, {
             oauthTokens: undefined,
             healthStatus: "needs_auth",
         })
@@ -530,7 +619,9 @@ export class McpServerManager {
     }
 
     async refreshTokenIfNeeded(id: string): Promise<boolean> {
-        return this.oauth.refreshTokenIfNeeded(id)
+        const refreshed = await this.oauth.refreshTokenIfNeeded(id)
+        if (refreshed) await this.persistServerToProductStore(id)
+        return refreshed
     }
 
     isOAuthPending(id: string): boolean {

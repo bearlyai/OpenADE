@@ -66,8 +66,7 @@ interface ClientToolDefinition<Schema extends ZodRawShape = ZodRawShape> {
 // Client Query Options
 // ============================================================================
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyClientToolDefinition = ClientToolDefinition<any>
+type AnyClientToolDefinition = ClientToolDefinition<ZodRawShape>
 
 export type ClientHarnessQueryOptions = HarnessQueryOptions & {
     /** Client-defined tools that execute in the renderer process (with handlers) */

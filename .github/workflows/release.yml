@@ -20,6 +20,9 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Check first-party explicit any usage
+        run: node scripts/check-no-explicit-any.mjs --self-test projects scripts
+
       # Harness — must build first, web and electron depend on it
       - name: Install harness dependencies
         working-directory: projects/harness

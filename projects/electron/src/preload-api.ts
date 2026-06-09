@@ -1,3 +1,31 @@
+export interface OpenADECoreRuntimeEndpoint {
+    url: string
+    token: string
+}
+
+export type OpenADECoreRolloutReason =
+    | "managed-core"
+    | "legacy-yjs-migration-accepted"
+    | "external-endpoint"
+    | "disabled"
+    | "legacy-yjs-documents"
+    | "development-default-off"
+    | "missing-core-binary"
+    | "invalid-managed-command"
+    | "unconfigured"
+
+export type OpenADECoreRolloutStatus = "connected" | "legacy-ipc"
+export type OpenADECoreRolloutSource = "managed" | "external" | "legacy-ipc"
+
+export interface OpenADECoreRolloutState {
+    status: OpenADECoreRolloutStatus
+    source: OpenADECoreRolloutSource
+    reason: OpenADECoreRolloutReason
+    automatic: boolean
+    legacyYjsDocumentsPresent: boolean
+    legacyYjsMigrationAccepted: boolean
+}
+
 export interface OpenADEAPI {
     app: {
         activeWorkUnloadBlockerDisabled?: boolean
@@ -44,6 +72,10 @@ export interface OpenADEAPI {
         setEnabled: (enabled: boolean) => Promise<unknown>
         setKeepAwakeMode: (mode: string) => Promise<unknown>
         startPairing: () => Promise<unknown>
+    }
+    core?: {
+        runtimeEndpoint?: OpenADECoreRuntimeEndpoint
+        rolloutState?: OpenADECoreRolloutState
     }
     runtime: {
         connect: () => Promise<unknown>

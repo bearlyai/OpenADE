@@ -7,10 +7,11 @@ import { type ProcessDef, type ProcessType, type ProcsConfig, type ReadProcsResu
 import { openUrlInNativeBrowser } from "../electronAPI/shell"
 import { useCodeStore } from "../store/context"
 import type { ProcessInstance, ProcessStatus, ProductProjectProcessAccess } from "../store/managers/RepoProcessesManager"
+import { type ProductProjectScope, createProductProjectProcessAccess } from "../store/productProjectProcessAccess"
 import { readProcsResultFromProductProcesses } from "../store/projectProcessReadResult"
-import { ProcsEditorModal } from "./procs/ProcsEditorModal"
 import { ProcessOutput } from "./ProcessOutput"
-import { type MenuItem, Menu } from "./ui/Menu"
+import { ProcsEditorModal } from "./procs/ProcsEditorModal"
+import { Menu, type MenuItem } from "./ui/Menu"
 
 interface ProcessesTrayProps {
     /** Path to search for config files (repo root or worktree root) */
@@ -21,7 +22,7 @@ interface ProcessesTrayProps {
     workspaceId: string
     /** Whether the panel is currently open */
     isOpen?: boolean
-    productScope?: { repoId: string; taskId?: string } | null
+    productScope?: ProductProjectScope | null
 }
 
 interface ConfigGroup {
@@ -62,13 +63,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
     const productRequest = useMemo(() => (productRepoId ? { repoId: productRepoId, taskId: productTaskId } : null), [productRepoId, productTaskId])
     const productAccess = useMemo<ProductProjectProcessAccess | null>(() => {
         if (!productRepoId) return null
-        const repoId = productRepoId
-        const taskId = productTaskId
-        return {
-            startProjectProcess: (args) => codeStore.startProductProjectProcess({ repoId, taskId, definitionId: args.definitionId }),
-            reconnectProjectProcess: (args) => codeStore.reconnectProductProjectProcess({ repoId, taskId, processId: args.processId }),
-            stopProjectProcess: (args) => codeStore.stopProductProjectProcess({ repoId, taskId, processId: args.processId }),
-        }
+        return createProductProjectProcessAccess(codeStore, { repoId: productRepoId, taskId: productTaskId })
     }, [codeStore, productRepoId, productTaskId])
 
     // Load config files
@@ -122,12 +117,14 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                 context,
                 initialTab,
                 initialFilePath,
+                productScope,
+                productAccess,
                 onSaved: (result: ReadProcsResult) => {
                     setProcsResult(result)
                 },
             })
         },
-        [workspaceId, searchPath, context]
+        [workspaceId, searchPath, context, productScope, productAccess]
     )
 
     const editMenuItems: MenuItem[] = [
@@ -267,9 +264,10 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                         )}
                         <Menu
                             trigger={
-                                <button type="button" className="btn p-1 text-muted hover:text-base-content transition-colors" title="Edit">
+                                <span className="flex items-center justify-center">
                                     <Pencil size={12} />
-                                </button>
+                                    <span className="sr-only">Edit processes</span>
+                                </span>
                             }
                             sections={[{ items: editMenuItems }]}
                             side="bottom"
@@ -523,18 +521,21 @@ const ProcessRowView = observer(function ProcessRowView({
     return (
         <div
             className={cx(
-                "group flex items-center gap-2.5 px-2.5 py-1.5 cursor-pointer transition-colors",
+                "group flex items-center gap-2.5 px-2.5 py-1.5 transition-colors",
                 isSelected ? "bg-primary/10 border-l-2 border-l-primary" : "hover:bg-base-200 border-l-2 border-l-transparent"
             )}
-            onClick={handleSelect}
         >
-            <div className={cx("w-2 h-2 rounded-full flex-shrink-0", STATUS_STYLES[status])} />
-            {showTypeIcon && <TypeIcon size={12} className="text-muted flex-shrink-0" />}
-            <span className="text-xs text-base-content truncate flex-1 min-w-0">{process.name}</span>
-            {instance?.exitCode !== undefined && instance.exitCode !== null && status !== "running" && (
-                <span className={cx("text-[10px] font-mono flex-shrink-0", instance.exitCode === 0 ? "text-success" : "text-error")}>{instance.exitCode}</span>
-            )}
-            <div className="flex items-center flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+            <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" onClick={handleSelect}>
+                <div className={cx("w-2 h-2 rounded-full flex-shrink-0", STATUS_STYLES[status])} />
+                {showTypeIcon && <TypeIcon size={12} className="text-muted flex-shrink-0" />}
+                <span className="text-xs text-base-content truncate flex-1 min-w-0">{process.name}</span>
+                {instance?.exitCode !== undefined && instance.exitCode !== null && status !== "running" && (
+                    <span className={cx("text-[10px] font-mono flex-shrink-0", instance.exitCode === 0 ? "text-success" : "text-error")}>
+                        {instance.exitCode}
+                    </span>
+                )}
+            </button>
+            <div className="flex items-center flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                 {process.url && (
                     <button
                         type="button"

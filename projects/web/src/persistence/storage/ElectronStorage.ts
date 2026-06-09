@@ -14,6 +14,15 @@ const SAVE_DEBOUNCE_MS = 1000
 interface CachedDoc {
     doc: Y.Doc
     unsubscribe: () => void
+    lastAppliedUpdate: Uint8Array | null
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+    if (left.byteLength !== right.byteLength) return false
+    for (let index = 0; index < left.byteLength; index += 1) {
+        if (left[index] !== right[index]) return false
+    }
+    return true
 }
 
 export class ElectronStorage implements StorageDriver {
@@ -35,8 +44,10 @@ export class ElectronStorage implements StorageDriver {
         const doc = new Y.Doc()
 
         const savedUpdate = await loadYjsDoc(id)
+        let lastAppliedUpdate: Uint8Array | null = null
         if (savedUpdate) {
             Y.applyUpdate(doc, savedUpdate)
+            lastAppliedUpdate = savedUpdate
         }
 
         // Setup debounced save on changes
@@ -55,6 +66,7 @@ export class ElectronStorage implements StorageDriver {
 
         const cachedDoc: CachedDoc = {
             doc,
+            lastAppliedUpdate,
             unsubscribe: () => {
                 doc.off("update", onUpdate)
                 if (saveTimeout) {
@@ -89,12 +101,23 @@ export class ElectronStorage implements StorageDriver {
     private async saveDoc(id: string, doc: Y.Doc): Promise<void> {
         const update = Y.encodeStateAsUpdate(doc)
         await saveYjsDoc(id, update)
+        const cached = this.docCache.get(id)
+        if (cached?.doc === doc) {
+            cached.lastAppliedUpdate = update
+        }
     }
 
     private async refreshDoc(id: string, doc: Y.Doc): Promise<boolean> {
         const savedUpdate = await loadYjsDoc(id)
         if (!savedUpdate) return false
+        const cached = this.docCache.get(id)
+        if (cached?.doc === doc && cached.lastAppliedUpdate && sameBytes(cached.lastAppliedUpdate, savedUpdate)) {
+            return true
+        }
         Y.applyUpdate(doc, savedUpdate)
+        if (cached?.doc === doc) {
+            cached.lastAppliedUpdate = savedUpdate
+        }
         return true
     }
 

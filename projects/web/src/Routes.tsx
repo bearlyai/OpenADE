@@ -276,6 +276,7 @@ export const CodeWorkspaceTaskRoute = observer(() => {
                     <input
                         ref={titleInputRef}
                         className="font-medium text-base-content min-w-0 bg-transparent border border-base-300 px-1 outline-none"
+                        aria-label="Task title"
                         defaultValue={taskTitle}
                         autoFocus
                         onBlur={(event) => handleTitleCommit(event.relatedTarget)}

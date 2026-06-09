@@ -113,6 +113,7 @@ export function TaskProductPanel({
                 <div className="flex min-w-0 gap-2">
                     <input
                         value={titleDraft}
+                        aria-label="Task title"
                         onChange={(event) => onTitleChange(event.target.value)}
                         className="input h-10 min-w-0 flex-1 border border-border bg-base-100 px-2 text-sm"
                     />
@@ -145,6 +146,7 @@ export function TaskProductPanel({
                 <div className="text-xs font-medium uppercase tracking-wide text-muted">Review</div>
                 <textarea
                     value={reviewInstructions}
+                    aria-label="Review instructions"
                     onChange={(event) => onReviewInstructionsChange(event.target.value)}
                     placeholder="Optional review notes"
                     className="input min-h-16 w-full resize-none border border-border bg-base-100 p-2 text-sm"
@@ -214,6 +216,7 @@ export function TaskProductPanel({
                 <div className="flex min-w-0 gap-2">
                     <input
                         value={commentDraft}
+                        aria-label="New comment"
                         onChange={(event) => onCommentDraftChange(event.target.value)}
                         placeholder="Add a comment"
                         className="input h-10 min-w-0 flex-1 border border-border bg-base-100 px-2 text-sm"
@@ -235,6 +238,7 @@ export function TaskProductPanel({
                                 <div className="flex flex-col gap-2">
                                     <textarea
                                         value={editingCommentDraft}
+                                        aria-label="Edit comment"
                                         onChange={(event) => onEditingCommentDraftChange(event.target.value)}
                                         className="input min-h-20 w-full resize-none border border-border bg-base-200 p-2 text-sm"
                                     />

@@ -15,6 +15,7 @@ import { useShortcutHintsVisible } from "../hooks/useShortcutHintsVisible"
 import { useTaskThreadScroll } from "../shell/task/useTaskThreadScroll"
 import type { TaskModel } from "../store/TaskModel"
 import { useCodeStore } from "../store/context"
+import type { ImagePersistencePayload } from "../utils/imageAttachment"
 import { isEventFromTerminal } from "../utils/keyboardShortcuts"
 
 const TASK_OPEN_GIT_REFRESH_DELAY_MS = 500
@@ -188,8 +189,10 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
         })
     }, [codeStore, workspaceId, taskId])
 
+    const persistImage = useCallback((payload: ImagePersistencePayload) => input.persistImage(payload), [input])
+
     // Page-level drop zone for images
-    const { isDragOver, dragHandlers } = useImageDropZone(editorManager)
+    const { isDragOver, dragHandlers } = useImageDropZone(editorManager, persistImage)
 
     // Show environment setup UI if needed
     if (taskModel.needsEnvironmentSetup) {

@@ -9,15 +9,39 @@ import type {
     OpenADEActionEventStoppedRequest,
     OpenADEActionExecutionUpdateRequest,
     OpenADEActionStreamAppendRequest,
+    OpenADEAgentCouplet,
     OpenADECommentCreateRequest,
     OpenADECommentDeleteRequest,
     OpenADECommentEditRequest,
+    OpenADECronInstallState,
+    OpenADECronInstallStateReadRequest,
+    OpenADECronInstallStateReadResult,
+    OpenADECronInstallStateReplaceRequest,
+    OpenADECronInstallStateReplaceResult,
     OpenADEHyperPlanReconcileLabelsSetRequest,
     OpenADEHyperPlanStepPrimitive,
     OpenADEHyperPlanStrategy,
     OpenADEHyperPlanSubExecutionAddRequest,
     OpenADEHyperPlanSubExecutionStreamAppendRequest,
     OpenADEHyperPlanSubExecutionUpdateRequest,
+    OpenADELegacyResourcesImportRequest,
+    OpenADELegacyResourcesImportResult,
+    OpenADEMCPHealthStatus,
+    OpenADEMCPOAuthTokens,
+    OpenADEMCPServer,
+    OpenADEMCPServerDeleteRequest,
+    OpenADEMCPServerDeleteResult,
+    OpenADEMCPServersReadResult,
+    OpenADEMCPServersReplaceRequest,
+    OpenADEMCPServersReplaceResult,
+    OpenADEMCPServerUpsertRequest,
+    OpenADEMCPServerUpsertResult,
+    OpenADEPersonalSettings,
+    OpenADEPersonalSettingsReadResult,
+    OpenADEPersonalSettingsReplaceRequest,
+    OpenADEPersonalSettingsReplaceResult,
+    OpenADEPersonalSettingsTab,
+    OpenADEPersonalSettingsThemeSetting,
     OpenADEProjectFileReadRequest,
     OpenADEProjectFileReadResult,
     OpenADEProjectFilesFuzzySearchRequest,
@@ -78,9 +102,17 @@ import type {
     OpenADETaskImageReadRequest,
     OpenADETaskImageReadResult,
     OpenADETaskImageReference,
+    OpenADETaskImageStagedReadRequest,
+    OpenADETaskImageStagedReadResult,
+    OpenADETaskImageWriteRequest,
+    OpenADETaskImageWriteResult,
     OpenADETaskResourceInventoryReadRequest,
     OpenADETaskResourceInventoryReadResult,
     OpenADETaskTerminalMutationResult,
+    OpenADETaskUsageBackfillRequest,
+    OpenADETaskUsageBackfillResult,
+    OpenADETaskUsageRecalculateRequest,
+    OpenADETaskUsageRecalculateResult,
     OpenADETaskTerminalReconnectRequest,
     OpenADETaskTerminalReconnectResult,
     OpenADETaskTerminalResizeRequest,
@@ -155,6 +187,8 @@ export interface OpenADEWriteAdapter {
     editComment(params: OpenADECommentEditRequest): Promise<unknown>
     deleteComment(params: OpenADECommentDeleteRequest): Promise<unknown>
     updateTaskMetadata(params: OpenADETaskMetadataUpdateRequest): Promise<unknown>
+    writeTaskImage?(params: OpenADETaskImageWriteRequest): Promise<OpenADETaskImageWriteResult>
+    readStagedTaskImage?(params: OpenADETaskImageStagedReadRequest): Promise<OpenADETaskImageStagedReadResult>
 }
 
 export interface OpenADEScopedHostAdapter {
@@ -228,6 +262,17 @@ export interface OpenADEModuleAdapters extends OpenADEReadAdapter, OpenADEWriteA
     createId?: () => string
     clientRequestRetentionMs?: number
     scopedHost?: OpenADEScopedHostAdapter
+    readMcpServers?: () => Promise<OpenADEMCPServersReadResult>
+    replaceMcpServers?: (params: OpenADEMCPServersReplaceRequest) => Promise<OpenADEMCPServersReplaceResult>
+    upsertMcpServer?: (params: OpenADEMCPServerUpsertRequest) => Promise<OpenADEMCPServerUpsertResult>
+    deleteMcpServer?: (params: OpenADEMCPServerDeleteRequest) => Promise<OpenADEMCPServerDeleteResult>
+    readPersonalSettings?: () => Promise<OpenADEPersonalSettingsReadResult>
+    replacePersonalSettings?: (params: OpenADEPersonalSettingsReplaceRequest) => Promise<OpenADEPersonalSettingsReplaceResult>
+    readCronInstallState?: (params: OpenADECronInstallStateReadRequest) => Promise<OpenADECronInstallStateReadResult>
+    replaceCronInstallState?: (params: OpenADECronInstallStateReplaceRequest) => Promise<OpenADECronInstallStateReplaceResult>
+    importLegacyResources?: (params: OpenADELegacyResourcesImportRequest) => Promise<OpenADELegacyResourcesImportResult>
+    backfillTaskUsage?: (params: OpenADETaskUsageBackfillRequest) => Promise<OpenADETaskUsageBackfillResult>
+    recalculateTaskUsage?: (params: OpenADETaskUsageRecalculateRequest) => Promise<OpenADETaskUsageRecalculateResult>
 }
 
 interface ClientRequestEntry {
@@ -319,6 +364,28 @@ function optionalNonNegativeIntegerParam(record: Record<string, unknown>, key: s
 function stringArrayParam(record: Record<string, unknown>, key: string): string[] | undefined {
     const value = record[key]
     return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined
+}
+
+function optionalStrictStringArrayParam(record: Record<string, unknown>, key: string): string[] | undefined {
+    const value = record[key]
+    if (value === undefined) return undefined
+    if (!Array.isArray(value) || !value.every((item): item is string => typeof item === "string")) {
+        throw new Error(`${key} is invalid`)
+    }
+    return value
+}
+
+function isoTimestampParam(record: Record<string, unknown>, key: string): string {
+    const value = stringParam(record, key)
+    if (!Number.isFinite(Date.parse(value))) throw new Error(`${key} is invalid`)
+    return value
+}
+
+function optionalIsoTimestampParam(record: Record<string, unknown>, key: string): string | undefined {
+    const value = optionalStringParam(record, key)
+    if (value === undefined) return undefined
+    if (!Number.isFinite(Date.parse(value))) throw new Error(`${key} is invalid`)
+    return value
 }
 
 function scopedRelativePathParam(record: Record<string, unknown>, key: string): string {
@@ -459,6 +526,44 @@ function projectProcessStopParams(params: unknown): OpenADEProjectProcessStopReq
     }
 }
 
+function cronInstallStateReadParams(params: unknown): OpenADECronInstallStateReadRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+    }
+}
+
+function cronInstallStateParam(key: string, value: unknown): OpenADECronInstallState {
+    const record = asRecord(value)
+    const cronId = stringParam(record, "cronId")
+    if (cronId !== key) throw new Error("installations keys must match cronId")
+    return {
+        cronId,
+        enabled: record.enabled === true,
+        installedAt: isoTimestampParam(record, "installedAt"),
+        lastRunAt: optionalIsoTimestampParam(record, "lastRunAt"),
+        lastTaskId: optionalStringParam(record, "lastTaskId"),
+    }
+}
+
+function cronInstallStateInstallationsParam(value: unknown): Record<string, OpenADECronInstallState> {
+    const record = asRecord(value)
+    const result: Record<string, OpenADECronInstallState> = {}
+    for (const [key, state] of Object.entries(record)) {
+        result[key] = cronInstallStateParam(key, state)
+    }
+    return result
+}
+
+function cronInstallStateReplaceParams(params: unknown): OpenADECronInstallStateReplaceRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        installations: cronInstallStateInstallationsParam(record.installations),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+}
+
 function taskTerminalStartParams(params: unknown): OpenADETaskTerminalStartRequest {
     const record = asRecord(params)
     return {
@@ -512,6 +617,9 @@ function taskTerminalStopParams(params: unknown): OpenADETaskTerminalStopRequest
     }
 }
 
+type TaskImageWriteExt = OpenADETaskImageWriteRequest["ext"]
+type TaskImageWriteMediaType = OpenADETaskImageWriteRequest["mediaType"]
+
 const ALLOWED_TASK_IMAGE_EXTENSIONS = new Set(["gif", "jpeg", "jpg", "png", "webp"])
 
 function taskImageIdParam(record: Record<string, unknown>, key: string): string {
@@ -526,6 +634,49 @@ function taskImageExtParam(record: Record<string, unknown>, key: string): string
     return value
 }
 
+function taskImageWriteExtParam(record: Record<string, unknown>, key: string): TaskImageWriteExt {
+    const value = stringParam(record, key).toLowerCase()
+    switch (value) {
+        case "gif":
+        case "jpeg":
+        case "jpg":
+        case "png":
+        case "webp":
+            return value
+        default:
+            throw new Error(`${key} is invalid`)
+    }
+}
+
+function expectedImageMediaType(ext: TaskImageWriteExt): TaskImageWriteMediaType {
+    switch (ext) {
+        case "gif":
+            return "image/gif"
+        case "jpeg":
+        case "jpg":
+            return "image/jpeg"
+        case "png":
+            return "image/png"
+        case "webp":
+            return "image/webp"
+    }
+}
+
+function taskImageWriteMediaTypeParam(record: Record<string, unknown>, key: string, ext: TaskImageWriteExt): TaskImageWriteMediaType {
+    const value = stringParam(record, key)
+    const expected = expectedImageMediaType(ext)
+    if (value !== expected) throw new Error(`${key} is invalid`)
+    return expected
+}
+
+function base64Param(record: Record<string, unknown>, key: string): string {
+    const value = stringParam(record, key)
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(value) || value.length % 4 !== 0) {
+        throw new Error(`${key} is invalid`)
+    }
+    return value
+}
+
 function taskImageReadParams(params: unknown): OpenADETaskImageReadRequest {
     const record = asRecord(params)
     return {
@@ -533,6 +684,26 @@ function taskImageReadParams(params: unknown): OpenADETaskImageReadRequest {
         taskId: stringParam(record, "taskId"),
         imageId: taskImageIdParam(record, "imageId"),
         ext: taskImageExtParam(record, "ext"),
+    }
+}
+
+function taskImageStagedReadParams(params: unknown): OpenADETaskImageStagedReadRequest {
+    const record = asRecord(params)
+    return {
+        imageId: taskImageIdParam(record, "imageId"),
+        ext: taskImageExtParam(record, "ext"),
+    }
+}
+
+function taskImageWriteParams(params: unknown): OpenADETaskImageWriteRequest {
+    const record = asRecord(params)
+    const ext = taskImageWriteExtParam(record, "ext")
+    return {
+        imageId: taskImageIdParam(record, "imageId"),
+        ext,
+        mediaType: taskImageWriteMediaTypeParam(record, "mediaType", ext),
+        data: base64Param(record, "data"),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
     }
 }
 
@@ -567,6 +738,25 @@ function taskResourceInventoryReadParams(params: unknown): OpenADETaskResourceIn
     return {
         repoId: stringParam(record, "repoId"),
         taskId: stringParam(record, "taskId"),
+    }
+}
+
+function taskUsageRecalculateParams(params: unknown): OpenADETaskUsageRecalculateRequest {
+    const record = asRecord(params)
+    return {
+        repoId: stringParam(record, "repoId"),
+        taskId: stringParam(record, "taskId"),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+}
+
+function taskUsageBackfillParams(params: unknown): OpenADETaskUsageBackfillRequest {
+    const record = asRecord(params)
+    return {
+        repoId: optionalStringParam(record, "repoId"),
+        taskIds: optionalStrictStringArrayParam(record, "taskIds"),
+        force: booleanParam(record, "force"),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
     }
 }
 
@@ -644,6 +834,191 @@ function optionalTaskGitScopeIdParam(record: Record<string, unknown>, key: strin
     }
     if (!/^(branch|worktree):[A-Za-z0-9._/@-]+$/.test(trimmed)) throw new Error(`${key} is invalid`)
     return trimmed
+}
+
+function mcpHealthStatusParam(value: unknown): OpenADEMCPHealthStatus {
+    switch (value) {
+        case "unknown":
+        case "healthy":
+        case "unhealthy":
+        case "needs_auth":
+            return value
+        default:
+            throw new Error("healthStatus is invalid")
+    }
+}
+
+function strictStringRecordParam(value: unknown, key: string): Record<string, string> | undefined {
+    if (value === undefined) return undefined
+    const record = asRecord(value)
+    const result: Record<string, string> = {}
+    for (const [nestedKey, nested] of Object.entries(record)) {
+        if (typeof nested !== "string") throw new Error(`${key}.${nestedKey} is invalid`)
+        result[nestedKey] = nested
+    }
+    return result
+}
+
+function mcpOAuthTokensParam(value: unknown): OpenADEMCPOAuthTokens | undefined {
+    if (value === undefined) return undefined
+    const record = asRecord(value)
+    return {
+        accessToken: stringParam(record, "accessToken"),
+        tokenType: stringParam(record, "tokenType"),
+        refreshToken: optionalStringParam(record, "refreshToken"),
+        expiresAt: optionalStringParam(record, "expiresAt"),
+    }
+}
+
+function mcpServerParams(value: unknown): OpenADEMCPServer {
+    const record = asRecord(value)
+    const base = {
+        id: stringParam(record, "id"),
+        name: stringParam(record, "name"),
+        enabled: record.enabled === true,
+        presetId: optionalStringParam(record, "presetId"),
+        lastTested: optionalStringParam(record, "lastTested"),
+        healthStatus: mcpHealthStatusParam(record.healthStatus),
+        createdAt: stringParam(record, "createdAt"),
+        updatedAt: stringParam(record, "updatedAt"),
+    }
+
+    if (record.transportType === "http") {
+        return {
+            ...base,
+            transportType: "http",
+            url: stringParam(record, "url"),
+            headers: strictStringRecordParam(record.headers, "headers"),
+            oauthTokens: mcpOAuthTokensParam(record.oauthTokens),
+        }
+    }
+
+    if (record.transportType === "stdio") {
+        return {
+            ...base,
+            transportType: "stdio",
+            command: stringParam(record, "command"),
+            args: stringArrayParam(record, "args"),
+            envVars: strictStringRecordParam(record.envVars, "envVars"),
+            cwd: optionalStringParam(record, "cwd"),
+        }
+    }
+
+    throw new Error("transportType is invalid")
+}
+
+function mcpServersReplaceParams(params: unknown): OpenADEMCPServersReplaceRequest {
+    const record = asRecord(params)
+    const servers = record.servers
+    if (!Array.isArray(servers)) throw new Error("servers is invalid")
+    return {
+        servers: servers.map(mcpServerParams),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+}
+
+function mcpServerUpsertParams(params: unknown): OpenADEMCPServerUpsertRequest {
+    const record = asRecord(params)
+    return {
+        server: mcpServerParams(record.server),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+}
+
+function mcpServerDeleteParams(params: unknown): OpenADEMCPServerDeleteRequest {
+    const record = asRecord(params)
+    return {
+        serverId: stringParam(record, "serverId"),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+}
+
+function personalSettingsThemeParam(value: unknown): OpenADEPersonalSettingsThemeSetting {
+    switch (value) {
+        case undefined:
+        case "system":
+            return "system"
+        case "code-theme-light":
+        case "code-theme-bright":
+        case "code-theme-clean":
+        case "code-theme-black":
+        case "code-theme-synthwave":
+        case "code-theme-dracula":
+            return value
+        default:
+            throw new Error("theme is invalid")
+    }
+}
+
+function personalSettingsTabParam(record: Record<string, unknown>, key: string): OpenADEPersonalSettingsTab | undefined {
+    const value = record[key]
+    switch (value) {
+        case undefined:
+            return undefined
+        case "appearance":
+        case "connectors":
+        case "companion":
+        case "system":
+        case "stats":
+        case "dev":
+            return value
+        default:
+            throw new Error(`${key} is invalid`)
+    }
+}
+
+function personalSettingsAgentCoupletParam(value: unknown, key: string): OpenADEAgentCouplet {
+    try {
+        const record = asRecord(value)
+        return {
+            harnessId: stringParam(record, "harnessId"),
+            modelId: stringParam(record, "modelId"),
+        }
+    } catch {
+        throw new Error(`${key} is invalid`)
+    }
+}
+
+function personalSettingsAgentCoupletsParam(value: unknown, key: string): OpenADEAgentCouplet[] | undefined {
+    if (value === undefined) return undefined
+    if (!Array.isArray(value)) throw new Error(`${key} is invalid`)
+    return value.map((item, index) => personalSettingsAgentCoupletParam(item, `${key}.${index}`))
+}
+
+function optionalPersonalSettingsAgentCoupletParam(value: unknown, key: string): OpenADEAgentCouplet | undefined {
+    if (value === undefined) return undefined
+    return personalSettingsAgentCoupletParam(value, key)
+}
+
+function personalSettingsParam(value: unknown): OpenADEPersonalSettings {
+    const record = asRecord(value)
+    return {
+        envVars: strictStringRecordParam(record.envVars, "envVars") ?? {},
+        theme: personalSettingsThemeParam(record.theme),
+        lastSettingsTab: personalSettingsTabParam(record, "lastSettingsTab"),
+        deviceId: optionalStringParam(record, "deviceId"),
+        telemetryDisabled: booleanParam(record, "telemetryDisabled"),
+        onboardingCompleted: booleanParam(record, "onboardingCompleted"),
+        devHideTray: booleanParam(record, "devHideTray"),
+        devForceAllCommands: booleanParam(record, "devForceAllCommands"),
+        shortcutHintsHidden: booleanParam(record, "shortcutHintsHidden"),
+        renderMarkdownMessages: booleanParam(record, "renderMarkdownMessages") ?? true,
+        lastSeenReleaseVersion: optionalStringParam(record, "lastSeenReleaseVersion"),
+        newTaskHarnessId: optionalStringParam(record, "newTaskHarnessId"),
+        newTaskModelId: optionalStringParam(record, "newTaskModelId"),
+        pinnedTaskIds: stringArrayParam(record, "pinnedTaskIds"),
+        hyperplanStrategyId: optionalStringParam(record, "hyperplanStrategyId"),
+        hyperplanAgents: personalSettingsAgentCoupletsParam(record.hyperplanAgents, "hyperplanAgents"),
+        hyperplanReconciler: optionalPersonalSettingsAgentCoupletParam(record.hyperplanReconciler, "hyperplanReconciler"),
+    }
+}
+
+function personalSettingsReplaceParams(params: unknown): OpenADEPersonalSettingsReplaceRequest {
+    const record = asRecord(params)
+    return {
+        settings: personalSettingsParam(record.settings),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
 }
 
 function taskGitTreeishParam(record: Record<string, unknown>, key: string): string {
@@ -1320,6 +1695,30 @@ function taskEnvironmentPrepareParams(params: unknown): OpenADETaskEnvironmentPr
     }
 }
 
+function legacyResourcesImportParams(params: unknown): OpenADELegacyResourcesImportRequest {
+    const record = asRecord(params)
+    const request: OpenADELegacyResourcesImportRequest = {
+        dataDir: optionalStringParam(record, "dataDir"),
+        imageDir: optionalStringParam(record, "imageDir"),
+        snapshotDir: optionalStringParam(record, "snapshotDir"),
+        importSessions: booleanParam(record, "importSessions"),
+        claudeConfigDir: optionalStringParam(record, "claudeConfigDir"),
+        codexHome: optionalStringParam(record, "codexHome"),
+        clientRequestId: optionalStringParam(record, "clientRequestId"),
+    }
+    if (
+        request.dataDir === undefined &&
+        request.imageDir === undefined &&
+        request.snapshotDir === undefined &&
+        request.importSessions !== true &&
+        request.claudeConfigDir === undefined &&
+        request.codexHome === undefined
+    ) {
+        throw new Error("dataDir, imageDir, snapshotDir, importSessions, claudeConfigDir, or codexHome is required")
+    }
+    return request
+}
+
 function dataDocumentIdParam(params: unknown): string {
     return stringParam(asRecord(params), "id")
 }
@@ -1434,6 +1833,33 @@ export function createOpenADEModule(adapters: OpenADEModuleAdapters): RuntimeMod
                 const { repoId, taskId, hydrateSessionEvents } = taskReadParams(params)
                 return adapters.readTask(repoId, taskId, { hydrateSessionEvents })
             }, { validateParams: validateWith(taskReadParams) })
+            const writeTaskImage = adapters.writeTaskImage
+            if (writeTaskImage) {
+                server.register(
+                    "openade/task/image/write",
+                    (params) => runIdempotentMutation("openade/task/image/write", params, () => writeTaskImage(taskImageWriteParams(params))),
+                    { validateParams: validateWith(taskImageWriteParams) }
+                )
+            }
+            const readStagedTaskImage = adapters.readStagedTaskImage
+            if (readStagedTaskImage) {
+                server.register(
+                    "openade/task/image/staged/read",
+                    (params) => readStagedTaskImage(taskImageStagedReadParams(params)),
+                    { validateParams: validateWith(taskImageStagedReadParams) }
+                )
+            }
+            const importLegacyResources = adapters.importLegacyResources
+            if (importLegacyResources) {
+                server.register(
+                    "openade/import/legacyResources",
+                    (params) =>
+                        runIdempotentMutation("openade/import/legacyResources", params, () =>
+                            importLegacyResources(legacyResourcesImportParams(params))
+                        ),
+                    { validateParams: validateWith(legacyResourcesImportParams) }
+                )
+            }
             const scopedHost = adapters.scopedHost
             if (scopedHost) {
                 const readScopedProject = async (repoId: string): Promise<OpenADEProject> => {
@@ -1871,6 +2297,22 @@ export function createOpenADEModule(adapters: OpenADEModuleAdapters): RuntimeMod
             server.register("openade/task/metadata/update", (params) =>
                 runIdempotentMutation("openade/task/metadata/update", params, () => adapters.updateTaskMetadata(taskMetadataUpdateParams(params)))
             , { validateParams: validateWith(taskMetadataUpdateParams) })
+            const recalculateTaskUsage = adapters.recalculateTaskUsage
+            if (recalculateTaskUsage) {
+                server.register("openade/task/usage/recalculate", (params) =>
+                    runIdempotentMutation("openade/task/usage/recalculate", params, () =>
+                        recalculateTaskUsage(taskUsageRecalculateParams(params))
+                    )
+                , { validateParams: validateWith(taskUsageRecalculateParams) })
+            }
+            const backfillTaskUsage = adapters.backfillTaskUsage
+            if (backfillTaskUsage) {
+                server.register("openade/task/usage/backfill", (params) =>
+                    runIdempotentMutation("openade/task/usage/backfill", params, () =>
+                        backfillTaskUsage(taskUsageBackfillParams(params))
+                    )
+                , { validateParams: validateWith(taskUsageBackfillParams) })
+            }
             server.register("openade/task/delete", (params) =>
                 runIdempotentMutation("openade/task/delete", params, () => adapters.deleteTask(taskDeleteParams(params)))
             , { validateParams: validateWith(taskDeleteParams) })
@@ -1887,6 +2329,82 @@ export function createOpenADEModule(adapters: OpenADEModuleAdapters): RuntimeMod
             server.register("data/yjs/delete", (params) =>
                 runIdempotentMutation("data/yjs/delete", params, () => adapters.deleteDataDocument(dataDocumentIdParam(params)))
             , { validateParams: validateWith(dataDocumentIdParam) })
+            const mcpSettings =
+                adapters.readMcpServers && adapters.replaceMcpServers && adapters.upsertMcpServer && adapters.deleteMcpServer
+                    ? {
+                          readMcpServers: adapters.readMcpServers,
+                          replaceMcpServers: adapters.replaceMcpServers,
+                          upsertMcpServer: adapters.upsertMcpServer,
+                          deleteMcpServer: adapters.deleteMcpServer,
+                      }
+                    : null
+            if (mcpSettings) {
+                server.register("openade/settings/mcpServers/read", () => mcpSettings.readMcpServers())
+                server.register(
+                    "openade/settings/mcpServers/replace",
+                    (params) =>
+                        runIdempotentMutation("openade/settings/mcpServers/replace", params, () =>
+                            mcpSettings.replaceMcpServers(mcpServersReplaceParams(params))
+                        ),
+                    { validateParams: validateWith(mcpServersReplaceParams) }
+                )
+                server.register(
+                    "openade/settings/mcpServers/upsert",
+                    (params) =>
+                        runIdempotentMutation("openade/settings/mcpServers/upsert", params, () =>
+                            mcpSettings.upsertMcpServer(mcpServerUpsertParams(params))
+                        ),
+                    { validateParams: validateWith(mcpServerUpsertParams) }
+                )
+                server.register(
+                    "openade/settings/mcpServers/delete",
+                    (params) =>
+                        runIdempotentMutation("openade/settings/mcpServers/delete", params, () =>
+                            mcpSettings.deleteMcpServer(mcpServerDeleteParams(params))
+                        ),
+                    { validateParams: validateWith(mcpServerDeleteParams) }
+                )
+            }
+            const personalSettings =
+                adapters.readPersonalSettings && adapters.replacePersonalSettings
+                    ? {
+                          readPersonalSettings: adapters.readPersonalSettings,
+                          replacePersonalSettings: adapters.replacePersonalSettings,
+                      }
+                    : null
+            if (personalSettings) {
+                server.register("openade/settings/personal/read", () => personalSettings.readPersonalSettings())
+                server.register(
+                    "openade/settings/personal/replace",
+                    (params) =>
+                        runIdempotentMutation("openade/settings/personal/replace", params, () =>
+                            personalSettings.replacePersonalSettings(personalSettingsReplaceParams(params))
+                        ),
+                    { validateParams: validateWith(personalSettingsReplaceParams) }
+                )
+            }
+            const cronInstallState =
+                adapters.readCronInstallState && adapters.replaceCronInstallState
+                    ? {
+                          readCronInstallState: adapters.readCronInstallState,
+                          replaceCronInstallState: adapters.replaceCronInstallState,
+                      }
+                    : null
+            if (cronInstallState) {
+                server.register(
+                    "openade/cron/installState/read",
+                    (params) => cronInstallState.readCronInstallState(cronInstallStateReadParams(params)),
+                    { validateParams: validateWith(cronInstallStateReadParams) }
+                )
+                server.register(
+                    "openade/cron/installState/replace",
+                    (params) =>
+                        runIdempotentMutation("openade/cron/installState/replace", params, () =>
+                            cronInstallState.replaceCronInstallState(cronInstallStateReplaceParams(params))
+                        ),
+                    { validateParams: validateWith(cronInstallStateReplaceParams) }
+                )
+            }
         },
     }
 }

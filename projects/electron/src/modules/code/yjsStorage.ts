@@ -30,6 +30,27 @@ function getLegacyNestedYjsStorageDir(): string {
 
 // Per-document save queue to prevent race conditions
 const saveQueues = new Map<string, Promise<void>>()
+const LOAD_CACHE_TTL_MS = 15_000
+const LOAD_CACHE_MAX_DOCUMENTS = 32
+const SLOW_YJS_LOAD_MS = 250
+const SLOW_YJS_SAVE_MS = 500
+const YJS_LOAD_BURST_WINDOW_MS = 5_000
+const YJS_LOAD_BURST_COUNT = 8
+
+interface LoadCacheEntry {
+    data: Uint8Array | null
+    expiresAt: number
+}
+
+interface LoadBurstEntry {
+    startedAt: number
+    count: number
+    lastWarnedCount: number
+}
+
+const loadQueues = new Map<string, Promise<Uint8Array | null>>()
+const loadCache = new Map<string, LoadCacheEntry>()
+const loadBursts = new Map<string, LoadBurstEntry>()
 
 // ============================================================================
 // Helper Functions
@@ -91,6 +112,62 @@ async function awaitPendingSaves(): Promise<void> {
     await Promise.all(Array.from(saveQueues.values()))
 }
 
+function clearLoadCache(id: string): void {
+    loadCache.delete(id)
+    loadQueues.delete(id)
+}
+
+function cacheLoadedDocument(id: string, data: Uint8Array | null): Uint8Array | null {
+    loadCache.delete(id)
+    loadCache.set(id, { data, expiresAt: Date.now() + LOAD_CACHE_TTL_MS })
+    while (loadCache.size > LOAD_CACHE_MAX_DOCUMENTS) {
+        const oldestKey = loadCache.keys().next().value
+        if (typeof oldestKey !== "string") break
+        loadCache.delete(oldestKey)
+    }
+    return data
+}
+
+function getCachedLoadedDocument(id: string): Uint8Array | null | undefined {
+    const cached = loadCache.get(id)
+    if (!cached) return undefined
+    if (cached.expiresAt <= Date.now()) {
+        loadCache.delete(id)
+        return undefined
+    }
+
+    loadCache.delete(id)
+    loadCache.set(id, cached)
+    return cached.data
+}
+
+function recordYjsLoad(id: string, data: Uint8Array | null, durationMs: number): void {
+    const size = data?.length ?? 0
+    if (durationMs >= SLOW_YJS_LOAD_MS) {
+        logger.warn("[YjsStorage] Slow document load", JSON.stringify({ id, size, durationMs }))
+    }
+
+    const now = Date.now()
+    const existing = loadBursts.get(id)
+    const burst = existing && now - existing.startedAt <= YJS_LOAD_BURST_WINDOW_MS
+        ? existing
+        : { startedAt: now, count: 0, lastWarnedCount: 0 }
+    burst.count += 1
+    if (burst.count >= YJS_LOAD_BURST_COUNT && burst.count - burst.lastWarnedCount >= YJS_LOAD_BURST_COUNT) {
+        burst.lastWarnedCount = burst.count
+        logger.warn(
+            "[YjsStorage] Repeated document loads",
+            JSON.stringify({ id, count: burst.count, windowMs: now - burst.startedAt, size })
+        )
+    }
+    loadBursts.set(id, burst)
+}
+
+function recordYjsSave(id: string, size: number, durationMs: number): void {
+    if (durationMs < SLOW_YJS_SAVE_MS) return
+    logger.warn("[YjsStorage] Slow document save", JSON.stringify({ id, size, durationMs }))
+}
+
 function expectedTaskMetaId(id: string): string | null {
     return id.startsWith("code:task:") ? id.slice("code:task:".length) : null
 }
@@ -134,10 +211,14 @@ async function writeMigratedDoc(filePath: string, data: Uint8Array): Promise<voi
  * Serializes saves per document to prevent race conditions.
  */
 async function handleSave(id: string, data: Uint8Array): Promise<void> {
+    const pendingLoad = loadQueues.get(id) ?? Promise.resolve()
+    const startedAt = Date.now()
     // Chain this save after any pending save for the same document
     const prevSave = saveQueues.get(id) ?? Promise.resolve()
 
     const currentSave = prevSave.then(async () => {
+        await pendingLoad
+        clearLoadCache(id)
         await ensureStorageDir()
 
         const filePath = getDocPath(id)
@@ -187,6 +268,8 @@ async function handleSave(id: string, data: Uint8Array): Promise<void> {
             // Atomic write: write to temp file, then rename
             await fs.writeFile(tempPath, mergedState)
             await fs.rename(tempPath, filePath)
+            cacheLoadedDocument(id, mergedState)
+            recordYjsSave(id, mergedState.length, Date.now() - startedAt)
 
             logger.debug(`[YjsStorage] Saved document: ${id} (${mergedState.length} bytes)`)
         } catch (error) {
@@ -224,51 +307,68 @@ export async function saveYjsDocument(id: string, data: Uint8Array): Promise<voi
  * Returns null if the document doesn't exist.
  */
 async function handleLoad(id: string): Promise<Uint8Array | null> {
+    const startedAt = Date.now()
     await awaitPendingSave(id)
+    const cached = getCachedLoadedDocument(id)
+    if (cached !== undefined) return cached
+
+    const queued = loadQueues.get(id)
+    if (queued) return queued
 
     const filePath = getDocPath(id)
     const legacyNestedPath = getLegacyNestedDocPath(id)
 
-    try {
-        const data = new Uint8Array(await fs.readFile(filePath))
-        if (isExpectedTaskDoc(id, data)) {
-            logger.debug(`[YjsStorage] Loaded document: ${id} (${data.length} bytes)`)
-            return data
-        }
-
+    const load = (async () => {
         try {
-            const legacyData = new Uint8Array(await fs.readFile(legacyNestedPath))
-            if (isExpectedTaskDoc(id, legacyData)) {
-                await writeMigratedDoc(filePath, legacyData)
-                logger.warn(`[YjsStorage] Recovered task document from legacy nested path: ${id}`)
-                return legacyData
+            const data = new Uint8Array(await fs.readFile(filePath))
+            if (isExpectedTaskDoc(id, data)) {
+                logger.debug(`[YjsStorage] Loaded document: ${id} (${data.length} bytes)`)
+                return cacheLoadedDocument(id, data)
             }
-        } catch (legacyError) {
-            if ((legacyError as NodeJS.ErrnoException).code !== "ENOENT") {
-                logger.warn(`[YjsStorage] Failed to inspect legacy nested document for ${id}:`, legacyError)
-            }
-        }
 
-        logger.warn(`[YjsStorage] Loaded task document with mismatched metadata: ${id}`)
-        return data
-    } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
             try {
                 const legacyData = new Uint8Array(await fs.readFile(legacyNestedPath))
                 if (isExpectedTaskDoc(id, legacyData)) {
                     await writeMigratedDoc(filePath, legacyData)
-                    logger.warn(`[YjsStorage] Migrated task document from legacy nested path: ${id}`)
-                    return legacyData
+                    logger.warn(`[YjsStorage] Recovered task document from legacy nested path: ${id}`)
+                    return cacheLoadedDocument(id, legacyData)
                 }
             } catch (legacyError) {
                 if ((legacyError as NodeJS.ErrnoException).code !== "ENOENT") {
-                    logger.warn(`[YjsStorage] Failed to load legacy nested document for ${id}:`, legacyError)
+                    logger.warn(`[YjsStorage] Failed to inspect legacy nested document for ${id}:`, legacyError)
                 }
             }
-            return null
+
+            logger.warn(`[YjsStorage] Loaded task document with mismatched metadata: ${id}`)
+            return cacheLoadedDocument(id, data)
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                try {
+                    const legacyData = new Uint8Array(await fs.readFile(legacyNestedPath))
+                    if (isExpectedTaskDoc(id, legacyData)) {
+                        await writeMigratedDoc(filePath, legacyData)
+                        logger.warn(`[YjsStorage] Migrated task document from legacy nested path: ${id}`)
+                        return cacheLoadedDocument(id, legacyData)
+                    }
+                } catch (legacyError) {
+                    if ((legacyError as NodeJS.ErrnoException).code !== "ENOENT") {
+                        logger.warn(`[YjsStorage] Failed to load legacy nested document for ${id}:`, legacyError)
+                    }
+                }
+                return cacheLoadedDocument(id, null)
+            }
+            throw error
         }
-        throw error
-    }
+    })().finally(() => {
+        if (loadQueues.get(id) === load) {
+            loadQueues.delete(id)
+        }
+    })
+
+    loadQueues.set(id, load)
+    const data = await load
+    recordYjsLoad(id, data, Date.now() - startedAt)
+    return data
 }
 
 export async function loadYjsDocument(id: string): Promise<Uint8Array | null> {
@@ -279,6 +379,8 @@ export async function loadYjsDocument(id: string): Promise<Uint8Array | null> {
  * Delete a YJS document from disk.
  */
 async function handleDelete(id: string): Promise<void> {
+    await (loadQueues.get(id) ?? Promise.resolve())
+    clearLoadCache(id)
     await awaitPendingSave(id)
 
     const filePath = getDocPath(id)

@@ -13,8 +13,7 @@ import { toolRenderer } from "./toolRenderer"
 import { unknownRenderer } from "./unknownRenderer"
 import { writeRenderer } from "./writeRenderer"
 
-// biome-ignore lint/suspicious/noExplicitAny: Generic renderer lookup requires any
-export function getRenderer(group: MergedGroup): GroupRenderer<any> {
+export function getRenderer(group: MergedGroup): GroupRenderer<MergedGroup> {
     return exhaustive.tag(group, "type", {
         text: () => textRenderer,
         thinking: () => thinkingRenderer,

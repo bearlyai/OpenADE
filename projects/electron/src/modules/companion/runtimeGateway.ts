@@ -2,6 +2,7 @@ import os from "node:os"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
+import logger from "electron-log"
 import {
     buildOpenADEHyperPlanStepPrompt,
     buildOpenADEProjectProcessDefinitions,
@@ -38,16 +39,22 @@ import {
     OPENADE_TASK_TITLE_OUTPUT_SCHEMA,
     OPENADE_TASK_TITLE_SYSTEM_PROMPT,
     publishOpenADECompanionEvent,
+    readYjsPersonalSettings,
     readOpenADEProjectFile,
     readOpenADETaskSnapshotIndex,
     readOpenADETaskSnapshotPatch,
     readOpenADETaskSnapshotPatchSlice,
+    readYjsMcpServers,
+    replaceYjsPersonalSettings,
+    replaceYjsMcpServers,
     resolveOpenADETaskWorkDir,
     resolveOpenADEHyperPlanStrategy,
     searchOpenADEProject,
     titleFromStructuredOutput,
+    upsertYjsMcpServer,
     validateOpenADEHyperPlanStrategy,
     writeOpenADEProjectFile,
+    deleteYjsMcpServer,
     type OpenADEActionEventSource,
     type OpenADEHyperPlanStep,
     type OpenADEHyperPlanStrategy,
@@ -71,6 +78,11 @@ import {
     type OpenADEProjectProcessStopRequest,
     type OpenADEProjectProcessStopResult,
     type OpenADEQueuedTurn,
+    type OpenADECronInstallState,
+    type OpenADECronInstallStateReadRequest,
+    type OpenADECronInstallStateReadResult,
+    type OpenADECronInstallStateReplaceRequest,
+    type OpenADECronInstallStateReplaceResult,
     type OpenADESnapshotEventRecord,
     type OpenADESnapshotChangedFile,
     type OpenADESetupEnvironmentEventCreateRequest,
@@ -104,6 +116,8 @@ import {
     type OpenADETaskImageReadRequest,
     type OpenADETaskImageReadResult,
     type OpenADETaskImageReference,
+    type OpenADETaskImageWriteRequest,
+    type OpenADETaskImageWriteResult,
     type OpenADETaskResourceInventoryReadRequest,
     type OpenADETaskResourceInventoryReadResult,
     type OpenADETaskTerminalMutationResult,
@@ -206,6 +220,7 @@ import { cleanupRuntimeHostModule, registerRuntimeHostModule } from "./runtimeHo
 import { createOpenADEYjsStorageAdapter } from "./runtimeYjsAdapter"
 import { configurePowerKeeper } from "./powerKeeper"
 import { createRuntimeNodeCodexAppServerBridge, notifyRuntimeNodeAgentBridgeEvent } from "../../../../runtime-node/src"
+import { markOpenADECoreLegacyYjsMigrationAccepted } from "../openadeCoreMigration"
 
 const agentProviders: AgentProviderSummary[] = [
     {
@@ -258,11 +273,24 @@ const agentProviders: AgentProviderSummary[] = [
     },
 ]
 
+const SLOW_RUNTIME_REQUEST_THRESHOLD_MS = 750
+
 let runtimeServer: RuntimeServer | null = null
 const runtimeBridgeUnregisters: (() => void)[] = []
 type ActiveTaskExecution = { executionId: string; runtimeId: string; repoId: string; eventId: string; childExecutionIds?: Set<string>; stopping?: boolean }
 const activeTaskExecutions = new Map<string, ActiveTaskExecution>()
 const scopedProjectProcesses = new Map<string, OpenADEProjectProcessRegistration>()
+const SCOPED_PROJECT_PROCS_CACHE_TTL_MS = 10_000
+const RUNTIME_PROCESS_LIST_CACHE_TTL_MS = 1_000
+
+interface PromiseCacheEntry<T> {
+    promise?: Promise<T>
+    result?: T
+    expiresAt?: number
+}
+
+const scopedProjectProcsCache = new Map<string, PromiseCacheEntry<ReadProcsResult>>()
+let runtimeProcessListCache: PromiseCacheEntry<Awaited<ReturnType<typeof listRuntimeProcesses>>> | null = null
 const quitBlockingRuntimeKinds = new Set(["agent", "process", "pty", "composite"])
 
 export function hasActiveRuntimeWork(): boolean {
@@ -776,6 +804,7 @@ function registerTrustedHostMethods(server: RuntimeServer): void {
     server.register("host/procs/file/read", (params) => readRuntimeProcsFile({ filePath: runtimeStringParam(runtimeRecordParam(params), "filePath") }))
     server.register("host/procs/file/write", (params) => {
         const record = runtimeRecordParam(params)
+        invalidateScopedProjectProcessCaches()
         return writeRuntimeProcsFile({
             filePath: runtimeStringParam(record, "filePath"),
             content: runtimeStringParam(record, "content"),
@@ -812,6 +841,7 @@ function registerTrustedHostMethods(server: RuntimeServer): void {
         const crons = record.crons
         if (!Array.isArray(processes)) throw new Error("processes is invalid")
         if (!Array.isArray(crons)) throw new Error("crons is invalid")
+        invalidateScopedProjectProcessCaches(optionalRuntimeStringParam(record, "searchPath"))
         return saveRuntimeEditableProcs({
             filePath: runtimeStringParam(record, "filePath"),
             relativePath: runtimeStringParam(record, "relativePath"),
@@ -821,6 +851,7 @@ function registerTrustedHostMethods(server: RuntimeServer): void {
         })
     })
     server.register("host/capabilities/read", () => getRuntimeCodeCapabilities())
+    server.register("host/core/legacyYjsMigration/accept", () => markOpenADECoreLegacyYjsMigrationAccepted())
     server.register("agent/sdkCapabilities/read", (params) => {
         const record = runtimeRecordParam(params)
         return getRuntimeSdkCapabilities({
@@ -1383,6 +1414,18 @@ async function readScopedTaskImage(
     }
 }
 
+async function writeRuntimeTaskImage(params: OpenADETaskImageWriteRequest): Promise<OpenADETaskImageWriteResult> {
+    const data = Buffer.from(params.data, "base64")
+    await saveRuntimeDataFile({ folder: "images", id: params.imageId, ext: params.ext, data })
+    return {
+        imageId: params.imageId,
+        ext: params.ext,
+        mediaType: params.mediaType,
+        size: data.byteLength,
+        sha256: createHash("sha256").update(data).digest("hex"),
+    }
+}
+
 async function scopedProjectProcessSearchRoot(params: { repo: OpenADEProject; task?: OpenADETask }): Promise<string> {
     return params.task ? scopedTaskWorkDir(params.repo, params.task) : path.resolve(params.repo.path)
 }
@@ -1395,13 +1438,61 @@ function projectProcessDefinitionsFromProcs(result: ReadProcsResult): {
     return buildOpenADEProjectProcessDefinitions({ root, configs: result.configs })
 }
 
+function cachedScopedProjectProcs(searchRoot: string): Promise<ReadProcsResult> {
+    const now = Date.now()
+    const cached = scopedProjectProcsCache.get(searchRoot)
+    if (cached?.promise) return cached.promise
+    if (cached?.result && cached.expiresAt && cached.expiresAt > now) return Promise.resolve(cached.result)
+
+    const promise = readRuntimeProcs({ path: searchRoot })
+        .then((result) => {
+            scopedProjectProcsCache.set(searchRoot, { result, expiresAt: Date.now() + SCOPED_PROJECT_PROCS_CACHE_TTL_MS })
+            return result
+        })
+        .catch((error: unknown) => {
+            if (scopedProjectProcsCache.get(searchRoot)?.promise === promise) scopedProjectProcsCache.delete(searchRoot)
+            throw error
+        })
+    scopedProjectProcsCache.set(searchRoot, { promise })
+    return promise
+}
+
+function cachedRuntimeProcessList(): Promise<Awaited<ReturnType<typeof listRuntimeProcesses>>> {
+    const now = Date.now()
+    if (runtimeProcessListCache?.promise) return runtimeProcessListCache.promise
+    if (runtimeProcessListCache?.result && runtimeProcessListCache.expiresAt && runtimeProcessListCache.expiresAt > now) {
+        return Promise.resolve(runtimeProcessListCache.result)
+    }
+
+    const promise = listRuntimeProcesses()
+        .then((result) => {
+            runtimeProcessListCache = { result, expiresAt: Date.now() + RUNTIME_PROCESS_LIST_CACHE_TTL_MS }
+            return result
+        })
+        .catch((error: unknown) => {
+            if (runtimeProcessListCache?.promise === promise) runtimeProcessListCache = null
+            throw error
+        })
+    runtimeProcessListCache = { promise }
+    return promise
+}
+
+function invalidateScopedProjectProcessCaches(searchRoot?: string): void {
+    runtimeProcessListCache = null
+    if (searchRoot) {
+        scopedProjectProcsCache.delete(searchRoot)
+    } else {
+        scopedProjectProcsCache.clear()
+    }
+}
+
 async function listScopedProjectProcesses(
     params: OpenADEProjectProcessListRequest & { repo: OpenADEProject; task?: OpenADETask }
 ): Promise<OpenADEProjectProcessListResult> {
     const searchRoot = await scopedProjectProcessSearchRoot(params)
-    const procs = await readRuntimeProcs({ path: searchRoot })
+    const procs = await cachedScopedProjectProcs(searchRoot)
     const definitions = projectProcessDefinitionsFromProcs(procs)
-    const runtimeProcesses = await listRuntimeProcesses()
+    const runtimeProcesses = await cachedRuntimeProcessList()
     const instances = runtimeProcesses.processes
         .map((processInfo) => {
             const registration = scopedProjectProcesses.get(processInfo.processId)
@@ -1442,6 +1533,7 @@ async function startScopedProjectProcess(
         definitionId: params.definitionId,
         cwd: processDef.cwd,
     })
+    invalidateScopedProjectProcessCaches(listed.searchRoot)
     return {
         repoId: params.repoId,
         taskId: params.taskId,
@@ -1471,6 +1563,7 @@ async function stopScopedProjectProcess(
     }
     const result = await killRuntimeProcess(params.processId)
     if (result.ok) scopedProjectProcesses.delete(params.processId)
+    invalidateScopedProjectProcessCaches()
     return openADEProjectProcessStopResultFromUnknown(result, params)
 }
 
@@ -1561,6 +1654,7 @@ async function buildRuntimeMcpServerConfigs(storage: OpenADEYjsStorage, enabledS
         } else if (row.transportType === "stdio" && typeof row.command === "string") {
             const config: Extract<McpServerConfig, { type: "stdio" }> = { type: "stdio", command: row.command }
             if (Array.isArray(row.args)) config.args = row.args.filter((arg): arg is string => typeof arg === "string")
+            if (typeof row.cwd === "string" && row.cwd) config.cwd = row.cwd
             if (typeof row.envVars === "object" && row.envVars !== null && !Array.isArray(row.envVars)) {
                 config.env = row.envVars as Record<string, string>
             }
@@ -2285,6 +2379,66 @@ async function ensureTaskExecutionEnvironment({
     }
 }
 
+interface RuntimeCronInstallStateDocument {
+    installations: Record<string, OpenADECronInstallState>
+}
+
+function runtimeCronInstallStateFromUnknown(key: string, value: unknown): OpenADECronInstallState | null {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return null
+    const record = value as Record<string, unknown>
+    const cronId = typeof record.cronId === "string" && record.cronId.trim() ? record.cronId.trim() : key
+    const installedAt = typeof record.installedAt === "string" ? record.installedAt : ""
+    if (!cronId || !installedAt) return null
+    return {
+        cronId,
+        enabled: record.enabled === true,
+        installedAt,
+        lastRunAt: typeof record.lastRunAt === "string" && record.lastRunAt ? record.lastRunAt : undefined,
+        lastTaskId: typeof record.lastTaskId === "string" && record.lastTaskId ? record.lastTaskId : undefined,
+    }
+}
+
+function parseRuntimeCronInstallStateDocument(raw: string): RuntimeCronInstallStateDocument {
+    let parsed: unknown
+    try {
+        parsed = JSON.parse(raw)
+    } catch {
+        return { installations: {} }
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { installations: {} }
+    const document = parsed as Record<string, unknown>
+    const source = typeof document.installations === "object" && document.installations !== null && !Array.isArray(document.installations) ? document.installations : parsed
+    const sourceRecord = source as Record<string, unknown>
+    const installations: Record<string, OpenADECronInstallState> = {}
+    for (const [key, value] of Object.entries(sourceRecord)) {
+        const state = runtimeCronInstallStateFromUnknown(key, value)
+        if (state) installations[state.cronId] = state
+    }
+    return { installations }
+}
+
+async function readRuntimeCronInstallState(params: OpenADECronInstallStateReadRequest): Promise<OpenADECronInstallStateReadResult> {
+    const data = await loadRuntimeDataFile({ folder: "cron", id: params.repoId, ext: "json" })
+    if (data === null) return { repoId: params.repoId, installations: {} }
+    const raw = Buffer.isBuffer(data) ? data.toString("utf8") : data
+    return { repoId: params.repoId, installations: parseRuntimeCronInstallStateDocument(raw).installations }
+}
+
+async function replaceRuntimeCronInstallState(params: OpenADECronInstallStateReplaceRequest): Promise<OpenADECronInstallStateReplaceResult> {
+    const document: RuntimeCronInstallStateDocument = { installations: params.installations }
+    await saveRuntimeDataFile({
+        folder: "cron",
+        id: params.repoId,
+        ext: "json",
+        data: JSON.stringify(document, null, 2),
+    })
+    return {
+        repoId: params.repoId,
+        installations: params.installations,
+        replacedInstallations: Object.keys(params.installations).length,
+    }
+}
+
 function registerOpenADEProductModule(server: RuntimeServer): void {
     const yjsStorage = createOpenADEYjsStorageAdapter({ hostName: () => os.hostname() })
     const projection = createOpenADEYjsProjection(yjsStorage)
@@ -2301,13 +2455,21 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
         createOpenADEModule({
             ...projection,
             readTask: async (repoId, taskId, options) => {
-                const task = await projection.readTask(repoId, taskId)
+                const task = await projection.readTask(repoId, taskId, options)
                 if (options?.hydrateSessionEvents === false) return task
 
                 const projects = await projection.readProjects()
                 const repoPath = projects.find((project) => project.id === repoId)?.path
                 return hydrateOpenADETaskSessionEvents({ server, task, repoPath })
             },
+            readMcpServers: () => readYjsMcpServers(yjsStorage),
+            replaceMcpServers: (params) => replaceYjsMcpServers(yjsStorage, params.servers),
+            upsertMcpServer: (params) => upsertYjsMcpServer(yjsStorage, params.server),
+            deleteMcpServer: (params) => deleteYjsMcpServer(yjsStorage, params.serverId),
+            readPersonalSettings: () => readYjsPersonalSettings(yjsStorage),
+            replacePersonalSettings: (params) => replaceYjsPersonalSettings(yjsStorage, params.settings),
+            readCronInstallState: readRuntimeCronInstallState,
+            replaceCronInstallState: replaceRuntimeCronInstallState,
             version: () => process.env.RELEASE ?? "local",
             scopedHost: {
                 listProjectFiles: listOpenADEProjectFiles,
@@ -2345,6 +2507,7 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                 readTaskSnapshotIndex: readScopedTaskSnapshotIndex,
                 readTaskSnapshotPatchSlice: readScopedTaskSnapshotPatchSlice,
             },
+            writeTaskImage: writeRuntimeTaskImage,
             saveDataDocumentBase64: (id, data) => yjsStorage.saveDocumentUpdate(id, Buffer.from(data, "base64")),
             deleteDataDocument: (id) => yjsStorage.deleteDocument(id),
             createRepo: async (params) => {
@@ -3598,6 +3761,10 @@ export function getRuntimeServer(): RuntimeServer {
             agentProviders,
             checkpointStore: createRuntimeCheckpointStore(),
             livenessProbe: createRuntimeNodeLivenessProbe(),
+            slowRequestThresholdMs: SLOW_RUNTIME_REQUEST_THRESHOLD_MS,
+            onSlowRequest: (event) => {
+                logger.warn("[Runtime] Slow request", JSON.stringify(event))
+            },
         })
         registerTrustedHostMethods(runtimeServer)
         registerOpenADEProductModule(runtimeServer)

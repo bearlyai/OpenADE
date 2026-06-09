@@ -20,17 +20,19 @@
 | `projects/runtime` | Reusable runtime server surface for routing, capabilities, subscriptions, permissions, and lifecycle state. | [projects/runtime/CLAUDE.md](projects/runtime/CLAUDE.md) |
 | `projects/runtime-node` | Generic Node host adapters for filesystem, git, process, PTY, agent harnesses, checkpoints, liveness, and headless serving. | [projects/runtime-node/CLAUDE.md](projects/runtime-node/CLAUDE.md) |
 | `projects/runtime-client` | Typed client helpers for runtime WebSocket and local transports, reconnect, notifications, and runtime record caches. | [projects/runtime-client/CLAUDE.md](projects/runtime-client/CLAUDE.md) |
+| `projects/openade-core` | Standalone Go OpenADE Core process for the long-term product backend, runtime transport, storage engine, permissions, and observability destination described in [goal.md](goal.md). | [projects/openade-core/CLAUDE.md](projects/openade-core/CLAUDE.md) |
 | `projects/openade-module` | OpenADE product semantics loaded into a runtime server: projects, tasks, turns, comments, snapshots, HyperPlan, and Yjs compatibility. | [projects/openade-module/CLAUDE.md](projects/openade-module/CLAUDE.md) |
 | `projects/openade-client` | Typed OpenADE project/task/turn client APIs layered on top of runtime-client transports. | [projects/openade-client/CLAUDE.md](projects/openade-client/CLAUDE.md) |
 | `projects/shared/companion` | Browser-safe shared DTOs for desktop companion service, web remote UI, and mobile host adapter. | [projects/shared/companion/CLAUDE.md](projects/shared/companion/CLAUDE.md) |
 
 ## Durable Migration Plans
 
+- [goal.md](goal.md) defines the destination for OpenADE Core: a standalone Go product kernel with SQLite/blob storage, one typed runtime API, thin medium shells, and classic desktop UI as the canonical product surface. Future agents must consult it before changing kernel composition, durable storage architecture, runtime/OpenADE contracts, Electron product-backend ownership, shared-shell direction, or medium-specific product capability decisions.
 - [plan.md](plan.md) covers the shared shell and remote-kernel migration for bringing companion, web, and desktop onto one runtime-attached product shell. Future agents must consult it before changing runtime composition, OpenADE client/store boundaries, companion permissions, mobile companion behavior, or desktop renderer paths that move away from direct Yjs/local Electron assumptions.
 
 ## Engineering Commandments
 
-1. Type strictly. Do not use loose typing, `any`, forced casts, or type-system escape hatches unless a boundary contract makes them unavoidable and the reason is documented in code.
+1. Type strictly. Do not use loose typing, `any`, Go `interface{}`, forced casts, or type-system escape hatches unless a boundary contract makes them unavoidable and the reason is documented in code. TypeScript package `typecheck` scripts, Core `make check`, and release validation run `scripts/check-no-explicit-any.mjs --self-test`; the root release guard scans `projects` and `scripts` so source-only shared folders are covered too. The guard scans first-party non-test source, self-tests its TS/Go detection and test-file exclusions, reports documented boundary exception counts, ignores vendored external repos, and only honors a reviewed exception listed in the scanner with a matching nearby source comment using `openade-allow-explicit-any: concrete reason`.
 2. Keep solutions simple, surgical, and production-aware. Prefer the smallest robust change, but step back when a better abstraction or limited redo prevents long-term complexity.
 3. Treat production data as real. Preserve backward compatibility with tolerant readers, optional fields, migrations, and regression fixtures for old shapes.
 4. Prefer strong contracts. Use types, schemas, parsers, validators, and discriminated unions at boundaries instead of implicit object shapes or stringly typed logic.

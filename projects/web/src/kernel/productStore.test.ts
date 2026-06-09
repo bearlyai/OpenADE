@@ -49,7 +49,18 @@ function createLocalRuntimeClient(server: RuntimeServer): RuntimeLocalClient {
     return new RuntimeLocalClient(transport, { clientName: "product-store-test", clientPlatform: "web" })
 }
 
-function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: RuntimeLocalClient; taskReadRequests: OpenADETaskReadOptions[] } {
+interface WrittenImageFixture {
+    data: string
+    ext: string
+    mediaType: string
+}
+
+function createRuntimeBackedStore(): {
+    store: OpenADEProductStore
+    runtime: RuntimeLocalClient
+    taskReadRequests: OpenADETaskReadOptions[]
+    writtenImages: Map<string, WrittenImageFixture>
+} {
     const server = new RuntimeServer({ serverName: "product-store-runtime", protocolVersion: 1 })
     const preview: OpenADETaskPreview = {
         id: "task-1",
@@ -95,6 +106,7 @@ function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: Runt
     }
     const tasks = new Map([[task.id, task]])
     const taskReadRequests: OpenADETaskReadOptions[] = []
+    const writtenImages = new Map<string, WrittenImageFixture>()
 
     function snapshot(options?: { version?: string; hostName?: string; workingTaskIds?: string[] }): OpenADESnapshot {
         return {
@@ -465,6 +477,20 @@ function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: Runt
             publishOpenADECompanionEvent(server, { type: "task_deleted", repoId: params.repoId, taskId: params.taskId, at: now() })
             return { repoId: params.repoId, taskId: params.taskId, deleted: true }
         },
+        writeTaskImage: async (params) => {
+            writtenImages.set(`${params.imageId}.${params.ext}`, {
+                data: params.data,
+                ext: params.ext,
+                mediaType: params.mediaType,
+            })
+            return {
+                imageId: params.imageId,
+                ext: params.ext,
+                mediaType: params.mediaType,
+                size: 5,
+                sha256: "runtime-image-sha256",
+            }
+        },
         setupTaskEnvironment: async () => undefined,
         createActionEvent: async () => ({ eventId: "event-created", createdAt: now() }),
         appendActionStreamEvent: async () => undefined,
@@ -490,6 +516,7 @@ function createRuntimeBackedStore(): { store: OpenADEProductStore; runtime: Runt
         runtime,
         store: new OpenADEProductStore(new OpenADEClient({ runtime, clientName: "product-store-test", clientPlatform: "web" })),
         taskReadRequests,
+        writtenImages,
     }
 }
 
@@ -531,8 +558,28 @@ describe("OpenADEProductStore", () => {
         }
     })
 
+    it("patches last-viewed metadata locally without re-reading task detail", async () => {
+        const { store, runtime, taskReadRequests } = createRuntimeBackedStore()
+        const lastViewedAt = "2026-01-01T00:10:00.000Z"
+
+        try {
+            await store.refreshSnapshot()
+            await store.getTask("repo-1", "task-1")
+
+            taskReadRequests.length = 0
+            await store.updateTaskMetadata({ taskId: "task-1", lastViewedAt }, { clientRequestId: "viewed-only" })
+
+            expect(taskReadRequests).toEqual([])
+            expect(store.snapshot?.repos[0]?.tasks[0]?.lastViewedAt).toBe(lastViewedAt)
+            expect(store.getCachedTask("repo-1", "task-1")?.lastViewedAt).toBe(lastViewedAt)
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
     it("refreshes DTO state and runtime records through a real local runtime client", async () => {
-        const { store, runtime } = createRuntimeBackedStore()
+        const { store, runtime, writtenImages } = createRuntimeBackedStore()
         store.subscribe()
 
         await expect(store.refreshSnapshot()).resolves.toMatchObject({
@@ -611,6 +658,20 @@ describe("OpenADEProductStore", () => {
             mediaType: "image/png",
             data: "aW1hZ2U=",
         })
+        await expect(
+            store.writeTaskImage({
+                imageId: "image-written",
+                ext: "png",
+                mediaType: "image/png",
+                data: "aW1hZ2U=",
+            })
+        ).resolves.toMatchObject({
+            imageId: "image-written",
+            ext: "png",
+            mediaType: "image/png",
+            sha256: "runtime-image-sha256",
+        })
+        expect(writtenImages.get("image-written.png")).toEqual({ data: "aW1hZ2U=", ext: "png", mediaType: "image/png" })
         await expect(store.readTaskSnapshotPatch({ repoId: "repo-1", taskId: "task-1", eventId: "snapshot-1" })).resolves.toMatchObject({
             patch: expect.stringContaining("+snapshot product store"),
         })

@@ -12,10 +12,26 @@ import type {
     OpenADECommentCreateResult,
     OpenADECommentDeleteRequest,
     OpenADECommentEditRequest,
+    OpenADECronInstallStateReadRequest,
+    OpenADECronInstallStateReadResult,
+    OpenADECronInstallStateReplaceRequest,
+    OpenADECronInstallStateReplaceResult,
     OpenADEHyperPlanReconcileLabelsSetRequest,
     OpenADEHyperPlanSubExecutionAddRequest,
     OpenADEHyperPlanSubExecutionStreamAppendRequest,
     OpenADEHyperPlanSubExecutionUpdateRequest,
+    OpenADELegacyResourcesImportRequest,
+    OpenADELegacyResourcesImportResult,
+    OpenADEMCPServerDeleteRequest,
+    OpenADEMCPServerDeleteResult,
+    OpenADEMCPServersReadResult,
+    OpenADEMCPServersReplaceRequest,
+    OpenADEMCPServersReplaceResult,
+    OpenADEMCPServerUpsertRequest,
+    OpenADEMCPServerUpsertResult,
+    OpenADEPersonalSettingsReadResult,
+    OpenADEPersonalSettingsReplaceRequest,
+    OpenADEPersonalSettingsReplaceResult,
     OpenADEProjectFileReadRequest,
     OpenADEProjectFileReadResult,
     OpenADEProjectFilesFuzzySearchRequest,
@@ -42,6 +58,12 @@ import type {
     OpenADEProjectSearchResult,
     OpenADEQueuedTurnCancelRequest,
     OpenADEQueuedTurnCancelResult,
+    OpenADEQueuedTurnEnqueueRequest,
+    OpenADEQueuedTurnEnqueueResult,
+    OpenADEQueuedTurnImportLegacyRequest,
+    OpenADEQueuedTurnImportLegacyResult,
+    OpenADEQueuedTurnReorderRequest,
+    OpenADEQueuedTurnReorderResult,
     OpenADERepoCreateRequest,
     OpenADERepoCreateResult,
     OpenADERepoDeleteRequest,
@@ -52,6 +74,8 @@ import type {
     OpenADETask,
     OpenADETaskChangesReadRequest,
     OpenADETaskChangesReadResult,
+    OpenADETaskCreateRequest,
+    OpenADETaskCreateResult,
     OpenADETaskReadOptions,
     OpenADETaskDeleteRequest,
     OpenADETaskDeleteResult,
@@ -78,8 +102,20 @@ import type {
     OpenADETaskGitScopesReadResult,
     OpenADETaskGitSummaryRequest,
     OpenADETaskGitSummaryResult,
+    OpenADETaskImageImportLegacyRequest,
+    OpenADETaskImageImportLegacyResult,
     OpenADETaskImageReadRequest,
     OpenADETaskImageReadResult,
+    OpenADETaskImageStagedReadRequest,
+    OpenADETaskImageStagedReadResult,
+    OpenADETaskImagesGCStagedRequest,
+    OpenADETaskImagesGCStagedResult,
+    OpenADETaskImagesImportLegacyRequest,
+    OpenADETaskImagesImportLegacyResult,
+    OpenADETaskImageWriteRequest,
+    OpenADETaskImageWriteResult,
+    OpenADETaskHarnessSessionsImportLegacyRequest,
+    OpenADETaskHarnessSessionsImportLegacyResult,
     OpenADETaskResourceInventoryReadRequest,
     OpenADETaskResourceInventoryReadResult,
     OpenADETaskTerminalMutationResult,
@@ -96,13 +132,25 @@ import type {
     OpenADETaskSnapshotPatchReadResult,
     OpenADETaskSnapshotPatchSliceReadRequest,
     OpenADETaskSnapshotPatchSliceReadResult,
+    OpenADETaskSnapshotsImportLegacyRequest,
+    OpenADETaskSnapshotsImportLegacyResult,
     OpenADETaskMetadataUpdateRequest,
+    OpenADETaskUsageBackfillRequest,
+    OpenADETaskUsageBackfillResult,
+    OpenADETaskUsageRecalculateRequest,
+    OpenADETaskUsageRecalculateResult,
     OpenADEReviewStartRequest,
     OpenADETurnStartRequest,
     OpenADETurnStartResult,
 } from "../../openade-module/src/types"
 import type { RuntimeNotification } from "../../runtime-protocol/src"
 import type { RuntimeClientStatus } from "../../runtime-client/src"
+import {
+    OPENADE_READ_METHODS_TO_COALESCE as GENERATED_OPENADE_READ_METHODS_TO_COALESCE,
+    type OpenADEMethod,
+    type OpenADERequestForMethod,
+    type OpenADEResponseForMethod,
+} from "./generated/openade-contracts"
 
 export type OpenADEClientConnectionStatus = RuntimeClientStatus
 
@@ -143,7 +191,47 @@ function isOpenADENotification(notification: RuntimeNotification): boolean {
     return notification.method === "connection/lagged" || notification.method.startsWith("openade/") || notification.method.startsWith("runtime/") || notification.method.startsWith("remote/")
 }
 
+const SLOW_OPENADE_CLIENT_REQUEST_MS = 750
+const OPENADE_CLIENT_REQUEST_BURST_WINDOW_MS = 2_000
+const OPENADE_CLIENT_REQUEST_BURST_COUNT = 12
+const OPENADE_READ_METHODS_TO_COALESCE: ReadonlySet<OpenADEMethod> = new Set(GENERATED_OPENADE_READ_METHODS_TO_COALESCE)
+
+interface ClientRequestBurstEntry {
+    startedAt: number
+    count: number
+    lastWarnedCount: number
+}
+
+const clientRequestBursts = new Map<string, ClientRequestBurstEntry>()
+
+function warnSlowOpenADERequest(details: Record<string, unknown>): void {
+    if (typeof console === "undefined" || typeof console.warn !== "function") return
+    console.warn("[OpenADEClient] Slow runtime request", details)
+}
+
+function warnOpenADERequestBurst(details: Record<string, unknown>): void {
+    if (typeof console === "undefined" || typeof console.warn !== "function") return
+    console.warn("[OpenADEClient] Runtime request burst", details)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null
+}
+
+function stableRequestValue(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(stableRequestValue)
+    if (!isRecord(value)) return value
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableRequestValue(value[key])]))
+}
+
+function coalescedReadRequestKey(method: OpenADEMethod, params: unknown): string | null {
+    if (!OPENADE_READ_METHODS_TO_COALESCE.has(method)) return null
+    return `${method}:${JSON.stringify(stableRequestValue(params))}`
+}
+
 export class OpenADEClient {
+    private readonly readRequestsInFlight = new Map<string, Promise<unknown>>()
+
     constructor(private readonly options: OpenADEClientOptions) {}
 
     async getSnapshot(): Promise<OpenADESnapshot> {
@@ -203,6 +291,17 @@ export class OpenADEClient {
 
     async stopProjectProcess(args: OpenADEProjectProcessStopRequest, options: OpenADERequestOptions = {}): Promise<OpenADEProjectProcessStopResult> {
         return this.request("openade/project/process/stop", withClientRequestId(args, options))
+    }
+
+    async readCronInstallState(args: OpenADECronInstallStateReadRequest): Promise<OpenADECronInstallStateReadResult> {
+        return this.request("openade/cron/installState/read", args)
+    }
+
+    async replaceCronInstallState(
+        args: OpenADECronInstallStateReplaceRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADECronInstallStateReplaceResult> {
+        return this.request("openade/cron/installState/replace", withClientRequestId(args, options))
     }
 
     async readTaskChanges(args: OpenADETaskChangesReadRequest): Promise<OpenADETaskChangesReadResult> {
@@ -265,8 +364,87 @@ export class OpenADEClient {
         return this.request("openade/task/terminal/stop", withClientRequestId(args, options))
     }
 
+    async importLegacyResources(
+        args: OpenADELegacyResourcesImportRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADELegacyResourcesImportResult> {
+        return this.request("openade/import/legacyResources", withClientRequestId(args, options))
+    }
+
+    async readMcpServers(): Promise<OpenADEMCPServersReadResult> {
+        return this.request("openade/settings/mcpServers/read", {})
+    }
+
+    async replaceMcpServers(
+        args: OpenADEMCPServersReplaceRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADEMCPServersReplaceResult> {
+        return this.request("openade/settings/mcpServers/replace", withClientRequestId(args, options))
+    }
+
+    async upsertMcpServer(
+        args: OpenADEMCPServerUpsertRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADEMCPServerUpsertResult> {
+        return this.request("openade/settings/mcpServers/upsert", withClientRequestId(args, options))
+    }
+
+    async deleteMcpServer(
+        args: OpenADEMCPServerDeleteRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADEMCPServerDeleteResult> {
+        return this.request("openade/settings/mcpServers/delete", withClientRequestId(args, options))
+    }
+
+    async readPersonalSettings(): Promise<OpenADEPersonalSettingsReadResult> {
+        return this.request("openade/settings/personal/read", {})
+    }
+
+    async replacePersonalSettings(
+        args: OpenADEPersonalSettingsReplaceRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADEPersonalSettingsReplaceResult> {
+        return this.request("openade/settings/personal/replace", withClientRequestId(args, options))
+    }
+
     async readTaskImage(args: OpenADETaskImageReadRequest): Promise<OpenADETaskImageReadResult> {
         return this.request("openade/task/image/read", args)
+    }
+
+    async readStagedTaskImage(args: OpenADETaskImageStagedReadRequest): Promise<OpenADETaskImageStagedReadResult> {
+        return this.request("openade/task/image/staged/read", args)
+    }
+
+    async writeTaskImage(args: OpenADETaskImageWriteRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskImageWriteResult> {
+        return this.request("openade/task/image/write", withClientRequestId(args, options))
+    }
+
+    async importLegacyTaskImage(
+        args: OpenADETaskImageImportLegacyRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADETaskImageImportLegacyResult> {
+        return this.request("openade/task/image/importLegacy", withClientRequestId(args, options))
+    }
+
+    async importLegacyTaskImages(
+        args: OpenADETaskImagesImportLegacyRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADETaskImagesImportLegacyResult> {
+        return this.request("openade/task/images/importLegacy", withClientRequestId(args, options))
+    }
+
+    async gcStagedTaskImages(
+        args: OpenADETaskImagesGCStagedRequest = {},
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADETaskImagesGCStagedResult> {
+        return this.request("openade/task/images/gcStaged", withClientRequestId(args, options))
+    }
+
+    async importLegacyTaskHarnessSessions(
+        args: OpenADETaskHarnessSessionsImportLegacyRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADETaskHarnessSessionsImportLegacyResult> {
+        return this.request("openade/task/sessions/importLegacy", withClientRequestId(args, options))
     }
 
     async readTaskResourceInventory(args: OpenADETaskResourceInventoryReadRequest): Promise<OpenADETaskResourceInventoryReadResult> {
@@ -289,8 +467,19 @@ export class OpenADEClient {
         return this.request("openade/task/snapshot/patch/readSlice", args)
     }
 
+    async importLegacyTaskSnapshots(
+        args: OpenADETaskSnapshotsImportLegacyRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADETaskSnapshotsImportLegacyResult> {
+        return this.request("openade/task/snapshots/importLegacy", withClientRequestId(args, options))
+    }
+
     async createRepo(args: OpenADERepoCreateRequest, options: OpenADERequestOptions = {}): Promise<OpenADERepoCreateResult> {
         return this.request("openade/repo/create", withClientRequestId(args, options))
+    }
+
+    async createTask(args: OpenADETaskCreateRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskCreateResult> {
+        return this.request("openade/task/create", withClientRequestId(args, options))
     }
 
     async updateRepo(args: OpenADERepoUpdateRequest, options: OpenADERequestOptions = {}): Promise<void> {
@@ -315,6 +504,18 @@ export class OpenADEClient {
 
     async cancelQueuedTurn(args: OpenADEQueuedTurnCancelRequest, options: OpenADERequestOptions = {}): Promise<OpenADEQueuedTurnCancelResult> {
         return this.request("openade/queued-turn/cancel", withClientRequestId(args, options))
+    }
+
+    async enqueueQueuedTurn(args: OpenADEQueuedTurnEnqueueRequest, options: OpenADERequestOptions = {}): Promise<OpenADEQueuedTurnEnqueueResult> {
+        return this.request("openade/queued-turn/enqueue", withClientRequestId(args, options))
+    }
+
+    async importLegacyQueuedTurn(args: OpenADEQueuedTurnImportLegacyRequest, options: OpenADERequestOptions = {}): Promise<OpenADEQueuedTurnImportLegacyResult> {
+        return this.request("openade/queued-turn/importLegacy", withClientRequestId(args, options))
+    }
+
+    async reorderQueuedTurns(args: OpenADEQueuedTurnReorderRequest, options: OpenADERequestOptions = {}): Promise<OpenADEQueuedTurnReorderResult> {
+        return this.request("openade/queued-turn/reorder", withClientRequestId(args, options))
     }
 
     async createActionEvent(args: OpenADEActionEventCreateRequest, options: OpenADERequestOptions = {}): Promise<OpenADEActionEventCreateResult> {
@@ -384,6 +585,20 @@ export class OpenADEClient {
         return this.request("openade/task/metadata/update", withClientRequestId(args, options))
     }
 
+    async backfillTaskUsage(
+        args: OpenADETaskUsageBackfillRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADETaskUsageBackfillResult> {
+        return this.request("openade/task/usage/backfill", withClientRequestId(args, options))
+    }
+
+    async recalculateTaskUsage(
+        args: OpenADETaskUsageRecalculateRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADETaskUsageRecalculateResult> {
+        return this.request("openade/task/usage/recalculate", withClientRequestId(args, options))
+    }
+
     async deleteTask(args: OpenADETaskDeleteRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskDeleteResult> {
         return this.request("openade/task/delete", withClientRequestId(args, options))
     }
@@ -409,7 +624,69 @@ export class OpenADEClient {
         this.options.runtime.close()
     }
 
-    private async request<T>(method: string, params?: unknown): Promise<T> {
-        return this.options.runtime.request<T>(method, params)
+    private async request<Method extends OpenADEMethod>(
+        method: Method,
+        ...[params]: undefined extends OpenADERequestForMethod<Method>
+            ? [params?: OpenADERequestForMethod<Method>]
+            : [params: OpenADERequestForMethod<Method>]
+    ): Promise<OpenADEResponseForMethod<Method>> {
+        const startedAt = Date.now()
+        let failed = false
+        this.recordRequestBurst(method)
+        const coalescedKey = coalescedReadRequestKey(method, params)
+        const inFlight = coalescedKey ? this.readRequestsInFlight.get(coalescedKey) : undefined
+        // The key includes the typed OpenADE method name and params; callers of request<T>()
+        // control T through the public method for that same runtime method.
+        if (inFlight) return inFlight as Promise<OpenADEResponseForMethod<Method>>
+
+        const promise = this.options.runtime
+            .request<OpenADEResponseForMethod<Method>>(method, params)
+            .catch((error: unknown) => {
+                failed = true
+                throw error
+            })
+            .finally(() => {
+                this.recordSlowRequest(method, startedAt, failed)
+                if (coalescedKey && this.readRequestsInFlight.get(coalescedKey) === promise) {
+                    this.readRequestsInFlight.delete(coalescedKey)
+                }
+            })
+        if (coalescedKey) this.readRequestsInFlight.set(coalescedKey, promise)
+
+        return promise
+    }
+
+    private recordSlowRequest(method: OpenADEMethod, startedAt: number, failed: boolean): void {
+        const durationMs = Date.now() - startedAt
+        if (durationMs < SLOW_OPENADE_CLIENT_REQUEST_MS) return
+        warnSlowOpenADERequest({
+            method,
+            durationMs,
+            failed,
+            clientName: this.options.clientName,
+            clientPlatform: this.options.clientPlatform,
+        })
+    }
+
+    private recordRequestBurst(method: OpenADEMethod): void {
+        const now = Date.now()
+        const existing = clientRequestBursts.get(method)
+        const burst = existing && now - existing.startedAt <= OPENADE_CLIENT_REQUEST_BURST_WINDOW_MS
+            ? existing
+            : { startedAt: now, count: 0, lastWarnedCount: 0 }
+        burst.count += 1
+
+        if (burst.count >= OPENADE_CLIENT_REQUEST_BURST_COUNT && burst.count - burst.lastWarnedCount >= OPENADE_CLIENT_REQUEST_BURST_COUNT) {
+            burst.lastWarnedCount = burst.count
+            warnOpenADERequestBurst({
+                method,
+                count: burst.count,
+                windowMs: now - burst.startedAt,
+                clientName: this.options.clientName,
+                clientPlatform: this.options.clientPlatform,
+            })
+        }
+
+        clientRequestBursts.set(method, burst)
     }
 }

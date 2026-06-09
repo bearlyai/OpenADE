@@ -244,6 +244,37 @@ describe("Git Module Tests", () => {
         })
     })
 
+    describe("Git Summary", () => {
+        it("should coalesce concurrent runtime git directory reads for the same repo", async () => {
+            const gitModule = await import("./git")
+
+            const [first, second] = await Promise.all([
+                gitModule.isRuntimeGitDirectory({ directory: TEST_REPO_DIR }),
+                gitModule.isRuntimeGitDirectory({ directory: TEST_REPO_DIR }),
+            ])
+
+            expect(first).toBe(second)
+            expect(first).toMatchObject({
+                isGitDirectory: true,
+                relativePath: "",
+                mainBranch: "main",
+            })
+            if (first.isGitDirectory) expect(fs.realpathSync(first.repoRoot)).toBe(fs.realpathSync(TEST_REPO_DIR))
+        })
+
+        it("should coalesce concurrent runtime git summary reads for the same repo", async () => {
+            const gitModule = await import("./git")
+
+            const [first, second] = await Promise.all([
+                gitModule.getRuntimeGitSummary({ repoDir: TEST_REPO_DIR }),
+                gitModule.getRuntimeGitSummary({ repoDir: TEST_REPO_DIR }),
+            ])
+
+            expect(first).toBe(second)
+            expect(first.branch).toBe("main")
+        })
+    })
+
     describe("Worktree Operations", () => {
         const WORKTREE_PATH = path.join(TEST_BASE_DIR, "test-worktree")
 

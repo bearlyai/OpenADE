@@ -82,7 +82,7 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         shortcut: { key: "mod+shift+g", display: "⌘⇧G" },
         isVisible: isGitBackedTrayVisible,
         onOpen: (tray) => {
-            tray.taskModel.refreshGitState()
+            tray.taskModel.refreshGitState({ force: true })
             tray.taskModel.changes.initializeForTray()
         },
         renderBadge: (tray) => {
@@ -135,7 +135,7 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         label: "Terminal",
         icon: TerminalSquare,
         shortcut: { key: "mod+t", display: "⌘T" },
-        onClose: (tray) => tray.taskModel.refreshGitState(),
+        onClose: (tray) => tray.taskModel.refreshGitState({ force: true }),
         renderContent: (tray) => {
             const env = tray.taskModel.environment
             if (!env?.taskWorkingDir) {

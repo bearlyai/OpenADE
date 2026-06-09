@@ -46,6 +46,15 @@ vi.mock("../persistence/repoStoreBootstrap", () => ({
 }))
 
 vi.mock("../persistence/mcpServerStoreBootstrap", () => ({
+    createEphemeralMcpServerStoreConnection: vi.fn(() => ({
+        store: {
+            servers: {
+                all: () => [],
+            },
+        },
+        sync: vi.fn(async () => undefined),
+        disconnect: vi.fn(),
+    })),
     connectMcpServerStore: vi.fn(async () => ({
         store: {
             servers: {
@@ -60,6 +69,12 @@ vi.mock("../persistence/mcpServerStoreBootstrap", () => ({
 
 vi.mock("../persistence/personalSettingsStoreBootstrap", () => ({
     connectPersonalSettingsStore: vi.fn(async () => ({
+        store: mocks.personalSettingsStore,
+        sync: vi.fn(async () => undefined),
+        refresh: vi.fn(async () => true),
+        disconnect: vi.fn(),
+    })),
+    connectProductPersonalSettingsStore: vi.fn(async () => ({
         store: mocks.personalSettingsStore,
         sync: vi.fn(async () => undefined),
         refresh: vi.fn(async () => true),

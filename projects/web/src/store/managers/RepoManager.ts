@@ -6,7 +6,7 @@
  * - In-memory git info cache (fetched on-demand, not persisted)
  */
 
-import { computed, makeAutoObservable } from "mobx"
+import { computed, makeAutoObservable, runInAction } from "mobx"
 import { type BranchInfo, type GitFileInfo, type GitSummaryResponse, gitApi } from "../../electronAPI/git"
 import type { OpenADETaskGitChangedFile } from "../../../../openade-module/src"
 import type { Repo } from "../../types"
@@ -297,7 +297,9 @@ export class RepoManager {
     async loadRepos(): Promise<void> {
         if (this.reposLoading) return
 
-        this.reposLoading = true
+        runInAction(() => {
+            this.reposLoading = true
+        })
         try {
             // Initialize stores if not done
             await this.store.initializeStores()
@@ -305,7 +307,9 @@ export class RepoManager {
                 this.store.trackRuntimeProductFallback("repo_list", "snapshot_unavailable")
             }
         } finally {
-            this.reposLoading = false
+            runInAction(() => {
+                this.reposLoading = false
+            })
         }
     }
 }

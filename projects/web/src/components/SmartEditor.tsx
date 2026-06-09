@@ -19,7 +19,7 @@ import { twMerge } from "tailwind-merge"
 import { usePortalContainer } from "../hooks/usePortalContainer"
 import type { SdkCapabilitiesManager, SlashCommandEntry } from "../store/managers/SdkCapabilitiesManager"
 import type { SmartEditorFileTreeMatch, SmartEditorManager } from "../store/managers/SmartEditorManager"
-import { processImageBlob } from "../utils/imageAttachment"
+import { type PersistImage, processImageBlob } from "../utils/imageAttachment"
 import { emitEmptyEditorGlobalShortcut, isEmptyEditorGlobalShortcut } from "../utils/keyboardShortcuts"
 import { getFileName } from "./utils/paths"
 
@@ -38,6 +38,7 @@ interface SmartEditorProps {
     slashCommandsDir: string | null
     /** SDK capabilities manager for slash command discovery */
     sdkCapabilities?: SdkCapabilitiesManager
+    persistImage?: PersistImage
 }
 
 export interface SmartEditorRef {
@@ -256,6 +257,7 @@ export const SmartEditor = observer(
                 fileMentionsDir,
                 slashCommandsDir,
                 sdkCapabilities,
+                persistImage,
             },
             ref
         ) => {
@@ -652,7 +654,7 @@ export const SmartEditor = observer(
                                 for (const file of Array.from(files)) {
                                     if (file.type.startsWith("image/")) {
                                         event.preventDefault()
-                                        processImageBlob(file)
+                                        processImageBlob(file, { persistImage })
                                             .then(({ attachment, dataUrl }) => manager.addImage(attachment, dataUrl))
                                             .catch((err) => console.error("[SmartEditor] Failed to process dropped image:", err))
                                         return true
@@ -669,7 +671,7 @@ export const SmartEditor = observer(
                                         const file = item.getAsFile()
                                         if (file) {
                                             event.preventDefault()
-                                            processImageBlob(file)
+                                            processImageBlob(file, { persistImage })
                                                 .then(({ attachment, dataUrl }) => manager.addImage(attachment, dataUrl))
                                                 .catch((err) => console.error("[SmartEditor] Failed to process pasted image:", err))
                                             return true
@@ -710,7 +712,7 @@ export const SmartEditor = observer(
                         },
                     },
                 },
-                [extensions, manager]
+                [extensions, manager, persistImage]
             )
 
             useEffect(() => {

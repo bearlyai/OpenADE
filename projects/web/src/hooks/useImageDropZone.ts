@@ -1,8 +1,8 @@
 import { useCallback, useRef, useState } from "react"
 import type { SmartEditorManager } from "../store/managers/SmartEditorManager"
-import { processImageBlob } from "../utils/imageAttachment"
+import { type PersistImage, processImageBlob } from "../utils/imageAttachment"
 
-export function useImageDropZone(editorManager: SmartEditorManager | null) {
+export function useImageDropZone(editorManager: SmartEditorManager | null, persistImage?: PersistImage) {
     const [isDragOver, setIsDragOver] = useState(false)
     const dragCounter = useRef(0)
 
@@ -37,13 +37,13 @@ export function useImageDropZone(editorManager: SmartEditorManager | null) {
             if (!files) return
             for (const file of Array.from(files)) {
                 if (file.type.startsWith("image/")) {
-                    processImageBlob(file)
+                    processImageBlob(file, { persistImage })
                         .then(({ attachment, dataUrl }) => editorManager.addImage(attachment, dataUrl))
                         .catch((err) => console.error("[useImageDropZone] Failed to process dropped image:", err))
                 }
             }
         },
-        [editorManager]
+        [editorManager, persistImage]
     )
 
     const dragHandlers = {

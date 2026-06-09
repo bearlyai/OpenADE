@@ -2,7 +2,7 @@ import fs from "node:fs"
 import fsp from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
     fuzzySearchOpenADEProjectFiles,
     listOpenADEProjectFiles,
@@ -90,6 +90,32 @@ describe("OpenADE scoped project host helpers", () => {
                 { name: "upper.ts", isDir: false, fullPath: "src/upper.ts" },
             ],
         })
+    })
+
+    it("reuses scoped fuzzy search path walks and invalidates them after scoped writes", async () => {
+        const readdirSpy = vi.spyOn(fsp, "readdir")
+        const originalPath = process.env.PATH
+        process.env.PATH = ""
+        try {
+            await expect(fuzzySearchOpenADEProjectFiles({ repoId: repo.id, repo, query: "app", limit: 5 })).resolves.toMatchObject({
+                results: ["src/app.ts"],
+            })
+            const callsAfterFirstSearch = readdirSpy.mock.calls.length
+
+            await expect(fuzzySearchOpenADEProjectFiles({ repoId: repo.id, repo, query: "upper", limit: 5 })).resolves.toMatchObject({
+                results: ["src/upper.ts"],
+            })
+            expect(readdirSpy.mock.calls.length).toBe(callsAfterFirstSearch)
+
+            await writeOpenADEProjectFile({ repoId: repo.id, repo, path: "src/generated.ts", content: "generated", encoding: "utf8", createDirs: true })
+            await expect(fuzzySearchOpenADEProjectFiles({ repoId: repo.id, repo, query: "generated", limit: 5 })).resolves.toMatchObject({
+                results: ["src/generated.ts"],
+            })
+            expect(readdirSpy.mock.calls.length).toBeGreaterThan(callsAfterFirstSearch)
+        } finally {
+            process.env.PATH = originalPath
+            readdirSpy.mockRestore()
+        }
     })
 
     it("searches real files while skipping hidden and generated directories", async () => {

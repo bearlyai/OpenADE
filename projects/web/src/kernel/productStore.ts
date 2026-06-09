@@ -4,12 +4,28 @@ import type {
     OpenADECommentCreateResult,
     OpenADECommentDeleteRequest,
     OpenADECommentEditRequest,
+    OpenADECronInstallStateReadRequest,
+    OpenADECronInstallStateReadResult,
+    OpenADECronInstallStateReplaceRequest,
+    OpenADECronInstallStateReplaceResult,
+    OpenADELegacyResourcesImportRequest,
+    OpenADELegacyResourcesImportResult,
+    OpenADEMCPServerDeleteRequest,
+    OpenADEMCPServerDeleteResult,
+    OpenADEMCPServerUpsertRequest,
+    OpenADEMCPServerUpsertResult,
+    OpenADEMCPServersReadResult,
+    OpenADEMCPServersReplaceRequest,
+    OpenADEMCPServersReplaceResult,
+    OpenADEPersonalSettingsReadResult,
+    OpenADEPersonalSettingsReplaceRequest,
+    OpenADEPersonalSettingsReplaceResult,
     OpenADEProjectFileReadRequest,
     OpenADEProjectFileReadResult,
-    OpenADEProjectFilesFuzzySearchRequest,
-    OpenADEProjectFilesFuzzySearchResult,
     OpenADEProjectFileWriteRequest,
     OpenADEProjectFileWriteResult,
+    OpenADEProjectFilesFuzzySearchRequest,
+    OpenADEProjectFilesFuzzySearchResult,
     OpenADEProjectFilesTreeRequest,
     OpenADEProjectFilesTreeResult,
     OpenADEProjectGitBranchesReadRequest,
@@ -64,10 +80,18 @@ import type {
     OpenADETaskGitSummaryResult,
     OpenADETaskImageReadRequest,
     OpenADETaskImageReadResult,
+    OpenADETaskImageStagedReadRequest,
+    OpenADETaskImageStagedReadResult,
+    OpenADETaskImageWriteRequest,
+    OpenADETaskImageWriteResult,
     OpenADETaskMetadataUpdateRequest,
     OpenADETaskReadOptions,
     OpenADETaskResourceInventoryReadRequest,
     OpenADETaskResourceInventoryReadResult,
+    OpenADETaskUsageBackfillRequest,
+    OpenADETaskUsageBackfillResult,
+    OpenADETaskUsageRecalculateRequest,
+    OpenADETaskUsageRecalculateResult,
     OpenADETaskSnapshotIndexReadRequest,
     OpenADETaskSnapshotIndexReadResult,
     OpenADETaskSnapshotPatchReadRequest,
@@ -87,6 +111,10 @@ import type {
     OpenADETurnStartRequest,
     OpenADETurnStartResult,
 } from "../../../openade-module/src"
+import { importOpenADELegacyYjsData } from "../../../openade-module/src/yjsImport"
+import type { OpenADELegacyYjsImportOptions, OpenADELegacyYjsImportResult, OpenADELegacyYjsImportWriter } from "../../../openade-module/src/yjsImport"
+import { type OpenADELegacyYjsCoreParityReport, compareOpenADELegacyYjsToCore } from "../../../openade-module/src/yjsImportParity"
+import type { OpenADEYjsProjection } from "../../../openade-module/src/yjsProjection"
 import { RuntimeRecordCache } from "../../../runtime-client/src"
 import type { RuntimeNotification } from "../../../runtime-protocol/src"
 
@@ -101,6 +129,47 @@ function notificationRecord(notification: RuntimeNotification): Record<string, u
 }
 
 const LIGHTWEIGHT_TASK_READ_OPTIONS: OpenADETaskReadOptions = { hydrateSessionEvents: false }
+const LEGACY_YJS_IMPORT_WRITER_METHODS = [
+    "createRepo",
+    "updateRepo",
+    "createTask",
+    "setupTaskEnvironment",
+    "createActionEvent",
+    "appendActionStreamEvent",
+    "completeActionEvent",
+    "errorActionEvent",
+    "stoppedActionEvent",
+    "updateActionExecution",
+    "addHyperPlanSubExecution",
+    "appendHyperPlanSubExecutionStreamEvent",
+    "updateHyperPlanSubExecution",
+    "createSnapshotEvent",
+    "createComment",
+    "updateTaskMetadata",
+] as const
+
+type LegacyYjsImportWriterMethod = (typeof LEGACY_YJS_IMPORT_WRITER_METHODS)[number]
+
+export interface OpenADEProductLegacyYjsImportReport {
+    imported: OpenADELegacyYjsImportResult
+    parity: OpenADELegacyYjsCoreParityReport
+    legacyYjsMigrationAccepted?: boolean
+}
+
+function isLastViewedOnlyMetadataUpdate(args: OpenADETaskMetadataUpdateRequest): boolean {
+    return (
+        args.lastViewedAt !== undefined &&
+        args.title === undefined &&
+        args.closed === undefined &&
+        args.lastEventAt === undefined &&
+        args.cancelledPlanEventId === undefined &&
+        args.usage === undefined &&
+        args.enabledMcpServerIds === undefined &&
+        args.sessionIds === undefined &&
+        args.queuedTurns === undefined &&
+        args.updatedAt === undefined
+    )
+}
 
 export class OpenADEProductStore {
     snapshot: OpenADESnapshot | null = null
@@ -108,7 +177,10 @@ export class OpenADEProductStore {
     private readonly tasks = new Map<string, OpenADETask>()
     private unsubscribe: (() => void) | null = null
 
-    constructor(private readonly client: OpenADEProductClient) {}
+    constructor(
+        private readonly client: OpenADEProductClient,
+        private readonly legacyYjsImportWriter: OpenADELegacyYjsImportWriter | null = null
+    ) {}
 
     getCachedTask(repoId: string, taskId: string): OpenADETask | null {
         return this.tasks.get(taskKey(repoId, taskId)) ?? null
@@ -178,6 +250,17 @@ export class OpenADEProductStore {
         return this.client.stopProjectProcess(args, options)
     }
 
+    async readCronInstallState(args: OpenADECronInstallStateReadRequest): Promise<OpenADECronInstallStateReadResult> {
+        return this.client.readCronInstallState(args)
+    }
+
+    async replaceCronInstallState(
+        args: OpenADECronInstallStateReplaceRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADECronInstallStateReplaceResult> {
+        return this.client.replaceCronInstallState(args, options)
+    }
+
     async readTaskChanges(args: OpenADETaskChangesReadRequest): Promise<OpenADETaskChangesReadResult> {
         return this.client.readTaskChanges(args)
     }
@@ -238,12 +321,62 @@ export class OpenADEProductStore {
         return this.client.stopTaskTerminal(args, options)
     }
 
+    async importLegacyResources(args: OpenADELegacyResourcesImportRequest, options: OpenADERequestOptions = {}): Promise<OpenADELegacyResourcesImportResult> {
+        const result = await this.client.importLegacyResources(args, options)
+        await this.refreshSnapshot()
+        return result
+    }
+
+    async importLegacyYjsData(projection: OpenADEYjsProjection, options: OpenADELegacyYjsImportOptions = {}): Promise<OpenADEProductLegacyYjsImportReport> {
+        const writer = this.legacyYjsImportWriter ?? legacyYjsImportWriterFromClient(this.client)
+        if (!writer) throw new Error("OpenADE Core legacy Yjs import writer is not available.")
+        const imported = await importOpenADELegacyYjsData(projection, writer, options)
+        const parity = await compareOpenADELegacyYjsToCore(projection, this.client, options)
+        await this.refreshSnapshot()
+        return { imported, parity }
+    }
+
     async readTaskImage(args: OpenADETaskImageReadRequest): Promise<OpenADETaskImageReadResult> {
         return this.client.readTaskImage(args)
     }
 
+    async readStagedTaskImage(args: OpenADETaskImageStagedReadRequest): Promise<OpenADETaskImageStagedReadResult> {
+        return this.client.readStagedTaskImage(args)
+    }
+
+    async writeTaskImage(args: OpenADETaskImageWriteRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskImageWriteResult> {
+        return this.client.writeTaskImage(args, options)
+    }
+
     async readTaskResourceInventory(args: OpenADETaskResourceInventoryReadRequest): Promise<OpenADETaskResourceInventoryReadResult> {
         return this.client.readTaskResourceInventory(args)
+    }
+
+    async readMcpServers(): Promise<OpenADEMCPServersReadResult> {
+        return this.client.readMcpServers()
+    }
+
+    async replaceMcpServers(args: OpenADEMCPServersReplaceRequest, options: OpenADERequestOptions = {}): Promise<OpenADEMCPServersReplaceResult> {
+        return this.client.replaceMcpServers(args, options)
+    }
+
+    async upsertMcpServer(args: OpenADEMCPServerUpsertRequest, options: OpenADERequestOptions = {}): Promise<OpenADEMCPServerUpsertResult> {
+        return this.client.upsertMcpServer(args, options)
+    }
+
+    async deleteMcpServer(args: OpenADEMCPServerDeleteRequest, options: OpenADERequestOptions = {}): Promise<OpenADEMCPServerDeleteResult> {
+        return this.client.deleteMcpServer(args, options)
+    }
+
+    async readPersonalSettings(): Promise<OpenADEPersonalSettingsReadResult> {
+        return this.client.readPersonalSettings()
+    }
+
+    async replacePersonalSettings(
+        args: OpenADEPersonalSettingsReplaceRequest,
+        options: OpenADERequestOptions = {}
+    ): Promise<OpenADEPersonalSettingsReplaceResult> {
+        return this.client.replacePersonalSettings(args, options)
     }
 
     async generateTaskTitle(args: OpenADETaskTitleGenerateRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskTitleGenerateResult> {
@@ -306,9 +439,27 @@ export class OpenADEProductStore {
 
     async updateTaskMetadata(args: OpenADETaskMetadataUpdateRequest, options: OpenADERequestOptions = {}): Promise<void> {
         await this.client.updateTaskMetadata(args, options)
+        if (isLastViewedOnlyMetadataUpdate(args)) {
+            this.applyLastViewedAt(args.taskId, args.lastViewedAt)
+            return
+        }
         const cached = [...this.tasks.values()].find((task) => task.id === args.taskId)
         if (cached) await this.refreshTask(cached.repoId, args.taskId)
         await this.refreshSnapshot()
+    }
+
+    async backfillTaskUsage(args: OpenADETaskUsageBackfillRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskUsageBackfillResult> {
+        const result = await this.client.backfillTaskUsage(args, options)
+        await this.refreshSnapshot()
+        return result
+    }
+
+    async recalculateTaskUsage(args: OpenADETaskUsageRecalculateRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskUsageRecalculateResult> {
+        const result = await this.client.recalculateTaskUsage(args, options)
+        const cached = [...this.tasks.values()].find((task) => task.id === args.taskId)
+        if (cached) await this.refreshTask(cached.repoId, args.taskId)
+        await this.refreshSnapshot()
+        return result
     }
 
     async createComment(args: OpenADECommentCreateRequest, options: OpenADERequestOptions = {}): Promise<OpenADECommentCreateResult> {
@@ -377,9 +528,6 @@ export class OpenADEProductStore {
 
         if (notification.method === "openade/task/previewChanged") {
             await this.refreshSnapshot()
-            if (repoId && taskId && this.getCachedTask(repoId, taskId)) {
-                await this.refreshTask(repoId, taskId, LIGHTWEIGHT_TASK_READ_OPTIONS)
-            }
             return true
         }
 
@@ -389,6 +537,23 @@ export class OpenADEProductStore {
         }
 
         return false
+    }
+
+    private applyLastViewedAt(taskId: string, lastViewedAt: string | undefined): void {
+        if (!lastViewedAt) return
+
+        for (const [key, task] of this.tasks) {
+            if (task.id === taskId) this.tasks.set(key, { ...task, lastViewedAt })
+        }
+
+        if (!this.snapshot) return
+        this.snapshot = {
+            ...this.snapshot,
+            repos: this.snapshot.repos.map((repo) => ({
+                ...repo,
+                tasks: repo.tasks.map((task) => (task.id === taskId ? { ...task, lastViewedAt } : task)),
+            })),
+        }
     }
 
     subscribe(): () => void {
@@ -407,6 +572,12 @@ export class OpenADEProductStore {
     }
 }
 
+function legacyYjsImportWriterFromClient(client: OpenADEProductClient): OpenADELegacyYjsImportWriter | null {
+    const candidate = client as Partial<Record<LegacyYjsImportWriterMethod, unknown>>
+    const hasRequiredMethods = LEGACY_YJS_IMPORT_WRITER_METHODS.every((method) => typeof candidate[method] === "function")
+    return hasRequiredMethods ? (client as OpenADEProductClient & OpenADELegacyYjsImportWriter) : null
+}
+
 export interface OpenADEProductClient {
     getSnapshot(): Promise<OpenADESnapshot>
     getTask(repoId: string, taskId: string, options?: OpenADETaskReadOptions): Promise<OpenADETask>
@@ -422,6 +593,8 @@ export interface OpenADEProductClient {
     startProjectProcess(args: OpenADEProjectProcessStartRequest, options?: OpenADERequestOptions): Promise<OpenADEProjectProcessStartResult>
     reconnectProjectProcess(args: OpenADEProjectProcessReconnectRequest): Promise<OpenADEProjectProcessReconnectResult>
     stopProjectProcess(args: OpenADEProjectProcessStopRequest, options?: OpenADERequestOptions): Promise<OpenADEProjectProcessStopResult>
+    readCronInstallState(args: OpenADECronInstallStateReadRequest): Promise<OpenADECronInstallStateReadResult>
+    replaceCronInstallState(args: OpenADECronInstallStateReplaceRequest, options?: OpenADERequestOptions): Promise<OpenADECronInstallStateReplaceResult>
     readTaskChanges(args: OpenADETaskChangesReadRequest): Promise<OpenADETaskChangesReadResult>
     readTaskGitSummary(args: OpenADETaskGitSummaryRequest): Promise<OpenADETaskGitSummaryResult>
     readTaskGitScopes(args: OpenADETaskGitScopesReadRequest): Promise<OpenADETaskGitScopesReadResult>
@@ -437,8 +610,17 @@ export interface OpenADEProductClient {
     writeTaskTerminal(args: OpenADETaskTerminalWriteRequest, options?: OpenADERequestOptions): Promise<OpenADETaskTerminalMutationResult>
     resizeTaskTerminal(args: OpenADETaskTerminalResizeRequest, options?: OpenADERequestOptions): Promise<OpenADETaskTerminalMutationResult>
     stopTaskTerminal(args: OpenADETaskTerminalStopRequest, options?: OpenADERequestOptions): Promise<OpenADETaskTerminalMutationResult>
+    importLegacyResources(args: OpenADELegacyResourcesImportRequest, options?: OpenADERequestOptions): Promise<OpenADELegacyResourcesImportResult>
     readTaskImage(args: OpenADETaskImageReadRequest): Promise<OpenADETaskImageReadResult>
+    readStagedTaskImage(args: OpenADETaskImageStagedReadRequest): Promise<OpenADETaskImageStagedReadResult>
+    writeTaskImage(args: OpenADETaskImageWriteRequest, options?: OpenADERequestOptions): Promise<OpenADETaskImageWriteResult>
     readTaskResourceInventory(args: OpenADETaskResourceInventoryReadRequest): Promise<OpenADETaskResourceInventoryReadResult>
+    readMcpServers(): Promise<OpenADEMCPServersReadResult>
+    replaceMcpServers(args: OpenADEMCPServersReplaceRequest, options?: OpenADERequestOptions): Promise<OpenADEMCPServersReplaceResult>
+    upsertMcpServer(args: OpenADEMCPServerUpsertRequest, options?: OpenADERequestOptions): Promise<OpenADEMCPServerUpsertResult>
+    deleteMcpServer(args: OpenADEMCPServerDeleteRequest, options?: OpenADERequestOptions): Promise<OpenADEMCPServerDeleteResult>
+    readPersonalSettings(): Promise<OpenADEPersonalSettingsReadResult>
+    replacePersonalSettings(args: OpenADEPersonalSettingsReplaceRequest, options?: OpenADERequestOptions): Promise<OpenADEPersonalSettingsReplaceResult>
     generateTaskTitle(args: OpenADETaskTitleGenerateRequest, options?: OpenADERequestOptions): Promise<OpenADETaskTitleGenerateResult>
     readTaskSnapshotPatch(args: OpenADETaskSnapshotPatchReadRequest): Promise<OpenADETaskSnapshotPatchReadResult>
     readTaskSnapshotIndex(args: OpenADETaskSnapshotIndexReadRequest): Promise<OpenADETaskSnapshotIndexReadResult>
@@ -451,6 +633,8 @@ export interface OpenADEProductClient {
     interruptTurn(taskId: string, options?: OpenADERequestOptions): Promise<void>
     cancelQueuedTurn(args: OpenADEQueuedTurnCancelRequest, options?: OpenADERequestOptions): Promise<OpenADEQueuedTurnCancelResult>
     updateTaskMetadata(args: OpenADETaskMetadataUpdateRequest, options?: OpenADERequestOptions): Promise<void>
+    backfillTaskUsage(args: OpenADETaskUsageBackfillRequest, options?: OpenADERequestOptions): Promise<OpenADETaskUsageBackfillResult>
+    recalculateTaskUsage(args: OpenADETaskUsageRecalculateRequest, options?: OpenADERequestOptions): Promise<OpenADETaskUsageRecalculateResult>
     createComment(args: OpenADECommentCreateRequest, options?: OpenADERequestOptions): Promise<OpenADECommentCreateResult>
     editComment(args: OpenADECommentEditRequest, options?: OpenADERequestOptions): Promise<void>
     deleteComment(args: OpenADECommentDeleteRequest, options?: OpenADERequestOptions): Promise<void>

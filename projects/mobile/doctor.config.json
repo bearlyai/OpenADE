@@ -1,0 +1,18 @@
+{
+  "failOn": "error",
+  "ignore": {
+    "rules": [
+      "react-doctor/design-no-redundant-size-axes",
+      "react-doctor/design-no-redundant-padding-axes",
+      "react-doctor/design-no-three-period-ellipsis"
+    ]
+  },
+  "rules": {
+    "react-doctor/effect-needs-cleanup": "error",
+    "react-doctor/no-effect-with-fresh-deps": "error",
+    "react-doctor/no-mutable-in-deps": "error",
+    "react-doctor/no-danger": "error",
+    "react-doctor/no-adjust-state-on-prop-change": "warn",
+    "react-doctor/control-has-associated-label": "warn"
+  }
+}

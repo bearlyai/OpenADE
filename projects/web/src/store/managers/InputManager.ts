@@ -41,6 +41,7 @@ import {
 } from "../../shell/task/taskCommandModel"
 import { taskCommandLabel } from "../../shell/task/taskCommands"
 import type { ActionEvent, QueuedTurn, UserInputContext } from "../../types"
+import type { ImagePersistencePayload } from "../../utils/imageAttachment"
 import type { CodeStore } from "../store"
 import type { EditorSnapshot } from "./SmartEditorManager"
 import type { SmartEditorManager } from "./SmartEditorManager"
@@ -183,6 +184,10 @@ export class InputManager {
 
     clear(): void {
         this.editorManager.clear()
+    }
+
+    async persistImage(payload: ImagePersistencePayload): Promise<void> {
+        await this.store.persistProductTaskImage(payload)
     }
 
     private captureAndClear(): UserInputContext {

@@ -8,8 +8,12 @@ function collectSnapshotPatchIds(task: OpenADETask): string[] {
     const ids = new Set<string>()
     for (const rawEvent of task.events) {
         const event = record(rawEvent)
-        if (event?.type === "snapshot" && typeof event.patchFileId === "string" && event.patchFileId.length > 0) {
-            ids.add(event.patchFileId)
+        if (event?.type !== "snapshot") continue
+        const patchFileId = typeof event.patchFileId === "string" && event.patchFileId.length > 0 ? event.patchFileId : null
+        const snapshotId = typeof event.id === "string" && event.id.length > 0 ? event.id : null
+        const resourceId = patchFileId ?? snapshotId
+        if (resourceId) {
+            ids.add(resourceId)
         }
     }
     return [...ids]

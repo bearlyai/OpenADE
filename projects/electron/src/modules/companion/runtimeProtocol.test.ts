@@ -449,6 +449,31 @@ describe("RuntimeServer", () => {
         })
     })
 
+    it("reports sanitized slow runtime request events", async () => {
+        const events: Array<{ method: string; durationMs: number; connectionId: string; failed: boolean; errorCode?: string }> = []
+        const runtime = new RuntimeServer({
+            serverName: "test-runtime",
+            slowRequestThresholdMs: 0,
+            onSlowRequest: (event) => events.push(event),
+        })
+        runtime.register("test/slow", () => ({ ok: true }))
+        const conn = connection("slow-connection").connection
+
+        await expect(runtime.handleRequest({ id: 1, method: "test/slow" }, conn)).resolves.toMatchObject({
+            id: 1,
+            result: { ok: true },
+        })
+
+        expect(events).toEqual([
+            {
+                method: "test/slow",
+                durationMs: expect.any(Number),
+                connectionId: "slow-connection",
+                failed: false,
+            },
+        ])
+    })
+
     it("handles typed requests and notifications", async () => {
         const runtime = new RuntimeServer({ serverName: "test-runtime" })
         const testConnection = connection()

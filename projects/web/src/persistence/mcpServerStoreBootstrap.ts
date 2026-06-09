@@ -6,6 +6,7 @@
 
 import { type McpServerStore, createMcpServerStore } from "./mcpServerStore"
 import { getStorageDriver } from "./storage"
+import * as Y from "yjs"
 
 // ============================================================================
 // Connection
@@ -15,6 +16,16 @@ export interface McpServerStoreConnection {
     store: McpServerStore
     sync: () => Promise<void>
     disconnect: () => void
+}
+
+export function createEphemeralMcpServerStoreConnection(): McpServerStoreConnection {
+    const doc = new Y.Doc()
+    const store = createMcpServerStore(doc)
+    return {
+        store,
+        sync: async () => undefined,
+        disconnect: () => doc.destroy(),
+    }
 }
 
 /**

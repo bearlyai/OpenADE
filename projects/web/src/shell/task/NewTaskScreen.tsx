@@ -89,6 +89,7 @@ export function NewTaskScreen({
                     <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">Prompt</div>
                     <input
                         value={title}
+                        aria-label="Task title"
                         onChange={(event) => onTitleChange(event.target.value)}
                         disabled={isSubmitting}
                         placeholder="Optional title"
@@ -96,6 +97,7 @@ export function NewTaskScreen({
                     />
                     <textarea
                         value={prompt}
+                        aria-label="Task prompt"
                         onChange={(event) => onPromptChange(event.target.value)}
                         disabled={isSubmitting}
                         placeholder={isSubmitting ? "Sending..." : "What should OpenADE do?"}

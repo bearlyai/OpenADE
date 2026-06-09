@@ -206,6 +206,9 @@ export function buildMcpServerConfigs(servers: McpServerItem[]): Record<string, 
             if (server.envVars && Object.keys(server.envVars).length > 0) {
                 config.env = server.envVars
             }
+            if (server.cwd) {
+                config.cwd = server.cwd
+            }
             result[server.name] = config
         }
     }

@@ -568,9 +568,14 @@ export class RepoProcessesManager {
     async stopProcessesMissingFromConfig(args: {
         context: RunContext
         validProcessIds: Set<string>
+        productAccess?: ProductProjectProcessAccess | null
     }): Promise<void> {
         const stale = this.getProcessesForContext(args.context).filter((instance) => !args.validProcessIds.has(instance.id))
-        await Promise.all(stale.map((instance) => this.stopProcess(instance.id)))
+        await Promise.all(
+            stale.map((instance) =>
+                args.productAccess && instance.productProcessId ? this.stopProductProcess(instance.id, args.productAccess) : this.stopProcess(instance.id)
+            )
+        )
 
         runInAction(() => {
             for (const instance of stale) {

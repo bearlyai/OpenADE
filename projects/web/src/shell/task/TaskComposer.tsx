@@ -92,7 +92,12 @@ export function TaskComposer({
                     </button>
                 ))}
                 {isRunning && (
-                    <button type="button" onClick={onAbort} className="btn ml-auto flex h-8 w-8 items-center justify-center bg-error/10 text-error">
+                    <button
+                        type="button"
+                        onClick={onAbort}
+                        aria-label="Abort task"
+                        className="btn ml-auto flex h-8 w-8 items-center justify-center bg-error/10 text-error"
+                    >
                         <Square size={14} />
                     </button>
                 )}
@@ -100,6 +105,7 @@ export function TaskComposer({
             <div className="flex min-w-0 gap-2">
                 <textarea
                     value={input}
+                    aria-label="Task input"
                     onChange={(event) => onInputChange(event.target.value)}
                     disabled={isSubmitting}
                     placeholder={

@@ -4,18 +4,29 @@
  * System configuration settings tab showing binary status and environment variables.
  */
 
-import { AlertTriangle, CheckCircle, Eye, EyeOff, Loader2, Minus, Plus, RefreshCw, RotateCcw, XCircle } from "lucide-react"
+import { AlertTriangle, CheckCircle, Database, Eye, EyeOff, FolderOpen, Loader2, Minus, Plus, RefreshCw, RotateCcw, XCircle } from "lucide-react"
 import { observer } from "mobx-react"
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
+import type { OpenADECoreRolloutState } from "../../../../electron/src/preload-api"
+import type { OpenADELegacyResourcesImportResult } from "../../../../openade-module/src"
 import { type ManagedBinaryStatus, ensureBinary, getStatuses } from "../../electronAPI/binaries"
 import { type HarnessStatusMap, getHarnessStatuses, isHarnessStatusApiAvailable } from "../../electronAPI/harnessStatus"
+import { selectDirectory } from "../../electronAPI/shell"
 import { isSystemApiAvailable } from "../../electronAPI/system"
+import { isCoreLegacyResourceImportClean, isCoreLegacyYjsImportClean, shouldAcceptCoreLegacyYjsMigration } from "../../runtime/coreMigration"
+import { resolveCoreRolloutState, resolveCoreRuntimeEndpoint } from "../../runtime/localProductRuntimeClient"
 import type { CodeStore } from "../../store/store"
+import { formatCoreLegacyResourceImportResult, importCoreLegacyResourcesFromSelection } from "./coreResourceMigration"
+import { type CoreLegacyYjsImportReport, formatCoreLegacyYjsImportResult, importCoreLegacyYjsDataFromLocalStore } from "./coreYjsMigration"
 import { getHarnessAuthTypeLabel, getHarnessDisplayName, toHarnessStatusView } from "./harnessStatusUtils"
 
 interface KeyValuePair {
     key: string
     value: string
+}
+
+function envVarPairsFromRecord(envVars: Record<string, string>): KeyValuePair[] {
+    return Object.entries(envVars).map(([key, value]) => ({ key, value }))
 }
 
 const KeyValueEditor = ({
@@ -112,7 +123,7 @@ const HarnessStatusSection = () => {
     const [isLoading, setIsLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
 
-    const refresh = async () => {
+    const refresh = useCallback(async () => {
         setIsLoading(true)
         try {
             const result = await getHarnessStatuses()
@@ -121,7 +132,7 @@ const HarnessStatusSection = () => {
         } finally {
             setIsLoading(false)
         }
-    }
+    }, [])
 
     useEffect(() => {
         if (!isHarnessStatusApiAvailable()) {
@@ -130,7 +141,7 @@ const HarnessStatusSection = () => {
         }
 
         refresh()
-    }, [])
+    }, [refresh])
 
     if (!isSystemApiAvailable()) return null
 
@@ -269,7 +280,7 @@ const ManagedBinariesSection = () => {
     const [statuses, setStatuses] = useState<ManagedBinaryStatus[]>([])
     const [isLoading, setIsLoading] = useState(true)
 
-    const refresh = async () => {
+    const refresh = useCallback(async () => {
         setIsLoading(true)
         try {
             const result = await getStatuses()
@@ -277,7 +288,7 @@ const ManagedBinariesSection = () => {
         } finally {
             setIsLoading(false)
         }
-    }
+    }, [])
 
     useEffect(() => {
         if (!isSystemApiAvailable()) {
@@ -296,7 +307,7 @@ const ManagedBinariesSection = () => {
         }, 2000)
 
         return () => clearInterval(interval)
-    }, [])
+    }, [refresh])
 
     if (!isSystemApiAvailable()) return null
 
@@ -331,6 +342,36 @@ const ManagedBinariesSection = () => {
     )
 }
 
+function coreRolloutStatusText(state: OpenADECoreRolloutState | null, hasCoreRuntimeEndpoint: boolean): string {
+    if (hasCoreRuntimeEndpoint) {
+        if (state?.source === "external") return "OpenADE Core is connected through an external endpoint."
+        if (state?.reason === "legacy-yjs-migration-accepted") return "OpenADE Core is connected after accepted legacy Yjs import."
+        if (state?.automatic) return "OpenADE Core is connected for this clean install."
+        return "OpenADE Core is connected."
+    }
+
+    switch (state?.reason) {
+        case "legacy-yjs-documents":
+            return "Legacy Yjs data detected; Core is waiting for migration."
+        case "disabled":
+            return "OpenADE Core is disabled by environment."
+        case "development-default-off":
+            return "Development launch is using the legacy IPC backend."
+        case "missing-core-binary":
+            return "OpenADE Core binary was not found."
+        case "invalid-managed-command":
+            return "Managed OpenADE Core command is invalid."
+        default:
+            return "OpenADE Core is not connected."
+    }
+}
+
+function coreRolloutTone(state: OpenADECoreRolloutState | null, hasCoreRuntimeEndpoint: boolean): "success" | "warning" | "muted" {
+    if (hasCoreRuntimeEndpoint) return "success"
+    if (state?.reason === "legacy-yjs-documents" || state?.reason === "disabled" || state?.reason === "invalid-managed-command") return "warning"
+    return "muted"
+}
+
 interface SystemConfigTabProps {
     store: CodeStore
 }
@@ -338,16 +379,29 @@ interface SystemConfigTabProps {
 export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
     const personalSettings = store.personalSettingsStore
     const currentEnvVars = personalSettings?.settings.current.envVars ?? {}
+    const hasCoreRuntimeEndpoint = resolveCoreRuntimeEndpoint() !== null
+    const coreRolloutState = resolveCoreRolloutState()
+    const coreTone = coreRolloutTone(coreRolloutState, hasCoreRuntimeEndpoint)
+    const coreStatusIconClass = coreTone === "success" ? "text-success mt-0.5" : coreTone === "warning" ? "text-warning mt-0.5" : "text-muted mt-0.5"
 
     // Convert Record to array of pairs for editing
-    const [envVarPairs, setEnvVarPairs] = useState<KeyValuePair[]>(Object.entries(currentEnvVars).map(([key, value]) => ({ key, value })))
+    const [envVarPairs, setEnvVarPairs] = useState<KeyValuePair[]>(() => envVarPairsFromRecord(currentEnvVars))
     const [hasChanges, setHasChanges] = useState(false)
     const [isSaving, setIsSaving] = useState(false)
+    const [isImportingLegacyYjs, setIsImportingLegacyYjs] = useState(false)
+    const [legacyYjsImportMessage, setLegacyYjsImportMessage] = useState<string | null>(null)
+    const [legacyYjsImportError, setLegacyYjsImportError] = useState<string | null>(null)
+    const [lastCleanLegacyYjsReport, setLastCleanLegacyYjsReport] = useState<CoreLegacyYjsImportReport | null>(null)
+    const [importSessions, setImportSessions] = useState(true)
+    const [isImportingLegacyResources, setIsImportingLegacyResources] = useState(false)
+    const [legacyResourceImportMessage, setLegacyResourceImportMessage] = useState<string | null>(null)
+    const [legacyResourceImportError, setLegacyResourceImportError] = useState<string | null>(null)
+    const [lastCleanLegacyResourcesResult, setLastCleanLegacyResourcesResult] = useState<OpenADELegacyResourcesImportResult | null>(null)
 
     // Update local state when store changes externally
     useEffect(() => {
         const storeEnvVars = personalSettings?.settings.current.envVars ?? {}
-        setEnvVarPairs(Object.entries(storeEnvVars).map(([key, value]) => ({ key, value })))
+        setEnvVarPairs(envVarPairsFromRecord(storeEnvVars))
         setHasChanges(false)
     }, [personalSettings?.settings.current.envVars])
 
@@ -381,8 +435,77 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
 
     const handleReset = () => {
         const storeEnvVars = personalSettings?.settings.current.envVars ?? {}
-        setEnvVarPairs(Object.entries(storeEnvVars).map(([key, value]) => ({ key, value })))
+        setEnvVarPairs(envVarPairsFromRecord(storeEnvVars))
         setHasChanges(false)
+    }
+
+    const handleImportLegacyYjsData = async () => {
+        if (!hasCoreRuntimeEndpoint || isImportingLegacyYjs) return
+        setIsImportingLegacyYjs(true)
+        setLegacyYjsImportMessage(null)
+        setLegacyYjsImportError(null)
+        try {
+            const result = await importCoreLegacyYjsDataFromLocalStore(store)
+            const cleanYjsReport = isCoreLegacyYjsImportClean(result) ? result : null
+            const cleanResourcesResult = lastCleanLegacyResourcesResult
+            let accepted = false
+            if (cleanYjsReport && cleanResourcesResult && shouldAcceptCoreLegacyYjsMigration(cleanYjsReport, cleanResourcesResult)) {
+                await store.markProductLegacyYjsMigrationAccepted()
+                accepted = true
+                setLegacyResourceImportMessage(
+                    `${formatCoreLegacyResourceImportResult(cleanResourcesResult)}; Core launch accepted after clean data and resources import`
+                )
+            }
+            setLastCleanLegacyYjsReport(cleanYjsReport)
+            const acceptedReport = { ...result, legacyYjsMigrationAccepted: accepted }
+            const messageParts = [formatCoreLegacyYjsImportResult(acceptedReport)]
+            if (!accepted && cleanYjsReport) messageParts.push("import legacy resources to accept Core launch")
+            setLegacyYjsImportMessage(messageParts.join("; "))
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Legacy data import failed"
+            setLegacyYjsImportError(message)
+            console.error("[SystemConfigTab] Failed to import legacy Yjs data into Core:", err)
+        } finally {
+            setIsImportingLegacyYjs(false)
+        }
+    }
+
+    const handleImportLegacyResources = async () => {
+        if (!hasCoreRuntimeEndpoint || isImportingLegacyResources) return
+        setIsImportingLegacyResources(true)
+        setLegacyResourceImportMessage(null)
+        setLegacyResourceImportError(null)
+        try {
+            const result = await importCoreLegacyResourcesFromSelection({
+                store,
+                selectDataDir: () => selectDirectory(),
+                importSessions,
+            })
+            if (result) {
+                const cleanResources = isCoreLegacyResourceImportClean(result) ? result : null
+                const cleanYjsReport = lastCleanLegacyYjsReport
+                let accepted = false
+                if (cleanYjsReport && cleanResources && shouldAcceptCoreLegacyYjsMigration(cleanYjsReport, cleanResources)) {
+                    await store.markProductLegacyYjsMigrationAccepted()
+                    accepted = true
+                }
+                setLastCleanLegacyResourcesResult(cleanResources)
+                const messageParts = [formatCoreLegacyResourceImportResult(result)]
+                if (accepted && cleanYjsReport) {
+                    setLegacyYjsImportMessage(formatCoreLegacyYjsImportResult({ ...cleanYjsReport, legacyYjsMigrationAccepted: true }))
+                    messageParts.push("Core launch accepted after clean data and resources import")
+                } else if (cleanResources) {
+                    messageParts.push("import legacy data to accept Core launch")
+                }
+                setLegacyResourceImportMessage(messageParts.join("; "))
+            }
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Legacy resource import failed"
+            setLegacyResourceImportError(message)
+            console.error("[SystemConfigTab] Failed to import legacy Core resources:", err)
+        } finally {
+            setIsImportingLegacyResources(false)
+        }
     }
 
     return (
@@ -392,6 +515,68 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
 
             {/* Managed Runtimes Section */}
             <ManagedBinariesSection />
+
+            {/* Core Migration Section */}
+            <section>
+                <h3 className="text-base font-semibold text-base-content mb-1">Core Migration</h3>
+                <p className="text-sm text-muted mb-4">Import local desktop data into the active OpenADE Core store.</p>
+
+                <div className="flex flex-col gap-3 p-3 bg-base-200/40 border border-border">
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-3 min-w-0">
+                            <Database size={16} className={coreStatusIconClass} />
+                            <div className="min-w-0">
+                                <p className="text-sm font-medium text-base-content">Legacy Data Import</p>
+                                <p className="text-xs text-muted mt-1">{coreRolloutStatusText(coreRolloutState, hasCoreRuntimeEndpoint)}</p>
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={handleImportLegacyYjsData}
+                            disabled={!hasCoreRuntimeEndpoint || isImportingLegacyYjs}
+                            className="btn px-3 py-1.5 text-sm font-medium bg-primary text-primary-content hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
+                        >
+                            {isImportingLegacyYjs ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+                            Import
+                        </button>
+                    </div>
+                    {legacyYjsImportMessage && <p className="text-xs text-success">{legacyYjsImportMessage}</p>}
+                    {legacyYjsImportError && <p className="text-xs text-error">{legacyYjsImportError}</p>}
+                </div>
+
+                <div className="flex flex-col gap-3 p-3 bg-base-200/40 border border-border mt-3">
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-3 min-w-0">
+                            <FolderOpen size={16} className={coreStatusIconClass} />
+                            <div className="min-w-0">
+                                <p className="text-sm font-medium text-base-content">Legacy Resource Import</p>
+                                <p className="text-xs text-muted mt-1">Import image, snapshot, and session blobs after legacy repo/task rows exist in Core.</p>
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={handleImportLegacyResources}
+                            disabled={!hasCoreRuntimeEndpoint || isImportingLegacyResources}
+                            className="btn px-3 py-1.5 text-sm font-medium bg-primary text-primary-content hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
+                        >
+                            {isImportingLegacyResources ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />}
+                            Import
+                        </button>
+                    </div>
+                    <label className="flex items-center gap-2 text-sm text-base-content">
+                        <input
+                            type="checkbox"
+                            checked={importSessions}
+                            onChange={(event) => setImportSessions(event.target.checked)}
+                            disabled={isImportingLegacyResources}
+                            className="checkbox checkbox-sm bg-base-200 border-border"
+                        />
+                        Include Claude Code and Codex transcripts
+                    </label>
+                    {legacyResourceImportMessage && <p className="text-xs text-success">{legacyResourceImportMessage}</p>}
+                    {legacyResourceImportError && <p className="text-xs text-error">{legacyResourceImportError}</p>}
+                </div>
+            </section>
 
             {/* Environment Variables Section */}
             <section>

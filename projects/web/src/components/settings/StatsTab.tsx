@@ -1,7 +1,7 @@
 import cx from "classnames"
-import { Check, Copy, Loader2 } from "lucide-react"
+import { Check, Copy, Loader2, RefreshCw } from "lucide-react"
 import { observer } from "mobx-react"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useMemo, useRef, useState } from "react"
 import type { OpenADETaskPreviewUsage } from "../../../../openade-module/src"
 import { normalizeModelClass } from "../../constants"
 import { formatDuration, needsTaskUsageBackfill } from "../../persistence/taskStatsUtils"
@@ -176,50 +176,53 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     const [copyRecapState, setCopyRecapState] = useState<"idle" | "copying" | "copied" | "error">("idle")
     const [selectedPeriod, setSelectedPeriod] = useState<string | null>(null)
     const repos = store.getTaskPreviewReposForStats()
-
-    // Backfill task stores missing usage data (or missing newer fields like durationMs)
-    useEffect(() => {
+    const tasksNeedingBackfill = useMemo(() => {
         const tasksToBackfill: Array<{ repoId: string; taskId: string }> = []
-        for (const repo of store.getTaskPreviewReposForStats()) {
+        for (const repo of repos) {
             for (const task of repo.tasks) {
                 if (needsTaskUsageBackfill(task.usage)) {
                     tasksToBackfill.push({ repoId: repo.id, taskId: task.id })
                 }
             }
         }
+        return tasksToBackfill
+    }, [repos])
 
-        if (tasksToBackfill.length === 0) return
+    const handleBackfillUsage = useCallback(async () => {
+        if (backfillProgress || tasksNeedingBackfill.length === 0) return
 
-        let cancelled = false
+        const tasksToBackfill = [...tasksNeedingBackfill]
         setBackfillProgress({ loaded: 0, total: tasksToBackfill.length })
 
-        const run = async () => {
+        try {
+            if (store.shouldUseRuntimeProductReads() && store.usesCleanManagedCoreRuntime()) {
+                await store.backfillTaskUsagePreviews(tasksToBackfill)
+                setBackfillProgress({ loaded: tasksToBackfill.length, total: tasksToBackfill.length })
+                return
+            }
+
             for (let i = 0; i < tasksToBackfill.length; i++) {
-                if (cancelled) break
                 const { repoId, taskId } = tasksToBackfill[i]
                 try {
                     await store.backfillTaskUsagePreview(repoId, taskId)
                 } catch (err) {
                     console.warn("[StatsTab] Failed to load task for backfill:", taskId, err)
                 }
-                if (!cancelled) setBackfillProgress({ loaded: i + 1, total: tasksToBackfill.length })
-                if (!cancelled && (i + 1) % BACKFILL_BATCH_SIZE === 0 && i + 1 < tasksToBackfill.length) {
+                setBackfillProgress({ loaded: i + 1, total: tasksToBackfill.length })
+                if ((i + 1) % BACKFILL_BATCH_SIZE === 0 && i + 1 < tasksToBackfill.length) {
                     await yieldToBrowser()
                 }
             }
+
             try {
                 if (!store.shouldUseRuntimeProductReads()) await store.syncRepoStore()
             } catch (err) {
                 console.warn("[StatsTab] Failed to sync stats backfill:", err)
             }
-            if (!cancelled) setBackfillProgress(null)
+        } finally {
+            setBackfillProgress(null)
         }
-
-        run()
-        return () => {
-            cancelled = true
-        }
-    }, [store, store.repoStore, store.runtimeProductSnapshot])
+    }, [backfillProgress, store, tasksNeedingBackfill])
 
     const handleCopy = useCallback(async () => {
         if (!cardRef.current || copyState === "copying") return
@@ -336,13 +339,22 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
 
     return (
         <div className="flex flex-col gap-4">
-            {/* Backfill indicator */}
-            {backfillProgress && (
-                <div className="flex items-center gap-2 text-xs text-muted">
-                    <Loader2 size={12} className="animate-spin" />
+            {tasksNeedingBackfill.length > 0 && (
+                <div className="flex items-center justify-between gap-3 text-xs text-muted">
                     <span>
-                        Loading {backfillProgress.loaded}/{backfillProgress.total} tasks...
+                        {backfillProgress
+                            ? `Loading ${backfillProgress.loaded}/${backfillProgress.total} tasks...`
+                            : `${countLabel(tasksNeedingBackfill.length, "task")} missing usage`}
                     </span>
+                    <button
+                        type="button"
+                        className="btn flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium transition-colors border shrink-0 bg-base-200 text-muted hover:text-base-content border-border"
+                        onClick={handleBackfillUsage}
+                        disabled={backfillProgress !== null}
+                    >
+                        {backfillProgress ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                        <span>Update</span>
+                    </button>
                 </div>
             )}
 

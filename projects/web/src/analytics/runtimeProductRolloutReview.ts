@@ -37,6 +37,13 @@ const APP_OPENED_ALLOWED_KEYS = new Set([
     "runtimeProductStoreEnabled",
     "runtimeProductStoreStatus",
     "runtimeProductStoreHasSnapshot",
+    "runtimeProductTransport",
+    "coreRolloutStatus",
+    "coreRolloutSource",
+    "coreRolloutReason",
+    "coreRolloutAutomatic",
+    "coreLegacyYjsDocumentsPresent",
+    "coreLegacyYjsMigrationAccepted",
 ])
 
 const RUNTIME_PRODUCT_ALLOWED_KEYS = new Set([
@@ -48,6 +55,13 @@ const RUNTIME_PRODUCT_ALLOWED_KEYS = new Set([
     "repoCount",
     "taskPreviewCount",
     "cachedTaskCount",
+    "runtimeProductTransport",
+    "coreRolloutStatus",
+    "coreRolloutSource",
+    "coreRolloutReason",
+    "coreRolloutAutomatic",
+    "coreLegacyYjsDocumentsPresent",
+    "coreLegacyYjsMigrationAccepted",
     "errorKind",
 ])
 

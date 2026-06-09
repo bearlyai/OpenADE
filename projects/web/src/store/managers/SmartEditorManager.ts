@@ -12,7 +12,12 @@
 
 import { makeAutoObservable, observable, runInAction } from "mobx"
 import { ulid } from "ulid"
-import type { OpenADEProjectFilesFuzzySearchRequest, OpenADEProjectFilesFuzzySearchResult } from "../../../../openade-module/src"
+import type {
+    OpenADEProjectFilesFuzzySearchRequest,
+    OpenADEProjectFilesFuzzySearchResult,
+    OpenADETaskImageStagedReadRequest,
+    OpenADETaskImageStagedReadResult,
+} from "../../../../openade-module/src"
 import { dataFolderApi } from "../../electronAPI/dataFolder"
 import { filesApi } from "../../electronAPI/files"
 import type { ImageAttachment } from "../../types"
@@ -86,6 +91,7 @@ interface SmartEditorProductFileContext {
 export interface SmartEditorProductFileAccess {
     getContext(id: string, workspaceId: string, dir: string): SmartEditorProductFileContext | null
     fuzzySearchProjectFiles(args: OpenADEProjectFilesFuzzySearchRequest): Promise<OpenADEProjectFilesFuzzySearchResult>
+    readStagedTaskImage?(args: OpenADETaskImageStagedReadRequest): Promise<OpenADETaskImageStagedReadResult | null>
 }
 
 // ============================================================================
@@ -130,7 +136,29 @@ function toFileSearchTreeMatch(treeMatch: OpenADEProjectFilesFuzzySearchResult["
     }
 }
 
-async function loadImagePreviewUrl(image: ImageAttachment): Promise<string | null> {
+function decodeBase64ArrayBuffer(value: string): ArrayBuffer {
+    const binary = globalThis.atob(value)
+    const arrayBuffer = new ArrayBuffer(binary.length)
+    const bytes = new Uint8Array(arrayBuffer)
+    for (let index = 0; index < binary.length; index++) {
+        bytes[index] = binary.charCodeAt(index)
+    }
+    return arrayBuffer
+}
+
+async function loadImagePreviewUrl(image: ImageAttachment, productAccess: SmartEditorProductFileAccess | null): Promise<string | null> {
+    if (productAccess?.readStagedTaskImage) {
+        try {
+            const result = await productAccess.readStagedTaskImage({ imageId: image.id, ext: image.ext })
+            if (result?.data) {
+                const blob = new Blob([decodeBase64ArrayBuffer(result.data)], { type: result.mediaType ?? image.mediaType })
+                return URL.createObjectURL(blob)
+            }
+        } catch (err) {
+            console.error("[SmartEditorManager] Failed to restore runtime image preview:", image.id, err)
+        }
+    }
+
     if (!dataFolderApi.isAvailable()) return null
 
     try {
@@ -169,6 +197,7 @@ export class SmartEditorManager {
     private onInsertFile: ((path: string) => void) | null = null
     private onClear: (() => void) | null = null
     private onSetContent: ((content: string | Record<string, unknown> | null) => void) | null = null
+    private productSearchesInFlight = new Map<string, Promise<OpenADEProjectFilesFuzzySearchResult | null>>()
 
     constructor(
         id: string,
@@ -332,13 +361,14 @@ export class SmartEditorManager {
     }
 
     async warmFileMentionSearch(dir: string): Promise<void> {
+        if (this.productContextFor(dir)) return
         await this.searchFileMentions(dir, "", 20)
     }
 
     async searchFileMentions(dir: string, query: string, limit = 20): Promise<SmartEditorFileSearchResult> {
         const productContext = this.productContextFor(dir)
         if (productContext) {
-            const result = await this.productAccess?.fuzzySearchProjectFiles({
+            const result = await this.searchProductFiles({
                 repoId: productContext.repoId,
                 taskId: productContext.taskId,
                 query,
@@ -432,7 +462,7 @@ export class SmartEditorManager {
 
     private async productFileExists(context: SmartEditorProductFileContext, relPath: string): Promise<boolean> {
         const normalizedPath = normalizeMentionPath(relPath)
-        const result = await this.productAccess?.fuzzySearchProjectFiles({
+        const result = await this.searchProductFiles({
             repoId: context.repoId,
             taskId: context.taskId,
             query: normalizedPath,
@@ -441,6 +471,33 @@ export class SmartEditorManager {
             includeHidden: true,
         })
         return result?.results.some((path) => normalizeMentionPath(path) === normalizedPath) ?? true
+    }
+
+    private searchProductFiles(args: OpenADEProjectFilesFuzzySearchRequest): Promise<OpenADEProjectFilesFuzzySearchResult | null> {
+        if (!this.productAccess) return Promise.resolve(null)
+        const key = JSON.stringify({
+            repoId: args.repoId,
+            taskId: args.taskId ?? null,
+            query: args.query,
+            matchDirs: args.matchDirs,
+            limit: args.limit,
+            includeHidden: args.includeHidden,
+        })
+        const existing = this.productSearchesInFlight.get(key)
+        if (existing) return existing
+
+        const promise = this.productAccess
+            .fuzzySearchProjectFiles(args)
+            .catch((error: unknown) => {
+                throw error
+            })
+            .finally(() => {
+                if (this.productSearchesInFlight.get(key) === promise) {
+                    this.productSearchesInFlight.delete(key)
+                }
+            })
+        this.productSearchesInFlight.set(key, promise)
+        return promise
     }
 
     // === Private: localStorage operations (uses workspaceId as namespace) ===
@@ -564,7 +621,7 @@ export class SmartEditorManager {
     private async createPreviewUrlMap(images: ImageAttachment[]): Promise<Map<string, string>> {
         const entries = await Promise.all(
             images.map(async (image) => {
-                const url = await loadImagePreviewUrl(image)
+                const url = await loadImagePreviewUrl(image, this.productAccess)
                 return url ? ([image.id, url] as const) : null
             })
         )

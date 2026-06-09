@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { _electron as electron, expect, test } from "@playwright/test"
+import { _electron as electron, expect, test, type TestInfo } from "@playwright/test"
 
 const SMOKE_ANALYTICS_STORAGE_KEY = "openade-smoke-analytics-events"
 
@@ -43,6 +44,39 @@ function parseSmokeTelemetryEvents(raw: string): Array<Record<string, unknown>> 
     if (!Array.isArray(parsed)) throw new Error("Smoke telemetry is not an array")
     if (!parsed.every(isRecord)) throw new Error("Smoke telemetry contains a non-object event")
     return parsed
+}
+
+async function reviewSmokeTelemetry(testInfo: TestInfo, rawSmokeTelemetry: string | null, userDataDir: string, artifactName: string) {
+    if (!rawSmokeTelemetry) throw new Error("Packaged smoke did not capture renderer analytics telemetry")
+    const smokeTelemetry = parseSmokeTelemetryEvents(rawSmokeTelemetry)
+    expect(smokeTelemetry.some((event) => event.event_type === "app_opened")).toBe(true)
+
+    const telemetryPath = join(userDataDir, `${artifactName}.ndjson`)
+    writeFileSync(telemetryPath, `${smokeTelemetry.map((event) => JSON.stringify(event)).join("\n")}\n`)
+    const reviewOutput = execFileSync("npm", ["run", "review:runtime-product-rollout", "--", telemetryPath], {
+        cwd: resolve(__dirname, "..", "..", "web"),
+        encoding: "utf8",
+    })
+    expect(reviewOutput).toContain("Runtime product rollout review: PASS")
+    await testInfo.attach(`${artifactName}.ndjson`, { path: telemetryPath, contentType: "application/x-ndjson" })
+    await testInfo.attach(`${artifactName}-review.txt`, { body: Buffer.from(reviewOutput), contentType: "text/plain" })
+    return smokeTelemetry
+}
+
+async function getOpenPort(): Promise<number> {
+    return new Promise((resolvePort, reject) => {
+        const server = createServer()
+        server.once("error", reject)
+        server.listen(0, "127.0.0.1", () => {
+            const address = server.address()
+            if (typeof address !== "object" || address === null) {
+                server.close(() => reject(new Error("Could not resolve temporary listener address")))
+                return
+            }
+            const port = address.port
+            server.close(() => resolvePort(port))
+        })
+    })
 }
 
 test("packaged app launches and loads the bundled web UI", async () => {
@@ -397,18 +431,7 @@ test("packaged app launches and loads the bundled web UI", async () => {
         await expect(relaunched.page.locator('[data-openade-surface="desktop-shared-task"]')).toHaveCount(0)
 
         const rawSmokeTelemetry = await relaunched.page.evaluate((storageKey) => window.localStorage.getItem(storageKey), SMOKE_ANALYTICS_STORAGE_KEY)
-        if (!rawSmokeTelemetry) throw new Error("Packaged smoke did not capture renderer analytics telemetry")
-        const smokeTelemetry = parseSmokeTelemetryEvents(rawSmokeTelemetry)
-        expect(smokeTelemetry.some((event) => event.event_type === "app_opened")).toBe(true)
-        const telemetryPath = join(userDataDir, "runtime-product-smoke-telemetry.ndjson")
-        writeFileSync(telemetryPath, `${smokeTelemetry.map((event) => JSON.stringify(event)).join("\n")}\n`)
-        const reviewOutput = execFileSync("npm", ["run", "review:runtime-product-rollout", "--", telemetryPath], {
-            cwd: resolve(__dirname, "..", "..", "web"),
-            encoding: "utf8",
-        })
-        expect(reviewOutput).toContain("Runtime product rollout review: PASS")
-        await test.info().attach("runtime-product-smoke-telemetry.ndjson", { path: telemetryPath, contentType: "application/x-ndjson" })
-        await test.info().attach("runtime-product-rollout-review.txt", { body: Buffer.from(reviewOutput), contentType: "text/plain" })
+        await reviewSmokeTelemetry(test.info(), rawSmokeTelemetry, userDataDir, "runtime-product-smoke-telemetry")
         passed = true
     } finally {
         if (app) {
@@ -419,6 +442,618 @@ test("packaged app launches and loads the bundled web UI", async () => {
             rmSync(repoDir, { recursive: true, force: true })
         } else {
             console.log(`OPENADE_SMOKE_KEEP_ARTIFACTS retained userDataDir=${userDataDir} repoDir=${repoDir}`)
+        }
+    }
+})
+
+test("packaged app launches managed OpenADE Core and exposes the Core runtime endpoint", async () => {
+    test.setTimeout(120_000)
+    const executablePath = resolveBinary()
+    const userDataDir = mkdtempSync(join(tmpdir(), "openade-core-smoke-"))
+    const repoDir = mkdtempSync(join(tmpdir(), "openade-core-smoke-repo-"))
+    const yjsStorageDir = join(userDataDir, ".openade", "data", "yjs")
+    const coreDataDir = join(userDataDir, ".openade", "core")
+    const corePort = await getOpenPort()
+    const smokeId = `managed-core-smoke-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+    const repoId = `${smokeId}-repo`
+    let app: Awaited<ReturnType<typeof electron.launch>> | undefined
+    let passed = false
+
+    try {
+        writeFileSync(join(repoDir, "README.md"), "OpenADE managed Core smoke fixture\n")
+        writeFileSync(
+            join(repoDir, "openade.toml"),
+            '[[process]]\nname = "Managed Core Echo"\ncommand = "echo managed core scoped process ok"\ntype = "task"\n'
+        )
+        execFileSync("git", ["init"], { cwd: repoDir, stdio: "ignore" })
+        execFileSync("git", ["config", "user.email", "managed-core-smoke@example.com"], { cwd: repoDir, stdio: "ignore" })
+        execFileSync("git", ["config", "user.name", "OpenADE Managed Core Smoke"], { cwd: repoDir, stdio: "ignore" })
+        execFileSync("git", ["add", "README.md", "openade.toml"], { cwd: repoDir, stdio: "ignore" })
+        execFileSync("git", ["commit", "-m", "Initial managed Core smoke fixture"], { cwd: repoDir, stdio: "ignore" })
+
+        app = await electron.launch({
+            executablePath,
+            timeout: 60_000,
+            args: [`--user-data-dir=${userDataDir}`],
+            env: {
+                ...process.env,
+                HOME: userDataDir,
+                OPENADE_CORE_DATA_DIR: coreDataDir,
+                OPENADE_CORE_PORT: String(corePort),
+                OPENADE_CORE_TOKEN: "managed-core-smoke-token",
+                OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER: "1",
+                OPENADE_SMOKE_TEST: "1",
+                OPENADE_YJS_STORAGE_DIR: yjsStorageDir,
+                USERPROFILE: userDataDir,
+            },
+        })
+
+        const page = await app.firstWindow({ timeout: 30_000 })
+        await page.waitForURL(/dist\/web\/index\.html|web\/index\.html/, { timeout: 30_000 })
+        await page.waitForFunction(() => "openadeAPI" in window, null, { timeout: 30_000 })
+
+        const coreSmoke = await page.evaluate(async ({ hostPlatform, smokeRepoId, smokeRepoPath }) => {
+            type RuntimeResponse<T> = { id: number; result?: T; error?: { code?: string; message?: string } }
+            type InitializeResult = {
+                serverName: string
+                protocolVersion: number
+                capabilities: { methods: string[]; notifications: string[] }
+            }
+            type SnapshotResult = {
+                server: { version?: string }
+                repos: Array<{ id: string; name: string; tasks?: Array<{ id: string; title: string; closed?: boolean }> }>
+                workingTaskIds: unknown[]
+            }
+            type RepoCreateResult = { repoId: string; createdAt: string }
+            type TaskCreateResult = { taskId: string; title: string; createdAt: string }
+            type TaskReadResult = {
+                id: string
+                repoId: string
+                title: string
+                closed?: boolean
+                comments: Array<{ id: string; body: string }>
+            }
+            type ProjectFilesTreeResult = { entries: Array<{ path: string; type: string }>; truncated: boolean }
+            type ProjectFileReadResult = { content: string | null; tooLarge: boolean }
+            type ProjectFileWriteResult = { path: string; size: number }
+            type ProjectFuzzySearchResult = { results: string[]; truncated: boolean }
+            type ProjectSearchResult = { matches: Array<{ path: string; content: string }>; truncated: boolean }
+            type ProjectGitInfoResult = { isGitRepo: boolean; mainBranch?: string }
+            type GitChangedFile = { path: string; status?: string }
+            type GitChangeGroup = { files: GitChangedFile[] }
+            type ProjectGitBranchesResult = { defaultBranch: string; branches: Array<{ name: string; isDefault?: boolean }> }
+            type GitSummaryResult = {
+                branch?: string
+                hasChanges: boolean
+                staged: GitChangeGroup
+                unstaged: GitChangeGroup
+                untracked: GitChangedFile[]
+            }
+            type TaskChangesResult = { files: GitChangedFile[]; fromTreeish: string; toTreeish: string }
+            type TaskDiffResult = { filePath: string; patch: string; truncated: boolean }
+            type TaskFilePairResult = { filePath: string; before: string; after: string; tooLarge: boolean }
+            type TaskGitLogResult = { commits: Array<{ sha: string; message: string }>; hasMore: boolean }
+            type TaskGitCommitResult = { committed: boolean; status: string; sha?: string }
+            type ProjectProcessListResult = {
+                processes: Array<{ id: string; name: string }>
+                errors: unknown[]
+                instances: unknown[]
+            }
+            type ProjectProcessStartResult = { processId: string; runtimeId: string; definitionId: string }
+            type ProjectProcessReconnectResult = {
+                found: boolean
+                completed?: boolean
+                output?: Array<{ type: "stdout" | "stderr"; data: string }>
+            }
+            type TaskTerminalStartResult = { terminalId: string; runtimeId: string; ok: boolean }
+            type TaskTerminalReconnectResult = {
+                found: boolean
+                output?: Array<{ data: string }>
+            }
+            type MutationOK = { ok: boolean }
+            type CommentCreateResult = { commentId: string; createdAt: string }
+            type SmokeTelemetryEvent = {
+                event_type?: string
+                event_properties?: {
+                    runtimeProductStoreEnabled?: boolean
+                    runtimeProductStoreStatus?: string
+                    runtimeProductStoreHasSnapshot?: boolean
+                    coreRolloutStatus?: string
+                    coreRolloutSource?: string
+                    coreRolloutReason?: string
+                    coreRolloutAutomatic?: boolean
+                    coreLegacyYjsDocumentsPresent?: boolean
+                    coreLegacyYjsMigrationAccepted?: boolean
+                }
+            }
+
+            const endpoint = window.openadeAPI?.core?.runtimeEndpoint
+            if (!endpoint) throw new Error("openadeAPI.core.runtimeEndpoint is not available")
+            const rolloutState = window.openadeAPI?.core?.rolloutState
+            if (!rolloutState) throw new Error("openadeAPI.core.rolloutState is not available")
+
+            const readSmokeEvents = (): SmokeTelemetryEvent[] => {
+                const raw = window.localStorage.getItem("openade-smoke-analytics-events")
+                if (!raw) return []
+                const parsed: unknown = JSON.parse(raw)
+                return Array.isArray(parsed) ? (parsed as SmokeTelemetryEvent[]) : []
+            }
+
+            const waitForReadyAppOpened = async (): Promise<SmokeTelemetryEvent> => {
+                for (let attempt = 0; attempt < 120; attempt++) {
+                    const event = readSmokeEvents().find((candidate) => {
+                        const props = candidate.event_properties
+                        return (
+                            candidate.event_type === "app_opened" &&
+                            props?.runtimeProductStoreEnabled === true &&
+                            props.runtimeProductStoreStatus === "ready" &&
+                            props.runtimeProductStoreHasSnapshot === true
+                        )
+                    })
+                    if (event) return event
+                    await new Promise((resolveDelay) => window.setTimeout(resolveDelay, 250))
+                }
+                throw new Error(`Renderer did not report ready Core product store; events: ${JSON.stringify(readSmokeEvents())}`)
+            }
+
+            const connect = async (): Promise<WebSocket> => {
+                let lastError = ""
+                for (let attempt = 0; attempt < 80; attempt++) {
+                    try {
+                        const socket = new WebSocket(endpoint.url, [`bearer.${endpoint.token}`])
+                        await new Promise<void>((resolveSocket, rejectSocket) => {
+                            const timeout = window.setTimeout(() => rejectSocket(new Error("Core WebSocket timed out")), 1_000)
+                            socket.addEventListener(
+                                "open",
+                                () => {
+                                    window.clearTimeout(timeout)
+                                    resolveSocket()
+                                },
+                                { once: true }
+                            )
+                            socket.addEventListener(
+                                "error",
+                                () => {
+                                    window.clearTimeout(timeout)
+                                    rejectSocket(new Error("Core WebSocket connection failed"))
+                                },
+                                { once: true }
+                            )
+                        })
+                        return socket
+                    } catch (error) {
+                        lastError = error instanceof Error ? error.message : String(error)
+                        await new Promise((resolveDelay) => window.setTimeout(resolveDelay, 250))
+                    }
+                }
+                throw new Error(`Could not connect to managed Core runtime: ${lastError}`)
+            }
+
+            const socket = await connect()
+            let nextId = 1
+            const request = async <T>(method: string, params?: unknown): Promise<T> => {
+                const id = nextId++
+                const responsePromise = new Promise<RuntimeResponse<T>>((resolveResponse, rejectResponse) => {
+                    const timeout = window.setTimeout(() => rejectResponse(new Error(`Timed out waiting for ${method}`)), 10_000)
+                    const onMessage = (event: MessageEvent<string>) => {
+                        const parsed = JSON.parse(event.data) as RuntimeResponse<T> | { method?: string }
+                        if (!("id" in parsed) || parsed.id !== id) return
+                        window.clearTimeout(timeout)
+                        socket.removeEventListener("message", onMessage)
+                        resolveResponse(parsed)
+                    }
+                    socket.addEventListener("message", onMessage)
+                })
+                socket.send(JSON.stringify(params === undefined ? { id, method } : { id, method, params }))
+                const response = await responsePromise
+                if (response.error) throw new Error(response.error.message ?? `Core request failed: ${method}`)
+                return response.result as T
+            }
+            const sleep = (ms: number) => new Promise((resolveDelay) => window.setTimeout(resolveDelay, ms))
+            const waitForProcessOutput = async (processId: string, expectedOutput: string): Promise<ProjectProcessReconnectResult> => {
+                let lastResult: ProjectProcessReconnectResult | null = null
+                for (let attempt = 0; attempt < 80; attempt++) {
+                    const result = await request<ProjectProcessReconnectResult>("openade/project/process/reconnect", {
+                        repoId: smokeRepoId,
+                        processId,
+                    })
+                    lastResult = result
+                    const output = result.output?.map((chunk) => chunk.data).join("") ?? ""
+                    if (output.includes(expectedOutput)) return result
+                    await sleep(250)
+                }
+                throw new Error(`Managed Core process ${processId} did not produce ${expectedOutput}; last result: ${JSON.stringify(lastResult)}`)
+            }
+            const waitForTerminalOutput = async (
+                taskId: string,
+                terminalId: string,
+                expectedOutput: string
+            ): Promise<TaskTerminalReconnectResult> => {
+                let lastResult: TaskTerminalReconnectResult | null = null
+                for (let attempt = 0; attempt < 80; attempt++) {
+                    const result = await request<TaskTerminalReconnectResult>("openade/task/terminal/reconnect", {
+                        repoId: smokeRepoId,
+                        taskId,
+                        terminalId,
+                    })
+                    lastResult = result
+                    const output = result.output?.map((chunk) => chunk.data).join("") ?? ""
+                    if (output.includes(expectedOutput)) return result
+                    await sleep(250)
+                }
+                throw new Error(`Managed Core terminal ${terminalId} did not produce ${expectedOutput}; last result: ${JSON.stringify(lastResult)}`)
+            }
+
+            const createdBy = { id: "managed-core-smoke-user", email: "managed-core-smoke@example.com" }
+            const initialize = await request<InitializeResult>("initialize", {
+                clientName: "OpenADE packaged managed Core smoke",
+                clientPlatform: "desktop",
+                protocolVersion: 1,
+            })
+            const snapshot = await request<SnapshotResult>("openade/snapshot/read")
+            const repoCreate = await request<RepoCreateResult>("openade/repo/create", {
+                repoId: smokeRepoId,
+                name: "Managed Core Smoke Repo",
+                path: smokeRepoPath,
+                createdBy,
+                clientRequestId: `${smokeRepoId}-repo-create`,
+            })
+            const tree = await request<ProjectFilesTreeResult>("openade/project/files/tree", {
+                repoId: repoCreate.repoId,
+                maxDepth: 2,
+                maxEntries: 20,
+            })
+            const readme = await request<ProjectFileReadResult>("openade/project/file/read", {
+                repoId: repoCreate.repoId,
+                path: "README.md",
+                encoding: "utf8",
+            })
+            const fileWrite = await request<ProjectFileWriteResult>("openade/project/file/write", {
+                repoId: repoCreate.repoId,
+                path: "notes/managed-core.txt",
+                encoding: "utf8",
+                content: "managed Core scoped write smoke\n",
+                createDirs: true,
+                clientRequestId: `${smokeRepoId}-file-write`,
+            })
+            const fuzzySearch = await request<ProjectFuzzySearchResult>("openade/project/files/fuzzySearch", {
+                repoId: repoCreate.repoId,
+                query: "managed-core",
+                limit: 10,
+            })
+            const contentSearch = await request<ProjectSearchResult>("openade/project/search", {
+                repoId: repoCreate.repoId,
+                query: "managed Core",
+                limit: 10,
+            })
+            const gitInfo = await request<ProjectGitInfoResult>("openade/project/git/info/read", { repoId: repoCreate.repoId })
+            const gitBranches = await request<ProjectGitBranchesResult>("openade/project/git/branches/read", {
+                repoId: repoCreate.repoId,
+                includeRemote: false,
+            })
+            const projectGitSummary = await request<GitSummaryResult>("openade/project/git/summary/read", { repoId: repoCreate.repoId })
+            const processes = await request<ProjectProcessListResult>("openade/project/process/list", { repoId: repoCreate.repoId })
+            const processStart = await request<ProjectProcessStartResult>("openade/project/process/start", {
+                repoId: repoCreate.repoId,
+                definitionId: "openade.toml::Managed Core Echo",
+                clientRequestId: `${smokeRepoId}-process-start`,
+            })
+            const processOutput = await waitForProcessOutput(processStart.processId, "managed core scoped process ok")
+            const processStop = await request<MutationOK>("openade/project/process/stop", {
+                repoId: repoCreate.repoId,
+                processId: processStart.processId,
+                clientRequestId: `${smokeRepoId}-process-stop`,
+            })
+            const taskCreate = await request<TaskCreateResult>("openade/task/create", {
+                repoId: repoCreate.repoId,
+                input: "Managed Core task create smoke",
+                title: "Managed Core Smoke Task",
+                createdBy,
+                deviceId: "managed-core-smoke-device",
+                clientRequestId: `${smokeRepoId}-task-create`,
+            })
+            const taskGitSummary = await request<GitSummaryResult>("openade/task/git/summary/read", {
+                repoId: repoCreate.repoId,
+                taskId: taskCreate.taskId,
+            })
+            const taskChanges = await request<TaskChangesResult>("openade/task/changes/read", {
+                repoId: repoCreate.repoId,
+                taskId: taskCreate.taskId,
+            })
+            const taskDiff = await request<TaskDiffResult>("openade/task/diff/read", {
+                repoId: repoCreate.repoId,
+                taskId: taskCreate.taskId,
+                filePath: "notes/managed-core.txt",
+                contextLines: 3,
+            })
+            const taskFilePair = await request<TaskFilePairResult>("openade/task/filePair/read", {
+                repoId: repoCreate.repoId,
+                taskId: taskCreate.taskId,
+                filePath: "notes/managed-core.txt",
+            })
+            const taskGitLog = await request<TaskGitLogResult>("openade/task/git/log", {
+                repoId: repoCreate.repoId,
+                taskId: taskCreate.taskId,
+                limit: 1,
+            })
+            const taskGitCommit = await request<TaskGitCommitResult>("openade/task/git/commit", {
+                repoId: repoCreate.repoId,
+                taskId: taskCreate.taskId,
+                message: "Managed Core smoke commit",
+                clientRequestId: `${smokeRepoId}-git-commit`,
+            })
+            const taskGitSummaryAfterCommit = await request<GitSummaryResult>("openade/task/git/summary/read", {
+                repoId: repoCreate.repoId,
+                taskId: taskCreate.taskId,
+            })
+            const taskGitLogAfterCommit = await request<TaskGitLogResult>("openade/task/git/log", {
+                repoId: repoCreate.repoId,
+                taskId: taskCreate.taskId,
+                limit: 1,
+            })
+            let terminalLifecycle:
+                | {
+                      skipped: false
+                      start: TaskTerminalStartResult
+                      output: TaskTerminalReconnectResult
+                      resize: MutationOK
+                      stop: MutationOK
+                  }
+                | { skipped: true; reason: string }
+            if (hostPlatform === "win32") {
+                terminalLifecycle = { skipped: true, reason: "pty smoke is unix-only" }
+            } else {
+                const terminalStart = await request<TaskTerminalStartResult>("openade/task/terminal/start", {
+                    repoId: repoCreate.repoId,
+                    taskId: taskCreate.taskId,
+                    cols: 80,
+                    rows: 24,
+                    clientRequestId: `${smokeRepoId}-terminal-start`,
+                })
+                await request<MutationOK>("openade/task/terminal/write", {
+                    repoId: repoCreate.repoId,
+                    taskId: taskCreate.taskId,
+                    terminalId: terminalStart.terminalId,
+                    data: 'printf "managed core terminal smoke\\n"\n',
+                    clientRequestId: `${smokeRepoId}-terminal-write`,
+                })
+                const terminalOutput = await waitForTerminalOutput(taskCreate.taskId, terminalStart.terminalId, "managed core terminal smoke")
+                const terminalResize = await request<MutationOK>("openade/task/terminal/resize", {
+                    repoId: repoCreate.repoId,
+                    taskId: taskCreate.taskId,
+                    terminalId: terminalStart.terminalId,
+                    cols: 100,
+                    rows: 30,
+                    clientRequestId: `${smokeRepoId}-terminal-resize`,
+                })
+                const terminalStop = await request<MutationOK>("openade/task/terminal/stop", {
+                    repoId: repoCreate.repoId,
+                    taskId: taskCreate.taskId,
+                    terminalId: terminalStart.terminalId,
+                    clientRequestId: `${smokeRepoId}-terminal-stop`,
+                })
+                terminalLifecycle = {
+                    skipped: false,
+                    start: terminalStart,
+                    output: terminalOutput,
+                    resize: terminalResize,
+                    stop: terminalStop,
+                }
+            }
+            const commentCreate = await request<CommentCreateResult>("openade/comment/create", {
+                taskId: taskCreate.taskId,
+                content: "Managed Core comment smoke",
+                source: { type: "task" },
+                selectedText: { value: "", start: 0, end: 0 },
+                author: createdBy,
+                clientRequestId: `${smokeRepoId}-comment-create`,
+            })
+            const titleUpdate = await request<MutationOK>("openade/task/metadata/update", {
+                taskId: taskCreate.taskId,
+                title: "Managed Core Smoke Task Updated",
+                closed: true,
+                lastViewedAt: new Date().toISOString(),
+                clientRequestId: `${smokeRepoId}-metadata-update`,
+            })
+            const task = await request<TaskReadResult>("openade/task/read", {
+                repoId: repoCreate.repoId,
+                taskId: taskCreate.taskId,
+                hydrateSessionEvents: false,
+            })
+            const snapshotAfterWorkflow = await request<SnapshotResult>("openade/snapshot/read")
+            socket.close()
+            const appOpened = await waitForReadyAppOpened()
+
+            return {
+                endpointUrl: endpoint.url,
+                endpointHasToken: endpoint.token.length > 0,
+                rolloutState,
+                initialize,
+                snapshot,
+                repoCreate,
+                tree,
+                readme,
+                fileWrite,
+                fuzzySearch,
+                contentSearch,
+                gitInfo,
+                gitBranches,
+                projectGitSummary,
+                processes,
+                processStart,
+                processOutput,
+                processStop,
+                taskCreate,
+                taskGitSummary,
+                taskChanges,
+                taskDiff,
+                taskFilePair,
+                taskGitLog,
+                taskGitCommit,
+                taskGitSummaryAfterCommit,
+                taskGitLogAfterCommit,
+                terminalLifecycle,
+                commentCreate,
+                titleUpdate,
+                task,
+                snapshotAfterWorkflow,
+                appOpened,
+            }
+        }, { hostPlatform: process.platform, smokeRepoId: repoId, smokeRepoPath: repoDir })
+
+        expect(coreSmoke.endpointUrl).toBe(`ws://127.0.0.1:${corePort}/v1/runtime`)
+        expect(coreSmoke.endpointHasToken).toBe(true)
+        expect(coreSmoke.rolloutState).toEqual({
+            status: "connected",
+            source: "managed",
+            reason: "managed-core",
+            automatic: true,
+            legacyYjsDocumentsPresent: false,
+            legacyYjsMigrationAccepted: false,
+        })
+        expect(coreSmoke.initialize.serverName).toBe("openade-core")
+        expect(coreSmoke.initialize.protocolVersion).toBe(1)
+        expect(coreSmoke.initialize.capabilities.methods).toEqual(
+            expect.arrayContaining([
+                "initialize",
+                "openade/snapshot/read",
+                "openade/repo/create",
+                "openade/task/create",
+                "openade/comment/create",
+                "openade/project/files/fuzzySearch",
+                "openade/project/git/branches/read",
+                "openade/project/git/summary/read",
+                "openade/task/git/summary/read",
+                "openade/task/changes/read",
+                "openade/task/diff/read",
+                "openade/task/filePair/read",
+                "openade/task/git/log",
+                "openade/task/git/commit",
+                "openade/project/process/start",
+                "openade/project/process/reconnect",
+                "openade/project/process/stop",
+                "openade/task/terminal/start",
+                "openade/task/terminal/reconnect",
+                "openade/task/terminal/write",
+                "openade/task/terminal/resize",
+                "openade/task/terminal/stop",
+            ])
+        )
+        expect(Array.isArray(coreSmoke.snapshot.repos)).toBe(true)
+        expect(Array.isArray(coreSmoke.snapshot.workingTaskIds)).toBe(true)
+        expect(coreSmoke.repoCreate.repoId).toBe(repoId)
+        expect(coreSmoke.tree.truncated).toBe(false)
+        expect(coreSmoke.tree.entries).toEqual(expect.arrayContaining([expect.objectContaining({ path: "README.md", type: "file" })]))
+        expect(coreSmoke.readme).toEqual(expect.objectContaining({ content: "OpenADE managed Core smoke fixture\n", tooLarge: false }))
+        expect(coreSmoke.fileWrite).toEqual(expect.objectContaining({ path: "notes/managed-core.txt", size: 32 }))
+        expect(coreSmoke.fuzzySearch.truncated).toBe(false)
+        expect(coreSmoke.fuzzySearch.results).toEqual(expect.arrayContaining(["notes/managed-core.txt"]))
+        expect(coreSmoke.contentSearch.truncated).toBe(false)
+        expect(coreSmoke.contentSearch.matches).toEqual(expect.arrayContaining([expect.objectContaining({ path: "notes/managed-core.txt" })]))
+        expect(coreSmoke.gitInfo.isGitRepo).toBe(true)
+        expect(coreSmoke.gitInfo.mainBranch).toBeTruthy()
+        expect(coreSmoke.gitBranches.defaultBranch).toBeTruthy()
+        expect(coreSmoke.gitBranches.branches.length).toBeGreaterThan(0)
+        expect(coreSmoke.projectGitSummary.hasChanges).toBe(true)
+        expect(coreSmoke.projectGitSummary.untracked).toEqual(
+            expect.arrayContaining([expect.objectContaining({ path: "notes/managed-core.txt" })])
+        )
+        expect(coreSmoke.processes).toMatchObject({
+            errors: [],
+            processes: [expect.objectContaining({ id: "openade.toml::Managed Core Echo", name: "Managed Core Echo" })],
+        })
+        expect(coreSmoke.processStart).toMatchObject({
+            definitionId: "openade.toml::Managed Core Echo",
+            runtimeId: `process:${coreSmoke.processStart.processId}`,
+        })
+        expect(coreSmoke.processOutput).toMatchObject({ found: true })
+        expect(coreSmoke.processOutput.output?.map((chunk) => chunk.data).join("")).toContain("managed core scoped process ok")
+        expect(coreSmoke.processStop.ok).toBe(true)
+        expect(coreSmoke.taskCreate.title).toBe("Managed Core Smoke Task")
+        expect(coreSmoke.taskGitSummary.hasChanges).toBe(true)
+        expect(coreSmoke.taskGitSummary.untracked).toEqual(
+            expect.arrayContaining([expect.objectContaining({ path: "notes/managed-core.txt" })])
+        )
+        expect(coreSmoke.taskChanges.files).toEqual(expect.arrayContaining([expect.objectContaining({ path: "notes/managed-core.txt" })]))
+        expect(coreSmoke.taskDiff).toMatchObject({ filePath: "notes/managed-core.txt", truncated: false })
+        expect(coreSmoke.taskDiff.patch).toContain("managed Core scoped write smoke")
+        expect(coreSmoke.taskFilePair).toMatchObject({
+            filePath: "notes/managed-core.txt",
+            before: "",
+            after: "managed Core scoped write smoke\n",
+            tooLarge: false,
+        })
+        expect(coreSmoke.taskGitLog.commits[0]?.message).toBe("Initial managed Core smoke fixture")
+        expect(coreSmoke.taskGitCommit).toMatchObject({
+            committed: true,
+            status: "committed",
+        })
+        expect(coreSmoke.taskGitCommit.sha).toBeTruthy()
+        expect(coreSmoke.taskGitSummaryAfterCommit.hasChanges).toBe(false)
+        expect(coreSmoke.taskGitSummaryAfterCommit.untracked).toEqual([])
+        expect(coreSmoke.taskGitLogAfterCommit.commits[0]).toMatchObject({
+            sha: coreSmoke.taskGitCommit.sha,
+            message: "Managed Core smoke commit",
+        })
+        if (process.platform === "win32") {
+            expect(coreSmoke.terminalLifecycle).toEqual({ skipped: true, reason: "pty smoke is unix-only" })
+        } else {
+            expect(coreSmoke.terminalLifecycle.skipped).toBe(false)
+            if (coreSmoke.terminalLifecycle.skipped) throw new Error("terminal lifecycle should run on non-Windows smoke")
+            const terminalLifecycle = coreSmoke.terminalLifecycle
+            expect(terminalLifecycle).toMatchObject({
+                skipped: false,
+                start: {
+                    ok: true,
+                    runtimeId: `pty:${terminalLifecycle.start.terminalId}`,
+                },
+                resize: { ok: true },
+                stop: { ok: true },
+            })
+            expect(terminalLifecycle.output).toMatchObject({ found: true })
+            expect(terminalLifecycle.output.output?.map((chunk) => chunk.data).join("")).toContain("managed core terminal smoke")
+        }
+        expect(coreSmoke.commentCreate.commentId).toBeTruthy()
+        expect(coreSmoke.titleUpdate.ok).toBe(true)
+        expect(coreSmoke.task).toMatchObject({
+            id: coreSmoke.taskCreate.taskId,
+            repoId,
+            title: "Managed Core Smoke Task Updated",
+            closed: true,
+            comments: [expect.objectContaining({ id: coreSmoke.commentCreate.commentId, body: "Managed Core comment smoke" })],
+        })
+        expect(coreSmoke.snapshotAfterWorkflow.repos).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: repoId,
+                    name: "Managed Core Smoke Repo",
+                    tasks: [expect.objectContaining({ id: coreSmoke.taskCreate.taskId, title: "Managed Core Smoke Task Updated", closed: true })],
+                }),
+            ])
+        )
+        expect(coreSmoke.appOpened.event_properties).toMatchObject({
+            runtimeProductStoreEnabled: true,
+            runtimeProductStoreStatus: "ready",
+            runtimeProductStoreHasSnapshot: true,
+            coreRolloutStatus: "connected",
+            coreRolloutSource: "managed",
+            coreRolloutReason: "managed-core",
+            coreRolloutAutomatic: true,
+            coreLegacyYjsDocumentsPresent: false,
+            coreLegacyYjsMigrationAccepted: false,
+        })
+        const rawSmokeTelemetry = await page.evaluate((storageKey) => window.localStorage.getItem(storageKey), SMOKE_ANALYTICS_STORAGE_KEY)
+        await reviewSmokeTelemetry(test.info(), rawSmokeTelemetry, userDataDir, "managed-core-runtime-product-smoke-telemetry")
+        passed = true
+    } finally {
+        if (app) {
+            await app.close().catch(() => undefined)
+        }
+        if (passed || process.env.OPENADE_SMOKE_KEEP_ARTIFACTS !== "1") {
+            rmSync(userDataDir, { recursive: true, force: true })
+            rmSync(repoDir, { recursive: true, force: true })
+        } else {
+            console.log(`OPENADE_SMOKE_KEEP_ARTIFACTS retained managed Core userDataDir=${userDataDir} repoDir=${repoDir}`)
         }
     }
 })

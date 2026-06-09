@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "../electron/node_modules/.bin/tsgo --noEmit"
+    "check:no-any": "node ../../scripts/check-no-explicit-any.mjs --self-test .",
+    "typecheck": "npm run check:no-any && ../electron/node_modules/.bin/tsgo --noEmit"
   },
   "exports": {
     ".": "./src/index.ts",

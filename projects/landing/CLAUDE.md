@@ -16,6 +16,8 @@ yarn install   # install deps
 yarn dev       # dev server on :3000
 yarn build     # production build to dist/
 yarn preview   # preview production build
+yarn check:no-any # reject explicit any in non-test source
+yarn typecheck # run no-any guard and strict TypeScript checks
 ```
 
 ## Design System

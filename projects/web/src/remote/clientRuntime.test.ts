@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { OpenADEClientOptions } from "../../../openade-client/src"
-import type { OpenADESnapshot, OpenADETask, OpenADETurnStartResult } from "../../../openade-module/src"
+import type {
+    OpenADECronInstallStateReadRequest,
+    OpenADECronInstallStateReplaceRequest,
+    OpenADEMCPServer,
+    OpenADEPersonalSettingsReplaceRequest,
+    OpenADESnapshot,
+    OpenADETask,
+    OpenADETurnStartResult,
+} from "../../../openade-module/src"
 import type { RuntimeClientOptions } from "../../../runtime-client/src"
 import { type RemoteConfig, __setRemoteClientConstructorsForTest, getRemoteProductStore, retryRemoteRead, subscribeRemoteChanges } from "./client"
 
@@ -107,6 +115,7 @@ class OpenADEClient {
     writeTaskTerminal = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", terminalId: "openade-task-terminal-test", ok: true }))
     resizeTaskTerminal = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", terminalId: "openade-task-terminal-test", ok: true }))
     stopTaskTerminal = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", terminalId: "openade-task-terminal-test", ok: true }))
+    importLegacyResources = vi.fn(async () => ({ images: null, snapshots: null, sessions: null, skipped: [] }))
     readTaskGitSummary = vi.fn(async () => ({
         repoId: "repo-1",
         taskId: "task-1",
@@ -170,6 +179,14 @@ class OpenADEClient {
     }))
     commitTaskGit = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", committed: false, status: "nothing_to_commit" as const }))
     readTaskImage = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", imageId: "image-1", ext: "png", mediaType: "image/png", data: "" }))
+    readStagedTaskImage = vi.fn(async () => ({ imageId: "image-1", ext: "png", mediaType: "image/png", data: "" }))
+    writeTaskImage = vi.fn(async (args: { imageId: string; ext: string; mediaType: string; data: string }) => ({
+        imageId: args.imageId,
+        ext: args.ext,
+        mediaType: args.mediaType,
+        size: args.data.length,
+        sha256: "remote-image-sha256",
+    }))
     readTaskResourceInventory = vi.fn(async () => ({
         repoId: "repo-1",
         taskId: "task-1",
@@ -179,6 +196,25 @@ class OpenADEClient {
         images: [],
         sessions: [],
         worktree: null,
+    }))
+    readMcpServers = vi.fn(async () => ({ servers: [] }))
+    replaceMcpServers = vi.fn(async (args: { servers: OpenADEMCPServer[] }) => ({ servers: args.servers, replacedServers: args.servers.length }))
+    upsertMcpServer = vi.fn(async (args: { server: OpenADEMCPServer }) => ({ server: args.server, created: true }))
+    deleteMcpServer = vi.fn(async (args: { serverId: string }) => ({ serverId: args.serverId, deleted: true }))
+    readCronInstallState = vi.fn(async (args: OpenADECronInstallStateReadRequest) => ({
+        repoId: args.repoId,
+        installations: {},
+    }))
+    replaceCronInstallState = vi.fn(async (args: OpenADECronInstallStateReplaceRequest) => ({
+        repoId: args.repoId,
+        installations: args.installations,
+        replacedInstallations: Object.keys(args.installations).length,
+    }))
+    readPersonalSettings = vi.fn(async () => ({
+        settings: { envVars: {}, theme: "system" as const, renderMarkdownMessages: true },
+    }))
+    replacePersonalSettings = vi.fn(async (args: OpenADEPersonalSettingsReplaceRequest) => ({
+        settings: args.settings,
     }))
     generateTaskTitle = vi.fn(async () => ({
         repoId: "repo-1",
@@ -199,6 +235,22 @@ class OpenADEClient {
         cancelled: true,
     }))
     updateTaskMetadata = vi.fn(async () => undefined)
+    backfillTaskUsage = vi.fn(async () => ({
+        updatedTasks: 0,
+        skippedTasks: 0,
+        tasks: [],
+    }))
+    recalculateTaskUsage = vi.fn(async () => ({
+        usage: {
+            usageVersion: 2,
+            inputTokens: 0,
+            outputTokens: 0,
+            totalCostUsd: 0,
+            eventCount: 0,
+            costByModel: {},
+            durationMs: 0,
+        },
+    }))
     createComment = vi.fn(async (args: { commentId?: string }) => ({ commentId: args.commentId ?? "comment-1", createdAt: "2026-05-31T00:00:00.000Z" }))
     editComment = vi.fn(async () => undefined)
     deleteComment = vi.fn(async () => undefined)

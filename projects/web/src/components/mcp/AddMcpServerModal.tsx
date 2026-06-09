@@ -177,7 +177,7 @@ export const AddMcpServerModal = NiceModal.create(
 
                 if (isEditing && editServer) {
                     // Update existing server
-                    manager.updateServer(editServer.id, {
+                    await manager.updateServer(editServer.id, {
                         name: name.trim(),
                         enabled,
                         url: transportType === "http" ? url.trim() : undefined,
@@ -189,13 +189,13 @@ export const AddMcpServerModal = NiceModal.create(
                 } else {
                     // Add new server
                     if (transportType === "http") {
-                        manager.addHttpServer({
+                        await manager.addHttpServer({
                             name: name.trim(),
                             url: url.trim(),
                             headers: Object.keys(headersObj).length > 0 ? headersObj : undefined,
                         })
                     } else {
-                        manager.addStdioServer({
+                        await manager.addStdioServer({
                             name: name.trim(),
                             command: command.trim(),
                             args: args.trim() ? args.trim().split(/\s+/) : undefined,

@@ -6,7 +6,7 @@
  */
 
 import type * as Y from "yjs"
-import type { SettingsTab } from "../components/settings/SettingsModal"
+import type { OpenADEPersonalSettings, OpenADEPersonalSettingsThemeSetting } from "../../../openade-module/src"
 import { type YObjectHandle, objectOfType } from "./storage"
 
 // ============================================================================
@@ -48,7 +48,7 @@ export const availableThemeClasses = {
 } as const
 
 /** Theme setting that can be stored (includes "system" option) */
-export type ThemeSetting = keyof typeof availableThemeClasses
+export type ThemeSetting = OpenADEPersonalSettingsThemeSetting
 
 /** Ordered list of all theme options for UI display (system first, then theme classes in order) */
 export const allThemeOptions: Array<{ value: ThemeSetting; label: string; isSystem: boolean }> = [
@@ -68,46 +68,7 @@ export const defaultLightTheme: ThemeClass = "code-theme-light"
 /**
  * Personal settings stored per-user.
  */
-export interface PersonalSettings {
-    /** Custom environment variables to propagate to all subprocesses, Claude queries, and PTYs */
-    envVars: Record<string, string>
-    /** Theme preference - defaults to "system" */
-    theme: ThemeSetting
-    /** Last viewed settings tab - remembers which tab to open by default */
-    lastSettingsTab?: SettingsTab
-    /** Anonymous device ID for analytics - generated on first launch */
-    deviceId?: string
-    /** Opt-out of telemetry - undefined/false means enabled, true means disabled */
-    telemetryDisabled?: boolean
-    /** Whether the user has completed onboarding - shows only once per device */
-    onboardingCompleted?: boolean
-    /** Dev: Hide the tray buttons and slide-out panel */
-    devHideTray?: boolean
-    /** Dev: Force all input commands visible at once for layout testing */
-    devForceAllCommands?: boolean
-    /** Hide shortcut hint overlays when holding Command */
-    shortcutHintsHidden?: boolean
-    /** Render assistant markdown as formatted prose instead of source-style text. */
-    renderMarkdownMessages?: boolean
-    /** Version string of the latest release notes the user has seen */
-    lastSeenReleaseVersion?: string
-    /** Last harness selected on the new task page; validated before use. */
-    newTaskHarnessId?: string
-    /** Last model selected on the new task page; validated against newTaskHarnessId before use. */
-    newTaskModelId?: string
-
-    // === HyperPlan settings ===
-
-    /** Task IDs the user has pinned to the top of the sidebar */
-    pinnedTaskIds?: string[]
-
-    /** HyperPlan default strategy ID: "standard" | "ensemble" | "cross-review" */
-    hyperplanStrategyId?: string
-    /** HyperPlan agent couplets for multi-agent strategies */
-    hyperplanAgents?: Array<{ harnessId: string; modelId: string }>
-    /** HyperPlan reconciler agent couplet */
-    hyperplanReconciler?: { harnessId: string; modelId: string }
-}
+export type PersonalSettings = OpenADEPersonalSettings
 
 /**
  * PersonalSettingsStore manages user-specific settings.

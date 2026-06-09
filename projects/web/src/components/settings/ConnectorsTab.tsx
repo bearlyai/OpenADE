@@ -177,20 +177,24 @@ export const ConnectorsTab = observer(({ store }: ConnectorsTabProps) => {
     const installedPresetIds = new Set(installedServers.filter((s) => s.presetId).map((s) => s.presetId))
     const availablePresets = MCP_PRESET_IDS.filter((id) => !installedPresetIds.has(id)).map((id) => MCP_PRESETS[id])
 
-    const handleInstall = (preset: McpPreset) => {
-        if (preset.transportType === "http") {
-            store.mcpServers.addHttpServer({
-                name: preset.name,
-                url: preset.url ?? "",
-                presetId: preset.id,
-            })
-        } else {
-            store.mcpServers.addStdioServer({
-                name: preset.name,
-                command: preset.command ?? "",
-                args: preset.args,
-                presetId: preset.id,
-            })
+    const handleInstall = async (preset: McpPreset) => {
+        try {
+            if (preset.transportType === "http") {
+                await store.mcpServers.addHttpServer({
+                    name: preset.name,
+                    url: preset.url ?? "",
+                    presetId: preset.id,
+                })
+            } else {
+                await store.mcpServers.addStdioServer({
+                    name: preset.name,
+                    command: preset.command ?? "",
+                    args: preset.args,
+                    presetId: preset.id,
+                })
+            }
+        } catch (err) {
+            console.error("[ConnectorsTab] Failed to install MCP server:", err)
         }
     }
 
@@ -199,7 +203,9 @@ export const ConnectorsTab = observer(({ store }: ConnectorsTabProps) => {
             title: "Remove Connector",
             description: `Are you sure you want to remove "${server.name}"? This will disconnect any active sessions.`,
             onConfirm: () => {
-                store.mcpServers.deleteServer(server.id)
+                store.mcpServers.deleteServer(server.id).catch((err) => {
+                    console.error("[ConnectorsTab] Failed to remove MCP server:", err)
+                })
             },
             buttonText: "Remove",
         })

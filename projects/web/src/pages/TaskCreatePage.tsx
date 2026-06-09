@@ -41,7 +41,7 @@ import { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager
 import type { StashedDraft } from "../store/managers/SmartEditorManager"
 import type { TaskCreation } from "../store/managers/TaskCreationManager"
 import type { Repo } from "../types"
-import { processImageBlob } from "../utils/imageAttachment"
+import { type ImagePersistencePayload, processImageBlob } from "../utils/imageAttachment"
 import {
     getMetaDigitShortcutIndex,
     isMetaOnlyShortcut,
@@ -325,9 +325,10 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
 
     // Get SmartEditorManager for task creation
     const editorManager = codeStore.smartEditors.getManager("task-create", workspaceId)
+    const persistImage = useCallback((payload: ImagePersistencePayload) => codeStore.persistProductTaskImage(payload), [codeStore])
 
     // Page-level drop zone for images
-    const { isDragOver, dragHandlers } = useImageDropZone(editorManager)
+    const { isDragOver, dragHandlers } = useImageDropZone(editorManager, persistImage)
 
     // SDK capabilities for slash command autocomplete
     const sdkCapabilities = useMemo(() => new SdkCapabilitiesManager(), [])
@@ -585,6 +586,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                     fileMentionsDir={repo?.path ?? null}
                     slashCommandsDir={repo?.path ?? null}
                     sdkCapabilities={sdkCapabilities}
+                    persistImage={persistImage}
                     onKeyDown={handleEditorKeyDown}
                     allowGlobalShortcutsWhenEmpty
                     placeholder="Describe your task... Use @ to reference files, / for commands"
@@ -669,12 +671,13 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                         <input
                             ref={fileInputRef}
                             type="file"
+                            aria-label="Attach image"
                             accept="image/jpeg,image/png,image/gif,image/webp"
                             className="hidden"
                             onChange={(e) => {
                                 const file = e.target.files?.[0]
                                 if (file) {
-                                    processImageBlob(file).then(({ attachment, dataUrl }) => {
+                                    processImageBlob(file, { persistImage }).then(({ attachment, dataUrl }) => {
                                         editorManager.addImage(attachment, dataUrl)
                                     })
                                     e.target.value = ""

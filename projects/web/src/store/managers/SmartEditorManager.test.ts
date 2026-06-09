@@ -302,6 +302,19 @@ describe("SmartEditorManager.searchFileMentions", () => {
         expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
     })
 
+    it("does not warm runtime file mentions with an empty fuzzy search on mount", async () => {
+        const productAccess: SmartEditorProductFileAccess = {
+            getContext: vi.fn(() => ({ repoId: "repo-1", taskId: "task-1" })),
+            fuzzySearchProjectFiles: vi.fn(),
+        }
+
+        const manager = new SmartEditorManager("task-task-1", WORKSPACE, productAccess)
+        await manager.warmFileMentionSearch("/repo")
+
+        expect(productAccess.fuzzySearchProjectFiles).not.toHaveBeenCalled()
+        expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
+    })
+
     it("keeps legacy file search as the unscoped fallback", async () => {
         const productAccess: SmartEditorProductFileAccess = {
             getContext: vi.fn(() => null),

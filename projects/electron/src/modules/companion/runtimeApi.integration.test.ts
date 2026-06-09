@@ -384,22 +384,6 @@ function waitForClose(socket: WebSocket): Promise<void> {
     })
 }
 
-function delay(ms: number): Promise<void> {
-    return new Promise((resolve) => globalThis.setTimeout(resolve, ms))
-}
-
-async function waitForProjectProcessOutput(socket: WebSocket, startId: number, repoId: string, processId: string): Promise<string> {
-    for (let attempt = 0; attempt < 50; attempt++) {
-        const result = runtimeResult<{ found: boolean; completed?: boolean; output?: Array<{ data: string }> }>(
-            await runtimeRequest(socket, startId + attempt, "openade/project/process/reconnect", { repoId, processId }),
-            startId + attempt
-        )
-        if (result.found && result.completed) return result.output?.map((chunk) => chunk.data).join("") ?? ""
-        await delay(20)
-    }
-    throw new Error(`Project process ${processId} did not complete`)
-}
-
 describe("companion runtime API integration", () => {
     let server: TestServer | null = null
     let checkpointDir = ""
@@ -454,14 +438,16 @@ describe("companion runtime API integration", () => {
                         "openade/project/git/branches/read",
                         "openade/project/git/summary/read",
                         "openade/project/process/list",
-                        "openade/project/process/start",
                         "openade/project/process/reconnect",
-                        "openade/project/process/stop",
                         "openade/task/changes/read",
                         "openade/task/diff/read",
                         "openade/task/filePair/read",
+                        "openade/task/git/summary/read",
                         "openade/task/git/log",
                         "openade/task/git/scopes/read",
+                        "openade/task/git/commit/files/read",
+                        "openade/task/git/fileAtTreeish/read",
+                        "openade/task/git/commit/filePatch/read",
                         "openade/task/image/read",
                         "openade/task/resourceInventory/read",
                         "openade/task/snapshot/patch/read",
@@ -494,14 +480,13 @@ describe("companion runtime API integration", () => {
                 "process/list",
                 "process/reconnect",
                 "process/kill",
+                "openade/project/process/start",
+                "openade/project/process/stop",
                 "openade/task/terminal/start",
                 "openade/task/terminal/write",
                 "openade/task/terminal/reconnect",
                 "openade/task/terminal/resize",
                 "openade/task/terminal/stop",
-                "openade/task/git/commit/files/read",
-                "openade/task/git/fileAtTreeish/read",
-                "openade/task/git/commit/filePatch/read",
                 "openade/task/git/commit",
                 "remote/device/list",
                 "remote/device/revoke",
@@ -513,6 +498,7 @@ describe("companion runtime API integration", () => {
                 "openade/snapshot/create",
                 "data/yjs/read",
                 "host/platform/info",
+                "host/core/legacyYjsMigration/accept",
                 "fs/path/describe",
                 "git/status/read",
                 "pty/spawn",
@@ -566,11 +552,14 @@ describe("companion runtime API integration", () => {
             [17, "process/script/start", { script: "echo blocked", cwd: os.tmpdir() }],
             [28, "process/reconnect", { processId: "blocked" }],
             [29, "process/kill", { processId: "blocked" }],
+            [50, "openade/project/process/start", { repoId: "repo-1", definitionId: "openade.toml::Phone Echo", clientRequestId: "blocked-process-start" }],
+            [51, "openade/project/process/stop", { repoId: "repo-1", processId: "blocked-process", clientRequestId: "blocked-process-stop" }],
             [18, "pty/spawn", { ptyId: "blocked-pty", cwd: os.tmpdir(), cols: 80, rows: 24 }],
             [19, "git/status/read", { repoDir: os.tmpdir() }],
             [20, "git/worktree/commit", { worktreePath: os.tmpdir(), message: "blocked" }],
             [21, "data/yjs/read", { id: "code:repos" }],
             [22, "host/platform/info"],
+            [49, "host/core/legacyYjsMigration/accept"],
             [23, "snapshot/bundle/save", { id: "snapshot-1", patch: "", index: { files: [] } }],
             [25, "snapshot/patch/read", { id: "snapshot-1" }],
             [26, "snapshot/index/read", { id: "snapshot-1" }],
@@ -581,9 +570,6 @@ describe("companion runtime API integration", () => {
             [33, "openade/task/terminal/resize", { repoId: "repo-1", taskId: "task-1", terminalId: "blocked", cols: 100, rows: 30 }],
             [34, "openade/task/terminal/stop", { repoId: "repo-1", taskId: "task-1", terminalId: "blocked" }],
             [37, "openade/task/git/commit", { repoId: "repo-1", taskId: "task-1", message: "blocked" }],
-            [45, "openade/task/git/commit/files/read", { repoId: "repo-1", taskId: "task-1", commit: "HEAD" }],
-            [46, "openade/task/git/fileAtTreeish/read", { repoId: "repo-1", taskId: "task-1", treeish: "HEAD", filePath: "README.md" }],
-            [47, "openade/task/git/commit/filePatch/read", { repoId: "repo-1", taskId: "task-1", commit: "HEAD", filePath: "README.md" }],
             [48, "openade/task/title/generate", { repoId: "repo-1", taskId: "task-1" }],
             [38, "remote/device/list"],
             [39, "remote/device/revoke", { deviceId: "blocked-device" }],
@@ -676,42 +662,27 @@ describe("companion runtime API integration", () => {
         ).toMatchObject({
             processes: [expect.objectContaining({ id: "openade.toml::Phone Echo", name: "Phone Echo", cwd: fs.realpathSync(repoPath) })],
         })
-        const processStarted = runtimeResult<{ processId: string; runtimeId: string }>(
+        expect(
             await runtimeRequest(socket, 33, "openade/project/process/start", {
                 repoId: "repo-1",
                 definitionId: "openade.toml::Phone Echo",
                 clientRequestId: "phone-process-start",
-            }),
-            33
-        )
-        expect(processStarted.runtimeId).toBe(`process:${processStarted.processId}`)
-        await expect(waitForProjectProcessOutput(socket, 100, "repo-1", processStarted.processId)).resolves.toContain("paired scoped process ok")
+            })
+        ).toMatchObject({ id: 33, error: expect.objectContaining({ code: "permission_denied" }) })
         expect(
             await runtimeRequest(socket, 34, "openade/project/process/stop", {
                 repoId: "repo-1",
-                processId: processStarted.processId,
+                processId: "phone-process",
                 clientRequestId: "phone-process-stop",
             })
-        ).toMatchObject({ id: 34, result: { ok: true } })
-        fs.appendFileSync(
-            path.join(repoPath, "openade.toml"),
-            '\n[[process]]\nname = "Outside"\ncommand = "printf nope"\nwork_dir = "../outside"\ntype = "task"\n'
-        )
-        expect(
-            runtimeResult<{ errors: Array<{ relativePath: string; error: string }> }>(
-                await runtimeRequest(socket, 35, "openade/project/process/list", { repoId: "repo-1" }),
-                35
-            )
-        ).toMatchObject({
-            errors: expect.arrayContaining([expect.objectContaining({ relativePath: "openade.toml", error: expect.stringContaining("outside the repository") })]),
-        })
+        ).toMatchObject({ id: 34, error: expect.objectContaining({ code: "permission_denied" }) })
         expect(
             await runtimeRequest(socket, 36, "openade/project/process/start", {
                 repoId: "repo-1",
-                definitionId: "openade.toml::Outside",
+                definitionId: "openade.toml::Phone Echo",
                 clientRequestId: "phone-process-outside",
             })
-        ).toMatchObject({ id: 36, error: expect.objectContaining({ code: "handler_error" }) })
+        ).toMatchObject({ id: 36, error: expect.objectContaining({ code: "permission_denied" }) })
 
         fs.writeFileSync(path.join(repoPath, "README.md"), "hello from scoped project search\npaired task git change\n")
         fs.writeFileSync(path.join(repoPath, "phone.txt"), "paired device can inspect scoped task git\n")
@@ -762,26 +733,42 @@ describe("companion runtime API integration", () => {
             ]),
         })
         const initialCommit = gitOutput(repoPath, ["rev-parse", "HEAD"])
-        await expect(
-            trustedRuntimeResult("trusted-git-commit-files", "openade/task/git/commit/files/read", {
-                repoId: "repo-1",
-                taskId: "task-1",
-                commit: initialCommit,
-            })
-        ).resolves.toMatchObject({
+        expect(
+            runtimeResult<{ branch: string | null; hasChanges: boolean; untracked: Array<{ path: string }> }>(
+                await runtimeRequest(socket, 242, "openade/task/git/summary/read", { repoId: "repo-1", taskId: "task-1" }),
+                242
+            )
+        ).toMatchObject({
+            branch: "main",
+            hasChanges: true,
+            untracked: expect.arrayContaining([expect.objectContaining({ path: "openade.toml" }), expect.objectContaining({ path: "phone.txt" })]),
+        })
+        expect(
+            runtimeResult<{ repoId: string; taskId: string; commit: string; files: Array<{ path: string; status: string }> }>(
+                await runtimeRequest(socket, 243, "openade/task/git/commit/files/read", {
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    commit: initialCommit,
+                }),
+                243
+            )
+        ).toMatchObject({
             repoId: "repo-1",
             taskId: "task-1",
             commit: initialCommit,
             files: [expect.objectContaining({ path: "README.md", status: "added" })],
         })
-        await expect(
-            trustedRuntimeResult("trusted-git-file-at-treeish", "openade/task/git/fileAtTreeish/read", {
-                repoId: "repo-1",
-                taskId: "task-1",
-                treeish: initialCommit,
-                filePath: "README.md",
-            })
-        ).resolves.toMatchObject({
+        expect(
+            runtimeResult<{ repoId: string; taskId: string; treeish: string; filePath: string; content: string; exists: boolean }>(
+                await runtimeRequest(socket, 244, "openade/task/git/fileAtTreeish/read", {
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    treeish: initialCommit,
+                    filePath: "README.md",
+                }),
+                244
+            )
+        ).toMatchObject({
             repoId: "repo-1",
             taskId: "task-1",
             treeish: initialCommit,
@@ -789,28 +776,31 @@ describe("companion runtime API integration", () => {
             content: "hello from scoped project search\n",
             exists: true,
         })
-        const trustedCommitPatch = await trustedRuntimeResult<{
+        const pairedCommitPatch = runtimeResult<{
             repoId: string
             taskId: string
             commit: string
             filePath: string
             patch: string
             stats: { insertions: number; deletions: number; changedLines: number; hunkCount: number }
-        }>("trusted-git-commit-patch", "openade/task/git/commit/filePatch/read", {
-            repoId: "repo-1",
-            taskId: "task-1",
-            commit: initialCommit,
-            filePath: "README.md",
-            contextLines: 3,
-        })
-        expect(trustedCommitPatch).toMatchObject({
+        }>(
+            await runtimeRequest(socket, 245, "openade/task/git/commit/filePatch/read", {
+                repoId: "repo-1",
+                taskId: "task-1",
+                commit: initialCommit,
+                filePath: "README.md",
+                contextLines: 3,
+            }),
+            245
+        )
+        expect(pairedCommitPatch).toMatchObject({
             repoId: "repo-1",
             taskId: "task-1",
             commit: initialCommit,
             filePath: "README.md",
             stats: { insertions: 1, deletions: 0, changedLines: 1, hunkCount: 1 },
         })
-        expect(trustedCommitPatch.patch).toContain("+hello from scoped project search")
+        expect(pairedCommitPatch.patch).toContain("+hello from scoped project search")
         const trustedCommit = await getRuntimeServer().handleRequest(
             {
                 id: "trusted-git-commit",

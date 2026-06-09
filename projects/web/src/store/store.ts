@@ -4,13 +4,26 @@ import type {
     OpenADECommentCreateResult,
     OpenADECommentDeleteRequest,
     OpenADECommentEditRequest,
+    OpenADECronInstallStateReadRequest,
+    OpenADECronInstallStateReadResult,
+    OpenADECronInstallStateReplaceRequest,
+    OpenADECronInstallStateReplaceResult,
+    OpenADELegacyResourcesImportRequest,
+    OpenADELegacyResourcesImportResult,
+    OpenADEMCPServerDeleteRequest,
+    OpenADEMCPServerDeleteResult,
+    OpenADEMCPServerUpsertRequest,
+    OpenADEMCPServerUpsertResult,
+    OpenADEMCPServersReadResult,
+    OpenADEMCPServersReplaceRequest,
+    OpenADEMCPServersReplaceResult,
     OpenADEProject,
     OpenADEProjectFileReadRequest,
     OpenADEProjectFileReadResult,
-    OpenADEProjectFilesFuzzySearchRequest,
-    OpenADEProjectFilesFuzzySearchResult,
     OpenADEProjectFileWriteRequest,
     OpenADEProjectFileWriteResult,
+    OpenADEProjectFilesFuzzySearchRequest,
+    OpenADEProjectFilesFuzzySearchResult,
     OpenADEProjectFilesTreeRequest,
     OpenADEProjectFilesTreeResult,
     OpenADEProjectGitBranchesReadRequest,
@@ -38,15 +51,15 @@ import type {
     OpenADEReviewStartRequest,
     OpenADESnapshot,
     OpenADETask,
+    OpenADETaskChangesReadRequest,
+    OpenADETaskChangesReadResult,
     OpenADETaskDeleteRequest,
     OpenADETaskDeleteResult,
+    OpenADETaskDiffReadRequest,
+    OpenADETaskDiffReadResult,
     OpenADETaskEnvironmentPrepareRequest,
     OpenADETaskEnvironmentPrepareResult,
     OpenADETaskEnvironmentSetupRequest,
-    OpenADETaskChangesReadRequest,
-    OpenADETaskChangesReadResult,
-    OpenADETaskDiffReadRequest,
-    OpenADETaskDiffReadResult,
     OpenADETaskFilePairReadRequest,
     OpenADETaskFilePairReadResult,
     OpenADETaskGitCommitFilePatchRequest,
@@ -61,6 +74,10 @@ import type {
     OpenADETaskGitScopesReadResult,
     OpenADETaskGitSummaryRequest,
     OpenADETaskGitSummaryResult,
+    OpenADETaskImageReadRequest,
+    OpenADETaskImageReadResult,
+    OpenADETaskImageStagedReadRequest,
+    OpenADETaskImageStagedReadResult,
     OpenADETaskMetadataUpdateRequest,
     OpenADETaskPreview,
     OpenADETaskReadOptions,
@@ -85,6 +102,7 @@ import type {
     OpenADETurnStartRequest,
     OpenADETurnStartResult,
 } from "../../../openade-module/src"
+import { createOpenADEYjsProjection } from "../../../openade-module/src/yjsProjection"
 import type { RuntimeNotification } from "../../../runtime-protocol/src"
 import { analytics, track } from "../analytics"
 import { DEFAULT_HARNESS_ID, DEFAULT_MODEL, MODEL_REGISTRY, getDefaultModelForHarness } from "../constants"
@@ -94,20 +112,32 @@ import { setGlobalEnv } from "../electronAPI/subprocess"
 import { isRuntimeBackedProductStoreEnabled } from "../featureFlags"
 import { crossReviewStrategy, ensembleStrategy, peerReviewStrategy, standardStrategy } from "../hyperplan/strategies"
 import type { AgentCouplet, HyperPlanStrategy } from "../hyperplan/types"
-import { OpenADEProductStore } from "../kernel/productStore"
+import { type OpenADEProductLegacyYjsImportReport, OpenADEProductStore } from "../kernel/productStore"
 import { taskFromRuntimeProduct } from "../kernel/taskAdapter"
 import type { McpServerStore } from "../persistence/mcpServerStore"
-import { type McpServerStoreConnection, connectMcpServerStore } from "../persistence/mcpServerStoreBootstrap"
+import { type McpServerStoreConnection, connectMcpServerStore, createEphemeralMcpServerStoreConnection } from "../persistence/mcpServerStoreBootstrap"
 import type { PersonalSettings, PersonalSettingsStore } from "../persistence/personalSettingsStore"
-import { type PersonalSettingsStoreConnection, connectPersonalSettingsStore } from "../persistence/personalSettingsStoreBootstrap"
+import {
+    type PersonalSettingsStoreConnection,
+    connectPersonalSettingsStore,
+    connectProductPersonalSettingsStore,
+} from "../persistence/personalSettingsStoreBootstrap"
 import { type RepoStore, getTaskPreview } from "../persistence/repoStore"
 import { type RepoStoreConnection, connectRepoStore } from "../persistence/repoStoreBootstrap"
+import { createElectronOpenADEYjsStorageAdapter } from "../persistence/storage/openadeYjsStorageAdapter"
 import { type TaskStoreConnection, loadTaskStore } from "../persistence/taskLoader"
 import { computeTaskUsage, needsTaskUsageBackfill, normalizeTaskPreviewUsage } from "../persistence/taskStatsUtils"
 import { type TaskStore, taskFromStore } from "../persistence/taskStore"
+import { markCoreLegacyYjsMigrationAccepted } from "../runtime/coreMigration"
 import { localOpenADEClient } from "../runtime/localOpenADEClient"
-import { localRuntimeClient } from "../runtime/localRuntimeClient"
+import {
+    localProductRuntime,
+    localProductRuntimeNotificationSource,
+    resolveCoreRolloutState,
+    resolveCoreRuntimeEndpoint,
+} from "../runtime/localProductRuntimeClient"
 import type { Task, User } from "../types"
+import { type ImagePersistencePayload, imagePersistencePayloadToWriteRequest, persistImageToDataFolder } from "../utils/imageAttachment"
 import type { ThinkingLevel } from "./TaskModel"
 
 import { CommentManager } from "./managers/CommentManager"
@@ -123,7 +153,7 @@ import { RepoManager } from "./managers/RepoManager"
 import { RepoProcessesManager } from "./managers/RepoProcessesManager"
 import { RuntimeManager } from "./managers/RuntimeManager"
 import { ScratchpadManager } from "./managers/ScratchpadManager"
-import { type SmartEditorProductFileAccess, SmartEditorManagerStore } from "./managers/SmartEditorManager"
+import { SmartEditorManagerStore, type SmartEditorProductFileAccess } from "./managers/SmartEditorManager"
 import { type CreationPhase, type TaskCreation, TaskCreationManager, type TaskCreationOptions } from "./managers/TaskCreationManager"
 import { TaskManager } from "./managers/TaskManager"
 import { UIStateManager, type ViewMode } from "./managers/UIStateManager"
@@ -136,6 +166,7 @@ export interface CodeStoreConfig {
     enableRuntimeProductStore?: boolean
     runtimeProductStoreFactory?: () => OpenADEProductStore
     runtimeNotificationSource?: RuntimeNotificationSource
+    legacyStoreConnectors?: Partial<CodeStoreLegacyStoreConnectors>
 }
 
 const ANALYTICS_DEVICE_ID_BACKUP_KEY = "openade-analytics-device-id"
@@ -145,8 +176,18 @@ export type RuntimeProductStoreStatus = "disabled" | "loading" | "ready" | "erro
 const RUNTIME_TASK_UPDATE_REFRESH_DELAY_MS = 150
 const LIGHTWEIGHT_RUNTIME_TASK_READ_OPTIONS: OpenADETaskReadOptions = { hydrateSessionEvents: false }
 
+function runtimeProductTaskReadKey(repoId: string, taskId: string, options: OpenADETaskReadOptions): string {
+    return `${repoId}\0${taskId}\0${options.hydrateSessionEvents === true ? "hydrated" : "lightweight"}`
+}
+
 export interface RuntimeNotificationSource {
     subscribe(listener: (notification: RuntimeNotification) => void): () => void
+}
+
+export interface CodeStoreLegacyStoreConnectors {
+    connectRepoStore: () => Promise<RepoStoreConnection>
+    connectMcpServerStore: () => Promise<McpServerStoreConnection>
+    connectPersonalSettingsStore: () => Promise<PersonalSettingsStoreConnection>
 }
 
 function notificationRecord(notification: RuntimeNotification): Record<string, unknown> {
@@ -235,6 +276,7 @@ export class CodeStore {
     private pendingRuntimeTaskUpdateNotifications: Map<string, RuntimeNotification> = new Map()
     private runtimeTaskUpdateTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
     private runtimeProductStore: OpenADEProductStore | null = null
+    private runtimeProductTaskReadInFlight: Map<string, Promise<OpenADETask | null>> = new Map()
     private telemetryReactionDisposer: (() => void) | null = null
     private pingIntervalId: ReturnType<typeof setInterval> | null = null
     private focusHandler: (() => void) | null = null
@@ -320,6 +362,7 @@ export class CodeStore {
         return {
             getContext: (id, workspaceId, dir) => this.getSmartEditorProductFileContext(id, workspaceId, dir),
             fuzzySearchProjectFiles: (args) => this.fuzzySearchProductProjectFiles(args),
+            readStagedTaskImage: (args) => this.readProductStagedTaskImage(args),
         }
     }
 
@@ -359,59 +402,122 @@ export class CodeStore {
         return this.storeInitPromise
     }
 
+    private connectRepoStore(): Promise<RepoStoreConnection> {
+        return this.config.legacyStoreConnectors?.connectRepoStore?.() ?? connectRepoStore()
+    }
+
+    private connectMcpServerStore(): Promise<McpServerStoreConnection> {
+        return this.config.legacyStoreConnectors?.connectMcpServerStore?.() ?? connectMcpServerStore()
+    }
+
+    private connectEphemeralMcpServerProjectionStore(): McpServerStoreConnection {
+        return createEphemeralMcpServerStoreConnection()
+    }
+
+    private connectPersonalSettingsStore(): Promise<PersonalSettingsStoreConnection> {
+        if (this.usesCleanManagedCoreRuntime() && this.runtimeProductStore && this.runtimeProductSnapshot) {
+            return connectProductPersonalSettingsStore(this.runtimeProductStore)
+        }
+        return this.config.legacyStoreConnectors?.connectPersonalSettingsStore?.() ?? connectPersonalSettingsStore()
+    }
+
+    private shouldInitializeRuntimeProductBeforeLegacyRepoStore(): boolean {
+        return this.usesCleanManagedCoreRuntime()
+    }
+
+    usesCleanManagedCoreRuntime(): boolean {
+        if (!this.shouldEnableRuntimeProductStore()) return false
+        const rolloutState = resolveCoreRolloutState()
+        return rolloutState?.status === "connected" && rolloutState.source !== "legacy-ipc" && rolloutState.legacyYjsDocumentsPresent === false
+    }
+
+    shouldUseCoreOwnedCronScheduler(): boolean {
+        return this.usesCleanManagedCoreRuntime() && this.shouldUseRuntimeProductReads()
+    }
+
+    private shouldPushEnvVarsToElectronHost(): boolean {
+        return !this.usesCleanManagedCoreRuntime()
+    }
+
+    private async connectLegacyRepoStoreFallback(): Promise<void> {
+        const repoConnection = await this.connectRepoStore()
+        await repoConnection.sync()
+        runInAction(() => {
+            this.repoStoreConnection = repoConnection
+            this.repoStore = repoConnection.store
+        })
+    }
+
     private async _doInitializeStores(): Promise<void> {
         try {
-            const [repoConnection, mcpConnection, personalSettingsConnection] = await Promise.all([
-                connectRepoStore(),
-                connectMcpServerStore(),
-                connectPersonalSettingsStore(),
-            ])
+            const initializeRuntimeBeforeLegacyRepoStore = this.shouldInitializeRuntimeProductBeforeLegacyRepoStore()
+            if (initializeRuntimeBeforeLegacyRepoStore) {
+                await this.initializeRuntimeProductStore()
+            }
+            const personalSettingsConnection = await this.connectPersonalSettingsStore()
 
-            await Promise.all([repoConnection.sync(), mcpConnection.sync(), personalSettingsConnection.sync()])
+            await personalSettingsConnection.sync()
 
             const newTaskDefaults = getNewTaskAgentDefaults(personalSettingsConnection.store.settings.get())
 
             runInAction(() => {
-                this.repoStoreConnection = repoConnection
-                this.repoStore = repoConnection.store
-                this.mcpServerStoreConnection = mcpConnection
-                this.mcpServerStore = mcpConnection.store
                 this.personalSettingsStoreConnection = personalSettingsConnection
                 this.personalSettingsStore = personalSettingsConnection.store
                 this.defaultHarnessId = newTaskDefaults.harnessId
                 this.defaultModel = newTaskDefaults.modelId
-                this.storeInitialized = true
-                this.storeInitializing = false
             })
 
             this.resetRuntimeNotificationSubscription()
-            await this.initializeRuntimeProductStore()
+            let mcpConnection: McpServerStoreConnection
+            if (initializeRuntimeBeforeLegacyRepoStore) {
+                if (this.runtimeProductSnapshot) {
+                    mcpConnection = this.connectEphemeralMcpServerProjectionStore()
+                } else {
+                    mcpConnection = await this.connectMcpServerStore()
+                    await this.connectLegacyRepoStoreFallback()
+                }
+            } else {
+                mcpConnection = await this.connectMcpServerStore()
+                await this.connectLegacyRepoStoreFallback()
+                await this.initializeRuntimeProductStore()
+            }
+            await mcpConnection.sync()
+            runInAction(() => {
+                this.mcpServerStoreConnection = mcpConnection
+                this.mcpServerStore = mcpConnection.store
+                this.storeInitialized = true
+                this.storeInitializing = false
+            })
+            await this.mcpServers.initializeProductSettingsProjection()
             await this.runtimes.hydrateOpenADETasks().catch((err) => {
                 console.warn("[CodeStore] Failed to hydrate runtime state:", err)
             })
 
-            // Start cron tracking for all repos (runs in background, doesn't block init)
-            this.crons.startAll().catch((err) => {
-                console.error("[CodeStore] Failed to start cron manager:", err)
-            })
-
-            const initialEnvVars = personalSettingsConnection.store.settings.get()?.envVars
-            if (initialEnvVars && Object.keys(initialEnvVars).length > 0) {
-                setGlobalEnv(initialEnvVars).catch((err) => {
-                    console.error("[CodeStore] Failed to push initial env vars:", err)
+            if (!this.shouldUseCoreOwnedCronScheduler()) {
+                this.crons.startAll().catch((err) => {
+                    console.error("[CodeStore] Failed to start cron manager:", err)
                 })
             }
 
-            this.envVarsReactionDisposer = reaction(
-                () => this.personalSettingsStore?.settings.get()?.envVars,
-                (envVars) => {
-                    if (envVars) {
-                        setGlobalEnv(envVars).catch((err) => {
-                            console.error("[CodeStore] Failed to push env vars:", err)
-                        })
-                    }
+            if (this.shouldPushEnvVarsToElectronHost()) {
+                const initialEnvVars = personalSettingsConnection.store.settings.get()?.envVars
+                if (initialEnvVars && Object.keys(initialEnvVars).length > 0) {
+                    setGlobalEnv(initialEnvVars).catch((err) => {
+                        console.error("[CodeStore] Failed to push initial env vars:", err)
+                    })
                 }
-            )
+
+                this.envVarsReactionDisposer = reaction(
+                    () => this.personalSettingsStore?.settings.get()?.envVars,
+                    (envVars) => {
+                        if (envVars) {
+                            setGlobalEnv(envVars).catch((err) => {
+                                console.error("[CodeStore] Failed to push env vars:", err)
+                            })
+                        }
+                    }
+                )
+            }
 
             this.initializeAnalytics(personalSettingsConnection.store)
         } catch (err) {
@@ -425,8 +531,9 @@ export class CodeStore {
 
     private runtimeNotificationSource(): RuntimeNotificationSource | null {
         if (this.config.runtimeNotificationSource) return this.config.runtimeNotificationSource
-        if (typeof window === "undefined" || !window.openadeAPI?.runtime) return null
-        return localRuntimeClient
+        if (typeof window === "undefined") return null
+        if (!window.openadeAPI?.runtime && !window.openadeAPI?.core?.runtimeEndpoint) return null
+        return localProductRuntimeNotificationSource
     }
 
     private subscribeToRuntimeNotifications(): (() => void) | null {
@@ -564,7 +671,7 @@ export class CodeStore {
     }
 
     private createRuntimeProductStore(): OpenADEProductStore {
-        return this.config.runtimeProductStoreFactory?.() ?? new OpenADEProductStore(localOpenADEClient)
+        return this.config.runtimeProductStoreFactory?.() ?? new OpenADEProductStore(localOpenADEClient, localOpenADEClient)
     }
 
     private runtimeProductErrorMessage(err: unknown): string {
@@ -573,6 +680,7 @@ export class CodeStore {
 
     private runtimeProductTelemetryProperties(source: string): Record<string, unknown> {
         const snapshot = this.runtimeProductSnapshot
+        const coreRolloutState = resolveCoreRolloutState()
         return {
             source,
             enabled: this.shouldEnableRuntimeProductStore(),
@@ -581,6 +689,13 @@ export class CodeStore {
             repoCount: snapshot?.repos.length ?? 0,
             taskPreviewCount: snapshot?.repos.reduce((count, repo) => count + repo.tasks.length, 0) ?? 0,
             cachedTaskCount: this.runtimeProductTasks.size,
+            runtimeProductTransport: localProductRuntime.source,
+            coreRolloutStatus: coreRolloutState?.status ?? "unavailable",
+            coreRolloutSource: coreRolloutState?.source ?? "unavailable",
+            coreRolloutReason: coreRolloutState?.reason ?? "unavailable",
+            coreRolloutAutomatic: coreRolloutState?.automatic ?? false,
+            coreLegacyYjsDocumentsPresent: coreRolloutState?.legacyYjsDocumentsPresent ?? false,
+            coreLegacyYjsMigrationAccepted: coreRolloutState?.legacyYjsMigrationAccepted ?? false,
         }
     }
 
@@ -703,10 +818,21 @@ export class CodeStore {
         options: OpenADETaskReadOptions = LIGHTWEIGHT_RUNTIME_TASK_READ_OPTIONS
     ): Promise<OpenADETask | null> {
         if (!this.runtimeProductStore) return null
-        const task = await this.runtimeProductStore.getTask(repoId, taskId, options)
-        runInAction(() => {
-            this.cacheRuntimeProductTask(task)
-        })
+        const key = runtimeProductTaskReadKey(repoId, taskId, options)
+        let request = this.runtimeProductTaskReadInFlight.get(key)
+        if (!request) {
+            request = this.runtimeProductStore.getTask(repoId, taskId, options).finally(() => {
+                this.runtimeProductTaskReadInFlight.delete(key)
+            })
+            this.runtimeProductTaskReadInFlight.set(key, request)
+        }
+
+        const task = await request
+        if (task) {
+            runInAction(() => {
+                this.cacheRuntimeProductTask(task)
+            })
+        }
         return task
     }
 
@@ -926,6 +1052,7 @@ export class CodeStore {
 
         const telemetryDisabled = settings?.telemetryDisabled ?? false
         analytics.setEnabled(!telemetryDisabled)
+        const coreRolloutState = resolveCoreRolloutState()
         track("app_opened", {
             deviceIdSource,
             deviceConfigWasGenerated: deviceConfig?.wasGenerated ?? false,
@@ -933,6 +1060,13 @@ export class CodeStore {
             runtimeProductStoreEnabled: this.shouldEnableRuntimeProductStore(),
             runtimeProductStoreStatus: this.runtimeProductStoreStatus,
             runtimeProductStoreHasSnapshot: this.runtimeProductSnapshot !== null,
+            runtimeProductTransport: localProductRuntime.source,
+            coreRolloutStatus: coreRolloutState?.status ?? "unavailable",
+            coreRolloutSource: coreRolloutState?.source ?? "unavailable",
+            coreRolloutReason: coreRolloutState?.reason ?? "unavailable",
+            coreRolloutAutomatic: coreRolloutState?.automatic ?? false,
+            coreLegacyYjsDocumentsPresent: coreRolloutState?.legacyYjsDocumentsPresent ?? false,
+            coreLegacyYjsMigrationAccepted: coreRolloutState?.legacyYjsMigrationAccepted ?? false,
         })
 
         this.telemetryReactionDisposer = reaction(
@@ -1004,10 +1138,39 @@ export class CodeStore {
         return connection.store
     }
 
+    async backfillTaskUsagePreviews(tasks: Array<{ repoId: string; taskId: string }>): Promise<void> {
+        if (tasks.length === 0) return
+
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore && this.usesCleanManagedCoreRuntime()) {
+            const taskIdsByRepo = new Map<string, string[]>()
+            for (const task of tasks) {
+                const preview = this.runtimeProductTaskPreview(task.repoId, task.taskId)
+                if (!preview || !needsTaskUsageBackfill(preview.usage)) continue
+                taskIdsByRepo.set(task.repoId, [...(taskIdsByRepo.get(task.repoId) ?? []), task.taskId])
+            }
+
+            for (const [repoId, taskIds] of taskIdsByRepo) {
+                await this.runtimeProductStore.backfillTaskUsage({ repoId, taskIds })
+            }
+            this.syncRuntimeProductStoreCache()
+            return
+        }
+
+        for (const task of tasks) {
+            await this.backfillTaskUsagePreview(task.repoId, task.taskId)
+        }
+    }
+
     async backfillTaskUsagePreview(repoId: string, taskId: string): Promise<void> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
             const preview = this.runtimeProductTaskPreview(repoId, taskId)
             if (!preview || !needsTaskUsageBackfill(preview.usage)) return
+
+            if (this.usesCleanManagedCoreRuntime()) {
+                await this.runtimeProductStore.backfillTaskUsage({ repoId, taskIds: [taskId] })
+                this.syncRuntimeProductStoreCache(taskId)
+                return
+            }
 
             const task = await this.loadRuntimeProductTask(repoId, taskId)
             const usage = task ? computeTaskUsage(task.events) : normalizeTaskPreviewUsage(preview.usage)
@@ -1169,6 +1332,89 @@ export class CodeStore {
         return localOpenADEClient.startTurn(params)
     }
 
+    async persistProductTaskImage(payload: ImagePersistencePayload): Promise<void> {
+        if (this.shouldUseRuntimeProductReads()) {
+            const request = imagePersistencePayloadToWriteRequest(payload)
+            if (this.runtimeProductStore) {
+                await this.runtimeProductStore.writeTaskImage(request)
+            } else {
+                await localOpenADEClient.writeTaskImage(request)
+            }
+            return
+        }
+
+        await persistImageToDataFolder(payload)
+    }
+
+    async readProductTaskImage(params: OpenADETaskImageReadRequest): Promise<OpenADETaskImageReadResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readTaskImage(params)
+        }
+
+        return localOpenADEClient.readTaskImage(params)
+    }
+
+    async readProductStagedTaskImage(params: OpenADETaskImageStagedReadRequest): Promise<OpenADETaskImageStagedReadResult | null> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readStagedTaskImage(params)
+        }
+
+        return null
+    }
+
+    async importProductLegacyResources(params: OpenADELegacyResourcesImportRequest): Promise<OpenADELegacyResourcesImportResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.importLegacyResources(params)
+        }
+
+        return localOpenADEClient.importLegacyResources(params)
+    }
+
+    async importProductLegacyYjsData(): Promise<OpenADEProductLegacyYjsImportReport> {
+        if (!this.shouldEnableRuntimeProductStore()) {
+            throw new Error("OpenADE Core migration requires the runtime product store.")
+        }
+        const coreEndpoint = resolveCoreRuntimeEndpoint()
+        if (!this.config.runtimeProductStoreFactory && !coreEndpoint) {
+            throw new Error("OpenADE Core is not connected.")
+        }
+
+        const productStore = this.runtimeProductStore ?? this.createRuntimeProductStore()
+        this.runtimeProductStore = productStore
+        this.ensureRuntimeNotificationSubscription()
+
+        try {
+            const projection = createOpenADEYjsProjection(createElectronOpenADEYjsStorageAdapter())
+            const result = await productStore.importLegacyYjsData(projection)
+            const snapshot = productStore.snapshot
+            if (snapshot) {
+                runInAction(() => {
+                    this.runtimeProductSnapshot = snapshot
+                    this.pruneRuntimeProductTasks(snapshot)
+                    this.runtimeProductStoreStatus = "ready"
+                    this.runtimeProductStoreError = null
+                })
+            }
+            return { ...result, legacyYjsMigrationAccepted: false }
+        } catch (err) {
+            const message = this.runtimeProductErrorMessage(err)
+            runInAction(() => {
+                this.runtimeProductStoreStatus = "error"
+                this.runtimeProductStoreError = message
+            })
+            this.trackRuntimeProductStoreError("legacy_yjs_import", err)
+            throw err
+        }
+    }
+
+    async markProductLegacyYjsMigrationAccepted(): Promise<void> {
+        const coreEndpoint = resolveCoreRuntimeEndpoint()
+        if (!coreEndpoint) {
+            throw new Error("OpenADE Core is not connected.")
+        }
+        await markCoreLegacyYjsMigrationAccepted()
+    }
+
     async startProductReview(params: OpenADEReviewStartRequest): Promise<{ taskId: string }> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
             return this.runtimeProductStore.startReview(params)
@@ -1297,6 +1543,38 @@ export class CodeStore {
         return localOpenADEClient.readTaskResourceInventory(params)
     }
 
+    async readProductMcpServers(): Promise<OpenADEMCPServersReadResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readMcpServers()
+        }
+
+        return localOpenADEClient.readMcpServers()
+    }
+
+    async replaceProductMcpServers(params: OpenADEMCPServersReplaceRequest): Promise<OpenADEMCPServersReplaceResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.replaceMcpServers(params)
+        }
+
+        return localOpenADEClient.replaceMcpServers(params)
+    }
+
+    async upsertProductMcpServer(params: OpenADEMCPServerUpsertRequest): Promise<OpenADEMCPServerUpsertResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.upsertMcpServer(params)
+        }
+
+        return localOpenADEClient.upsertMcpServer(params)
+    }
+
+    async deleteProductMcpServer(params: OpenADEMCPServerDeleteRequest): Promise<OpenADEMCPServerDeleteResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.deleteMcpServer(params)
+        }
+
+        return localOpenADEClient.deleteMcpServer(params)
+    }
+
     async readProductTaskDiff(params: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
             return this.runtimeProductStore.readTaskDiff(params)
@@ -1407,6 +1685,22 @@ export class CodeStore {
         }
 
         return localOpenADEClient.stopProjectProcess(params)
+    }
+
+    async readProductCronInstallState(params: OpenADECronInstallStateReadRequest): Promise<OpenADECronInstallStateReadResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readCronInstallState(params)
+        }
+
+        return localOpenADEClient.readCronInstallState(params)
+    }
+
+    async replaceProductCronInstallState(params: OpenADECronInstallStateReplaceRequest): Promise<OpenADECronInstallStateReplaceResult> {
+        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+            return this.runtimeProductStore.replaceCronInstallState(params)
+        }
+
+        return localOpenADEClient.replaceCronInstallState(params)
     }
 
     async readProductTaskGitLog(params: OpenADETaskGitLogRequest): Promise<OpenADETaskGitLogResult> {
@@ -1569,6 +1863,7 @@ export class CodeStore {
         this.runtimeProductStore = null
         this.runtimeProductSnapshot = null
         this.runtimeProductTasks.clear()
+        this.runtimeProductTaskReadInFlight.clear()
         this.trackedRuntimeProductFallbackKeys.clear()
         this.runtimeProductStoreStatus = "disabled"
         this.runtimeProductStoreError = null

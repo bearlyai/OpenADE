@@ -8,8 +8,10 @@
     "clean": "rm -rf ./dist/*",
     "start": "npm run build:harness && yarn install && vite dev",
     "test": "vitest --run",
-    "typecheck": "(npm run biome || true) && tsgo --noEmit",
+    "check:no-any": "node ../../scripts/check-no-explicit-any.mjs --self-test .",
+    "typecheck": "(npm run biome || true) && npm run doctor && npm run check:no-any && tsgo --noEmit",
     "biome": "biome format --write && biome lint --write --diagnostic-level=error",
+    "doctor": "npx --yes react-doctor@0.2.16 --no-score --fail-on error",
     "knip": "knip",
     "review:runtime-product-rollout": "node --experimental-strip-types scripts/review-runtime-product-rollout.mjs"
   },

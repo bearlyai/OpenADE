@@ -57,6 +57,7 @@ export interface McpStdioServerItem extends McpServerBase {
     command: string
     args?: string[]
     envVars?: Record<string, string>
+    cwd?: string
 }
 
 /**
@@ -83,6 +84,7 @@ export interface McpServerUpdate {
     command?: string
     args?: string[]
     envVars?: Record<string, string>
+    cwd?: string
 }
 
 /**

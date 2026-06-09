@@ -3,8 +3,16 @@ import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { createOpenADENodeYjsStorage } from "./nodeYjsStorage"
-import { createOpenADEYjsWriter, type OpenADEYjsMutationStorageAdapter } from "./yjsMutation"
+import {
+    createOpenADEYjsWriter,
+    deleteYjsMcpServer,
+    readYjsMcpServers,
+    replaceYjsMcpServers,
+    type OpenADEYjsMutationStorageAdapter,
+    upsertYjsMcpServer,
+} from "./yjsMutation"
 import { createOpenADEYjsProjection } from "./yjsProjection"
+import type { OpenADEMCPServer } from "./types"
 
 type Deferred = {
     promise: Promise<void>
@@ -126,5 +134,93 @@ describe("createOpenADEYjsWriter", () => {
                 }),
             ])
         )
+    })
+
+    it("updates lastViewedAt in repo previews without loading the task document", async () => {
+        const baseStorage = createOpenADENodeYjsStorage(storageDir, { legacyNestedRootDir: null })
+        const readIds: string[] = []
+        const saveIds: string[] = []
+        const storage: OpenADEYjsMutationStorageAdapter = {
+            ...baseStorage,
+            async readDocumentUpdate(id) {
+                readIds.push(id)
+                return baseStorage.readDocumentUpdate(id)
+            },
+            async saveDocumentUpdate(id, data) {
+                saveIds.push(id)
+                await baseStorage.saveDocumentUpdate(id, data)
+            },
+        }
+        const writer = createOpenADEYjsWriter(storage, {
+            createId: () => "generated-id",
+            createSlug: () => "generated-slug",
+            now: () => "2026-06-01T00:00:00.000Z",
+        })
+        const projection = createOpenADEYjsProjection(storage)
+
+        await writer.createRepo({
+            repoId: "repo-1",
+            name: "Mutation Repo",
+            path: "/tmp/mutation-repo",
+            createdBy: { id: "user-1", email: "user@example.com" },
+        })
+        await writer.createTask({
+            repoId: "repo-1",
+            taskId: "task-1",
+            slug: "task-1",
+            title: "Mutation Task",
+            input: "Exercise viewed metadata",
+            createdBy: { id: "user-1", email: "user@example.com" },
+            deviceId: "device-1",
+            isolationStrategy: { type: "head" },
+        })
+
+        readIds.length = 0
+        saveIds.length = 0
+        await writer.updateTaskMetadata({
+            taskId: "task-1",
+            lastViewedAt: "2026-06-01T00:10:00.000Z",
+        })
+
+        expect(readIds).toEqual(["code:repos"])
+        expect(saveIds).toEqual(["code:repos"])
+        const snapshot = await projection.readSnapshot()
+        expect(snapshot.repos[0]?.tasks[0]?.lastViewedAt).toBe("2026-06-01T00:10:00.000Z")
+    })
+
+    it("round trips MCP server settings rows through real Yjs storage", async () => {
+        const storage = createOpenADENodeYjsStorage(storageDir, { legacyNestedRootDir: null })
+        const stdioServer: OpenADEMCPServer = {
+            id: "mcp-stdio-1",
+            name: "Stdio MCP",
+            transportType: "stdio",
+            enabled: true,
+            command: "node",
+            args: ["server.js"],
+            envVars: { NODE_ENV: "test" },
+            cwd: "/tmp/mcp",
+            healthStatus: "unknown",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            updatedAt: "2026-06-01T00:00:00.000Z",
+        }
+        const httpServer: OpenADEMCPServer = {
+            id: "mcp-http-1",
+            name: "HTTP MCP",
+            transportType: "http",
+            enabled: true,
+            url: "https://mcp.example.test/mcp",
+            headers: { "X-Test": "1" },
+            oauthTokens: { accessToken: "token-1", tokenType: "Bearer", refreshToken: "refresh-1" },
+            healthStatus: "healthy",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            updatedAt: "2026-06-01T00:00:00.000Z",
+        }
+
+        await expect(readYjsMcpServers(storage)).resolves.toEqual({ servers: [] })
+        await expect(replaceYjsMcpServers(storage, [stdioServer])).resolves.toEqual({ servers: [stdioServer], replacedServers: 1 })
+        await expect(upsertYjsMcpServer(storage, httpServer)).resolves.toEqual({ server: httpServer, created: true })
+        await expect(readYjsMcpServers(storage)).resolves.toEqual({ servers: [stdioServer, httpServer] })
+        await expect(deleteYjsMcpServer(storage, "mcp-stdio-1")).resolves.toEqual({ serverId: "mcp-stdio-1", deleted: true })
+        await expect(readYjsMcpServers(storage)).resolves.toEqual({ servers: [httpServer] })
     })
 })

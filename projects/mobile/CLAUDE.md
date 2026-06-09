@@ -68,7 +68,7 @@ Thin Capacitor shell for the OpenADE remote-control surface.
 
 ## Verification
 
-- Run npm run typecheck from projects/mobile after changing the Capacitor host, remote UI imports, or shared companion/runtime clients.
-- Run npm run build from projects/mobile after UI or shell changes.
+- Run npm run typecheck from projects/mobile after changing the Capacitor host, remote UI imports, or shared companion/runtime clients. This includes the serious-error React Doctor gate from `doctor.config.json`.
+- Run npm run build from projects/mobile after UI or shell changes. Build runs the same typecheck gate first, including React Doctor and the non-test explicit-`any` scanner, so Mobile OTA/TestFlight workflows cannot bypass those checks.
 - Run npx cap sync ios after a successful build.
 - For iOS verification, build and run the App workspace/scheme in the simulator and capture a screenshot.

@@ -115,6 +115,7 @@ export function ProjectSearchPanel({
                 <Search size={13} className="shrink-0 text-muted" />
                 <input
                     value={query}
+                    aria-label="Search files"
                     onChange={(event) => onQueryChange(event.target.value)}
                     onKeyDown={(event) => {
                         if (event.key === "Enter") onSearch()

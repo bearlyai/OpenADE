@@ -1,0 +1,15 @@
+{
+  "name": "@openade/shared-companion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:no-any": "node ../../../scripts/check-no-explicit-any.mjs --self-test .",
+    "typecheck": "npm run check:no-any && ../../electron/node_modules/.bin/tsgo --noEmit"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./src": "./src/index.ts",
+    "./src/*": "./src/*"
+  }
+}

@@ -3,7 +3,7 @@ import * as Y from "yjs"
 
 import type { AnyJSON, JSONObject, JSONPrimitive, JsonArray } from "./json"
 
-type AnyYAbstractType = Y.AbstractType<any>
+type AnyYAbstractType = Y.AbstractType<unknown>
 
 enablePatches()
 
@@ -59,8 +59,8 @@ const pathWithIndex = (base: string, index: number) => {
     return `${base}[${index}]`
 }
 
-const buildYMapFromObject = (obj: JSONObject, path: string, onDrop: DropReporter): Y.Map<any> => {
-    const yMap = new Y.Map<any>()
+const buildYMapFromObject = (obj: JSONObject, path: string, onDrop: DropReporter): Y.Map<unknown> => {
+    const yMap = new Y.Map<unknown>()
 
     for (const [key, value] of Object.entries(obj)) {
         const nextPath = pathWithKey(path, key)
@@ -73,8 +73,8 @@ const buildYMapFromObject = (obj: JSONObject, path: string, onDrop: DropReporter
     return yMap
 }
 
-const buildYArrayFromValues = (values: AnyJSON[], path: string, onDrop: DropReporter): Y.Array<any> => {
-    const yArray = new Y.Array<any>()
+const buildYArrayFromValues = (values: AnyJSON[], path: string, onDrop: DropReporter): Y.Array<unknown> => {
+    const yArray = new Y.Array<unknown>()
 
     for (let index = 0; index < values.length; index += 1) {
         const nextPath = pathWithIndex(path, index)
@@ -312,7 +312,7 @@ const convertValueToPlain = (value: unknown, path: string, onDrop: DropReporter)
     }
 }
 
-const syncYArray = (target: Y.Array<any>, values: AnyJSON[], path: string, onDrop: DropReporter) => {
+const syncYArray = (target: Y.Array<unknown>, values: AnyJSON[], path: string, onDrop: DropReporter) => {
     const converted: unknown[] = []
     for (let index = 0; index < values.length; index += 1) {
         const nextPath = pathWithIndex(path, index)
@@ -331,7 +331,7 @@ const syncYArray = (target: Y.Array<any>, values: AnyJSON[], path: string, onDro
     }
 }
 
-const applyValueToYMap = (map: Y.Map<any>, key: string, value: AnyJSON, path: string, onDrop: DropReporter) => {
+const applyValueToYMap = (map: Y.Map<unknown>, key: string, value: AnyJSON, path: string, onDrop: DropReporter) => {
     const existing = map.get(key)
 
     if (value instanceof Y.AbstractType) {
@@ -376,14 +376,14 @@ const applyValueToYMap = (map: Y.Map<any>, key: string, value: AnyJSON, path: st
     }
 }
 
-const insertValueIntoYArray = (array: Y.Array<any>, index: number, value: AnyJSON, path: string, onDrop: DropReporter) => {
+const insertValueIntoYArray = (array: Y.Array<unknown>, index: number, value: AnyJSON, path: string, onDrop: DropReporter) => {
     const converted = convertValueForInsert(value, path, onDrop)
     if (converted !== DROP) {
         array.insert(index, [converted])
     }
 }
 
-const replaceValueInYArray = (array: Y.Array<any>, index: number, value: AnyJSON, path: string, onDrop: DropReporter) => {
+const replaceValueInYArray = (array: Y.Array<unknown>, index: number, value: AnyJSON, path: string, onDrop: DropReporter) => {
     const existing = index < array.length ? array.get(index) : undefined
 
     if (value instanceof Y.AbstractType) {
@@ -444,7 +444,7 @@ const replaceValueInYArray = (array: Y.Array<any>, index: number, value: AnyJSON
     }
 }
 
-const syncYMapWithObject = (map: Y.Map<any>, value: JSONObject, path: string, onDrop: DropReporter) => {
+const syncYMapWithObject = (map: Y.Map<unknown>, value: JSONObject, path: string, onDrop: DropReporter) => {
     const nextKeys = new Set(Object.keys(value))
     for (const key of Array.from(map.keys())) {
         if (!nextKeys.has(key)) {
@@ -458,8 +458,7 @@ const syncYMapWithObject = (map: Y.Map<any>, value: JSONObject, path: string, on
     }
 }
 
-type YValue = AnyYAbstractType | AnyJSON
-type YContainer = Y.Map<YValue> | Y.Array<YValue>
+type YContainer = Y.Map<unknown> | Y.Array<unknown>
 
 type ContainerResolution = {
     container: YContainer
@@ -467,7 +466,7 @@ type ContainerResolution = {
     key: string | number
 } | null
 
-const resolveContainerForPatch = (root: Y.Map<YValue>, path: Array<string | number>, onDrop: DropReporter): ContainerResolution => {
+const resolveContainerForPatch = (root: Y.Map<unknown>, path: Array<string | number>, onDrop: DropReporter): ContainerResolution => {
     if (path.length === 0) {
         return null
     }
@@ -484,7 +483,7 @@ const resolveContainerForPatch = (root: Y.Map<YValue>, path: Array<string | numb
             }
 
             const nextPath = pathWithKey(currentPath, segment)
-            const nextValue = container.get(segment)
+            const nextValue: unknown = container.get(segment)
 
             if (nextValue instanceof Y.Map || nextValue instanceof Y.Array) {
                 container = nextValue
@@ -521,7 +520,7 @@ const resolveContainerForPatch = (root: Y.Map<YValue>, path: Array<string | numb
             }
 
             const nextPath = pathWithIndex(currentPath, segment)
-            const nextValue: YValue | undefined = container.get(segment)
+            const nextValue: unknown = container.get(segment)
 
             if (nextValue instanceof Y.Map || nextValue instanceof Y.Array) {
                 container = nextValue
@@ -564,7 +563,7 @@ const resolveContainerForPatch = (root: Y.Map<YValue>, path: Array<string | numb
     }
 }
 
-const applyPatchToYMap = (root: Y.Map<any>, patch: Patch, onDrop: DropReporter): boolean => {
+const applyPatchToYMap = (root: Y.Map<unknown>, patch: Patch, onDrop: DropReporter): boolean => {
     if (patch.path.length === 0) {
         return false
     }
@@ -633,9 +632,9 @@ export function asYObject(thing: unknown): AnyYAbstractType | AnyJSON | undefine
     return converted
 }
 
-export function asJavascriptObject<T extends AnyJSON>(thing: AnyYAbstractType | T): T
-export function asJavascriptObject<T extends AnyJSON>(thing: unknown): T
-export function asJavascriptObject<T extends AnyJSON>(thing: unknown): T {
+export function asJavascriptObject<T>(thing: AnyYAbstractType | T): T
+export function asJavascriptObject<T>(thing: unknown): T
+export function asJavascriptObject<T>(thing: unknown): T {
     const result = convertValueToPlain(thing, ROOT_PATH, reportDrop)
     if (result.value === DROP) {
         return undefined as T
@@ -643,10 +642,10 @@ export function asJavascriptObject<T extends AnyJSON>(thing: unknown): T {
     return result.value as T
 }
 
-export function mutate<T extends JSONObject>(target: Y.Map<any>, updater: (draft: T) => void): void
-export function mutate<T extends JsonArray>(target: Y.Array<any>, updater: (draft: T) => void): void
-export function mutate(target: Y.Map<any> | Y.Array<any>, updater: (draft: JSONObject | JsonArray) => void): void
-export function mutate(target: Y.Map<any> | Y.Array<any>, updater: (draft: JSONObject | JsonArray) => void): void {
+export function mutate<T extends object>(target: Y.Map<unknown>, updater: (draft: T) => void): void
+export function mutate<T extends JsonArray>(target: Y.Array<unknown>, updater: (draft: T) => void): void
+export function mutate(target: Y.Map<unknown> | Y.Array<unknown>, updater: (draft: JSONObject | JsonArray) => void): void
+export function mutate(target: Y.Map<unknown> | Y.Array<unknown>, updater: (draft: JSONObject | JsonArray) => void): void {
     const patches: Patch[] = []
 
     if (target instanceof Y.Array) {

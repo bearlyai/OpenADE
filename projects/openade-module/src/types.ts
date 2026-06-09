@@ -85,6 +85,59 @@ export interface OpenADEQueuedTurnCancelResult {
     cancelled: boolean
 }
 
+export interface OpenADEQueuedTurnEnqueueRequest extends OpenADEClientRequest {
+    repoId: string
+    taskId: string
+    type: "do" | "ask"
+    input: string
+    queuedTurnId?: string
+    createdAt?: string
+    eventId?: string
+    appendSystemPrompt?: string
+    enabledMcpServerIds?: string[]
+    harnessId?: string
+    modelId?: string
+    label?: string
+    includeComments?: boolean
+    images?: unknown[]
+    thinking?: "low" | "med" | "high" | "max"
+    fastMode?: boolean
+}
+
+export interface OpenADEQueuedTurnEnqueueResult {
+    taskId: string
+    queuedTurnId: string
+    queued: boolean
+    turn: OpenADEQueuedTurn
+}
+
+export interface OpenADEQueuedTurnImportLegacyRequest extends OpenADEClientRequest {
+    repoId: string
+    taskId: string
+    turn: OpenADEQueuedTurn
+    position?: number
+}
+
+export interface OpenADEQueuedTurnImportLegacyResult {
+    taskId: string
+    queuedTurnId: string
+    imported: boolean
+    turn: OpenADEQueuedTurn
+}
+
+export interface OpenADEQueuedTurnReorderRequest extends OpenADEClientRequest {
+    repoId: string
+    taskId: string
+    queuedTurnIds: string[]
+    updatedAt?: string
+}
+
+export interface OpenADEQueuedTurnReorderResult {
+    taskId: string
+    reordered: boolean
+    turns: OpenADEQueuedTurn[]
+}
+
 export interface OpenADETaskReadOptions {
     hydrateSessionEvents?: boolean
 }
@@ -616,6 +669,34 @@ export interface OpenADEProcsCronDef {
 
 export type OpenADEProcsCronInput = Omit<OpenADEProcsCronDef, "id">
 
+export interface OpenADECronInstallState {
+    cronId: string
+    enabled: boolean
+    installedAt: string
+    lastRunAt?: string
+    lastTaskId?: string
+}
+
+export interface OpenADECronInstallStateReadRequest {
+    repoId: string
+}
+
+export interface OpenADECronInstallStateReadResult {
+    repoId: string
+    installations: Record<string, OpenADECronInstallState>
+}
+
+export interface OpenADECronInstallStateReplaceRequest extends OpenADEClientRequest {
+    repoId: string
+    installations: Record<string, OpenADECronInstallState>
+}
+
+export interface OpenADECronInstallStateReplaceResult {
+    repoId: string
+    installations: Record<string, OpenADECronInstallState>
+    replacedInstallations: number
+}
+
 export interface OpenADEProcsConfig {
     relativePath: string
     processes: OpenADEProcsProcessDef[]
@@ -834,6 +915,240 @@ export interface OpenADETaskImageReadResult {
     ext: string
     mediaType?: string
     data: string | null
+}
+
+export interface OpenADETaskImageStagedReadRequest {
+    imageId: string
+    ext: string
+}
+
+export interface OpenADETaskImageStagedReadResult {
+    imageId: string
+    ext: string
+    mediaType?: string
+    data: string | null
+}
+
+export interface OpenADETaskImageWriteRequest extends OpenADEClientRequest {
+    imageId: string
+    ext: "gif" | "jpeg" | "jpg" | "png" | "webp"
+    mediaType: "image/gif" | "image/jpeg" | "image/png" | "image/webp"
+    data: string
+}
+
+export interface OpenADETaskImageWriteResult {
+    imageId: string
+    ext: string
+    mediaType: string
+    size: number
+    sha256: string
+}
+
+export interface OpenADETaskImageImportLegacyRequest extends OpenADEClientRequest {
+    imageId: string
+    ext: "gif" | "jpeg" | "jpg" | "png" | "webp"
+    mediaType: "image/gif" | "image/jpeg" | "image/png" | "image/webp"
+    sourcePath: string
+}
+
+export interface OpenADETaskImageImportLegacyResult {
+    imageId: string
+    ext: string
+    mediaType: string
+    size: number
+    sha256: string
+}
+
+export interface OpenADETaskImagesImportLegacyRequest extends OpenADEClientRequest {
+    sourceDir: string
+}
+
+export interface OpenADETaskImageImportLegacyIssue {
+    imageId: string
+    ext: string
+    code: string
+}
+
+export interface OpenADETaskImagesImportLegacyResult {
+    scannedTasks: number
+    referencedImages: number
+    importedImages: number
+    alreadyImportedImages: number
+    missingImages: OpenADETaskImageImportLegacyIssue[]
+    conflictedImages: OpenADETaskImageImportLegacyIssue[]
+    failedImages: OpenADETaskImageImportLegacyIssue[]
+}
+
+export interface OpenADETaskImagesGCStagedRequest extends OpenADEClientRequest {
+    olderThanMs?: number
+    dryRun?: boolean
+}
+
+export interface OpenADETaskImagesGCStagedResult {
+    scannedImages: number
+    scannedTasks: number
+    referencedImages: number
+    eligibleImages: number
+    deletedImages: number
+    retainedImages: number
+    olderThanMs: number
+    dryRun: boolean
+    failedImages: OpenADETaskImageImportLegacyIssue[]
+}
+
+export interface OpenADETaskHarnessSessionsImportLegacyRequest extends OpenADEClientRequest {
+    claudeConfigDir?: string
+    codexHome?: string
+}
+
+export interface OpenADETaskHarnessSessionImportLegacyIssue {
+    sessionId: string
+    harnessId: string
+    code: string
+}
+
+export interface OpenADETaskHarnessSessionsImportLegacyResult {
+    scannedTasks: number
+    referencedSessions: number
+    importedSessions: number
+    alreadyImportedSessions: number
+    missingSessions: OpenADETaskHarnessSessionImportLegacyIssue[]
+    conflictedSessions: OpenADETaskHarnessSessionImportLegacyIssue[]
+    failedSessions: OpenADETaskHarnessSessionImportLegacyIssue[]
+}
+
+export interface OpenADELegacyResourcesImportRequest extends OpenADEClientRequest {
+    dataDir?: string
+    imageDir?: string
+    snapshotDir?: string
+    importSessions?: boolean
+    claudeConfigDir?: string
+    codexHome?: string
+}
+
+export type OpenADELegacyResourceImportKind = "images" | "snapshots" | "sessions"
+
+export interface OpenADELegacyResourceImportSkip {
+    kind: OpenADELegacyResourceImportKind
+    code: string
+}
+
+export interface OpenADELegacyResourcesImportResult {
+    images: OpenADETaskImagesImportLegacyResult | null
+    snapshots: OpenADETaskSnapshotsImportLegacyResult | null
+    sessions: OpenADETaskHarnessSessionsImportLegacyResult | null
+    skipped: OpenADELegacyResourceImportSkip[]
+}
+
+export type OpenADEMCPHealthStatus = "unknown" | "healthy" | "unhealthy" | "needs_auth"
+
+export interface OpenADEMCPOAuthTokens {
+    accessToken: string
+    refreshToken?: string
+    expiresAt?: string
+    tokenType: string
+}
+
+export interface OpenADEMCPServerBase {
+    id: string
+    name: string
+    enabled: boolean
+    presetId?: string
+    lastTested?: string
+    healthStatus: OpenADEMCPHealthStatus
+    createdAt: string
+    updatedAt: string
+}
+
+export interface OpenADEMCPHTTPServer extends OpenADEMCPServerBase {
+    transportType: "http"
+    url: string
+    headers?: Record<string, string>
+    oauthTokens?: OpenADEMCPOAuthTokens
+}
+
+export interface OpenADEMCPStdioServer extends OpenADEMCPServerBase {
+    transportType: "stdio"
+    command: string
+    args?: string[]
+    envVars?: Record<string, string>
+    cwd?: string
+}
+
+export type OpenADEMCPServer = OpenADEMCPHTTPServer | OpenADEMCPStdioServer
+
+export interface OpenADEMCPServersReadResult {
+    servers: OpenADEMCPServer[]
+}
+
+export interface OpenADEMCPServersReplaceRequest extends OpenADEClientRequest {
+    servers: OpenADEMCPServer[]
+}
+
+export interface OpenADEMCPServersReplaceResult {
+    servers: OpenADEMCPServer[]
+    replacedServers: number
+}
+
+export interface OpenADEMCPServerUpsertRequest extends OpenADEClientRequest {
+    server: OpenADEMCPServer
+}
+
+export interface OpenADEMCPServerUpsertResult {
+    server: OpenADEMCPServer
+    created: boolean
+}
+
+export interface OpenADEMCPServerDeleteRequest extends OpenADEClientRequest {
+    serverId: string
+}
+
+export interface OpenADEMCPServerDeleteResult {
+    serverId: string
+    deleted: boolean
+}
+
+export type OpenADEPersonalSettingsThemeSetting =
+    | "system"
+    | "code-theme-light"
+    | "code-theme-bright"
+    | "code-theme-clean"
+    | "code-theme-black"
+    | "code-theme-synthwave"
+    | "code-theme-dracula"
+
+export type OpenADEPersonalSettingsTab = "appearance" | "connectors" | "companion" | "system" | "stats" | "dev"
+
+export interface OpenADEPersonalSettings {
+    envVars: Record<string, string>
+    theme: OpenADEPersonalSettingsThemeSetting
+    lastSettingsTab?: OpenADEPersonalSettingsTab
+    deviceId?: string
+    telemetryDisabled?: boolean
+    onboardingCompleted?: boolean
+    devHideTray?: boolean
+    devForceAllCommands?: boolean
+    shortcutHintsHidden?: boolean
+    renderMarkdownMessages?: boolean
+    lastSeenReleaseVersion?: string
+    newTaskHarnessId?: string
+    newTaskModelId?: string
+    pinnedTaskIds?: string[]
+    hyperplanStrategyId?: string
+    hyperplanAgents?: OpenADEAgentCouplet[]
+    hyperplanReconciler?: OpenADEAgentCouplet
+}
+
+export interface OpenADEPersonalSettingsReadResult {
+    settings: OpenADEPersonalSettings
+}
+
+export interface OpenADEPersonalSettingsReplaceRequest extends OpenADEClientRequest {
+    settings: OpenADEPersonalSettings
+}
+
+export interface OpenADEPersonalSettingsReplaceResult {
+    settings: OpenADEPersonalSettings
 }
 
 export type OpenADETaskDiffContextLines = 1 | 3 | 10 | 25 | 100
@@ -1133,6 +1448,25 @@ export interface OpenADETaskSnapshotPatchSliceReadResult {
     patch: string | null
 }
 
+export interface OpenADETaskSnapshotsImportLegacyRequest extends OpenADEClientRequest {
+    sourceDir: string
+}
+
+export interface OpenADESnapshotPatchImportLegacyIssue {
+    patchFileId: string
+    code: string
+}
+
+export interface OpenADETaskSnapshotsImportLegacyResult {
+    scannedTasks: number
+    referencedPatches: number
+    importedPatches: number
+    alreadyImportedPatches: number
+    missingPatches: OpenADESnapshotPatchImportLegacyIssue[]
+    conflictedPatches: OpenADESnapshotPatchImportLegacyIssue[]
+    failedPatches: OpenADESnapshotPatchImportLegacyIssue[]
+}
+
 export interface OpenADETaskResourceInventoryReadRequest {
     repoId: string
     taskId: string
@@ -1170,6 +1504,17 @@ export interface OpenADETaskMetadataUpdateRequest extends OpenADEClientRequest {
     updatedAt?: string
 }
 
+export interface OpenADETaskUsageRecalculateRequest extends OpenADEClientRequest {
+    repoId: string
+    taskId: string
+}
+
+export interface OpenADETaskUsageBackfillRequest extends OpenADEClientRequest {
+    repoId?: string
+    taskIds?: string[]
+    force?: boolean
+}
+
 export interface OpenADETaskPreviewUsage {
     usageVersion?: number
     inputTokens: number
@@ -1178,6 +1523,22 @@ export interface OpenADETaskPreviewUsage {
     eventCount: number
     costByModel: Record<string, number>
     durationMs?: number
+}
+
+export interface OpenADETaskUsageRecalculateResult {
+    usage: OpenADETaskPreviewUsage
+}
+
+export interface OpenADETaskUsageBackfillTaskResult {
+    repoId: string
+    taskId: string
+    usage: OpenADETaskPreviewUsage
+}
+
+export interface OpenADETaskUsageBackfillResult {
+    updatedTasks: number
+    skippedTasks: number
+    tasks: OpenADETaskUsageBackfillTaskResult[]
 }
 
 export interface OpenADETaskPreview {

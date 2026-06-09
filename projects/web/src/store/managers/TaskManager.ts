@@ -8,6 +8,8 @@ import { TaskModel } from "../TaskModel"
 import type { CodeStore } from "../store"
 import { TaskUIStateManager } from "./TaskUIStateManager"
 
+const TASK_VIEWED_WRITE_MIN_INTERVAL_MS = 60_000
+
 // ============================================================================
 // Deep Delete Types
 // ============================================================================
@@ -27,6 +29,8 @@ export class TaskManager {
     regeneratingTitleTaskIds: Set<string> = new Set()
     private taskModels: Map<string, TaskModel> = new Map()
     private taskUIStates: Map<string, TaskUIStateManager> = new Map()
+    private markViewedInFlight: Map<string, Promise<void>> = new Map()
+    private lastViewedWriteAt: Map<string, number> = new Map()
 
     constructor(private store: CodeStore) {
         makeAutoObservable(this, {
@@ -269,11 +273,35 @@ export class TaskManager {
     }
 
     async markTaskViewed(taskId: string): Promise<void> {
-        if (!this.getTask(taskId)) return
+        const task = this.getTask(taskId)
+        if (!task) return
 
-        await this.store.updateProductTaskMetadata({ taskId, lastViewedAt: new Date().toISOString() })
-        if (this.store.shouldUseRuntimeProductReads()) return
-        await this.store.refreshProductStateAfterTaskMutation(taskId)
+        const repoId = this.resolveRepoId(taskId)
+        const preview = repoId ? this.store.getTaskPreviewsForRepo(repoId).find((candidate) => candidate.id === taskId) : undefined
+        const nowMs = Date.now()
+        const lastLocalWriteAt = this.lastViewedWriteAt.get(taskId) ?? 0
+        const persistedViewedAt = preview?.lastViewedAt ? Date.parse(preview.lastViewedAt) : 0
+        if (nowMs - Math.max(lastLocalWriteAt, Number.isNaN(persistedViewedAt) ? 0 : persistedViewedAt) < TASK_VIEWED_WRITE_MIN_INTERVAL_MS) return
+
+        const existing = this.markViewedInFlight.get(taskId)
+        if (existing) return existing
+
+        const viewedAt = new Date(nowMs).toISOString()
+        this.lastViewedWriteAt.set(taskId, nowMs)
+        const promise = (async () => {
+            try {
+                await this.store.updateProductTaskMetadata({ taskId, lastViewedAt: viewedAt })
+                if (this.store.shouldUseRuntimeProductReads()) return
+                await this.store.refreshProductStateAfterTaskMutation(taskId)
+            } catch (error) {
+                this.lastViewedWriteAt.delete(taskId)
+                throw error
+            } finally {
+                this.markViewedInFlight.delete(taskId)
+            }
+        })()
+        this.markViewedInFlight.set(taskId, promise)
+        return promise
     }
 
     async setTaskClosed(taskId: string, closed: boolean): Promise<void> {

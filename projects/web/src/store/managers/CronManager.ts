@@ -15,12 +15,13 @@
  * Refresh events (task completion, window focus) are debounced to avoid
  * cancelling/recreating timers on every event.
  *
- * Cron state is persisted in ~/.openade/data/cron/{repoId}.json via the data folder API.
+ * Runtime-backed cron state is persisted through OpenADE product APIs.
+ * Legacy renderer scheduling falls back to ~/.openade/data/cron/{repoId}.json.
  */
 
 import { Cron } from "croner"
 import { makeAutoObservable, observable, runInAction } from "mobx"
-import type { OpenADETurnStartRequest } from "../../../../openade-module/src"
+import type { OpenADECronInstallState, OpenADETurnStartRequest } from "../../../../openade-module/src"
 import { dataFolderApi } from "../../electronAPI/dataFolder"
 import type { CronDef, ReadProcsResult } from "../../electronAPI/procs"
 import { readProcs } from "../../electronAPI/procs"
@@ -32,13 +33,7 @@ import type { CodeStore } from "../store"
 // Cron Install State (persisted per machine in data folder)
 // ============================================================================
 
-export interface CronInstallState {
-    cronId: string
-    enabled: boolean
-    installedAt: string
-    lastRunAt?: string
-    lastTaskId?: string
-}
+export type CronInstallState = OpenADECronInstallState
 
 interface PersistedCronState {
     installations: Record<string, CronInstallState>
@@ -69,6 +64,7 @@ interface RepoState {
     repoPath: string
     cronDefs: Map<string, { def: CronDef; configFilePath: string }>
     installStates: Map<string, CronInstallState>
+    configLoaded: boolean
 }
 
 // Max safe delay for setTimeout (~24.8 days). Longer delays get chained.
@@ -102,6 +98,7 @@ export class CronManager {
     private _afterEventDisposer: (() => void) | null = null
     private _focusHandler: (() => void) | null = null
     private _refreshDebounceTimer: ReturnType<typeof setTimeout> | null = null
+    private _configLoadInFlight = new Map<string, Promise<void>>()
     private _refreshInFlight = false
     private _refreshPendingAgain = false
     private _lastConfigRefreshAt = 0
@@ -112,11 +109,19 @@ export class CronManager {
 
     /** Start cron tracking for all repos */
     async startAll(): Promise<void> {
+        if (this.store.shouldUseCoreOwnedCronScheduler()) return
         if (this._started) return
         this._started = true
 
         const repos = this.store.repos.repos
-        await runWithConcurrencyLimit(repos, PROCS_REFRESH_CONCURRENCY, (repo) => this.addRepo(repo.id, repo.path))
+        await runWithConcurrencyLimit(repos, PROCS_REFRESH_CONCURRENCY, async (repo) => {
+            await this.ensureRepoState(repo.id, repo.path)
+        })
+        const reposWithInstalledCrons = Array.from(this._repos.values()).filter((repoState) => repoState.installStates.size > 0)
+        await runWithConcurrencyLimit(reposWithInstalledCrons, PROCS_REFRESH_CONCURRENCY, async (repoState) => {
+            await this.refreshRepoConfig(repoState)
+            this.rescheduleRepo(repoState)
+        })
 
         // Refresh config after any task event completes (e.g. a plan that edits openade.toml)
         this._afterEventDisposer = this.store.execution.onAfterEvent(() => {
@@ -130,19 +135,29 @@ export class CronManager {
 
     /** Add or refresh a single repo */
     async addRepo(repoId: string, repoPath: string): Promise<void> {
-        let repoState = this._repos.get(repoId)
-        if (!repoState) {
-            repoState = {
-                repoId,
-                repoPath,
-                cronDefs: observable.map(),
-                installStates: observable.map(),
-            }
-            this._repos.set(repoId, repoState)
-            await this.loadInstallStates(repoState)
-        }
+        const repoState = await this.ensureRepoState(repoId, repoPath)
         await this.refreshRepoConfig(repoState)
         this.rescheduleRepo(repoState)
+    }
+
+    async ensureRepoConfigLoaded(repoId: string): Promise<void> {
+        const repo = this.store.repos.getRepo(repoId)
+        if (!repo) return
+
+        const repoState = await this.ensureRepoState(repo.id, repo.path)
+        if (repoState.configLoaded) return
+        const existing = this._configLoadInFlight.get(repoId)
+        if (existing) return existing
+
+        const promise = this.refreshRepoConfig(repoState)
+            .then(() => {
+                this.rescheduleRepo(repoState)
+            })
+            .finally(() => {
+                this._configLoadInFlight.delete(repoId)
+            })
+        this._configLoadInFlight.set(repoId, promise)
+        return promise
     }
 
     stop(): void {
@@ -153,6 +168,7 @@ export class CronManager {
         }
         this._refreshInFlight = false
         this._refreshPendingAgain = false
+        this._configLoadInFlight.clear()
         if (this._afterEventDisposer) {
             this._afterEventDisposer()
             this._afterEventDisposer = null
@@ -174,6 +190,9 @@ export class CronManager {
     updateCronDefs(repoId: string, result: ReadProcsResult): void {
         const repoState = this._repos.get(repoId)
         if (!repoState) return
+        runInAction(() => {
+            repoState.configLoaded = true
+        })
         this.applyProcsResult(repoState, result)
         this.rescheduleRepo(repoState)
     }
@@ -306,7 +325,10 @@ export class CronManager {
     }
 
     private async refreshAndRescheduleAll(): Promise<void> {
-        await runWithConcurrencyLimit(Array.from(this._repos.values()), PROCS_REFRESH_CONCURRENCY, async (rs) => {
+        const reposToRefresh = Array.from(this._repos.values()).filter(
+            (repoState) => repoState.configLoaded || repoState.installStates.size > 0 || repoState.cronDefs.size > 0
+        )
+        await runWithConcurrencyLimit(reposToRefresh, PROCS_REFRESH_CONCURRENCY, async (rs) => {
             await this.refreshRepoConfig(rs)
             this.rescheduleRepo(rs)
         })
@@ -317,15 +339,37 @@ export class CronManager {
             if (this.store.shouldUseRuntimeProductReads()) {
                 const result = await this.store.listProductProjectProcesses({ repoId: repoState.repoId })
                 this.applyProcsResult(repoState, readProcsResultFromProductProcesses(result))
+                runInAction(() => {
+                    repoState.configLoaded = true
+                })
                 this._lastConfigRefreshAt = Date.now()
                 return
             }
             const result = await readProcs(repoState.repoPath)
             this.applyProcsResult(repoState, result)
+            runInAction(() => {
+                repoState.configLoaded = true
+            })
             this._lastConfigRefreshAt = Date.now()
         } catch (err) {
             console.error(`[CronManager] Failed to refresh config for ${repoState.repoId}:`, err)
         }
+    }
+
+    private async ensureRepoState(repoId: string, repoPath: string): Promise<RepoState> {
+        let repoState = this._repos.get(repoId)
+        if (repoState) return repoState
+
+        repoState = {
+            repoId,
+            repoPath,
+            cronDefs: observable.map(),
+            installStates: observable.map(),
+            configLoaded: false,
+        }
+        this._repos.set(repoId, repoState)
+        await this.loadInstallStates(repoState)
+        return repoState
     }
 
     private applyProcsResult(repoState: RepoState, result: ReadProcsResult): void {
@@ -360,10 +404,26 @@ export class CronManager {
     }
 
     // ============================================================================
-    // Persistence (data folder)
+    // Persistence
     // ============================================================================
 
     private async loadInstallStates(repoState: RepoState): Promise<void> {
+        if (this.store.shouldUseRuntimeProductReads()) {
+            try {
+                const result = await this.store.readProductCronInstallState({ repoId: repoState.repoId })
+                runInAction(() => {
+                    repoState.installStates.clear()
+                    for (const [key, state] of Object.entries(result.installations)) {
+                        repoState.installStates.set(key, state)
+                    }
+                })
+                return
+            } catch (err) {
+                console.error(`[CronManager] Failed to load product install states for ${repoState.repoId}:`, err)
+                return
+            }
+        }
+
         if (!dataFolderApi.isAvailable()) return
 
         try {
@@ -385,12 +445,23 @@ export class CronManager {
     }
 
     private async saveInstallStates(repoState: RepoState): Promise<void> {
+        const data: PersistedCronState = {
+            installations: Object.fromEntries(repoState.installStates),
+        }
+
+        if (this.store.shouldUseRuntimeProductReads()) {
+            try {
+                await this.store.replaceProductCronInstallState({ repoId: repoState.repoId, installations: data.installations })
+                return
+            } catch (err) {
+                console.error(`[CronManager] Failed to save product install states for ${repoState.repoId}:`, err)
+                return
+            }
+        }
+
         if (!dataFolderApi.isAvailable()) return
 
         try {
-            const data: PersistedCronState = {
-                installations: Object.fromEntries(repoState.installStates),
-            }
             await dataFolderApi.save("cron", repoState.repoId, JSON.stringify(data, null, 2), "json")
         } catch (err) {
             console.error(`[CronManager] Failed to save install states for ${repoState.repoId}:`, err)
@@ -410,6 +481,8 @@ export class CronManager {
     private scheduleCron(repoState: RepoState, cronId: string, def: CronDef): void {
         const key = `${repoState.repoId}::${cronId}`
         this.cancelTimer(key)
+
+        if (this.store.shouldUseCoreOwnedCronScheduler()) return
 
         const state = repoState.installStates.get(cronId)
         if (!state?.enabled) return
@@ -515,6 +588,7 @@ export class CronManager {
                 this._timers.delete(key)
             }
         }
+        if (this.store.shouldUseCoreOwnedCronScheduler()) return
         // Schedule all enabled crons (skip running ones — fireCron.finally() handles their rescheduling)
         for (const [cronId, { def }] of repoState.cronDefs) {
             const key = `${repoState.repoId}::${cronId}`

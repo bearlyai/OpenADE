@@ -164,6 +164,7 @@ const TaskItem = ({
                 <input
                     type="checkbox"
                     className="flex-shrink-0 accent-primary"
+                    aria-label={`Select ${preview.title}`}
                     checked={isSelected}
                     onChange={onToggleSelect}
                     onClick={(e) => e.stopPropagation()}
@@ -177,6 +178,7 @@ const TaskItem = ({
                 <input
                     ref={inputRef}
                     className="truncate min-w-0 flex-1 text-sm bg-transparent text-inherit border border-base-300 px-1 py-0 outline-none"
+                    aria-label="Task title"
                     defaultValue={preview.title}
                     autoFocus
                     onBlur={handleCommit}
@@ -231,7 +233,17 @@ const TaskItem = ({
         <ContextMenu.Root>
             <ContextMenu.Trigger
                 className="flex w-full"
-                render={<div role="button" tabIndex={0} className={rowClassName} onClick={handleClick} onKeyDown={handleKeyDown} title={preview.title} />}
+                render={
+                    <div
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Open ${preview.title}`}
+                        className={rowClassName}
+                        onClick={handleClick}
+                        onKeyDown={handleKeyDown}
+                        title={preview.title}
+                    />
+                }
             >
                 {rowContent}
             </ContextMenu.Trigger>

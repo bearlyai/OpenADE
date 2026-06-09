@@ -18,6 +18,16 @@ import type {
     OpenADEHyperPlanSubExecutionAddRequest,
     OpenADEHyperPlanSubExecutionStreamAppendRequest,
     OpenADEHyperPlanSubExecutionUpdateRequest,
+    OpenADEMCPHealthStatus,
+    OpenADEMCPOAuthTokens,
+    OpenADEMCPServer,
+    OpenADEMCPServerDeleteResult,
+    OpenADEMCPServersReadResult,
+    OpenADEMCPServersReplaceResult,
+    OpenADEMCPServerUpsertResult,
+    OpenADEPersonalSettings,
+    OpenADEPersonalSettingsReadResult,
+    OpenADEPersonalSettingsReplaceResult,
     OpenADERepoCreateRequest,
     OpenADERepoCreateResult,
     OpenADERepoDeleteRequest,
@@ -37,6 +47,10 @@ type JsonPrimitive = string | number | boolean | null
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
 type JsonRecord = { [key: string]: JsonValue }
 const loadedStateVectors = new WeakMap<Y.Doc, Uint8Array>()
+const MCP_SERVERS_DOCUMENT_ID = "code:mcp_servers"
+const MCP_SERVERS_ARRAY_NAME = "mcp_servers"
+const PERSONAL_SETTINGS_DOCUMENT_ID = "code:personal_settings"
+const PERSONAL_SETTINGS_MAP_NAME = "personal_settings"
 
 export interface OpenADEYjsMutationStorageAdapter extends OpenADEYjsStorageAdapter {
     readDocumentUpdate(id: string): Promise<Uint8Array | null>
@@ -190,6 +204,260 @@ function upsertOrderedItem(doc: Y.Doc, name: string, item: Record<string, unknow
     }
 
     pushOrderedItem(doc, name, item)
+}
+
+function stringRecord(value: unknown): Record<string, string> | undefined {
+    if (!isRecord(value)) return undefined
+    const result: Record<string, string> = {}
+    for (const [key, nested] of Object.entries(value)) {
+        if (typeof nested === "string") result[key] = nested
+    }
+    return Object.keys(result).length > 0 ? result : undefined
+}
+
+function stringArray(value: unknown): string[] | undefined {
+    if (!Array.isArray(value)) return undefined
+    const result = value.filter((nested): nested is string => typeof nested === "string")
+    return result.length > 0 ? result : undefined
+}
+
+function optionalString(value: unknown): string | undefined {
+    return typeof value === "string" && value.length > 0 ? value : undefined
+}
+
+function mcpOAuthTokens(value: unknown): OpenADEMCPOAuthTokens | undefined {
+    if (!isRecord(value)) return undefined
+    const accessToken = optionalString(value.accessToken)
+    const tokenType = optionalString(value.tokenType)
+    if (!accessToken || !tokenType) return undefined
+    return {
+        accessToken,
+        tokenType,
+        refreshToken: optionalString(value.refreshToken),
+        expiresAt: optionalString(value.expiresAt),
+    }
+}
+
+function normalizeMcpServerRow(row: Record<string, unknown>): OpenADEMCPServer | null {
+    const id = optionalString(row.id)
+    const name = optionalString(row.name)
+    const healthStatus: OpenADEMCPHealthStatus =
+        row.healthStatus === "healthy" || row.healthStatus === "unhealthy" || row.healthStatus === "needs_auth" ? row.healthStatus : "unknown"
+    const createdAt = optionalString(row.createdAt)
+    const updatedAt = optionalString(row.updatedAt)
+    if (!id || !name || typeof row.enabled !== "boolean" || !createdAt || !updatedAt) return null
+
+    const base = {
+        id,
+        name,
+        enabled: row.enabled,
+        presetId: optionalString(row.presetId),
+        lastTested: optionalString(row.lastTested),
+        healthStatus,
+        createdAt,
+        updatedAt,
+    }
+
+    if (row.transportType === "http") {
+        const url = optionalString(row.url)
+        if (!url) return null
+        return {
+            ...base,
+            transportType: "http",
+            url,
+            headers: stringRecord(row.headers),
+            oauthTokens: mcpOAuthTokens(row.oauthTokens),
+        }
+    }
+
+    if (row.transportType === "stdio") {
+        const command = optionalString(row.command)
+        if (!command) return null
+        return {
+            ...base,
+            transportType: "stdio",
+            command,
+            args: stringArray(row.args),
+            envVars: stringRecord(row.envVars),
+            cwd: optionalString(row.cwd),
+        }
+    }
+
+    return null
+}
+
+function mcpServerRecord(server: OpenADEMCPServer): Record<string, unknown> & { id: string } {
+    const base: Record<string, unknown> & { id: string } = {
+        id: server.id,
+        name: server.name,
+        transportType: server.transportType,
+        enabled: server.enabled,
+        healthStatus: server.healthStatus,
+        createdAt: server.createdAt,
+        updatedAt: server.updatedAt,
+    }
+    if (server.presetId) base.presetId = server.presetId
+    if (server.lastTested) base.lastTested = server.lastTested
+
+    if (server.transportType === "http") {
+        base.url = server.url
+        if (server.headers && Object.keys(server.headers).length > 0) base.headers = server.headers
+        if (server.oauthTokens) base.oauthTokens = server.oauthTokens
+        return base
+    }
+
+    base.command = server.command
+    if (server.args && server.args.length > 0) base.args = server.args
+    if (server.envVars && Object.keys(server.envVars).length > 0) base.envVars = server.envVars
+    if (server.cwd) base.cwd = server.cwd
+    return base
+}
+
+export async function readYjsMcpServers(storage: OpenADEYjsMutationStorageAdapter): Promise<OpenADEMCPServersReadResult> {
+    const rows = (await storage.readOrderedArray<Record<string, unknown>>(MCP_SERVERS_DOCUMENT_ID, MCP_SERVERS_ARRAY_NAME)) ?? []
+    return { servers: rows.map(normalizeMcpServerRow).filter((server): server is OpenADEMCPServer => server !== null) }
+}
+
+export async function replaceYjsMcpServers(
+    storage: OpenADEYjsMutationStorageAdapter,
+    servers: OpenADEMCPServer[]
+): Promise<OpenADEMCPServersReplaceResult> {
+    const doc = await loadDoc(storage, MCP_SERVERS_DOCUMENT_ID)
+    doc.transact(() => {
+        doc.getMap(`${MCP_SERVERS_ARRAY_NAME}:data`).clear()
+        const order = doc.getArray<string>(`${MCP_SERVERS_ARRAY_NAME}:order`)
+        if (order.length > 0) order.delete(0, order.length)
+        for (const server of servers) pushOrderedItem(doc, MCP_SERVERS_ARRAY_NAME, mcpServerRecord(server))
+    })
+    await saveDoc(storage, MCP_SERVERS_DOCUMENT_ID, doc)
+    return { servers, replacedServers: servers.length }
+}
+
+export async function upsertYjsMcpServer(
+    storage: OpenADEYjsMutationStorageAdapter,
+    server: OpenADEMCPServer
+): Promise<OpenADEMCPServerUpsertResult> {
+    const doc = await loadDoc(storage, MCP_SERVERS_DOCUMENT_ID)
+    const created = !hasOrderedItem(doc, MCP_SERVERS_ARRAY_NAME, server.id)
+    upsertOrderedItem(doc, MCP_SERVERS_ARRAY_NAME, mcpServerRecord(server))
+    await saveDoc(storage, MCP_SERVERS_DOCUMENT_ID, doc)
+    return { server, created }
+}
+
+export async function deleteYjsMcpServer(
+    storage: OpenADEYjsMutationStorageAdapter,
+    serverId: string
+): Promise<OpenADEMCPServerDeleteResult> {
+    const doc = await loadDoc(storage, MCP_SERVERS_DOCUMENT_ID)
+    const deleted = hasOrderedItem(doc, MCP_SERVERS_ARRAY_NAME, serverId)
+    if (deleted) deleteOrderedItem(doc, MCP_SERVERS_ARRAY_NAME, serverId)
+    await saveDoc(storage, MCP_SERVERS_DOCUMENT_ID, doc)
+    return { serverId, deleted }
+}
+
+function normalizeYjsPersonalSettings(value: Record<string, unknown>): OpenADEPersonalSettings {
+    return {
+        envVars: stringRecord(value.envVars) ?? {},
+        theme: personalSettingsTheme(value.theme),
+        lastSettingsTab: personalSettingsTab(value.lastSettingsTab),
+        deviceId: typeof value.deviceId === "string" && value.deviceId.length > 0 ? value.deviceId : undefined,
+        telemetryDisabled: typeof value.telemetryDisabled === "boolean" ? value.telemetryDisabled : undefined,
+        onboardingCompleted: typeof value.onboardingCompleted === "boolean" ? value.onboardingCompleted : undefined,
+        devHideTray: typeof value.devHideTray === "boolean" ? value.devHideTray : undefined,
+        devForceAllCommands: typeof value.devForceAllCommands === "boolean" ? value.devForceAllCommands : undefined,
+        shortcutHintsHidden: typeof value.shortcutHintsHidden === "boolean" ? value.shortcutHintsHidden : undefined,
+        renderMarkdownMessages: typeof value.renderMarkdownMessages === "boolean" ? value.renderMarkdownMessages : true,
+        lastSeenReleaseVersion:
+            typeof value.lastSeenReleaseVersion === "string" && value.lastSeenReleaseVersion.length > 0 ? value.lastSeenReleaseVersion : undefined,
+        newTaskHarnessId: typeof value.newTaskHarnessId === "string" && value.newTaskHarnessId.length > 0 ? value.newTaskHarnessId : undefined,
+        newTaskModelId: typeof value.newTaskModelId === "string" && value.newTaskModelId.length > 0 ? value.newTaskModelId : undefined,
+        pinnedTaskIds: Array.isArray(value.pinnedTaskIds) ? value.pinnedTaskIds.filter((item): item is string => typeof item === "string") : undefined,
+        hyperplanStrategyId:
+            typeof value.hyperplanStrategyId === "string" && value.hyperplanStrategyId.length > 0 ? value.hyperplanStrategyId : undefined,
+        hyperplanAgents: personalSettingsAgentCouplets(value.hyperplanAgents),
+        hyperplanReconciler: personalSettingsAgentCouplet(value.hyperplanReconciler),
+    }
+}
+
+function personalSettingsTheme(value: unknown): OpenADEPersonalSettings["theme"] {
+    switch (value) {
+        case "code-theme-light":
+        case "code-theme-bright":
+        case "code-theme-clean":
+        case "code-theme-black":
+        case "code-theme-synthwave":
+        case "code-theme-dracula":
+            return value
+        default:
+            return "system"
+    }
+}
+
+function personalSettingsTab(value: unknown): OpenADEPersonalSettings["lastSettingsTab"] {
+    switch (value) {
+        case "appearance":
+        case "connectors":
+        case "companion":
+        case "system":
+        case "stats":
+        case "dev":
+            return value
+        default:
+            return undefined
+    }
+}
+
+function personalSettingsAgentCouplet(value: unknown): OpenADEPersonalSettings["hyperplanReconciler"] {
+    if (!isRecord(value)) return undefined
+    const harnessId = typeof value.harnessId === "string" && value.harnessId.length > 0 ? value.harnessId : null
+    const modelId = typeof value.modelId === "string" && value.modelId.length > 0 ? value.modelId : null
+    return harnessId && modelId ? { harnessId, modelId } : undefined
+}
+
+function personalSettingsAgentCouplets(value: unknown): OpenADEPersonalSettings["hyperplanAgents"] {
+    if (!Array.isArray(value)) return undefined
+    const result = value.map(personalSettingsAgentCouplet).filter((item): item is { harnessId: string; modelId: string } => item !== undefined)
+    return result.length > 0 ? result : undefined
+}
+
+function personalSettingsRecord(settings: OpenADEPersonalSettings): Record<string, unknown> {
+    const record: Record<string, unknown> = {
+        envVars: settings.envVars,
+        theme: settings.theme,
+        renderMarkdownMessages: settings.renderMarkdownMessages ?? true,
+    }
+    if (settings.lastSettingsTab) record.lastSettingsTab = settings.lastSettingsTab
+    if (settings.deviceId) record.deviceId = settings.deviceId
+    if (settings.telemetryDisabled !== undefined) record.telemetryDisabled = settings.telemetryDisabled
+    if (settings.onboardingCompleted !== undefined) record.onboardingCompleted = settings.onboardingCompleted
+    if (settings.devHideTray !== undefined) record.devHideTray = settings.devHideTray
+    if (settings.devForceAllCommands !== undefined) record.devForceAllCommands = settings.devForceAllCommands
+    if (settings.shortcutHintsHidden !== undefined) record.shortcutHintsHidden = settings.shortcutHintsHidden
+    if (settings.lastSeenReleaseVersion) record.lastSeenReleaseVersion = settings.lastSeenReleaseVersion
+    if (settings.newTaskHarnessId) record.newTaskHarnessId = settings.newTaskHarnessId
+    if (settings.newTaskModelId) record.newTaskModelId = settings.newTaskModelId
+    if (settings.pinnedTaskIds && settings.pinnedTaskIds.length > 0) record.pinnedTaskIds = settings.pinnedTaskIds
+    if (settings.hyperplanStrategyId) record.hyperplanStrategyId = settings.hyperplanStrategyId
+    if (settings.hyperplanAgents && settings.hyperplanAgents.length > 0) record.hyperplanAgents = settings.hyperplanAgents
+    if (settings.hyperplanReconciler) record.hyperplanReconciler = settings.hyperplanReconciler
+    return record
+}
+
+export async function readYjsPersonalSettings(storage: OpenADEYjsMutationStorageAdapter): Promise<OpenADEPersonalSettingsReadResult> {
+    const settings = (await storage.readMapObject(PERSONAL_SETTINGS_DOCUMENT_ID, PERSONAL_SETTINGS_MAP_NAME)) ?? {}
+    return { settings: normalizeYjsPersonalSettings(settings) }
+}
+
+export async function replaceYjsPersonalSettings(
+    storage: OpenADEYjsMutationStorageAdapter,
+    settings: OpenADEPersonalSettings
+): Promise<OpenADEPersonalSettingsReplaceResult> {
+    const doc = await loadDoc(storage, PERSONAL_SETTINGS_DOCUMENT_ID)
+    const map = doc.getMap(PERSONAL_SETTINGS_MAP_NAME)
+    map.clear()
+    setMapObject(map, personalSettingsRecord(settings))
+    await saveDoc(storage, PERSONAL_SETTINGS_DOCUMENT_ID, doc)
+    return { settings }
 }
 
 async function loadDoc(storage: OpenADEYjsMutationStorageAdapter, id: string): Promise<Y.Doc> {
@@ -388,6 +656,51 @@ async function syncTaskMetadataPreview(
             )
         })
         await saveDoc(storage, "code:repos", reposDoc)
+    } finally {
+        reposDoc.destroy()
+    }
+}
+
+function isLastViewedOnlyMetadataUpdate(request: OpenADETaskMetadataUpdateRequest): boolean {
+    return (
+        request.lastViewedAt !== undefined &&
+        request.title === undefined &&
+        request.closed === undefined &&
+        request.lastEventAt === undefined &&
+        request.cancelledPlanEventId === undefined &&
+        request.usage === undefined &&
+        request.enabledMcpServerIds === undefined &&
+        request.sessionIds === undefined &&
+        request.queuedTurns === undefined
+    )
+}
+
+async function syncTaskViewedPreview(
+    storage: OpenADEYjsMutationStorageAdapter,
+    taskId: string,
+    lastViewedAt: string,
+    updatedAt: string
+): Promise<boolean> {
+    const reposDoc = await loadDoc(storage, "code:repos")
+    let updated = false
+    try {
+        const repos = reposDoc.getMap<Y.Map<unknown>>("repos:data")
+        reposDoc.transact(() => {
+            repos.forEach((repoMap) => {
+                if (updated || !(repoMap instanceof Y.Map)) return
+                const tasks = repoMap.get("tasks")
+                if (!(tasks instanceof Y.Array)) return
+                const found = tasks.toArray().some((task) => {
+                    const plain = toPlain(task)
+                    return isRecord(plain) && plain.id === taskId
+                })
+                if (!found) return
+                updateTaskPreview(repoMap, taskId, { lastViewedAt }, updatedAt)
+                updated = true
+            })
+        })
+        if (updated) await saveDoc(storage, "code:repos", reposDoc)
+        return updated
     } finally {
         reposDoc.destroy()
     }
@@ -1044,6 +1357,11 @@ export function createOpenADEYjsWriter(storage: OpenADEYjsMutationStorageAdapter
 
         async updateTaskMetadata(request) {
             const updatedAt = request.updatedAt ?? now()
+            if (request.lastViewedAt && isLastViewedOnlyMetadataUpdate(request)) {
+                const updatedPreview = await syncTaskViewedPreview(storage, request.taskId, request.lastViewedAt, updatedAt)
+                if (updatedPreview) return
+            }
+
             const taskDoc = await loadDoc(storage, `code:task:${request.taskId}`)
 
             try {

@@ -63,6 +63,7 @@ function createStore(task: Task): CodeStore {
         tasks: {
             getTask: (taskId: string) => (taskId === task.id ? task : null),
         },
+        shouldUseRuntimeProductReads: () => false,
     } as unknown as CodeStore
 }
 
@@ -73,6 +74,31 @@ describe("TaskModel harness lock", () => {
         const model = new TaskModel(createStore(task), task.id)
 
         expect(model.isClosed).toBe(true)
+    })
+
+    it("reuses a fresh runtime git summary unless a refresh is forced", async () => {
+        const task = createTask([])
+        const readProductTaskGitSummary = vi.fn().mockResolvedValue({
+            branch: "main",
+            headCommit: "abc123",
+            ahead: 0,
+            hasChanges: false,
+            staged: { files: [], stats: { added: 0, deleted: 0 } },
+            unstaged: { files: [], stats: { added: 0, deleted: 0 } },
+            untracked: [],
+        })
+        const store = {
+            ...createStore(task),
+            shouldUseRuntimeProductReads: () => true,
+            readProductTaskGitSummary,
+        } as unknown as CodeStore
+        const model = new TaskModel(store, task.id)
+
+        await model.refreshGitState()
+        await model.refreshGitState()
+        await model.refreshGitState({ force: true })
+
+        expect(readProductTaskGitSummary).toHaveBeenCalledTimes(2)
     })
 
     it("hydrates harness/model from latest action event", () => {

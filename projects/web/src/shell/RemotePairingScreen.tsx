@@ -108,6 +108,7 @@ export function RemotePairingScreen({
                         <div className="flex flex-col gap-2">
                             <input
                                 className="input h-[52px] w-full max-w-full border border-border bg-base-200 px-3 text-base"
+                                aria-label="Pairing link"
                                 placeholder="Paste pairing link"
                                 value={baseUrl}
                                 onChange={(event) => onBaseUrlChange(event.target.value)}

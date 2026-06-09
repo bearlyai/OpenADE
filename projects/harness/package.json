@@ -4,6 +4,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "openade-harness-worker": "./dist/worker.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -17,7 +20,8 @@
   "scripts": {
     "preinstall": "yarn build 2>/dev/null || true",
     "build": "tsc",
-    "typecheck": "tsgo --noEmit",
+    "check:no-any": "node ../../scripts/check-no-explicit-any.mjs --self-test .",
+    "typecheck": "npm run check:no-any && tsgo --noEmit",
     "test": "NO_COLOR=1 vitest run --exclude 'src/**/*.integration.test.ts'",
     "test:watch": "NO_COLOR=1 vitest --exclude 'src/**/*.integration.test.ts'",
     "test:integration": "NO_COLOR=1 vitest run --config vitest.integration.config.ts",

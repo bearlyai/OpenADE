@@ -8,7 +8,8 @@
     "build": "npm run build:harness && npm run clean && node ./build.mjs",
     "watch": "yarn && modd",
     "start": "npm run build:harness && npm install && RELEASE=head DEBUG=1 npm run build && npx electron dist/main.js",
-    "typecheck": "tsgo --noEmit",
+    "check:no-any": "node ../../scripts/check-no-explicit-any.mjs --self-test .",
+    "typecheck": "npm run check:no-any && tsgo --noEmit",
     "test": "vitest run --reporter=verbose",
     "test:smoke": "playwright test --config=playwright.config.ts",
     "test:watch": "vitest",
@@ -60,7 +61,8 @@
     "asarUnpack": [],
     "extraResources": [
       "dist/pages/**",
-      "dist/web/**"
+      "dist/web/**",
+      "dist/openade-core/**"
     ],
     "afterPack": "build/afterPack.js",
     "afterSign": "build/notarize.js",

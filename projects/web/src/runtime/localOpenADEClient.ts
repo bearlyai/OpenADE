@@ -1,7 +1,7 @@
 import { createKernelSessionFromRuntime } from "../kernel/session"
-import { localRuntimeClient } from "./localRuntimeClient"
+import { localProductRuntimeClient } from "./localProductRuntimeClient"
 
-export const localKernelSession = createKernelSessionFromRuntime(localRuntimeClient, {
+export const localKernelSession = createKernelSessionFromRuntime(localProductRuntimeClient, {
     clientName: "OpenADE Desktop",
     clientPlatform: "desktop",
     protocolVersion: 1,

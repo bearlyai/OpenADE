@@ -124,6 +124,7 @@ export const ReviewPickerModal = NiceModal.create(
                 <div className="flex flex-col gap-4">
                     <textarea
                         value={notes}
+                        aria-label="Reviewer notes"
                         onChange={(e) => setNotes(e.target.value)}
                         placeholder="Add notes for the reviewer (optional)"
                         className="w-full px-3 py-2 text-sm bg-base-200 border border-border text-base-content placeholder:text-muted resize-none focus:outline-none focus:border-primary/50"

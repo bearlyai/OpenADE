@@ -356,6 +356,38 @@ describe("createOpenADEYjsProjection fixtures", () => {
         })
     })
 
+    it("loads a task document once when the storage adapter exposes raw document updates", async () => {
+        const rawUpdateReads: string[] = []
+        const mapReads: string[] = []
+        const arrayReads: string[] = []
+        const projection = createOpenADEYjsProjection({
+            ...storage,
+            readDocumentUpdate: async (id) => {
+                rawUpdateReads.push(id)
+                return storage.readDocumentUpdate(id)
+            },
+            readMapObject: async (documentId, mapName) => {
+                mapReads.push(`${documentId}:${mapName}`)
+                return storage.readMapObject(documentId, mapName)
+            },
+            readOrderedArray: async <T extends Record<string, unknown>>(documentId: string, name: string): Promise<T[] | null> => {
+                arrayReads.push(`${documentId}:${name}`)
+                return storage.readOrderedArray<T>(documentId, name)
+            },
+        })
+
+        await expect(projection.readTask("repo-fixture", "task-action", { hydrateSessionEvents: false })).resolves.toMatchObject({
+            id: "task-action",
+        })
+
+        expect(rawUpdateReads).toEqual(["code:task:task-action"])
+        expect(mapReads).toEqual([])
+        expect(arrayReads).toEqual([])
+        expect(rawUpdateReads.filter((id) => id === "code:task:task-action")).toHaveLength(1)
+        expect(mapReads.filter((read) => read.startsWith("code:task:task-action:"))).toHaveLength(0)
+        expect(arrayReads.filter((read) => read.startsWith("code:task:task-action:"))).toHaveLength(0)
+    })
+
     it("bounds stored session arrays on lightweight task reads and restores them when explicitly hydrated", async () => {
         await installLargeSessionTaskFixture()
         const projection = createOpenADEYjsProjection(storage)

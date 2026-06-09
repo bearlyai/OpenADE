@@ -120,6 +120,44 @@ export type {
 
 // Cache for git installation check
 let gitInstalledCache: { installed: boolean; version?: string } | null = null
+const GIT_SUMMARY_CACHE_TTL_MS = 1_000
+const GIT_DIRECTORY_CACHE_TTL_MS = 5_000
+const GH_CLI_CACHE_TTL_MS = 60_000
+
+interface GitSummaryCacheEntry {
+    promise?: Promise<GitSummaryResponse>
+    result?: GitSummaryResponse
+    expiresAt?: number
+}
+
+interface GitDirectoryCacheEntry {
+    promise?: Promise<IsGitDirectoryResponse>
+    result?: IsGitDirectoryResponse
+    expiresAt?: number
+}
+
+interface GhCliCacheEntry {
+    promise?: Promise<CheckGhCliResponse>
+    result?: CheckGhCliResponse
+    expiresAt?: number
+}
+
+function caughtErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error)
+}
+
+function caughtErrorStack(error: unknown): string | undefined {
+    return error instanceof Error ? error.stack : undefined
+}
+
+function caughtErrorLog(error: unknown): { error: string; stack?: string } {
+    const stack = caughtErrorStack(error)
+    return stack ? { error: caughtErrorMessage(error), stack } : { error: caughtErrorMessage(error) }
+}
+
+const gitSummaryCache = new Map<string, GitSummaryCacheEntry>()
+const gitDirectoryCache = new Map<string, GitDirectoryCacheEntry>()
+let ghCliCache: GhCliCacheEntry | null = null
 
 /**
  * Get the base directory for worktrees (cross-platform)
@@ -160,6 +198,73 @@ function validateWorkTreeId(id: string): void {
     if (id.includes("..") || id.includes("/") || id.includes("\\")) {
         throw new Error("workTreeId cannot contain path traversal characters")
     }
+}
+
+function gitSummaryCacheKey(params: GitStatusParams): string {
+    return `${params.repoDir ?? ""}\0${params.workTreeId ?? ""}`
+}
+
+function clearGitSummaryCache(): void {
+    gitSummaryCache.clear()
+}
+
+function gitDirectoryCacheKey(params: IsGitDirectoryParams): string {
+    return params.directory
+}
+
+function clearGitDirectoryCache(): void {
+    gitDirectoryCache.clear()
+}
+
+function clearGitReadCaches(): void {
+    clearGitSummaryCache()
+    clearGitDirectoryCache()
+}
+
+function cachedGitSummary(params: GitStatusParams): Promise<GitSummaryResponse> {
+    const key = gitSummaryCacheKey(params)
+    const cached = gitSummaryCache.get(key)
+    if (cached?.promise) return cached.promise
+    if (cached?.result && cached.expiresAt && cached.expiresAt > Date.now()) return Promise.resolve(cached.result)
+
+    const promise = handleGetGitSummary(params)
+        .then((result) => {
+            gitSummaryCache.set(key, {
+                result,
+                expiresAt: Date.now() + GIT_SUMMARY_CACHE_TTL_MS,
+            })
+            return result
+        })
+        .catch((error: unknown) => {
+            if (gitSummaryCache.get(key)?.promise === promise) gitSummaryCache.delete(key)
+            throw error
+        })
+
+    gitSummaryCache.set(key, { promise })
+    return promise
+}
+
+function cachedGitDirectory(params: IsGitDirectoryParams): Promise<IsGitDirectoryResponse> {
+    const key = gitDirectoryCacheKey(params)
+    const cached = gitDirectoryCache.get(key)
+    if (cached?.promise) return cached.promise
+    if (cached?.result && cached.expiresAt && cached.expiresAt > Date.now()) return Promise.resolve(cached.result)
+
+    const promise = handleIsGitDirectory(params)
+        .then((result) => {
+            gitDirectoryCache.set(key, {
+                result,
+                expiresAt: Date.now() + GIT_DIRECTORY_CACHE_TTL_MS,
+            })
+            return result
+        })
+        .catch((error: unknown) => {
+            if (gitDirectoryCache.get(key)?.promise === promise) gitDirectoryCache.delete(key)
+            throw error
+        })
+
+    gitDirectoryCache.set(key, { promise })
+    return promise
 }
 
 /**
@@ -317,11 +422,7 @@ async function handleIsGitInstalled(): Promise<IsGitInstalledResponse> {
     return gitInstalledCache
 }
 
-/**
- * Check if gh CLI is installed and authenticated.
- * Lightweight endpoint that only runs `gh auth status`.
- */
-async function handleCheckGhCli(): Promise<CheckGhCliResponse> {
+async function checkGhCliUncached(): Promise<CheckGhCliResponse> {
     const startTime = Date.now()
     logger.info("[Git:checkGhCli] Checking gh CLI availability")
 
@@ -335,6 +436,32 @@ async function handleCheckGhCli(): Promise<CheckGhCliResponse> {
 
     logger.info("[Git:checkGhCli] Result", JSON.stringify({ hasGhCli, duration: Date.now() - startTime }))
     return { hasGhCli }
+}
+
+function cachedGhCli(): Promise<CheckGhCliResponse> {
+    const now = Date.now()
+    if (ghCliCache?.promise) return ghCliCache.promise
+    if (ghCliCache?.result && ghCliCache.expiresAt && ghCliCache.expiresAt > now) return Promise.resolve(ghCliCache.result)
+
+    const promise = checkGhCliUncached()
+        .then((result) => {
+            ghCliCache = { result, expiresAt: Date.now() + GH_CLI_CACHE_TTL_MS }
+            return result
+        })
+        .catch((error: unknown) => {
+            if (ghCliCache?.promise === promise) ghCliCache = null
+            throw error
+        })
+    ghCliCache = { promise }
+    return promise
+}
+
+/**
+ * Check if gh CLI is installed and authenticated.
+ * Lightweight endpoint that only runs `gh auth status`.
+ */
+async function handleCheckGhCli(): Promise<CheckGhCliResponse> {
+    return cachedGhCli()
 }
 
 /**
@@ -370,14 +497,7 @@ async function handleIsGitDirectory(params: IsGitDirectoryParams): Promise<IsGit
             }
         }
 
-        // Detect gh CLI availability (authenticated GitHub CLI)
-        let hasGhCli = false
-        try {
-            const ghResult = await execCommand("gh", ["auth", "status"], { timeout: 5000 })
-            hasGhCli = ghResult.success
-        } catch {
-            // gh not installed or not in PATH
-        }
+        const { hasGhCli } = await cachedGhCli()
 
         logger.info("[Git:isGitDirectory] Git directory found", JSON.stringify({
             directory: params.directory,
@@ -395,15 +515,16 @@ async function handleIsGitDirectory(params: IsGitDirectoryParams): Promise<IsGit
             mainBranch,
             hasGhCli,
         }
-    } catch (error: any) {
+    } catch (error) {
+        const message = caughtErrorMessage(error)
         logger.info("[Git:isGitDirectory] Not a git directory", JSON.stringify({
             directory: params.directory,
-            error: error.message,
+            error: message,
             duration: Date.now() - startTime,
         }))
         return {
             isGitDirectory: false,
-            error: error.message,
+            error: message,
         }
     }
 }
@@ -519,8 +640,8 @@ async function handleGetOrCreateWorkTree(params: GetOrCreateWorkTreeParams): Pro
 
         logger.info("[Git:getOrCreateWorkTree] Worktree ready", JSON.stringify({ worktreePath, matchingDir, duration: Date.now() - startTime }))
         return { worktreeDir: worktreePath, matchingDir, created: true }
-    } catch (error: any) {
-        logger.error("[Git:getOrCreateWorkTree] Error:", JSON.stringify({ error: error.message, stack: error.stack, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:getOrCreateWorkTree] Error:", JSON.stringify({ ...caughtErrorLog(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -597,8 +718,8 @@ async function handleWorkTreeDiffPatch(params: WorkTreeDiffPatchParams): Promise
             duration: Date.now() - startTime,
         }))
         return { patch }
-    } catch (error: any) {
-        logger.error("[Git:workTreeDiffPatch] Error:", JSON.stringify({ error: error.message, stack: error.stack, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:workTreeDiffPatch] Error:", JSON.stringify({ ...caughtErrorLog(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -639,8 +760,8 @@ async function handleGetMergeBase(params: GetMergeBaseParams): Promise<GetMergeB
 
         logger.info("[Git:getMergeBase] Found merge-base", JSON.stringify({ mergeBaseCommit, duration: Date.now() - startTime }))
         return { mergeBaseCommit }
-    } catch (error: any) {
-        logger.error("[Git:getMergeBase] Error:", JSON.stringify({ error: error.message, stack: error.stack, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:getMergeBase] Error:", JSON.stringify({ ...caughtErrorLog(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -913,8 +1034,8 @@ async function handleGetGitSummary(params: GitStatusParams): Promise<GitSummaryR
         }))
 
         return summary
-    } catch (error: any) {
-        logger.error("[Git:getGitSummary] Error:", JSON.stringify({ error: error.message, stack: error.stack, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:getGitSummary] Error:", JSON.stringify({ ...caughtErrorLog(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -973,8 +1094,8 @@ async function handleGetGitStatus(params: GitStatusParams): Promise<GitStatusRes
             },
             untracked: summary.untracked,
         }
-    } catch (error: any) {
-        logger.error("[Git:getGitStatus] Error:", JSON.stringify({ error: error.message, stack: error.stack, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:getGitStatus] Error:", JSON.stringify({ ...caughtErrorLog(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -1045,8 +1166,8 @@ async function handleListFiles(params: ListFilesParams): Promise<ListFilesRespon
 
         logger.info("[Git:listFiles] Files listed", JSON.stringify({ count: files.length, truncated, duration: Date.now() - startTime }))
         return { files, truncated }
-    } catch (error: any) {
-        logger.error("[Git:listFiles] Error:", JSON.stringify({ error: error.message, stack: error.stack, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:listFiles] Error:", JSON.stringify({ ...caughtErrorLog(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -1122,8 +1243,8 @@ async function handleListWorkTrees(params: ListWorkTreesParams): Promise<ListWor
 
         logger.info("[Git:listWorkTrees] Worktrees listed", JSON.stringify({ count: worktrees.length, duration: Date.now() - startTime }))
         return { worktrees }
-    } catch (error: any) {
-        logger.error("[Git:listWorkTrees] Error:", JSON.stringify({ error: error.message, stack: error.stack, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:listWorkTrees] Error:", JSON.stringify({ ...caughtErrorLog(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -1176,9 +1297,9 @@ async function handleCommitWorkTree(params: CommitWorkTreeParams): Promise<Commi
 
         logger.info("[Git:commitWorkTree] Commit successful", JSON.stringify({ sha, duration: Date.now() - startTime }))
         return { committed: true, sha }
-    } catch (error: any) {
-        logger.error("[Git:commitWorkTree] Error:", JSON.stringify({ error: error.message, stack: error.stack, duration: Date.now() - startTime }))
-        return { committed: false, error: error.message }
+    } catch (error) {
+        logger.error("[Git:commitWorkTree] Error:", JSON.stringify({ ...caughtErrorLog(error), duration: Date.now() - startTime }))
+        return { committed: false, error: caughtErrorMessage(error) }
     }
 }
 
@@ -1321,8 +1442,8 @@ async function handleListBranches(params: ListBranchesParams): Promise<ListBranc
             duration: Date.now() - startTime,
         }))
         return { branches, defaultBranch }
-    } catch (error: any) {
-        logger.error("[Git:listBranches] Error:", JSON.stringify({ error: error.message, stack: error.stack, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:listBranches] Error:", JSON.stringify({ ...caughtErrorLog(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -1375,8 +1496,8 @@ async function handleResolvePath(params: ResolvePathParams): Promise<ResolvePath
         }))
 
         return { resolvedPath, exists, isDirectory }
-    } catch (error: any) {
-        logger.error("[Git:resolvePath] Error:", JSON.stringify({ error: error.message, stack: error.stack, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:resolvePath] Error:", JSON.stringify({ ...caughtErrorLog(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -1510,8 +1631,8 @@ async function handleGetGitLog(params: GetGitLogParams): Promise<GetGitLogRespon
             commits: commits.slice(0, limit),
             hasMore,
         }
-    } catch (error: any) {
-        logger.error("[Git:getLog] Error:", JSON.stringify({ error: error.message, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:getLog] Error:", JSON.stringify({ error: caughtErrorMessage(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -1558,8 +1679,8 @@ async function handleGetCommitFiles(params: GetCommitFilesParams): Promise<GetCo
         }))
 
         return { files }
-    } catch (error: any) {
-        logger.error("[Git:getCommitFiles] Error:", JSON.stringify({ error: error.message, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:getCommitFiles] Error:", JSON.stringify({ error: caughtErrorMessage(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -1618,8 +1739,8 @@ async function handleGetChangedFiles(params: GetChangedFilesParams): Promise<Get
             fromTreeish: params.fromTreeish,
             toTreeish: params.toTreeish,
         }
-    } catch (error: any) {
-        logger.error("[Git:getChangedFiles] Error:", JSON.stringify({ error: error.message, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:getChangedFiles] Error:", JSON.stringify({ error: caughtErrorMessage(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -1815,8 +1936,8 @@ async function handleGetFileAtTreeish(params: GetFileAtTreeishParams): Promise<G
         }))
 
         return { content: result.stdout, exists: true }
-    } catch (error: any) {
-        logger.error("[Git:getFileAtTreeish] Error:", JSON.stringify({ error: error.message, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:getFileAtTreeish] Error:", JSON.stringify({ error: caughtErrorMessage(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -1902,8 +2023,8 @@ async function handleGetFilePair(params: GetFilePairParams): Promise<GetFilePair
             before: beforeResult.content,
             after: afterContent,
         }
-    } catch (error: any) {
-        logger.error("[Git:getFilePair] Error:", JSON.stringify({ error: error.message, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:getFilePair] Error:", JSON.stringify({ error: caughtErrorMessage(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -1957,8 +2078,8 @@ async function handleGetWorktreeFilePatch(params: GetWorktreeFilePatchParams): P
         }))
 
         return response
-    } catch (error: any) {
-        logger.error("[Git:getWorktreeFilePatch] Error:", JSON.stringify({ error: error.message, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:getWorktreeFilePatch] Error:", JSON.stringify({ error: caughtErrorMessage(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -2014,8 +2135,8 @@ async function handleGetCommitFilePatch(params: GetCommitFilePatchParams): Promi
         }))
 
         return response
-    } catch (error: any) {
-        logger.error("[Git:getCommitFilePatch] Error:", JSON.stringify({ error: error.message, duration: Date.now() - startTime }))
+    } catch (error) {
+        logger.error("[Git:getCommitFilePatch] Error:", JSON.stringify({ error: caughtErrorMessage(error), duration: Date.now() - startTime }))
         throw error
     }
 }
@@ -2062,9 +2183,9 @@ async function handleInitGit(params: InitGitParams): Promise<InitGitResponse> {
 
         logger.info("[Git:initGit] Git repository initialized successfully", JSON.stringify({ directory: params.directory, duration: Date.now() - startTime }))
         return { success: true }
-    } catch (error: any) {
-        logger.error("[Git:initGit] Error:", JSON.stringify({ error: error.message, stack: error.stack, duration: Date.now() - startTime }))
-        return { success: false, error: error.message }
+    } catch (error) {
+        logger.error("[Git:initGit] Error:", JSON.stringify({ ...caughtErrorLog(error), duration: Date.now() - startTime }))
+        return { success: false, error: caughtErrorMessage(error) }
     }
 }
 
@@ -2113,7 +2234,7 @@ export async function getHotFiles(repoDir: string): Promise<Record<string, numbe
 }
 
 export async function isRuntimeGitDirectory(params: IsGitDirectoryParams): Promise<IsGitDirectoryResponse> {
-    return handleIsGitDirectory(params)
+    return cachedGitDirectory(params)
 }
 
 export async function isRuntimeGitInstalled(): Promise<IsGitInstalledResponse> {
@@ -2125,6 +2246,7 @@ export async function checkRuntimeGhCli(): Promise<CheckGhCliResponse> {
 }
 
 export async function getOrCreateRuntimeWorkTree(params: GetOrCreateWorkTreeParams): Promise<GetOrCreateWorkTreeResponse> {
+    clearGitReadCaches()
     return handleGetOrCreateWorkTree(params)
 }
 
@@ -2137,7 +2259,7 @@ export async function getRuntimeMergeBase(params: GetMergeBaseParams): Promise<G
 }
 
 export async function getRuntimeGitSummary(params: GitStatusParams): Promise<GitSummaryResponse> {
-    return handleGetGitSummary(params)
+    return cachedGitSummary(params)
 }
 
 export async function getRuntimeGitStatus(params: GitStatusParams): Promise<GitStatusResponse> {
@@ -2161,6 +2283,7 @@ export async function getRuntimeChangedFiles(params: GetChangedFilesParams): Pro
 }
 
 export async function deleteRuntimeWorkTree(params: DeleteWorkTreeParams): Promise<DeleteWorkTreeResponse> {
+    clearGitReadCaches()
     return handleDeleteWorkTree(params)
 }
 
@@ -2169,6 +2292,7 @@ export async function isRuntimeBranchMerged(params: IsBranchMergedParams): Promi
 }
 
 export async function deleteRuntimeBranch(params: DeleteBranchParams): Promise<void> {
+    clearGitReadCaches()
     await handleDeleteBranch(params)
 }
 
@@ -2177,10 +2301,12 @@ export async function listRuntimeWorkTrees(params: ListWorkTreesParams): Promise
 }
 
 export async function commitRuntimeWorkTree(params: CommitWorkTreeParams): Promise<CommitWorkTreeResponse> {
+    clearGitReadCaches()
     return handleCommitWorkTree(params)
 }
 
 export async function commitRuntimeWorkingTree(params: CommitWorkingTreeParams): Promise<CommitWorkingTreeResponse> {
+    clearGitReadCaches()
     return handleCommitWorkingTree(params)
 }
 
@@ -2189,6 +2315,7 @@ export async function listRuntimeBranches(params: ListBranchesParams): Promise<L
 }
 
 export async function initRuntimeGit(params: InitGitParams): Promise<InitGitResponse> {
+    clearGitReadCaches()
     return handleInitGit(params)
 }
 

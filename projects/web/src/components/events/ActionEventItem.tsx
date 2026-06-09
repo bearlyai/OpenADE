@@ -112,7 +112,7 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId, on
         <CollapsibleEvent icon={icon} label={useLabel} query={queryText} event={event} expanded={expanded} onToggle={onToggle}>
             {event.images && event.images.length > 0 && (
                 <div className="px-3">
-                    <ImageAttachments images={event.images} />
+                    <ImageAttachments images={event.images} taskId={taskId} />
                 </div>
             )}
             {reviewUserInstructions && <UserInputMessage text={reviewUserInstructions} taskId={taskId} />}

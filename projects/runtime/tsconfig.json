@@ -7,5 +7,6 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/**/*", "../runtime-protocol/src/**/*"]
+  "include": ["src/**/*", "../runtime-protocol/src/**/*"],
+  "exclude": ["src/**/*.test.ts"]
 }

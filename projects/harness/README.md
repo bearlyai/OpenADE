@@ -48,6 +48,25 @@ for await (const event of harness.query(query)) {
 }
 ```
 
+## OpenADE Core Worker
+
+The package also builds a process worker for the Go OpenADE Core:
+
+```bash
+yarn build
+node dist/worker.js
+# or, when installed as a package:
+openade-harness-worker
+```
+
+Core config example:
+
+```bash
+OPENADE_CORE_AGENT_WORKER_COMMAND='["node","/path/to/openade/projects/harness/dist/worker.js"]'
+```
+
+The worker reads one JSON `start` envelope from stdin and writes NDJSON `stream`, `execution`, and `result` messages to stdout. It runs Claude Code or Codex through the same `HarnessQuery` interface documented below, including optional `mcpServerConfigs` passed through as `HarnessQuery.mcpServers` and Core-expanded base64 image sources passed through as multimodal prompt parts.
+
 ## API Reference
 
 ### `Harness<M>`
