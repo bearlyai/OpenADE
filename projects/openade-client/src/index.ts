@@ -636,13 +636,13 @@ export class OpenADEClient {
     ): Promise<OpenADEResponseForMethod<Method>> {
         const startedAt = Date.now()
         let failed = false
-        this.recordRequestBurst(method)
         const coalescedKey = coalescedReadRequestKey(method, params)
         const inFlight = coalescedKey ? this.readRequestsInFlight.get(coalescedKey) : undefined
         // The key includes the typed OpenADE method name and params; callers of request<T>()
         // control T through the public method for that same runtime method.
         if (inFlight) return inFlight as Promise<OpenADEResponseForMethod<Method>>
 
+        this.recordRequestBurst(method)
         const promise = this.options.runtime
             .request<OpenADEResponseForMethod<Method>>(method, params)
             .catch((error: unknown) => {
