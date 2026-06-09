@@ -23,7 +23,7 @@ export interface CodeLayoutProps {
 
 export const CodeLayout = observer(({ children, isCodeModuleAvailable, workspaceId, taskId, title, icon, navbarRight }: CodeLayoutProps) => {
     const codeStore = useCodeStore()
-    const [hasInitialized, setHasInitialized] = useState(false)
+    const [hasInitialized, setHasInitialized] = useState(() => codeStore.storeInitialized)
 
     // Gate access to desktop app with code modules only
     if (!isCodeModuleAvailable) {
@@ -42,6 +42,11 @@ export const CodeLayout = observer(({ children, isCodeModuleAvailable, workspace
 
     // Load repos on mount and initialize capabilities + platform info
     useEffect(() => {
+        if (codeStore.storeInitialized) {
+            setHasInitialized(true)
+            return
+        }
+
         let cancelled = false
         const init = async () => {
             // Initialize independent app-shell reads together so cold task opens are not serialized behind startup probes.
@@ -52,7 +57,7 @@ export const CodeLayout = observer(({ children, isCodeModuleAvailable, workspace
         return () => {
             cancelled = true
         }
-    }, [codeStore])
+    }, [codeStore, codeStore.storeInitialized])
 
     // Ensure tasks are loaded when workspace changes
     useEffect(() => {
