@@ -67,6 +67,10 @@ describe("getModelFullId", () => {
         expect(getModelFullId("opus-4-8", "claude-code")).toBe("claude-opus-4-8")
     })
 
+    it("resolves fable alias to full id", () => {
+        expect(getModelFullId("fable", "claude-code")).toBe("claude-fable-5")
+    })
+
     it("resolves alias searching all harnesses", () => {
         expect(getModelFullId("gpt-5.3-codex")).toBe("gpt-5.3-codex")
     })
@@ -87,8 +91,8 @@ describe("getModelFullId", () => {
 describe("getModelsForHarness", () => {
     it("returns models for claude-code", () => {
         const models = getModelsForHarness("claude-code")
-        expect(models.length).toBe(6)
-        expect(models.map((m) => m.id)).toEqual(["opus-4-6", "opus-4-7", "opus-4-8", "opus", "sonnet", "haiku"])
+        expect(models.length).toBe(7)
+        expect(models.map((m) => m.id)).toEqual(["fable", "opus-4-6", "opus-4-7", "opus-4-8", "opus", "sonnet", "haiku"])
     })
 
     it("returns models for codex", () => {
@@ -133,6 +137,7 @@ describe("resolveModelForHarness", () => {
         expect(resolveModelForHarness("claude-opus-4-6", "claude-code")).toBe("opus-4-6")
         expect(resolveModelForHarness("claude-opus-4-7", "claude-code")).toBe("opus-4-7")
         expect(resolveModelForHarness("claude-opus-4-8", "claude-code")).toBe("opus-4-8")
+        expect(resolveModelForHarness("claude-fable-5", "claude-code")).toBe("fable")
         expect(resolveModelForHarness("gpt-5.3-codex", "codex")).toBe("gpt-5.3-codex")
     })
 
@@ -169,6 +174,7 @@ describe("resolveModelForHarness", () => {
 
 describe("normalizeModelClass", () => {
     it("resolves from registry by alias", () => {
+        expect(normalizeModelClass("fable")).toBe("Fable")
         expect(normalizeModelClass("opus")).toBe("Opus")
         expect(normalizeModelClass("opus-4-7")).toBe("Opus")
         expect(normalizeModelClass("opus-4-8")).toBe("Opus")
@@ -177,6 +183,7 @@ describe("normalizeModelClass", () => {
     })
 
     it("resolves from registry by fullId", () => {
+        expect(normalizeModelClass("claude-fable-5")).toBe("Fable")
         expect(normalizeModelClass("claude-opus-4-7")).toBe("Opus")
         expect(normalizeModelClass("claude-opus-4-8")).toBe("Opus")
         expect(normalizeModelClass("gpt-5.3-codex")).toBe("Codex")

@@ -26,8 +26,6 @@ interface ReviewAgentOption {
     isTop: boolean
 }
 
-const TOP_MODEL_IDS = new Set(Object.values(MODEL_REGISTRY).map((config) => config.defaultModel))
-
 const OpenAIIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" className="w-4 h-4">
         <path
@@ -63,13 +61,14 @@ export const ReviewPickerModal = NiceModal.create(
             for (const harnessId of Object.keys(MODEL_REGISTRY) as HarnessId[]) {
                 const harnessLabel = HARNESS_META[harnessId]?.name ?? harnessId
                 for (const model of getVisibleModelEntries(harnessId)) {
+                    if (model.tier === "low") continue
                     pairs.push({
                         id: `${harnessId}:${model.id}`,
                         harnessId,
                         modelId: model.id,
                         harnessLabel,
                         modelLabel: model.label,
-                        isTop: TOP_MODEL_IDS.has(model.id),
+                        isTop: model.tier === "high",
                     })
                 }
             }

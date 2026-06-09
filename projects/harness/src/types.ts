@@ -262,6 +262,7 @@ export interface ModelEntry {
     fullId: string // wire model ID or rolling alias sent to CLI
     label: string // display label (e.g. "Opus 4.7")
     displayClass: string // normalized class for grouping/display (e.g. "Opus")
+    tier?: "high" | "low" // UI priority: "high" = featured/top, "low" = de-prioritized (hidden from review). Default (undefined) = standard.
 }
 
 export interface HarnessModelConfig {

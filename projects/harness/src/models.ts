@@ -23,19 +23,20 @@ export const HARNESS_META: Record<HarnessId, HarnessMetaEntry> = {
 
 export const CLAUDE_CODE_MODEL_CONFIG: HarnessModelConfig = {
     models: [
+        { id: "fable", fullId: "claude-fable-5", label: "Fable 5", displayClass: "Fable", tier: "high" },
         { id: "opus-4-6", fullId: "claude-opus-4-6", label: "Opus 4.6", displayClass: "Opus" },
         { id: "opus-4-7", fullId: "claude-opus-4-7", label: "Opus 4.7", displayClass: "Opus" },
-        { id: "opus-4-8", fullId: "claude-opus-4-8", label: "Opus 4.8", displayClass: "Opus" },
+        { id: "opus-4-8", fullId: "claude-opus-4-8", label: "Opus 4.8", displayClass: "Opus", tier: "high" },
         { id: "opus", fullId: "opus", label: "Opus (latest)", displayClass: "Opus" },
         { id: "sonnet", fullId: "claude-sonnet-4-6", label: "Sonnet 4.6", displayClass: "Sonnet" },
-        { id: "haiku", fullId: "claude-haiku-4-5-20251001", label: "Haiku 4.5", displayClass: "Haiku" },
+        { id: "haiku", fullId: "claude-haiku-4-5-20251001", label: "Haiku 4.5", displayClass: "Haiku", tier: "low" },
     ],
     defaultModel: "opus",
 }
 
 export const CODEX_MODEL_CONFIG: HarnessModelConfig = {
     models: [
-        { id: "gpt-5.5", fullId: "gpt-5.5", label: "GPT-5.5", displayClass: "Codex" },
+        { id: "gpt-5.5", fullId: "gpt-5.5", label: "GPT-5.5", displayClass: "Codex", tier: "high" },
         { id: "gpt-5.4", fullId: "gpt-5.4", label: "GPT-5.4", displayClass: "Codex" },
         { id: "gpt-5.3-codex", fullId: "gpt-5.3-codex", label: "GPT-5.3 Codex", displayClass: "Codex" },
         { id: "gpt-5.3-codex-spark", fullId: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark", displayClass: "Codex" },
@@ -143,6 +144,7 @@ export function normalizeModelClass(modelId: string): string {
 
     // Fallback for legacy/unknown model IDs
     const lower = modelId.toLowerCase()
+    if (lower.includes("fable")) return "Fable"
     if (lower.includes("opus")) return "Opus"
     if (lower.includes("sonnet")) return "Sonnet"
     if (lower.includes("haiku")) return "Haiku"

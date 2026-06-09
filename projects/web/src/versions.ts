@@ -8,6 +8,16 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.80.0",
+        title: "Claude Fable 5",
+        date: "2026-06-09",
+        highlights: [
+            "Claude Code now includes Claude Fable 5, Anthropic's most powerful model, as a selectable option",
+            "The review picker now leads with the top models — Fable 5, Opus 4.8, and GPT-5.5 — and visually de-emphasizes the rest",
+            "Haiku is no longer offered as a review agent to keep the picker focused on capable models",
+        ],
+    },
+    {
         version: "0.79.0",
         title: "Runtime Core, Queued Turns & Markdown",
         date: "2026-05-31",
