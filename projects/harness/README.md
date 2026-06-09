@@ -65,7 +65,7 @@ Core config example:
 OPENADE_CORE_AGENT_WORKER_COMMAND='["node","/path/to/openade/projects/harness/dist/worker.js"]'
 ```
 
-The worker reads one JSON `start` envelope from stdin and writes NDJSON `stream`, `execution`, and `result` messages to stdout. It runs Claude Code or Codex through the same `HarnessQuery` interface documented below, including optional `mcpServerConfigs` passed through as `HarnessQuery.mcpServers` and Core-expanded base64 image sources passed through as multimodal prompt parts.
+The worker reads one JSON `start` envelope from stdin and writes NDJSON `stream`, `execution`, and `result` messages to stdout. It runs Claude Code or Codex through the same `HarnessQuery` interface documented below, including optional `mcpServerConfigs` passed through as `HarnessQuery.mcpServers` and Core-expanded base64 image sources passed through as multimodal prompt parts. When Core sets `OPENADE_AGENT_WORKER_RECOVERY_FILE`, the worker appends the same outbound NDJSON protocol messages to that file before stdout so Core can replay or tail a worker transcript after restart.
 
 ## API Reference
 

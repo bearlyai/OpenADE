@@ -40,7 +40,7 @@ func main() {
 	hostName, _ := os.Hostname()
 	var agentExecutor product.AgentExecutor
 	if len(cfg.AgentWorkerCommand) > 0 {
-		agentExecutor = product.NewCommandAgentExecutor(cfg.AgentWorkerCommand)
+		agentExecutor = product.NewCommandAgentExecutorWithRecoveryDir(cfg.AgentWorkerCommand, filepath.Join(cfg.DataDir, "agent-recovery"))
 	}
 	product.ConfigureDeviceAuthentication(httpHandler, store)
 	productService := product.Register(httpHandler.Runtime, store, product.Options{

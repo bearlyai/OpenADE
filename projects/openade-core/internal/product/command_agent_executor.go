@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -20,8 +21,9 @@ const (
 )
 
 type CommandAgentExecutor struct {
-	Command []string
-	Env     []string
+	Command     []string
+	Env         []string
+	RecoveryDir string
 }
 
 type commandAgentWorkerStartEnvelope struct {
@@ -70,6 +72,10 @@ func NewCommandAgentExecutor(command []string) CommandAgentExecutor {
 	return CommandAgentExecutor{Command: append([]string(nil), command...)}
 }
 
+func NewCommandAgentExecutorWithRecoveryDir(command []string, recoveryDir string) CommandAgentExecutor {
+	return CommandAgentExecutor{Command: append([]string(nil), command...), RecoveryDir: recoveryDir}
+}
+
 func (executor CommandAgentExecutor) Run(ctx context.Context, request AgentExecutionRequest, emitter AgentExecutionEmitter) AgentExecutionResult {
 	command := normalizedCommand(executor.Command)
 	if len(command) == 0 {
@@ -83,7 +89,16 @@ func (executor CommandAgentExecutor) Run(ctx context.Context, request AgentExecu
 		cmd.Dir = request.RepoPath
 	}
 	configureCommandAgentProcess(cmd)
-	cmd.Env = environmentWithOverrides(os.Environ(), request.EnvVars, executor.Env...)
+	envExtras := append([]string(nil), executor.Env...)
+	recoveryFile := commandAgentRecoveryFile(executor.RecoveryDir, request.RuntimeID)
+	if recoveryFile != "" {
+		envExtras = append(envExtras, "OPENADE_AGENT_WORKER_RECOVERY_FILE="+recoveryFile)
+		if err := emitter.UpdateExecution(execCtx, AgentExecutionUpdate{RecoveryFile: recoveryFile}); err != nil {
+			cancel()
+			return failedAgentExecution("agent worker recovery metadata rejected")
+		}
+	}
+	cmd.Env = environmentWithOverrides(os.Environ(), request.EnvVars, envExtras...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return failedAgentExecution("agent worker stdin unavailable")
@@ -256,6 +271,34 @@ func normalizedCommand(command []string) []string {
 		}
 	}
 	return normalized
+}
+
+func commandAgentRecoveryFile(recoveryDir string, runtimeID string) string {
+	dir := strings.TrimSpace(recoveryDir)
+	if dir == "" {
+		return ""
+	}
+	name := commandAgentRecoveryFileName(runtimeID)
+	if name == "" {
+		return ""
+	}
+	return filepath.Join(dir, name+".ndjson")
+}
+
+func commandAgentRecoveryFileName(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	var builder strings.Builder
+	for _, char := range trimmed {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' || char == '_' || char == '.' {
+			builder.WriteRune(char)
+			continue
+		}
+		builder.WriteByte('_')
+	}
+	return builder.String()
 }
 
 func agentExecutionStatusFromWorker(status string) (AgentExecutionStatus, bool) {

@@ -88,7 +88,7 @@ func (emitter agentExecutionEmitter) UpdateExecution(ctx context.Context, update
 	if !active {
 		return errorString("agent runtime is not active")
 	}
-	if update.PID != nil || update.PGID != nil || !update.ProcessStartedAt.IsZero() {
+	if update.PID != nil || update.PGID != nil || !update.ProcessStartedAt.IsZero() || update.RecoveryFile != "" {
 		if runtimeErr := emitter.service.updateAgentRuntimeExecutionState(ctx, emitter.runtimeID, update); runtimeErr != nil {
 			return errorString(runtimeErr.Message)
 		}
@@ -125,6 +125,9 @@ func (service *Service) updateAgentRuntimeExecutionState(ctx context.Context, ru
 	}
 	if !update.ProcessStartedAt.IsZero() {
 		dto.ProcessStartedAt = formatTime(update.ProcessStartedAt)
+	}
+	if update.RecoveryFile != "" {
+		dto.RecoveryFile = update.RecoveryFile
 	}
 	updatedAt := time.Now().UTC()
 	dto.UpdatedAt = formatTime(updatedAt)

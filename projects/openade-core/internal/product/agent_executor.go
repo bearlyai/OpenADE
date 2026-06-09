@@ -46,6 +46,7 @@ type AgentExecutionUpdate struct {
 	PID              *int
 	PGID             *int
 	ProcessStartedAt time.Time
+	RecoveryFile     string
 }
 
 type AgentExecutionResult struct {

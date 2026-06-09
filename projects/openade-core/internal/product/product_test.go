@@ -6626,6 +6626,23 @@ func waitForProcessExit(t *testing.T, cmd *exec.Cmd, timeout time.Duration) {
 	}
 }
 
+func waitForRuntimeStatus(t *testing.T, harness *runtimeHarness, runtimeID string, status string) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var last map[string]any
+	for time.Now().Before(deadline) {
+		last = resultObject(t, harness.request(t, "runtime/read", map[string]any{
+			"runtimeId": runtimeID,
+		}))
+		if last["status"] == status {
+			return last
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("runtime %s did not reach %s; last = %#v", runtimeID, status, last)
+	return nil
+}
+
 type stopRaceAgentExecutor struct {
 	started  chan struct{}
 	finished chan struct{}
@@ -7601,6 +7618,284 @@ func TestProductRuntimeRecordsOrphanActiveOnStartup(t *testing.T) {
 	if completed["status"] != "completed" || completed["exitCode"] != float64(0) {
 		t.Fatalf("completed runtime after startup = %#v", completed)
 	}
+}
+
+func seedAgentRecoveryFixture(t *testing.T, store *storage.Store, ctx context.Context, input agentRecoveryFixtureInput) {
+	t.Helper()
+	if err := store.UpsertRepo(ctx, storage.Repo{
+		ID:        input.RepoID,
+		Name:      input.Title + " Repo",
+		Path:      "/tmp/" + input.RepoID,
+		CreatedAt: input.StartedAt,
+		UpdatedAt: input.StartedAt,
+	}); err != nil {
+		t.Fatalf("upsert %s repo: %v", input.RepoID, err)
+	}
+	if err := store.UpsertTask(ctx, storage.Task{
+		ID:            input.TaskID,
+		RepoID:        input.RepoID,
+		Slug:          input.TaskID,
+		Title:         input.Title,
+		IsolationJSON: sql.NullString{String: `{"type":"head"}`, Valid: true},
+		CreatedAt:     input.StartedAt,
+		UpdatedAt:     input.StartedAt,
+	}); err != nil {
+		t.Fatalf("upsert %s task: %v", input.TaskID, err)
+	}
+	actionPayload := fmt.Sprintf(`{"id":%q,"type":"action","status":"in_progress","createdAt":%q,"userInput":%q,"source":{"type":"do","userLabel":"Do"},"execution":{"harnessId":"codex","executionId":%q,"events":[]},"includesCommentIds":[]}`, input.EventID, input.StartedAt.Format(time.RFC3339Nano), input.UserInput, input.ExecutionID)
+	if err := store.UpsertTaskEvent(ctx, storage.TaskEvent{
+		ID:          input.EventID,
+		TaskID:      input.TaskID,
+		Seq:         1,
+		Type:        "action",
+		Status:      sql.NullString{String: "in_progress", Valid: true},
+		SourceType:  sql.NullString{String: "do", Valid: true},
+		SourceLabel: sql.NullString{String: "Do", Valid: true},
+		CreatedAt:   input.StartedAt,
+		PayloadJSON: sql.NullString{String: actionPayload, Valid: true},
+	}); err != nil {
+		t.Fatalf("upsert %s action event: %v", input.EventID, err)
+	}
+	payload := map[string]any{
+		"nativeId":     input.ExecutionID,
+		"pid":          input.PID,
+		"recoveryFile": input.RecoveryFile,
+	}
+	if input.PGID != nil {
+		payload["pgid"] = *input.PGID
+	}
+	runtimePayload, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal %s runtime payload: %v", input.EventID, err)
+	}
+	scope := fmt.Sprintf(`{"ownerType":"openade-task","ownerId":%q,"repoPath":%q,"rootPath":%q,"labels":{"eventId":%q,"executionId":%q}}`, input.TaskID, "/tmp/"+input.RepoID, "/tmp/"+input.RepoID, input.EventID, input.ExecutionID)
+	if err := store.UpsertRuntime(ctx, storage.RuntimeRecord{
+		RuntimeID:      "openade-turn:" + input.EventID,
+		Kind:           "agent",
+		Status:         "running",
+		ScopeJSON:      sql.NullString{String: scope, Valid: true},
+		StartedAt:      input.StartedAt,
+		UpdatedAt:      input.StartedAt,
+		LastActivityAt: input.StartedAt,
+		PayloadJSON:    sql.NullString{String: string(runtimePayload), Valid: true},
+	}); err != nil {
+		t.Fatalf("upsert %s runtime: %v", input.EventID, err)
+	}
+}
+
+type agentRecoveryFixtureInput struct {
+	RepoID       string
+	TaskID       string
+	EventID      string
+	ExecutionID  string
+	Title        string
+	UserInput    string
+	StartedAt    time.Time
+	RecoveryFile string
+	PID          int
+	PGID         *int
+}
+
+func TestProductRuntimeStartupRecoversCompletedAgentWorkerTranscript(t *testing.T) {
+	startedAt := time.Date(2026, 6, 8, 22, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(2 * time.Minute)
+	completedAtString := completedAt.Format(time.RFC3339Nano)
+	recoveryFile := filepath.Join(t.TempDir(), "openade-turn-event-recovered-agent.ndjson")
+	recoveryLines := []string{
+		`{"type":"stream","event":{"id":"stream-recovered-1","direction":"execution","type":"session_started","executionId":"exec-recovered-agent","harnessId":"codex","sessionId":"session-recovered-agent"}}`,
+		`{"type":"stream","event":{"id":"stream-recovered-2","direction":"execution","type":"raw_message","executionId":"exec-recovered-agent","harnessId":"codex","message":{"type":"item.completed","item":{"type":"agent_message","text":"Recovered after Core restart."}}}}`,
+		`{"type":"stream","event":{"id":"stream-recovered-3","direction":"execution","type":"complete","executionId":"exec-recovered-agent","harnessId":"codex","usage":{"inputTokens":3,"outputTokens":4}}}`,
+		`{"type":"execution","sessionId":"session-recovered-agent","gitRefsAfter":{"sha":"abc123","branch":"main"}}`,
+		fmt.Sprintf(`{"type":"result","status":"completed","success":true,"completedAt":%q}`, completedAtString),
+	}
+	if err := os.WriteFile(recoveryFile, []byte(strings.Join(recoveryLines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("write recovery transcript: %v", err)
+	}
+	harness := newRuntimeHarnessWithStoreSetup(t, func(ctx context.Context, store *storage.Store) {
+		seedAgentRecoveryFixture(t, store, ctx, agentRecoveryFixtureInput{
+			RepoID:       "repo-recovered-agent",
+			TaskID:       "task-recovered-agent",
+			EventID:      "event-recovered-agent",
+			ExecutionID:  "exec-recovered-agent",
+			Title:        "Recovered agent",
+			UserInput:    "recover completed worker",
+			StartedAt:    startedAt,
+			RecoveryFile: recoveryFile,
+			PID:          deadProcessID(t),
+		})
+	})
+
+	runtimeDTO := resultObject(t, harness.request(t, "runtime/read", map[string]any{
+		"runtimeId": "openade-turn:event-recovered-agent",
+	}))
+	if runtimeDTO["status"] != "completed" || runtimeDTO["nativeId"] != "exec-recovered-agent" || runtimeDTO["exitedAt"] != completedAtString {
+		t.Fatalf("startup recovered agent runtime = %#v", runtimeDTO)
+	}
+	if _, ok := runtimeDTO["recoveryFile"]; ok {
+		t.Fatalf("runtime DTO exposed recovery file path = %#v", runtimeDTO)
+	}
+	task := resultObject(t, harness.request(t, "openade/task/read", map[string]any{
+		"repoId":               "repo-recovered-agent",
+		"taskId":               "task-recovered-agent",
+		"hydrateSessionEvents": true,
+	}))
+	action := actionEventFromTask(t, task, "event-recovered-agent")
+	if action["status"] != "completed" || action["completedAt"] != completedAtString {
+		t.Fatalf("startup recovered action = %#v", action)
+	}
+	execution := objectField(t, action, "execution")
+	if execution["sessionId"] != "session-recovered-agent" {
+		t.Fatalf("startup recovered execution session = %#v", execution)
+	}
+	events := arrayField(t, execution, "events")
+	if len(events) != 3 {
+		t.Fatalf("startup recovered execution events = %#v", events)
+	}
+	if objectValue(t, events[1])["type"] != "raw_message" || objectField(t, objectValue(t, events[1]), "message")["type"] != "item.completed" {
+		t.Fatalf("startup recovered stream events = %#v", events)
+	}
+	gitRefsAfter := objectField(t, execution, "gitRefsAfter")
+	if gitRefsAfter["sha"] != "abc123" || gitRefsAfter["branch"] != "main" {
+		t.Fatalf("startup recovered git refs = %#v", gitRefsAfter)
+	}
+	result := objectField(t, action, "result")
+	if result["success"] != true {
+		t.Fatalf("startup recovered action result = %#v", result)
+	}
+}
+
+func TestProductRuntimeStartupAdoptsLiveAgentWorkerTranscript(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("live agent worker adoption uses Unix process groups")
+	}
+	worker, pid, pgid := startLongRunningProcessGroup(t)
+	t.Cleanup(func() {
+		if worker.Process != nil {
+			_ = worker.Process.Kill()
+		}
+		_ = worker.Wait()
+	})
+	startedAt := time.Date(2026, 6, 8, 22, 30, 0, 0, time.UTC)
+	completedAt := startedAt.Add(2 * time.Minute)
+	completedAtString := completedAt.Format(time.RFC3339Nano)
+	recoveryFile := filepath.Join(t.TempDir(), "openade-turn-event-live-adopted.ndjson")
+	initialLine := `{"type":"stream","event":{"id":"stream-live-1","direction":"execution","type":"raw_message","executionId":"exec-live-adopted","harnessId":"codex","message":{"type":"item.completed","item":{"type":"agent_message","text":"Before restart."}}}}`
+	if err := os.WriteFile(recoveryFile, []byte(initialLine+"\n"), 0o600); err != nil {
+		t.Fatalf("write live recovery transcript: %v", err)
+	}
+	harness := newRuntimeHarnessWithStoreSetup(t, func(ctx context.Context, store *storage.Store) {
+		seedAgentRecoveryFixture(t, store, ctx, agentRecoveryFixtureInput{
+			RepoID:       "repo-live-adopted",
+			TaskID:       "task-live-adopted",
+			EventID:      "event-live-adopted",
+			ExecutionID:  "exec-live-adopted",
+			Title:        "Live adopted agent",
+			UserInput:    "adopt live worker",
+			StartedAt:    startedAt,
+			RecoveryFile: recoveryFile,
+			PID:          pid,
+			PGID:         pgid,
+		})
+	})
+
+	running := resultObject(t, harness.request(t, "runtime/read", map[string]any{
+		"runtimeId": "openade-turn:event-live-adopted",
+	}))
+	if running["status"] != "running" || running["nativeId"] != "exec-live-adopted" {
+		t.Fatalf("adopted live runtime = %#v", running)
+	}
+	task := resultObject(t, harness.request(t, "openade/task/read", map[string]any{
+		"repoId":               "repo-live-adopted",
+		"taskId":               "task-live-adopted",
+		"hydrateSessionEvents": true,
+	}))
+	action := actionEventFromTask(t, task, "event-live-adopted")
+	events := arrayField(t, objectField(t, action, "execution"), "events")
+	if len(events) != 1 || objectValue(t, events[0])["id"] != "stream-live-1" {
+		t.Fatalf("adopted live initial stream = %#v", events)
+	}
+
+	appendLines := []string{
+		`{"type":"stream","event":{"id":"stream-live-2","direction":"execution","type":"complete","executionId":"exec-live-adopted","harnessId":"codex","usage":{"inputTokens":5,"outputTokens":6}}}`,
+		`{"type":"execution","sessionId":"session-live-adopted","gitRefsAfter":{"sha":"def456"}}`,
+		fmt.Sprintf(`{"type":"result","status":"completed","success":true,"completedAt":%q}`, completedAtString),
+	}
+	file, err := os.OpenFile(recoveryFile, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open live recovery transcript for append: %v", err)
+	}
+	if _, err := file.WriteString(strings.Join(appendLines, "\n") + "\n"); err != nil {
+		_ = file.Close()
+		t.Fatalf("append live recovery transcript: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close live recovery transcript: %v", err)
+	}
+
+	completed := waitForRuntimeStatus(t, harness, "openade-turn:event-live-adopted", "completed")
+	if completed["exitedAt"] != completedAtString {
+		t.Fatalf("completed adopted runtime = %#v", completed)
+	}
+	task = resultObject(t, harness.request(t, "openade/task/read", map[string]any{
+		"repoId":               "repo-live-adopted",
+		"taskId":               "task-live-adopted",
+		"hydrateSessionEvents": true,
+	}))
+	action = actionEventFromTask(t, task, "event-live-adopted")
+	if action["status"] != "completed" || action["completedAt"] != completedAtString {
+		t.Fatalf("completed adopted action = %#v", action)
+	}
+	execution := objectField(t, action, "execution")
+	if execution["sessionId"] != "session-live-adopted" {
+		t.Fatalf("completed adopted execution = %#v", execution)
+	}
+	events = arrayField(t, execution, "events")
+	if len(events) != 2 {
+		t.Fatalf("completed adopted stream events = %#v", events)
+	}
+	waitForProcessExit(t, worker, 2*time.Second)
+}
+
+func TestProductRuntimeStopTerminatesAdoptedLiveAgentWorker(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("live agent worker adoption uses Unix process groups")
+	}
+	worker, pid, pgid := startLongRunningProcessGroup(t)
+	t.Cleanup(func() {
+		if worker.Process != nil {
+			_ = worker.Process.Kill()
+		}
+		_ = worker.Wait()
+	})
+	startedAt := time.Date(2026, 6, 8, 23, 0, 0, 0, time.UTC)
+	recoveryFile := filepath.Join(t.TempDir(), "openade-turn-event-live-stop.ndjson")
+	if err := os.WriteFile(recoveryFile, []byte(`{"type":"stream","event":{"id":"stream-stop-1","direction":"execution","type":"raw_message","executionId":"exec-live-stop","harnessId":"codex","message":{"type":"item.completed","item":{"type":"agent_message","text":"Still running."}}}}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write stoppable recovery transcript: %v", err)
+	}
+	harness := newRuntimeHarnessWithStoreSetup(t, func(ctx context.Context, store *storage.Store) {
+		seedAgentRecoveryFixture(t, store, ctx, agentRecoveryFixtureInput{
+			RepoID:       "repo-live-stop",
+			TaskID:       "task-live-stop",
+			EventID:      "event-live-stop",
+			ExecutionID:  "exec-live-stop",
+			Title:        "Live stoppable agent",
+			UserInput:    "stop adopted worker",
+			StartedAt:    startedAt,
+			RecoveryFile: recoveryFile,
+			PID:          pid,
+			PGID:         pgid,
+		})
+	})
+	waitForRuntimeStatus(t, harness, "openade-turn:event-live-stop", "running")
+
+	stopped := resultObject(t, harness.request(t, "runtime/stop", map[string]any{
+		"runtimeId": "openade-turn:event-live-stop",
+		"reason":    "user stop after adoption",
+	}))
+	if stopped["status"] != "stopped" || stopped["error"] != "user stop after adoption" {
+		t.Fatalf("stopped adopted runtime = %#v", stopped)
+	}
+	waitForProcessExit(t, worker, 2*time.Second)
 }
 
 func TestProductRuntimeStartupStopsVerifiedDeadProcessBackedRuntimes(t *testing.T) {

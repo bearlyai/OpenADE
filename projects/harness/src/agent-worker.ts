@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
+import { mkdir, open, type FileHandle } from "node:fs/promises"
+import { dirname } from "node:path"
 import type { Readable, Writable } from "node:stream"
 import { promisify } from "node:util"
 import type { Harness } from "./harness.js"
@@ -21,6 +23,7 @@ export interface CommandAgentWorkerOptions {
     now?: () => Date
     gitRefs?: (cwd: string) => Promise<WorkerGitRefs | undefined>
     eventId?: () => string
+    recoveryFile?: string
 }
 
 export interface WorkerHarness {
@@ -117,86 +120,106 @@ interface WorkerRunState {
     errorMessage?: string
 }
 
+interface RecoveryWriter {
+    append(line: string): Promise<void>
+    close(): Promise<void>
+}
+
+interface WorkerOutputState {
+    available: boolean
+}
+
 export async function runCommandAgentWorker(options: CommandAgentWorkerOptions): Promise<number> {
     const now = options.now ?? (() => new Date())
-    const write = (message: WorkerMessage) => writeWorkerMessage(options.output, message)
-
-    let envelope: WorkerStartEnvelope
-    try {
-        envelope = parseStartEnvelope(JSON.parse(await readAll(options.input)))
-    } catch (error) {
-        writeError(options.errorOutput, `Invalid worker start envelope: ${errorMessage(error)}\n`)
-        return 1
-    }
-
-    const request = envelope.request
-    const harness = workerHarnesses(options.harnesses)[request.harnessId]
-    if (!harness) {
-        await write({
-            type: "result",
-            status: "failed",
-            success: false,
-            error: `Harness is not configured: ${request.harnessId}`,
-            completedAt: now().toISOString(),
+    const recoveryWriter = await openRecoveryWriter(options.recoveryFile, options.errorOutput)
+    const outputState: WorkerOutputState = { available: true }
+    if (recoveryWriter) {
+        options.output.on("error", () => {
+            outputState.available = false
         })
-        return 0
     }
-
-    const state: WorkerRunState = {
-        sawError: false,
-        sawComplete: false,
-    }
+    const write = (message: WorkerMessage) => writeWorkerMessage(options.output, message, recoveryWriter, outputState)
 
     try {
-        const query = commandWorkerHarnessQuery(request, options.signal ?? new AbortController().signal)
-        for await (const event of harness.query(query)) {
-            await emitHarnessEvent(write, request, event, state, options.eventId ?? defaultEventId)
+        let envelope: WorkerStartEnvelope
+        try {
+            envelope = parseStartEnvelope(JSON.parse(await readAll(options.input)))
+        } catch (error) {
+            writeError(options.errorOutput, `Invalid worker start envelope: ${errorMessage(error)}\n`)
+            return 1
         }
-    } catch (error) {
-        state.sawError = true
-        state.errorMessage = errorMessage(error)
-        await write({
-            type: "stream",
-            event: {
-                id: (options.eventId ?? defaultEventId)(),
-                direction: "execution",
-                type: "error",
-                executionId: request.executionId,
-                harnessId: request.harnessId,
-                error: state.errorMessage,
-                code: "unknown",
-            },
-        })
-    }
 
-    if (options.signal?.aborted) {
+        const request = envelope.request
+        const harness = workerHarnesses(options.harnesses)[request.harnessId]
+        if (!harness) {
+            await write({
+                type: "result",
+                status: "failed",
+                success: false,
+                error: `Harness is not configured: ${request.harnessId}`,
+                completedAt: now().toISOString(),
+            })
+            return 0
+        }
+
+        const state: WorkerRunState = {
+            sawError: false,
+            sawComplete: false,
+        }
+
+        try {
+            const query = commandWorkerHarnessQuery(request, options.signal ?? new AbortController().signal)
+            for await (const event of harness.query(query)) {
+                await emitHarnessEvent(write, request, event, state, options.eventId ?? defaultEventId)
+            }
+        } catch (error) {
+            state.sawError = true
+            state.errorMessage = errorMessage(error)
+            await write({
+                type: "stream",
+                event: {
+                    id: (options.eventId ?? defaultEventId)(),
+                    direction: "execution",
+                    type: "error",
+                    executionId: request.executionId,
+                    harnessId: request.harnessId,
+                    error: state.errorMessage,
+                    code: "unknown",
+                },
+            })
+        }
+
+        if (options.signal?.aborted) {
+            await write({
+                type: "result",
+                status: "stopped",
+                success: false,
+                completedAt: now().toISOString(),
+            })
+            return 0
+        }
+
+        const gitRefsAfter = await readGitRefsAfter(request.cwd || request.repoPath, options.gitRefs ?? defaultGitRefs)
+        if (state.sessionId || gitRefsAfter) {
+            await write({
+                type: "execution",
+                sessionId: state.sessionId,
+                gitRefsAfter,
+            })
+        }
+
+        const failed = state.sawError && !state.sawComplete
         await write({
             type: "result",
-            status: "stopped",
-            success: false,
+            status: failed ? "failed" : "completed",
+            success: !state.sawError,
+            error: failed ? state.errorMessage : undefined,
             completedAt: now().toISOString(),
         })
         return 0
+    } finally {
+        await recoveryWriter?.close()
     }
-
-    const gitRefsAfter = await readGitRefsAfter(request.cwd || request.repoPath, options.gitRefs ?? defaultGitRefs)
-    if (state.sessionId || gitRefsAfter) {
-        await write({
-            type: "execution",
-            sessionId: state.sessionId,
-            gitRefsAfter,
-        })
-    }
-
-    const failed = state.sawError && !state.sawComplete
-    await write({
-        type: "result",
-        status: failed ? "failed" : "completed",
-        success: !state.sawError,
-        error: failed ? state.errorMessage : undefined,
-        completedAt: now().toISOString(),
-    })
-    return 0
 }
 
 function commandWorkerHarnessQuery(request: WorkerStartRequest, signal: AbortSignal): HarnessQuery {
@@ -318,14 +341,32 @@ function deterministicSmokeHarnesses(): Record<HarnessId, WorkerHarness> {
     }
 }
 
-function deterministicSmokeHarness(harnessId: HarnessId): WorkerHarness {
+function deterministicSmokeHarness(harnessId: HarnessId, env: NodeJS.ProcessEnv = process.env): WorkerHarness {
     return {
-        async *query(): AsyncGenerator<HarnessEvent<unknown>> {
+        async *query(query: HarnessQuery): AsyncGenerator<HarnessEvent<unknown>> {
+            const delayMs = deterministicSmokeDelayMs(query, env)
+            if (delayMs > 0) {
+                await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs))
+            }
             yield { type: "session_started", sessionId: `smoke-${harnessId}-session` }
             yield { type: "message", message: deterministicSmokeMessage(harnessId) }
             yield { type: "complete", usage: { inputTokens: 1, outputTokens: 1, durationMs: 1 } }
         },
     }
+}
+
+function deterministicSmokeDelayMs(query: HarnessQuery, env: NodeJS.ProcessEnv): number {
+    const promptNeedle = env.OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_PROMPT?.trim()
+    if (!promptNeedle || !promptText(query.prompt).includes(promptNeedle)) return 0
+    const parsed = Number(env.OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_MS?.trim())
+    if (!Number.isFinite(parsed) || parsed <= 0) return 0
+    return Math.min(Math.trunc(parsed), 30_000)
+}
+
+function promptText(prompt: HarnessQuery["prompt"]): string {
+    if (typeof prompt === "string") return prompt
+    if (!Array.isArray(prompt)) return ""
+    return prompt.map((part) => (part.type === "text" ? part.text : "")).join("\n")
 }
 
 function deterministicSmokeMessage(harnessId: HarnessId): unknown {
@@ -453,11 +494,47 @@ async function readAll(input: Readable): Promise<string> {
     return Buffer.concat(chunks).toString("utf8")
 }
 
-function writeWorkerMessage(output: Writable, message: WorkerMessage): Promise<void> {
+async function openRecoveryWriter(filePath: string | undefined, errorOutput: Writable | undefined): Promise<RecoveryWriter | undefined> {
+    const trimmed = filePath?.trim()
+    if (!trimmed) return undefined
+    try {
+        await mkdir(dirname(trimmed), { recursive: true })
+        const handle = await open(trimmed, "a")
+        return newFileRecoveryWriter(handle)
+    } catch (error) {
+        writeError(errorOutput, `Failed to open worker recovery file: ${errorMessage(error)}\n`)
+        return undefined
+    }
+}
+
+function newFileRecoveryWriter(handle: FileHandle): RecoveryWriter {
+    return {
+        async append(line: string): Promise<void> {
+            await handle.write(`${line}\n`)
+        },
+        async close(): Promise<void> {
+            await handle.close()
+        },
+    }
+}
+
+async function writeWorkerMessage(
+    output: Writable,
+    message: WorkerMessage,
+    recoveryWriter: RecoveryWriter | undefined,
+    outputState: WorkerOutputState
+): Promise<void> {
+    const line = JSON.stringify(message)
+    await recoveryWriter?.append(line)
+    if (recoveryWriter && !outputState.available) return
     return new Promise((resolve, reject) => {
-        output.write(`${JSON.stringify(message)}\n`, (error: Error | null | undefined) => {
-            if (error) reject(error)
-            else resolve()
+        output.write(`${line}\n`, (error: Error | null | undefined) => {
+            if (error && !recoveryWriter) {
+                reject(error)
+                return
+            }
+            if (error) outputState.available = false
+            resolve()
         })
     })
 }

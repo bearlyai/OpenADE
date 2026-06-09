@@ -122,9 +122,11 @@ Core sends one JSON `start` envelope on stdin with protocol version `1`, repo/ta
 - `execution` with session id and best-effort final git refs
 - `result` with `completed`, `failed`, or `stopped`
 
+When `OPENADE_AGENT_WORKER_RECOVERY_FILE` is set, the worker appends every outbound NDJSON protocol message to that file before stdout. This is Core's restart recovery transcript for workers that finish after Core disconnects; keep it as the same typed worker protocol, not a second transport or Electron-specific IPC path.
+
 Keep this worker protocol boring and typed. Do not add Electron-specific IPC, renderer callbacks, raw host access, or mocked clients here. MCP server config and task image/blob expansion must come from Core-owned product state before payloads reach the start envelope.
 
-For packaged Electron smoke only, the worker may use its deterministic smoke harness when both `OPENADE_SMOKE_TEST=1` and `OPENADE_SMOKE_DETERMINISTIC_HARNESS=1` are set. That still exercises the real Core command-executor subprocess protocol; it only replaces the external Claude/Codex CLI so packaged smoke does not require auth or network. Do not enable that mode outside smoke tests.
+For packaged Electron smoke only, the worker may use its deterministic smoke harness when both `OPENADE_SMOKE_TEST=1` and `OPENADE_SMOKE_DETERMINISTIC_HARNESS=1` are set. That still exercises the real Core command-executor subprocess protocol; it only replaces the external Claude/Codex CLI so packaged smoke does not require auth or network. `OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_PROMPT` and `OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_MS` may delay only prompts containing the configured text for restart-during-live-turn smoke coverage. Do not enable that mode outside smoke tests.
 
 ## Session Management
 

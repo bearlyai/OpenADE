@@ -1,9 +1,12 @@
 package product
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"os"
 	"time"
 
 	"github.com/openade/openade/projects/openade-core/internal/core"
@@ -37,6 +40,7 @@ type runtimeRecordDTO struct {
 	ExitCode         *int            `json:"exitCode,omitempty"`
 	Signal           *string         `json:"signal,omitempty"`
 	Error            string          `json:"error,omitempty"`
+	RecoveryFile     string          `json:"-"`
 }
 
 type runtimeRecordPayloadDTO struct {
@@ -49,6 +53,7 @@ type runtimeRecordPayloadDTO struct {
 	ExitCode         *int    `json:"exitCode,omitempty"`
 	Signal           *string `json:"signal,omitempty"`
 	Error            string  `json:"error,omitempty"`
+	RecoveryFile     string  `json:"recoveryFile,omitempty"`
 }
 
 type runtimeReconcileDTO struct {
@@ -58,6 +63,7 @@ type runtimeReconcileDTO struct {
 }
 
 const orphanedAgentWorkerStartupStopReason = "agent worker process was orphaned during core startup"
+const adoptedAgentWorkerTranscriptPollInterval = 100 * time.Millisecond
 
 func (service *Service) handleRuntimeList(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
 	var params struct {
@@ -347,9 +353,343 @@ func (service *Service) markActiveRuntimesOrphaned() {
 	if err := service.store.MarkActiveRuntimesOrphaned(ctx, updatedAt); err != nil {
 		return
 	}
+	service.recoverOrAdoptStoredAgentWorkers(ctx)
 	service.stopStoredLiveOrphanedAgentWorkers(ctx)
 	service.reconcileStoredDeadProcessBackedRuntimes(ctx)
 	service.reconcileStoredAgentActionEvents(ctx, updatedAt)
+}
+
+func (service *Service) recoverOrAdoptStoredAgentWorkers(ctx context.Context) {
+	records, err := service.store.ListRuntimes(ctx)
+	if err != nil {
+		return
+	}
+	for _, record := range records {
+		dto, runtimeErr := runtimeRecordToDTO(record)
+		if runtimeErr != nil || dto.Kind != "agent" || dto.Status != "orphaned" || dto.RecoveryFile == "" {
+			continue
+		}
+		recovered, runtimeErr := service.recoverCompletedAgentWorkerTranscript(ctx, dto)
+		if runtimeErr != nil || !recovered {
+			if runtimeErr == nil {
+				_, _ = service.adoptLiveAgentWorkerTranscript(ctx, dto)
+			}
+			continue
+		}
+	}
+}
+
+func (service *Service) recoverCompletedAgentWorkerTranscript(ctx context.Context, dto runtimeRecordDTO) (bool, *core.RuntimeError) {
+	taskID := dto.Scope.OwnerID
+	if dto.Scope.OwnerType != "openade-task" || taskID == "" || dto.RecoveryFile == "" {
+		return false, nil
+	}
+	eventID := ""
+	queuedTurnID := ""
+	if dto.Scope.Labels != nil {
+		eventID = dto.Scope.Labels["eventId"]
+		queuedTurnID = dto.Scope.Labels["queuedTurnId"]
+	}
+	if eventID == "" {
+		return false, nil
+	}
+	messages, recoveredResult, ok, runtimeErr := readCommandAgentRecoveryTranscript(dto.RecoveryFile)
+	if runtimeErr != nil || !ok {
+		return false, runtimeErr
+	}
+	for _, message := range messages {
+		if message.Type == "result" {
+			if runtimeErr := service.applyAgentWorkerRecoveryResult(ctx, dto, recoveredResult, queuedTurnID); runtimeErr != nil {
+				return false, runtimeErr
+			}
+			terminateRecoveredAgentWorkerIfStillRunning(dto)
+			return true, nil
+		}
+		if runtimeErr := service.applyAgentWorkerRecoveryMessage(ctx, taskID, eventID, message); runtimeErr != nil {
+			return false, runtimeErr
+		}
+	}
+	return false, nil
+}
+
+func (service *Service) adoptLiveAgentWorkerTranscript(ctx context.Context, dto runtimeRecordDTO) (bool, *core.RuntimeError) {
+	if dto.PID == nil || !agentWorkerProcessIsRunning(*dto.PID) || dto.RecoveryFile == "" {
+		return false, nil
+	}
+	taskID := dto.Scope.OwnerID
+	eventID := ""
+	if dto.Scope.Labels != nil {
+		eventID = dto.Scope.Labels["eventId"]
+	}
+	if dto.Scope.OwnerType != "openade-task" || taskID == "" || eventID == "" {
+		return false, nil
+	}
+	messages, recoveredResult, ok, runtimeErr := readCommandAgentRecoveryTranscript(dto.RecoveryFile)
+	if runtimeErr != nil {
+		return false, runtimeErr
+	}
+	if ok {
+		return service.recoverCompletedAgentWorkerTranscript(ctx, dto)
+	}
+	for _, message := range messages {
+		if runtimeErr := service.applyAgentWorkerRecoveryMessage(ctx, taskID, eventID, message); runtimeErr != nil {
+			return false, runtimeErr
+		}
+	}
+	dto.Status = "running"
+	updatedAt := time.Now().UTC()
+	dto.UpdatedAt = formatTime(updatedAt)
+	dto.LastActivityAt = dto.UpdatedAt
+	record, runtimeErr := runtimeDTOToStorage(dto)
+	if runtimeErr != nil {
+		return false, runtimeErr
+	}
+	if err := service.store.UpsertRuntime(ctx, record); err != nil {
+		return false, handlerError(err)
+	}
+	service.runtime.Notify("runtime/updated", dto)
+	service.notifyWorkingTasks(ctx, updatedAt)
+
+	tailCtx, cancelTail := context.WithCancel(context.Background())
+	service.registerAdoptedAgentExecution(dto, cancelTail)
+	go service.tailAdoptedAgentWorkerTranscript(tailCtx, dto, len(messages), recoveredResult)
+	return true, nil
+}
+
+func (service *Service) registerAdoptedAgentExecution(dto runtimeRecordDTO, cancelTail context.CancelFunc) {
+	service.agentMu.Lock()
+	service.agentExecutions[dto.RuntimeID] = &agentExecutionState{cancel: func() {
+		cancelTail()
+		_ = terminateAgentWorkerProcess(dto.PID, dto.PGID)
+	}}
+	service.agentMu.Unlock()
+}
+
+func (service *Service) tailAdoptedAgentWorkerTranscript(ctx context.Context, dto runtimeRecordDTO, appliedCount int, recoveredResult AgentExecutionResult) {
+	ticker := time.NewTicker(adoptedAgentWorkerTranscriptPollInterval)
+	defer ticker.Stop()
+	defer service.unregisterAgentExecution(dto.RuntimeID)
+
+	for {
+		messages, result, ok, runtimeErr := readCommandAgentRecoveryTranscript(dto.RecoveryFile)
+		if runtimeErr == nil {
+			if len(messages) > appliedCount {
+				taskID := dto.Scope.OwnerID
+				eventID := ""
+				queuedTurnID := ""
+				if dto.Scope.Labels != nil {
+					eventID = dto.Scope.Labels["eventId"]
+					queuedTurnID = dto.Scope.Labels["queuedTurnId"]
+				}
+				for index := appliedCount; index < len(messages); index++ {
+					message := messages[index]
+					if message.Type == "result" {
+						if result.Status == "" {
+							result = recoveredResult
+						}
+						_ = service.applyAgentWorkerRecoveryResult(context.Background(), dto, result, queuedTurnID)
+						terminateRecoveredAgentWorkerIfStillRunning(dto)
+						return
+					}
+					_ = service.applyAgentWorkerRecoveryMessage(context.Background(), taskID, eventID, message)
+				}
+				appliedCount = len(messages)
+			}
+			if ok {
+				if result.Status == "" {
+					result = recoveredResult
+				}
+				queuedTurnID := ""
+				if dto.Scope.Labels != nil {
+					queuedTurnID = dto.Scope.Labels["queuedTurnId"]
+				}
+				_ = service.applyAgentWorkerRecoveryResult(context.Background(), dto, result, queuedTurnID)
+				terminateRecoveredAgentWorkerIfStillRunning(dto)
+				return
+			}
+		}
+		if dto.PID != nil && !agentWorkerProcessIsRunning(*dto.PID) {
+			_, _ = service.stopAgentRuntimeRecord(context.Background(), dto, "agent worker process is no longer running")
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (service *Service) applyAgentWorkerRecoveryMessage(ctx context.Context, taskID string, eventID string, message commandAgentWorkerMessage) *core.RuntimeError {
+	switch message.Type {
+	case "stream":
+		if len(message.Event) == 0 {
+			return handlerError(errorString("agent worker recovery stream event is missing"))
+		}
+		return service.appendActionStreamEventValue(ctx, taskID, eventID, message.Event)
+	case "execution":
+		if message.SessionID == "" && message.ParentSessionID == "" && len(message.GitRefsAfter) == 0 {
+			return nil
+		}
+		return service.updateActionExecutionState(ctx, taskID, eventID, AgentExecutionUpdate{
+			SessionID:       message.SessionID,
+			ParentSessionID: message.ParentSessionID,
+			GitRefsAfter:    message.GitRefsAfter,
+		})
+	default:
+		return nil
+	}
+}
+
+func (service *Service) applyAgentWorkerRecoveryResult(ctx context.Context, dto runtimeRecordDTO, recoveredResult AgentExecutionResult, queuedTurnID string) *core.RuntimeError {
+	taskID := dto.Scope.OwnerID
+	eventID := ""
+	if dto.Scope.Labels != nil {
+		eventID = dto.Scope.Labels["eventId"]
+	}
+	status := normalizeAgentExecutionStatus(recoveredResult)
+	completedAt := recoveredResult.CompletedAt
+	if completedAt.IsZero() {
+		completedAt = time.Now().UTC()
+	}
+	if recoveredResult.SessionID != "" || recoveredResult.ParentSessionID != "" || len(recoveredResult.GitRefsAfter) > 0 {
+		if runtimeErr := service.updateActionExecutionState(ctx, taskID, eventID, AgentExecutionUpdate{
+			SessionID:       recoveredResult.SessionID,
+			ParentSessionID: recoveredResult.ParentSessionID,
+			GitRefsAfter:    recoveredResult.GitRefsAfter,
+		}); runtimeErr != nil {
+			return runtimeErr
+		}
+	}
+	success := recoveredResult.Success
+	if success == nil {
+		value := status == AgentExecutionCompleted
+		success = &value
+	}
+	actionStatus := string(status)
+	if actionStatus == string(AgentExecutionFailed) {
+		actionStatus = "error"
+	}
+	if runtimeErr := service.updateActionTerminalState(ctx, actionTerminalUpdate{
+		TaskID:        taskID,
+		EventID:       eventID,
+		Status:        actionStatus,
+		Success:       success,
+		CompletedAt:   completedAt,
+		FromReconcile: true,
+	}); runtimeErr != nil {
+		return runtimeErr
+	}
+	if queuedTurnID != "" {
+		if task, found, err := service.store.GetTask(ctx, taskID); err == nil && found {
+			service.completeQueuedTurn(ctx, task, queuedTurnID, queuedTurnStatusForAgentStatus(status), completedAt)
+		}
+	}
+	service.settleRecoveredAgentRuntime(ctx, dto, string(status), recoveredResult.Error, completedAt)
+	if status == AgentExecutionCompleted {
+		service.drainNextQueuedTurn(ctx, taskID)
+	}
+	return nil
+}
+
+func terminateRecoveredAgentWorkerIfStillRunning(dto runtimeRecordDTO) {
+	if dto.PID != nil && agentWorkerProcessIsRunning(*dto.PID) {
+		_ = terminateAgentWorkerProcess(dto.PID, dto.PGID)
+	}
+}
+
+func readCommandAgentRecoveryTranscript(path string) ([]commandAgentWorkerMessage, AgentExecutionResult, bool, *core.RuntimeError) {
+	file, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil, AgentExecutionResult{}, false, nil
+	}
+	if err != nil {
+		return nil, AgentExecutionResult{}, false, handlerError(err)
+	}
+	defer file.Close()
+
+	messages := []commandAgentWorkerMessage{}
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), commandAgentWorkerMaxLineBytes)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		message := commandAgentWorkerMessage{}
+		if err := json.Unmarshal(line, &message); err != nil {
+			return nil, AgentExecutionResult{}, false, handlerError(err)
+		}
+		messages = append(messages, message)
+		if message.Type == "result" {
+			result, runtimeErr := commandAgentRecoveryResult(message)
+			if runtimeErr != nil {
+				return nil, AgentExecutionResult{}, false, runtimeErr
+			}
+			return messages, result, true, nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, AgentExecutionResult{}, false, handlerError(err)
+	}
+	return messages, AgentExecutionResult{}, false, nil
+}
+
+func commandAgentRecoveryResult(message commandAgentWorkerMessage) (AgentExecutionResult, *core.RuntimeError) {
+	status, ok := agentExecutionStatusFromWorker(message.Status)
+	if !ok {
+		return AgentExecutionResult{}, handlerError(errorString("agent worker recovery result status is invalid"))
+	}
+	completedAt := time.Time{}
+	if message.CompletedAt != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, message.CompletedAt)
+		if err != nil {
+			return AgentExecutionResult{}, handlerError(errorString("agent worker recovery completedAt is invalid"))
+		}
+		completedAt = parsed
+	}
+	return AgentExecutionResult{
+		Status:          status,
+		Success:         message.Success,
+		SessionID:       message.SessionID,
+		ParentSessionID: message.ParentSessionID,
+		GitRefsAfter:    message.GitRefsAfter,
+		Error:           message.Error,
+		CompletedAt:     completedAt,
+	}, nil
+}
+
+func (service *Service) settleRecoveredAgentRuntime(ctx context.Context, dto runtimeRecordDTO, status string, errorMessage string, completedAt time.Time) {
+	if isTerminalRuntimeStatus(dto.Status) {
+		return
+	}
+	dto.Status = status
+	dto.UpdatedAt = formatTime(completedAt)
+	dto.LastActivityAt = dto.UpdatedAt
+	dto.ExitedAt = dto.UpdatedAt
+	if status == string(AgentExecutionStopped) {
+		signal := "stopped"
+		dto.Signal = &signal
+	}
+	if errorMessage != "" {
+		dto.Error = errorMessage
+	}
+	record, runtimeErr := runtimeDTOToStorage(dto)
+	if runtimeErr != nil {
+		return
+	}
+	if err := service.store.UpsertRuntime(ctx, record); err != nil {
+		return
+	}
+	switch status {
+	case string(AgentExecutionCompleted):
+		service.runtime.Notify("runtime/completed", dto)
+	case string(AgentExecutionFailed):
+		service.runtime.Notify("runtime/failed", dto)
+	case string(AgentExecutionStopped):
+		service.runtime.Notify("runtime/stopped", dto)
+	}
+	service.notifyWorkingTasks(ctx, completedAt)
 }
 
 func (service *Service) stopStoredLiveOrphanedAgentWorkers(ctx context.Context) {
@@ -492,6 +832,7 @@ func runtimeRecordToDTO(record storage.RuntimeRecord) (runtimeRecordDTO, *core.R
 		ExitCode:         cloneIntPointer(payload.ExitCode),
 		Signal:           cloneStringPointer(payload.Signal),
 		Error:            payload.Error,
+		RecoveryFile:     payload.RecoveryFile,
 	}, nil
 }
 
@@ -520,6 +861,7 @@ func runtimeDTOToStorage(dto runtimeRecordDTO) (storage.RuntimeRecord, *core.Run
 		ExitCode:         cloneIntPointer(dto.ExitCode),
 		Signal:           cloneStringPointer(dto.Signal),
 		Error:            dto.Error,
+		RecoveryFile:     dto.RecoveryFile,
 	})
 	if err != nil {
 		return storage.RuntimeRecord{}, handlerError(err)

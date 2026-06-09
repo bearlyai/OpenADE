@@ -456,6 +456,7 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
     const corePort = await getOpenPort()
     const smokeId = `managed-core-smoke-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
     const repoId = `${smokeId}-repo`
+    const liveRecoveryPrompt = "managed Core live recovery smoke"
     let app: Awaited<ReturnType<typeof electron.launch>> | undefined
     let passed = false
 
@@ -472,6 +473,8 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
                 OPENADE_CORE_TOKEN: "managed-core-smoke-token",
                 OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER: "1",
                 OPENADE_SMOKE_DETERMINISTIC_HARNESS: "1",
+                OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_MS: "6000",
+                OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_PROMPT: liveRecoveryPrompt,
                 OPENADE_SMOKE_TEST: "1",
                 OPENADE_YJS_STORAGE_DIR: yjsStorageDir,
                 USERPROFILE: userDataDir,
@@ -1135,6 +1138,80 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
         await expect(page.locator('[data-openade-surface="desktop-shared-project"]')).toHaveCount(0)
         await expect(page.locator('[data-openade-surface="desktop-shared-task"]')).toHaveCount(0)
 
+        const liveRecovery = await page.evaluate(async ({ smokeRepoId, smokeTaskId, prompt }) => {
+            type RuntimeResponse<T> = { id: number; result?: T; error?: { code?: string; message?: string } }
+            type TurnStartResult = { taskId: string; eventId?: string; queued?: boolean }
+            type RuntimeReadResult = { runtimeId: string; kind?: string; status?: string; processStartedAt?: string }
+
+            const endpoint = window.openadeAPI?.core?.runtimeEndpoint
+            if (!endpoint) throw new Error("openadeAPI.core.runtimeEndpoint is not available")
+            const socket = new WebSocket(endpoint.url, [`bearer.${endpoint.token}`])
+            await new Promise<void>((resolveSocket, rejectSocket) => {
+                const timeout = window.setTimeout(() => rejectSocket(new Error("Core WebSocket timed out")), 3_000)
+                socket.addEventListener(
+                    "open",
+                    () => {
+                        window.clearTimeout(timeout)
+                        resolveSocket()
+                    },
+                    { once: true }
+                )
+                socket.addEventListener(
+                    "error",
+                    () => {
+                        window.clearTimeout(timeout)
+                        rejectSocket(new Error("Core WebSocket connection failed"))
+                    },
+                    { once: true }
+                )
+            })
+            let nextId = 1
+            const request = async <T>(method: string, params?: unknown): Promise<T> => {
+                const id = nextId++
+                const responsePromise = new Promise<RuntimeResponse<T>>((resolveResponse, rejectResponse) => {
+                    const timeout = window.setTimeout(() => rejectResponse(new Error(`Timed out waiting for ${method}`)), 12_000)
+                    const onMessage = (event: MessageEvent<string>) => {
+                        const parsed = JSON.parse(event.data) as RuntimeResponse<T> | { method?: string }
+                        if (!("id" in parsed) || parsed.id !== id) return
+                        window.clearTimeout(timeout)
+                        socket.removeEventListener("message", onMessage)
+                        resolveResponse(parsed)
+                    }
+                    socket.addEventListener("message", onMessage)
+                })
+                socket.send(JSON.stringify(params === undefined ? { id, method } : { id, method, params }))
+                const response = await responsePromise
+                if (response.error) throw new Error(response.error.message ?? `Core request failed: ${method}`)
+                return response.result as T
+            }
+            await request("initialize", {
+                clientName: "OpenADE packaged managed Core live recovery smoke",
+                clientPlatform: "desktop",
+                protocolVersion: 1,
+            })
+            const turnStart = await request<TurnStartResult>("openade/turn/start", {
+                repoId: smokeRepoId,
+                inTaskId: smokeTaskId,
+                type: "ask",
+                input: prompt,
+                harnessId: "codex",
+                modelId: "gpt-smoke",
+                clientRequestId: `${smokeRepoId}-live-recovery-turn`,
+            })
+            if (!turnStart.eventId) throw new Error(`Live recovery turn did not return an event id${turnStart.queued ? " because it queued" : ""}`)
+            const runtimeId = `openade-turn:${turnStart.eventId}`
+            let runtime: RuntimeReadResult | null = null
+            for (let attempt = 0; attempt < 80; attempt++) {
+                runtime = await request<RuntimeReadResult>("runtime/read", { runtimeId })
+                if (runtime?.status === "running" && runtime.processStartedAt) {
+                    socket.close()
+                    return { taskId: turnStart.taskId, eventId: turnStart.eventId, runtimeId, runtime }
+                }
+                await new Promise((resolveDelay) => window.setTimeout(resolveDelay, 100))
+            }
+            throw new Error(`Live recovery runtime did not start with process metadata: ${JSON.stringify(runtime)}`)
+        }, { smokeRepoId: repoId, smokeTaskId: coreSmoke.taskCreate.taskId, prompt: liveRecoveryPrompt })
+
         await app.close()
         app = undefined
 
@@ -1149,12 +1226,109 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
             legacyYjsDocumentsPresent: false,
             legacyYjsMigrationAccepted: false,
         })
+        const recoveredLiveTurn = await relaunched.page.evaluate(async ({ smokeRepoId, smokeTaskId, eventId, runtimeId, prompt }) => {
+            type RuntimeResponse<T> = { id: number; result?: T; error?: { code?: string; message?: string } }
+            type RuntimeReadResult = { runtimeId: string; kind?: string; status?: string; processStartedAt?: string }
+            type TaskEvent = {
+                id?: string
+                status?: string
+                userInput?: string
+                execution?: {
+                    sessionId?: string
+                    events?: Array<{ type?: string; usage?: { inputTokens?: number; outputTokens?: number; durationMs?: number } }>
+                }
+            }
+            type TaskReadResult = { id: string; events: TaskEvent[] }
+
+            const endpoint = window.openadeAPI?.core?.runtimeEndpoint
+            if (!endpoint) throw new Error("openadeAPI.core.runtimeEndpoint is not available after relaunch")
+            const socket = new WebSocket(endpoint.url, [`bearer.${endpoint.token}`])
+            await new Promise<void>((resolveSocket, rejectSocket) => {
+                const timeout = window.setTimeout(() => rejectSocket(new Error("Core WebSocket timed out after relaunch")), 3_000)
+                socket.addEventListener(
+                    "open",
+                    () => {
+                        window.clearTimeout(timeout)
+                        resolveSocket()
+                    },
+                    { once: true }
+                )
+                socket.addEventListener(
+                    "error",
+                    () => {
+                        window.clearTimeout(timeout)
+                        rejectSocket(new Error("Core WebSocket connection failed after relaunch"))
+                    },
+                    { once: true }
+                )
+            })
+            let nextId = 1
+            const request = async <T>(method: string, params?: unknown): Promise<T> => {
+                const id = nextId++
+                const responsePromise = new Promise<RuntimeResponse<T>>((resolveResponse, rejectResponse) => {
+                    const timeout = window.setTimeout(() => rejectResponse(new Error(`Timed out waiting for ${method}`)), 15_000)
+                    const onMessage = (event: MessageEvent<string>) => {
+                        const parsed = JSON.parse(event.data) as RuntimeResponse<T> | { method?: string }
+                        if (!("id" in parsed) || parsed.id !== id) return
+                        window.clearTimeout(timeout)
+                        socket.removeEventListener("message", onMessage)
+                        resolveResponse(parsed)
+                    }
+                    socket.addEventListener("message", onMessage)
+                })
+                socket.send(JSON.stringify(params === undefined ? { id, method } : { id, method, params }))
+                const response = await responsePromise
+                if (response.error) throw new Error(response.error.message ?? `Core request failed: ${method}`)
+                return response.result as T
+            }
+            await request("initialize", {
+                clientName: "OpenADE packaged managed Core live recovery relaunch smoke",
+                clientPlatform: "desktop",
+                protocolVersion: 1,
+            })
+            let runtime: RuntimeReadResult | null = null
+            let task: TaskReadResult | null = null
+            for (let attempt = 0; attempt < 100; attempt++) {
+                runtime = await request<RuntimeReadResult>("runtime/read", { runtimeId })
+                task = await request<TaskReadResult>("openade/task/read", {
+                    repoId: smokeRepoId,
+                    taskId: smokeTaskId,
+                    hydrateSessionEvents: true,
+                })
+                const event = task.events.find((candidate) => candidate.id === eventId)
+                if (runtime?.status === "completed" && event?.status === "completed") {
+                    socket.close()
+                    return { runtime, event }
+                }
+                if (runtime?.status === "failed" || runtime?.status === "stopped" || event?.status === "error" || event?.status === "stopped") {
+                    throw new Error(`Live recovery turn settled incorrectly: ${JSON.stringify({ runtime, event })}`)
+                }
+                await new Promise((resolveDelay) => window.setTimeout(resolveDelay, 250))
+            }
+            throw new Error(`Live recovery turn did not complete after relaunch: ${JSON.stringify({ runtime, task, prompt })}`)
+        }, { smokeRepoId: repoId, smokeTaskId: coreSmoke.taskCreate.taskId, eventId: liveRecovery.eventId, runtimeId: liveRecovery.runtimeId, prompt: liveRecoveryPrompt })
+        expect(recoveredLiveTurn.runtime).toMatchObject({
+            runtimeId: liveRecovery.runtimeId,
+            kind: "agent",
+            status: "completed",
+        })
+        expect(recoveredLiveTurn.runtime.processStartedAt).toBeTruthy()
+        expect(recoveredLiveTurn.event).toMatchObject({
+            id: liveRecovery.eventId,
+            status: "completed",
+            userInput: liveRecoveryPrompt,
+            execution: { sessionId: "smoke-codex-session" },
+        })
+        expect(recoveredLiveTurn.event.execution?.events).toEqual(
+            expect.arrayContaining([expect.objectContaining({ type: "complete", usage: expect.objectContaining({ inputTokens: 1, outputTokens: 1 }) })])
+        )
         await relaunched.page.evaluate(({ smokeRepoId, smokeTaskId }) => {
             window.location.hash = `/dashboard/code/workspace/${smokeRepoId}/task/${smokeTaskId}`
         }, { smokeRepoId: repoId, smokeTaskId: coreSmoke.taskCreate.taskId })
         const relaunchedClassicCoreTask = relaunched.page.locator('[data-openade-surface="desktop-classic-task"]')
         await expect(relaunchedClassicCoreTask).toBeVisible({ timeout: 30_000 })
         await expect(relaunchedClassicCoreTask).toContainText("Run managed Core packaged turn smoke")
+        await expect(relaunchedClassicCoreTask).toContainText(liveRecoveryPrompt)
         await expect(relaunched.page.locator('[data-openade-surface="desktop-shared-project"]')).toHaveCount(0)
         await expect(relaunched.page.locator('[data-openade-surface="desktop-shared-task"]')).toHaveCount(0)
 

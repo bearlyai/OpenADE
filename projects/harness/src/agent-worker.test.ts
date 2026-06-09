@@ -1,4 +1,7 @@
+import { mkdtemp, readFile } from "node:fs/promises"
+import { join } from "node:path"
 import { Readable, Writable } from "node:stream"
+import { tmpdir } from "node:os"
 import { describe, expect, it } from "vitest"
 import { runCommandAgentWorker, type WorkerHarness } from "./agent-worker.js"
 import type { HarnessEvent, HarnessQuery } from "./types.js"
@@ -13,6 +16,12 @@ class MemoryWritable extends Writable {
 
     text(): string {
         return this.chunks.join("")
+    }
+}
+
+class BrokenWritable extends Writable {
+    _write(_chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+        callback(new Error("broken stdout"))
     }
 }
 
@@ -177,6 +186,62 @@ describe("runCommandAgentWorker", () => {
         })
     })
 
+    it("writes every worker protocol message to a recovery transcript", async () => {
+        const output = new MemoryWritable()
+        const recoveryDir = await mkdtemp(join(tmpdir(), "openade-worker-recovery-"))
+        const recoveryFile = join(recoveryDir, "runtime.ndjson")
+        let eventCounter = 0
+
+        const exitCode = await runCommandAgentWorker({
+            input: Readable.from([startEnvelope()]),
+            output,
+            recoveryFile,
+            now: () => new Date("2026-06-07T10:03:00.000Z"),
+            eventId: () => `recovery-${++eventCounter}`,
+            gitRefs: async () => ({ sha: "def456" }),
+            harnesses: {
+                codex: fakeHarness([
+                    { type: "session_started", sessionId: "session-recovery" },
+                    { type: "message", message: { type: "item.completed", item: { type: "agent_message", text: "Recovered" } } },
+                    { type: "complete", usage: { inputTokens: 2, outputTokens: 3 } },
+                ]),
+            },
+        })
+
+        expect(exitCode).toBe(0)
+        expect(await readFile(recoveryFile, "utf8")).toBe(output.text())
+        const messages = parseLines(output)
+        expect(messages.at(-1)).toMatchObject({
+            type: "result",
+            status: "completed",
+            success: true,
+            completedAt: "2026-06-07T10:03:00.000Z",
+        })
+    })
+
+    it("keeps writing recovery transcript when stdout is disconnected", async () => {
+        const recoveryDir = await mkdtemp(join(tmpdir(), "openade-worker-broken-stdout-"))
+        const recoveryFile = join(recoveryDir, "runtime.ndjson")
+
+        const exitCode = await runCommandAgentWorker({
+            input: Readable.from([startEnvelope()]),
+            output: new BrokenWritable(),
+            recoveryFile,
+            now: () => new Date("2026-06-07T10:05:00.000Z"),
+            eventId: () => "broken-stdout-stream",
+            gitRefs: async () => undefined,
+            harnesses: {
+                codex: fakeHarness([{ type: "complete", usage: { inputTokens: 1, outputTokens: 1 } }]),
+            },
+        })
+
+        expect(exitCode).toBe(0)
+        const transcript = (await readFile(recoveryFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>)
+        expect(transcript).toHaveLength(2)
+        expect(transcript[0]).toMatchObject({ type: "stream", event: { type: "complete" } })
+        expect(transcript[1]).toMatchObject({ type: "result", status: "completed" })
+    })
+
     it("passes base64 image blocks through to the harness prompt", async () => {
         const output = new MemoryWritable()
         const capturedQueries: HarnessQuery[] = []
@@ -273,6 +338,51 @@ describe("runCommandAgentWorker", () => {
                 delete process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS
             } else {
                 process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS = previousDeterministicHarness
+            }
+        }
+    })
+
+    it("delays only deterministic smoke prompts matching the configured recovery probe", async () => {
+        const output = new MemoryWritable()
+        const previousSmokeTest = process.env.OPENADE_SMOKE_TEST
+        const previousDeterministicHarness = process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS
+        const previousDelayPrompt = process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_PROMPT
+        const previousDelayMs = process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_MS
+        process.env.OPENADE_SMOKE_TEST = "1"
+        process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS = "1"
+        process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_PROMPT = "Delay managed Core recovery smoke"
+        process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_MS = "1"
+        try {
+            const exitCode = await runCommandAgentWorker({
+                input: Readable.from([startEnvelope({ input: "Delay managed Core recovery smoke" })]),
+                output,
+                now: () => new Date("2026-06-07T10:04:00.000Z"),
+                eventId: () => "delayed-smoke-stream",
+                gitRefs: async () => undefined,
+            })
+
+            expect(exitCode).toBe(0)
+            expect(parseLines(output).at(-1)).toMatchObject({ type: "result", status: "completed" })
+        } finally {
+            if (previousSmokeTest === undefined) {
+                delete process.env.OPENADE_SMOKE_TEST
+            } else {
+                process.env.OPENADE_SMOKE_TEST = previousSmokeTest
+            }
+            if (previousDeterministicHarness === undefined) {
+                delete process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS
+            } else {
+                process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS = previousDeterministicHarness
+            }
+            if (previousDelayPrompt === undefined) {
+                delete process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_PROMPT
+            } else {
+                process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_PROMPT = previousDelayPrompt
+            }
+            if (previousDelayMs === undefined) {
+                delete process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_MS
+            } else {
+                process.env.OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_MS = previousDelayMs
             }
         }
     })
