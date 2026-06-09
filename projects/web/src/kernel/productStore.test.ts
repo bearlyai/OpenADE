@@ -60,6 +60,7 @@ function createRuntimeBackedStore(): {
     runtime: RuntimeLocalClient
     taskReadRequests: OpenADETaskReadOptions[]
     writtenImages: Map<string, WrittenImageFixture>
+    publishTaskChanged(previewChanged?: boolean): void
     snapshotRequestCount(): number
     processListRequestCount(): number
     fuzzySearchRequestCount(): number
@@ -559,6 +560,7 @@ function createRuntimeBackedStore(): {
         store: new OpenADEProductStore(new OpenADEClient({ runtime, clientName: "product-store-test", clientPlatform: "web" })),
         taskReadRequests,
         writtenImages,
+        publishTaskChanged,
         snapshotRequestCount: () => snapshotRequests,
         processListRequestCount: () => processListRequests,
         fuzzySearchRequestCount: () => fuzzySearchRequests,
@@ -571,6 +573,11 @@ function createRuntimeBackedStore(): {
 async function flushAsyncNotifications(): Promise<void> {
     await Promise.resolve()
     await Promise.resolve()
+}
+
+async function waitForNotificationCoalescing(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 180))
+    await flushAsyncNotifications()
 }
 
 describe("OpenADEProductStore", () => {
@@ -651,6 +658,33 @@ describe("OpenADEProductStore", () => {
             expect(taskReadRequests).toEqual([])
             expect(store.snapshot?.repos[0]?.tasks[0]?.lastViewedAt).toBe(lastViewedAt)
             expect(store.getCachedTask("repo-1", "task-1")?.lastViewedAt).toBe(lastViewedAt)
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("coalesces subscribed task update notifications before refreshing task detail", async () => {
+        const { store, runtime, taskReadRequests, publishTaskChanged } = createRuntimeBackedStore()
+
+        try {
+            await store.refreshSnapshot()
+            await store.getTask("repo-1", "task-1")
+            store.subscribe()
+
+            taskReadRequests.length = 0
+            publishTaskChanged(false)
+            publishTaskChanged(false)
+            publishTaskChanged(false)
+            await waitForNotificationCoalescing()
+
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }])
+
+            taskReadRequests.length = 0
+            publishTaskChanged(true)
+            await waitForNotificationCoalescing()
+
+            expect(taskReadRequests).toEqual([])
         } finally {
             store.destroy()
             await runtime.close()

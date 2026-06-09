@@ -134,6 +134,7 @@ const LIGHTWEIGHT_TASK_CACHE_TTL_MS = 1_000
 const PROCESS_LIST_CACHE_TTL_MS = 1_000
 const PROJECT_SEARCH_CACHE_TTL_MS = 1_000
 const GIT_SUMMARY_CACHE_TTL_MS = 1_000
+const TASK_UPDATE_NOTIFICATION_COALESCE_MS = 150
 const LEGACY_YJS_IMPORT_WRITER_METHODS = [
     "createRepo",
     "updateRepo",
@@ -216,6 +217,8 @@ export class OpenADEProductStore {
     private readonly projectSearchCache = new Map<string, CachedProjectSearch>()
     private readonly projectGitSummaryCache = new Map<string, CachedProjectGitSummary>()
     private readonly taskGitSummaryCache = new Map<string, CachedTaskGitSummary>()
+    private readonly pendingTaskUpdateNotifications = new Map<string, RuntimeNotification>()
+    private readonly taskUpdateNotificationTimers = new Map<string, ReturnType<typeof setTimeout>>()
     private unsubscribe: (() => void) | null = null
 
     constructor(
@@ -672,15 +675,26 @@ export class OpenADEProductStore {
 
     subscribe(): () => void {
         if (this.unsubscribe) return this.unsubscribe
-        this.unsubscribe = this.client.subscribeToChanges((notification) => {
+        const unsubscribeClient = this.client.subscribeToChanges((notification) => {
+            if (this.scheduleTaskUpdateNotification(notification)) return
+            this.cancelPendingTaskUpdateNotification(notification)
             void this.handleNotification(notification)
         })
+        let subscribed = true
+        this.unsubscribe = () => {
+            if (!subscribed) return
+            subscribed = false
+            this.clearPendingTaskUpdateNotifications()
+            unsubscribeClient()
+            this.unsubscribe = null
+        }
         return this.unsubscribe
     }
 
     destroy(): void {
         this.unsubscribe?.()
         this.unsubscribe = null
+        this.clearPendingTaskUpdateNotifications()
         this.tasks.clear()
         this.taskLoadedAt.clear()
         this.processListCache.clear()
@@ -689,6 +703,43 @@ export class OpenADEProductStore {
         this.projectGitSummaryCache.clear()
         this.taskGitSummaryCache.clear()
         this.runtimes.clear()
+    }
+
+    private scheduleTaskUpdateNotification(notification: RuntimeNotification): boolean {
+        if (notification.method !== "openade/task/updated" && notification.method !== "openade/queuedTurn/updated") return false
+
+        const key = taskNotificationKey(notification)
+        if (!key) return false
+
+        this.pendingTaskUpdateNotifications.set(key, notification)
+        if (this.taskUpdateNotificationTimers.has(key)) return true
+
+        const timer = setTimeout(() => {
+            this.taskUpdateNotificationTimers.delete(key)
+            const pending = this.pendingTaskUpdateNotifications.get(key)
+            this.pendingTaskUpdateNotifications.delete(key)
+            if (pending) void this.handleNotification(pending)
+        }, TASK_UPDATE_NOTIFICATION_COALESCE_MS)
+        this.taskUpdateNotificationTimers.set(key, timer)
+        return true
+    }
+
+    private cancelPendingTaskUpdateNotification(notification: RuntimeNotification): void {
+        if (notification.method !== "openade/task/previewChanged" && notification.method !== "openade/task/deleted") return
+
+        const key = taskNotificationKey(notification)
+        if (!key) return
+
+        const timer = this.taskUpdateNotificationTimers.get(key)
+        if (timer) clearTimeout(timer)
+        this.taskUpdateNotificationTimers.delete(key)
+        this.pendingTaskUpdateNotifications.delete(key)
+    }
+
+    private clearPendingTaskUpdateNotifications(): void {
+        for (const timer of this.taskUpdateNotificationTimers.values()) clearTimeout(timer)
+        this.taskUpdateNotificationTimers.clear()
+        this.pendingTaskUpdateNotifications.clear()
     }
 
     private clearProcessListCacheForScope(repoId: string, taskId?: string): void {
@@ -726,6 +777,13 @@ export class OpenADEProductStore {
 
 function processListCacheKey(repoId: string, taskId?: string): string {
     return `${repoId}\0${taskId ?? ""}`
+}
+
+function taskNotificationKey(notification: RuntimeNotification): string | null {
+    const params = notificationRecord(notification)
+    const repoId = typeof params.repoId === "string" ? params.repoId : null
+    const taskId = typeof params.taskId === "string" ? params.taskId : null
+    return repoId && taskId ? taskKey(repoId, taskId) : null
 }
 
 function isOpenADETomlPath(path: string): boolean {
