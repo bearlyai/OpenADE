@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createOpenADEModule, type OpenADEModuleAdapters } from "../../openade-module/src/module"
 import type {
+    OpenADECronInstallState,
     OpenADEProject,
     OpenADESnapshot,
     OpenADETask,
@@ -134,6 +135,7 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
     const server = new RuntimeServer({ serverName: "desktop-route-runtime", protocolVersion: 1 })
     const task = cloneTask(routeTask)
     const project = routeProject(task)
+    let cronInstallStates: Record<string, OpenADECronInstallState> = {}
     let projectProcessId: string | null = null
     const adapters: OpenADEModuleAdapters = {
         version: () => "route-smoke-test",
@@ -284,6 +286,15 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
                 if (typeof comment !== "object" || comment === null || Array.isArray(comment)) return true
                 return !("id" in comment) || comment.id !== params.commentId
             })
+        },
+        readCronInstallState: async (params) => {
+            if (params.repoId !== project.id) throw new Error(`Repo ${params.repoId} not found`)
+            return { repoId: params.repoId, installations: structuredClone(cronInstallStates) }
+        },
+        replaceCronInstallState: async (params) => {
+            if (params.repoId !== project.id) throw new Error(`Repo ${params.repoId} not found`)
+            cronInstallStates = structuredClone(params.installations)
+            return { repoId: params.repoId, installations: structuredClone(cronInstallStates), replacedInstallations: Object.keys(cronInstallStates).length }
         },
         updateTaskMetadata: async (params) => {
             if (params.taskId !== task.id) throw new Error(`Task ${params.taskId} not found`)
@@ -745,6 +756,7 @@ describe("Code routes with runtime product reads", () => {
 
     it("renders the classic desktop task route by default after loading task detail through the real local runtime product store", async () => {
         const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
+        const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined)
         const setTimeoutSpy = vi.spyOn(window, "setTimeout")
         const startedTurns: OpenADETurnStartRequest[] = []
         const metadataUpdates: OpenADETaskMetadataUpdateRequest[] = []
@@ -807,6 +819,7 @@ describe("Code routes with runtime product reads", () => {
             expect(taskReads[0]).toEqual({ repoId: "repo-1", taskId: "task-1", options: { hydrateSessionEvents: false } })
             await vi.waitFor(() => expect(metadataUpdates.some((update) => update.lastViewedAt)).toBe(true), { timeout: 1000, interval: 10 })
             expect(taskReads.every((read) => read.options?.hydrateSessionEvents === false)).toBe(true)
+            expect(consoleErrorSpy.mock.calls.some((call) => String(call[0]).includes("[CronManager] Failed to load product install states"))).toBe(false)
             expect(setTimeoutSpy).not.toHaveBeenCalledWith(expect.any(Function), 2500)
             await waitForText(container, "Runtime route task")
             await waitForText(container, "Do the runtime-backed work")
@@ -842,6 +855,7 @@ describe("Code routes with runtime product reads", () => {
             expect(taskReads.every((read) => read.options?.hydrateSessionEvents === false)).toBe(true)
             expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
         } finally {
+            consoleErrorSpy.mockRestore()
             setTimeoutSpy.mockRestore()
             trackSpy.mockRestore()
             codeStore.disconnectAllStores()

@@ -524,6 +524,8 @@ Update docs in the same change when behavior changes:
 
 ## Decision Log
 
+- 2026-06-09: The runtime-backed classic desktop route smoke now exposes the product cron install-state contract (`openade/cron/installState/read` and `replace`) through its real `RuntimeServer`/`createOpenADEModule` test runtime. This keeps route startup verification aligned with the typed product API that desktop uses in Core/runtime-backed sessions and adds an assertion that missing cron install-state methods do not reappear as `CronManager` startup noise.
+
 - 2026-06-09: Classic desktop `CodeLayout` no longer shows the app-shell loading spinner just because `TaskManager.loadedRepoIds` has not yet been marked by the post-render effect. Once `CodeStore.storeInitialized` is true, repo/task previews already come from the loaded runtime snapshot or legacy repo store, so the layout now renders immediately while `ensureTasksLoaded()` records the workspace marker. A focused layout regression proves an initialized store with an empty loaded-workspace marker still renders route content immediately, skips redundant `loadRepos()`, and does not show `Loading`.
 
 - 2026-06-09: Classic desktop `CodeLayout` no longer starts every route remount in a local loading state after `CodeStore` is already initialized. Task switches now initialize `hasInitialized` from `codeStore.storeInitialized`, skip the redundant `loadRepos()` gate on initialized stores, and let cached runtime DTOs render without a per-route app-shell spinner. A focused layout regression proves an initialized store renders route content immediately and does not call `loadRepos()` again; the runtime-backed desktop route smoke still passes through the real local runtime path.
