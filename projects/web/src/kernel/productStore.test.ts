@@ -61,6 +61,7 @@ function createRuntimeBackedStore(): {
     taskReadRequests: OpenADETaskReadOptions[]
     writtenImages: Map<string, WrittenImageFixture>
     publishTaskChanged(previewChanged?: boolean): void
+    publishTaskUpdated(repoId: string, taskId: string): void
     snapshotRequestCount(): number
     processListRequestCount(): number
     fuzzySearchRequestCount(): number
@@ -135,6 +136,10 @@ function createRuntimeBackedStore(): {
 
     function publishTaskChanged(previewChanged = true): void {
         publishOpenADECompanionEvent(server, { type: "task_changed", repoId: "repo-1", taskId: "task-1", previewChanged, at: now() })
+    }
+
+    function publishTaskUpdated(repoId: string, taskId: string): void {
+        server.notify("openade/task/updated", { repoId, taskId, at: now() })
     }
 
     async function updateTaskMetadata(params: OpenADETaskMetadataUpdateRequest): Promise<void> {
@@ -561,6 +566,7 @@ function createRuntimeBackedStore(): {
         taskReadRequests,
         writtenImages,
         publishTaskChanged,
+        publishTaskUpdated,
         snapshotRequestCount: () => snapshotRequests,
         processListRequestCount: () => processListRequests,
         fuzzySearchRequestCount: () => fuzzySearchRequests,
@@ -685,6 +691,25 @@ describe("OpenADEProductStore", () => {
             await waitForNotificationCoalescing()
 
             expect(taskReadRequests).toEqual([])
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("does not read uncached task detail for background task update notifications", async () => {
+        const { store, runtime, taskReadRequests, publishTaskUpdated } = createRuntimeBackedStore()
+
+        try {
+            await store.refreshSnapshot()
+            store.subscribe()
+
+            taskReadRequests.length = 0
+            publishTaskUpdated("repo-1", "task-background")
+            await waitForNotificationCoalescing()
+
+            expect(taskReadRequests).toEqual([])
+            expect(store.getCachedTask("repo-1", "task-background")).toBeNull()
         } finally {
             store.destroy()
             await runtime.close()

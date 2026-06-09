@@ -230,6 +230,10 @@ export class OpenADEProductStore {
         return this.tasks.get(taskKey(repoId, taskId)) ?? null
     }
 
+    private hasCachedTask(repoId: string, taskId: string): boolean {
+        return this.tasks.has(taskKey(repoId, taskId))
+    }
+
     async refreshSnapshot(options: OpenADEProductReadOptions = {}): Promise<OpenADESnapshot> {
         if (!options.bypassCache && this.snapshot && Date.now() - this.snapshotLoadedAt < SNAPSHOT_CACHE_TTL_MS) return this.snapshot
 
@@ -649,7 +653,9 @@ export class OpenADEProductStore {
 
         if ((notification.method === "openade/task/updated" || notification.method === "openade/queuedTurn/updated") && repoId && taskId) {
             this.clearGitSummaryCacheForScope(repoId, taskId)
-            await this.refreshTask(repoId, taskId, LIGHTWEIGHT_TASK_READ_OPTIONS)
+            if (this.hasCachedTask(repoId, taskId)) {
+                await this.refreshTask(repoId, taskId, LIGHTWEIGHT_TASK_READ_OPTIONS)
+            }
             return true
         }
 
