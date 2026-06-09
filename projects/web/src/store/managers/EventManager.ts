@@ -115,7 +115,7 @@ export class EventManager {
         if (!this.store.tasks.getTask(taskId)) return false
 
         await this.store.updateProductTaskMetadata({ taskId, cancelledPlanEventId: planEventId })
-        await this.store.refreshProductStateAfterTaskMutation(taskId)
+        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
         return true
     }
 }

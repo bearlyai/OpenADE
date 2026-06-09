@@ -329,7 +329,7 @@ export class TaskModel {
             taskId: this.taskId,
             queuedTurnId,
         })
-        await this.store.refreshProductStateAfterTaskMutation(this.taskId)
+        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(this.taskId)
     }
 
     readProductTaskChanges(params: Omit<OpenADETaskChangesReadRequest, "repoId" | "taskId">): Promise<OpenADETaskChangesReadResult> {

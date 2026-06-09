@@ -1355,7 +1355,9 @@ export class CodeStore {
 
     async startProductTurn(params: OpenADETurnStartRequest): Promise<OpenADETurnStartResult> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
-            return this.runtimeProductStore.startTurn(params)
+            const result = await this.runtimeProductStore.startTurn(params)
+            this.syncRuntimeProductStoreCache(result.taskId || params.inTaskId || undefined)
+            return result
         }
 
         return localOpenADEClient.startTurn(params)
@@ -1446,7 +1448,9 @@ export class CodeStore {
 
     async startProductReview(params: OpenADEReviewStartRequest): Promise<{ taskId: string }> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
-            return this.runtimeProductStore.startReview(params)
+            const result = await this.runtimeProductStore.startReview(params)
+            this.syncRuntimeProductStoreCache(result.taskId)
+            return result
         }
 
         return localOpenADEClient.startReview(params)
@@ -1463,7 +1467,9 @@ export class CodeStore {
 
     async cancelProductQueuedTurn(params: OpenADEQueuedTurnCancelRequest): Promise<OpenADEQueuedTurnCancelResult> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
-            return this.runtimeProductStore.cancelQueuedTurn(params)
+            const result = await this.runtimeProductStore.cancelQueuedTurn(params)
+            this.syncRuntimeProductStoreCache(params.taskId)
+            return result
         }
 
         return localOpenADEClient.cancelQueuedTurn(params)
@@ -1492,6 +1498,7 @@ export class CodeStore {
     async setupProductTaskEnvironment(params: OpenADETaskEnvironmentSetupRequest): Promise<void> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
             await this.runtimeProductStore.setupTaskEnvironment(params)
+            this.syncRuntimeProductStoreCache(params.taskId)
             return
         }
 
@@ -1508,7 +1515,9 @@ export class CodeStore {
 
     async createProductComment(params: OpenADECommentCreateRequest): Promise<OpenADECommentCreateResult> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
-            return this.runtimeProductStore.createComment(params)
+            const result = await this.runtimeProductStore.createComment(params)
+            this.syncRuntimeProductStoreCache(params.taskId)
+            return result
         }
 
         return localOpenADEClient.createComment(params)
@@ -1517,6 +1526,7 @@ export class CodeStore {
     async editProductComment(params: OpenADECommentEditRequest): Promise<void> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
             await this.runtimeProductStore.editComment(params)
+            this.syncRuntimeProductStoreCache(params.taskId)
             return
         }
 
@@ -1526,6 +1536,7 @@ export class CodeStore {
     async deleteProductComment(params: OpenADECommentDeleteRequest): Promise<void> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
             await this.runtimeProductStore.deleteComment(params)
+            this.syncRuntimeProductStoreCache(params.taskId)
             return
         }
 

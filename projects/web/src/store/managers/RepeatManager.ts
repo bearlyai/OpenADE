@@ -148,7 +148,7 @@ export class RepeatManager {
                     label: REPEAT_LABEL,
                     includeComments: false,
                 })
-                await this.store.refreshProductStateAfterTaskMutation(taskId)
+                if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
             } catch (err) {
                 console.error("[RepeatManager] Failed to start repeat turn:", err)
                 if (this.activeTaskId === taskId) this.cleanup()

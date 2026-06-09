@@ -650,20 +650,56 @@ describe("OpenADEProductStore", () => {
         }
     })
 
-    it("patches last-viewed metadata locally without re-reading task detail", async () => {
-        const { store, runtime, taskReadRequests } = createRuntimeBackedStore()
+    it("patches accepted metadata locally without re-reading task detail or snapshot", async () => {
+        const { store, runtime, taskReadRequests, snapshotRequestCount } = createRuntimeBackedStore()
         const lastViewedAt = "2026-01-01T00:10:00.000Z"
+        const lastEventAt = "2026-01-01T00:11:00.000Z"
+        const updatedAt = "2026-01-01T00:12:00.000Z"
+        const usage = { usageVersion: 1, inputTokens: 10, outputTokens: 5, totalCostUsd: 0.01, eventCount: 2, costByModel: { "model-1": 0.01 } }
 
         try {
             await store.refreshSnapshot()
             await store.getTask("repo-1", "task-1")
 
             taskReadRequests.length = 0
-            await store.updateTaskMetadata({ taskId: "task-1", lastViewedAt }, { clientRequestId: "viewed-only" })
+            const existingSnapshotRequests = snapshotRequestCount()
+            await store.updateTaskMetadata(
+                {
+                    taskId: "task-1",
+                    title: "Accepted metadata",
+                    closed: true,
+                    lastViewedAt,
+                    lastEventAt,
+                    cancelledPlanEventId: "event-plan",
+                    usage,
+                    enabledMcpServerIds: ["server-1"],
+                    sessionIds: { claude: "session-1" },
+                    queuedTurns: [],
+                    updatedAt,
+                },
+                { clientRequestId: "metadata-patch" }
+            )
 
             expect(taskReadRequests).toEqual([])
-            expect(store.snapshot?.repos[0]?.tasks[0]?.lastViewedAt).toBe(lastViewedAt)
-            expect(store.getCachedTask("repo-1", "task-1")?.lastViewedAt).toBe(lastViewedAt)
+            expect(snapshotRequestCount()).toBe(existingSnapshotRequests)
+            expect(store.snapshot?.repos[0]?.tasks[0]).toMatchObject({
+                title: "Accepted metadata",
+                closed: true,
+                lastViewedAt,
+                lastEventAt,
+                usage,
+            })
+            expect(store.getCachedTask("repo-1", "task-1")).toMatchObject({
+                title: "Accepted metadata",
+                closed: true,
+                lastViewedAt,
+                lastEventAt,
+                cancelledPlanEventId: "event-plan",
+                enabledMcpServerIds: ["server-1"],
+                sessionIds: { claude: "session-1" },
+                queuedTurns: [],
+                updatedAt,
+            })
         } finally {
             store.destroy()
             await runtime.close()

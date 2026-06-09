@@ -2033,12 +2033,14 @@ describe("CodeStore runtime product store bridge", () => {
         })
         const interruptTurn = vi.spyOn(codeStore, "interruptProductTurn")
         const deleteTask = vi.spyOn(codeStore, "deleteProductTask")
-        const originalRefreshAfterCreation = codeStore.refreshProductStateAfterTaskCreation.bind(codeStore)
+        const originalStartProductTurn = codeStore.startProductTurn.bind(codeStore)
         let creationId = ""
-        const refreshAfterCreation = vi.spyOn(codeStore, "refreshProductStateAfterTaskCreation").mockImplementation(async (repoId, taskId) => {
-            await originalRefreshAfterCreation(repoId, taskId)
+        const startProductTurn = vi.spyOn(codeStore, "startProductTurn").mockImplementation(async (params) => {
+            const result = await originalStartProductTurn(params)
             codeStore.creation.getCreation(creationId)?.abortController.abort()
+            return result
         })
+        const refreshAfterCreation = vi.spyOn(codeStore, "refreshProductStateAfterTaskCreation")
 
         try {
             await codeStore.initializeRuntimeProductStore()
@@ -2067,11 +2069,13 @@ describe("CodeStore runtime product store bridge", () => {
                     deleteWorktrees: true,
                 },
             })
-            expect(refreshAfterCreation).toHaveBeenCalledWith("repo-1", "task-started")
+            expect(startProductTurn).toHaveBeenCalled()
+            expect(refreshAfterCreation).not.toHaveBeenCalled()
             expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([])
         } finally {
             interruptTurn.mockRestore()
             deleteTask.mockRestore()
+            startProductTurn.mockRestore()
             refreshAfterCreation.mockRestore()
             codeStore.disconnectAllStores()
             await runtime.close()

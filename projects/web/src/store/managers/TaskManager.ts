@@ -263,12 +263,12 @@ export class TaskManager {
 
     async setSessionId({ taskId, key, sessionId }: { taskId: string; key: string; sessionId: string }): Promise<void> {
         await this.store.updateProductTaskMetadata({ taskId, sessionIds: { [key]: sessionId } })
-        await this.store.refreshProductStateAfterTaskMutation(taskId)
+        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     async addDeviceEnvironment(taskId: string, deviceEnv: TaskDeviceEnvironment): Promise<void> {
         await this.store.setupProductTaskEnvironment({ taskId, deviceEnvironment: deviceEnv })
-        await this.store.refreshProductStateAfterTaskMutation(taskId)
+        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
         this.invalidateTaskModel(taskId)
     }
 
@@ -311,13 +311,13 @@ export class TaskManager {
         }
 
         await this.store.updateProductTaskMetadata({ taskId, closed })
-        await this.store.refreshProductStateAfterTaskMutation(taskId)
+        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     setEnabledMcpServerIds(taskId: string, serverIds: string[]): void {
         void (async () => {
             await this.store.updateProductTaskMetadata({ taskId, enabledMcpServerIds: serverIds })
-            await this.store.refreshProductStateAfterTaskMutation(taskId)
+            if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
         })().catch((error) => {
             console.error("[TaskManager] Failed to update MCP server selection:", error)
         })
@@ -329,7 +329,7 @@ export class TaskManager {
 
         void (async () => {
             await this.store.updateProductTaskMetadata({ taskId, title: trimmed })
-            await this.store.refreshProductStateAfterTaskMutation(taskId)
+            if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
         })().catch((error) => {
             console.error("[TaskManager] Failed to update task title:", error)
         })

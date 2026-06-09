@@ -201,12 +201,19 @@ export class TaskCreationManager {
                 fastMode: creation.fastMode,
                 hyperplanStrategy: creation.mode === "hyperplan" ? cloneHyperPlanStrategy(this.store.getActiveHyperPlanStrategy()) : undefined,
             })
-            await this.store.refreshProductStateAfterTaskCreation(creation.repoId, result.taskId)
 
-            if (signal.aborted) {
+            const cleanupIfCancelled = async () => {
+                if (!signal.aborted) return false
                 await this.cleanupAcceptedCancelledTask(creation.repoId, result.taskId)
-                throw new Error("Task creation cancelled")
+                return true
             }
+
+            if (await cleanupIfCancelled()) throw new Error("Task creation cancelled")
+            if (!this.store.shouldUseRuntimeProductReads()) {
+                await this.store.refreshProductStateAfterTaskCreation(creation.repoId, result.taskId)
+            }
+
+            if (await cleanupIfCancelled()) throw new Error("Task creation cancelled")
 
             runInAction(() => {
                 creation.completedTaskId = result.taskId

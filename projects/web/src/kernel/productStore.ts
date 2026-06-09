@@ -85,6 +85,7 @@ import type {
     OpenADETaskImageWriteRequest,
     OpenADETaskImageWriteResult,
     OpenADETaskMetadataUpdateRequest,
+    OpenADETaskPreview,
     OpenADETaskReadOptions,
     OpenADETaskResourceInventoryReadRequest,
     OpenADETaskResourceInventoryReadResult,
@@ -191,19 +192,30 @@ export interface OpenADEProductLegacyYjsImportReport {
     legacyYjsMigrationAccepted?: boolean
 }
 
-function isLastViewedOnlyMetadataUpdate(args: OpenADETaskMetadataUpdateRequest): boolean {
-    return (
-        args.lastViewedAt !== undefined &&
-        args.title === undefined &&
-        args.closed === undefined &&
-        args.lastEventAt === undefined &&
-        args.cancelledPlanEventId === undefined &&
-        args.usage === undefined &&
-        args.enabledMcpServerIds === undefined &&
-        args.sessionIds === undefined &&
-        args.queuedTurns === undefined &&
-        args.updatedAt === undefined
-    )
+function taskWithMetadataUpdate(task: OpenADETask, args: OpenADETaskMetadataUpdateRequest): OpenADETask {
+    return {
+        ...task,
+        title: args.title ?? task.title,
+        closed: args.closed ?? task.closed,
+        lastViewedAt: args.lastViewedAt ?? task.lastViewedAt,
+        lastEventAt: args.lastEventAt ?? task.lastEventAt,
+        cancelledPlanEventId: args.cancelledPlanEventId ?? task.cancelledPlanEventId,
+        enabledMcpServerIds: args.enabledMcpServerIds ?? task.enabledMcpServerIds,
+        sessionIds: args.sessionIds ? { ...(task.sessionIds ?? {}), ...args.sessionIds } : task.sessionIds,
+        queuedTurns: args.queuedTurns ?? task.queuedTurns,
+        updatedAt: args.updatedAt ?? task.updatedAt,
+    }
+}
+
+function taskPreviewWithMetadataUpdate(task: OpenADETaskPreview, args: OpenADETaskMetadataUpdateRequest): OpenADETaskPreview {
+    return {
+        ...task,
+        title: args.title ?? task.title,
+        closed: args.closed ?? task.closed,
+        lastViewedAt: args.lastViewedAt ?? task.lastViewedAt,
+        lastEventAt: args.lastEventAt ?? task.lastEventAt,
+        usage: args.usage ?? task.usage,
+    }
 }
 
 export class OpenADEProductStore {
@@ -559,13 +571,7 @@ export class OpenADEProductStore {
 
     async updateTaskMetadata(args: OpenADETaskMetadataUpdateRequest, options: OpenADERequestOptions = {}): Promise<void> {
         await this.client.updateTaskMetadata(args, options)
-        if (isLastViewedOnlyMetadataUpdate(args)) {
-            this.applyLastViewedAt(args.taskId, args.lastViewedAt)
-            return
-        }
-        const cached = [...this.tasks.values()].find((task) => task.id === args.taskId)
-        if (cached) await this.refreshTask(cached.repoId, args.taskId)
-        await this.refreshSnapshot({ bypassCache: true })
+        this.applyTaskMetadataUpdate(args)
     }
 
     async backfillTaskUsage(args: OpenADETaskUsageBackfillRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskUsageBackfillResult> {
@@ -662,11 +668,9 @@ export class OpenADEProductStore {
         return false
     }
 
-    private applyLastViewedAt(taskId: string, lastViewedAt: string | undefined): void {
-        if (!lastViewedAt) return
-
+    private applyTaskMetadataUpdate(args: OpenADETaskMetadataUpdateRequest): void {
         for (const [key, task] of this.tasks) {
-            if (task.id === taskId) this.tasks.set(key, { ...task, lastViewedAt })
+            if (task.id === args.taskId) this.tasks.set(key, taskWithMetadataUpdate(task, args))
         }
 
         if (!this.snapshot) return
@@ -674,7 +678,7 @@ export class OpenADEProductStore {
             ...this.snapshot,
             repos: this.snapshot.repos.map((repo) => ({
                 ...repo,
-                tasks: repo.tasks.map((task) => (task.id === taskId ? { ...task, lastViewedAt } : task)),
+                tasks: repo.tasks.map((task) => (task.id === args.taskId ? taskPreviewWithMetadataUpdate(task, args) : task)),
             })),
         }
     }

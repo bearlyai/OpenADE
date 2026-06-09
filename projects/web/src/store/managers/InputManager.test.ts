@@ -211,7 +211,7 @@ describe("InputManager queueable desktop commands", () => {
         ])
     })
 
-    it("refreshes runtime DTOs instead of opening a direct task store when runtime product reads are active", async () => {
+    it("uses runtime product mutation cache instead of opening a direct task store when runtime product reads are active", async () => {
         const { manager, store } = createManager()
         store.shouldUseRuntimeProductReads.mockReturnValue(true)
 
@@ -219,8 +219,8 @@ describe("InputManager queueable desktop commands", () => {
 
         expect(store.getTaskStore).not.toHaveBeenCalled()
         expect(store.refreshTaskStoreFromStorage).not.toHaveBeenCalled()
-        expect(store.refreshRuntimeProductSnapshot).toHaveBeenCalledWith({ bypassCache: true })
-        expect(store.refreshRuntimeProductTaskForTaskId).toHaveBeenCalledWith("task-1")
+        expect(store.refreshRuntimeProductSnapshot).not.toHaveBeenCalled()
+        expect(store.refreshRuntimeProductTaskForTaskId).not.toHaveBeenCalled()
     })
 
     it("hides the accepted queued row once storage knows that queued turn is no longer queued", async () => {

@@ -634,10 +634,12 @@ export class CronManager {
             }
 
             const result = await this.store.startProductTurn(args)
-            if (args.inTaskId) {
-                await this.store.refreshProductStateAfterTaskMutation(result.taskId)
-            } else {
-                await this.store.refreshProductStateAfterTaskCreation(repoState.repoId, result.taskId)
+            if (!this.store.shouldUseRuntimeProductReads()) {
+                if (args.inTaskId) {
+                    await this.store.refreshProductStateAfterTaskMutation(result.taskId)
+                } else {
+                    await this.store.refreshProductStateAfterTaskCreation(repoState.repoId, result.taskId)
+                }
             }
 
             if (state) {

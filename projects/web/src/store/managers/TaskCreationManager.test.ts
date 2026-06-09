@@ -109,6 +109,7 @@ describe("TaskCreationManager creation plumbing", () => {
             },
             startProductTurn,
             refreshProductStateAfterTaskCreation: vi.fn(async () => undefined),
+            shouldUseRuntimeProductReads: vi.fn(() => false),
             getActiveHyperPlanStrategy: vi.fn(),
         } as unknown as CodeStore
 
@@ -162,9 +163,13 @@ describe("TaskCreationManager creation plumbing", () => {
     })
 
     it("cleans up a server-accepted task through product APIs when creation is cancelled", async () => {
-        const startProductTurn = vi.fn(async () => ({ taskId: "task-1" }))
+        const managerRef: { current: TaskCreationManager | null } = { current: null }
+        const startProductTurn = vi.fn(async () => {
+            managerRef.current?.getCreation("creation-1")?.abortController.abort()
+            return { taskId: "task-1" }
+        })
         const refreshProductStateAfterTaskCreation = vi.fn(async () => {
-            manager.getCreation("creation-1")?.abortController.abort()
+            managerRef.current?.getCreation("creation-1")?.abortController.abort()
         })
         const interruptProductTurn = vi.fn(async () => undefined)
         const deleteProductTask = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", deleted: true }))
@@ -182,10 +187,12 @@ describe("TaskCreationManager creation plumbing", () => {
             interruptProductTurn,
             deleteProductTask,
             refreshProductStateAfterTaskDeletion,
+            shouldUseRuntimeProductReads: vi.fn(() => true),
             getActiveHyperPlanStrategy: vi.fn(),
         } as unknown as CodeStore
 
         const manager = new TaskCreationManager(store)
+        managerRef.current = manager
         manager.creationsById.set("creation-1", {
             id: "creation-1",
             repoId: "repo-1",
@@ -214,6 +221,7 @@ describe("TaskCreationManager creation plumbing", () => {
             },
         })
         expect(refreshProductStateAfterTaskDeletion).toHaveBeenCalledWith("task-1")
+        expect(refreshProductStateAfterTaskCreation).not.toHaveBeenCalled()
         expect(generateTitleSpy).not.toHaveBeenCalled()
         expect(manager.getCreation("creation-1")).toBeNull()
     })
