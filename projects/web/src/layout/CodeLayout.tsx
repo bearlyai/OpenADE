@@ -86,7 +86,7 @@ export const CodeLayout = observer(({ children, isCodeModuleAvailable, workspace
     }, [workspaceId, taskId, hasInitialized, codeStore, codeStore.runtimeProductStoreStatus])
 
     // Check if tasks are loaded for the current workspace
-    const tasksLoaded = !workspaceId || codeStore.tasks.loadedRepoIds.has(workspaceId)
+    const tasksLoaded = !workspaceId || codeStore.storeInitialized || codeStore.tasks.loadedRepoIds.has(workspaceId)
 
     const handleOpenSettings = useCallback(
         (tab?: SettingsTab) => {

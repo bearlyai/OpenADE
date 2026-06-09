@@ -10,7 +10,11 @@ import { CodeLayout, type CodeLayoutProps } from "./CodeLayout"
 
 const CodeLayoutForTest = CodeLayout as ComponentType<Omit<CodeLayoutProps, "children">>
 
-function createInitializedStore(): { store: CodeStore; loadRepos: ReturnType<typeof vi.fn>; ensureTasksLoaded: ReturnType<typeof vi.fn> } {
+function createInitializedStore(loadedRepoIds: Set<string> = new Set(["repo-1"])): {
+    store: CodeStore
+    loadRepos: ReturnType<typeof vi.fn>
+    ensureTasksLoaded: ReturnType<typeof vi.fn>
+} {
     const loadRepos = vi.fn(async () => undefined)
     const ensureTasksLoaded = vi.fn()
     const store = {
@@ -24,7 +28,7 @@ function createInitializedStore(): { store: CodeStore; loadRepos: ReturnType<typ
             loadRepos,
         },
         tasks: {
-            loadedRepoIds: new Set(["repo-1"]),
+            loadedRepoIds,
             ensureTasksLoaded,
         },
     } as unknown as CodeStore
@@ -79,6 +83,39 @@ describe("CodeLayout", () => {
         })
 
         expect(container.textContent).toContain("Ready task route")
+        expect(container.textContent).not.toContain("Loading")
+        expect(loadRepos).not.toHaveBeenCalled()
+        expect(ensureTasksLoaded).toHaveBeenCalledWith("repo-1")
+    })
+
+    it("does not show the app loading shell while marking initialized workspace tasks loaded", () => {
+        const { store, loadRepos, ensureTasksLoaded } = createInitializedStore(new Set())
+
+        flushSync(() => {
+            root.render(
+                createElement(
+                    MemoryRouter,
+                    null,
+                    createElement(
+                        CodeStoreProvider,
+                        { store },
+                        createElement(
+                            CodeLayoutForTest,
+                            {
+                                isCodeModuleAvailable: true,
+                                workspaceId: "repo-1",
+                                taskId: "task-1",
+                                title: "Task",
+                                icon: createElement(Code, { size: "1rem" }),
+                            },
+                            createElement("div", null, "Ready before loaded marker")
+                        )
+                    )
+                )
+            )
+        })
+
+        expect(container.textContent).toContain("Ready before loaded marker")
         expect(container.textContent).not.toContain("Loading")
         expect(loadRepos).not.toHaveBeenCalled()
         expect(ensureTasksLoaded).toHaveBeenCalledWith("repo-1")
