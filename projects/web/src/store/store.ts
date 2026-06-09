@@ -174,6 +174,7 @@ const ANALYTICS_DEVICE_ID_BACKUP_KEY = "openade-analytics-device-id"
 export type RuntimeProductStoreStatus = "disabled" | "loading" | "ready" | "error"
 
 const RUNTIME_TASK_UPDATE_REFRESH_DELAY_MS = 150
+const RUNTIME_TASK_LIGHTWEIGHT_CACHE_FRESH_MS = 2_000
 const LIGHTWEIGHT_RUNTIME_TASK_READ_OPTIONS: OpenADETaskReadOptions = { hydrateSessionEvents: false }
 
 function runtimeProductTaskReadKey(repoId: string, taskId: string, options: OpenADETaskReadOptions): string {
@@ -277,6 +278,7 @@ export class CodeStore {
     private runtimeTaskUpdateTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
     private runtimeProductStore: OpenADEProductStore | null = null
     private runtimeProductTaskReadInFlight: Map<string, Promise<OpenADETask | null>> = new Map()
+    private runtimeProductTaskReadLoadedAt: Map<string, number> = new Map()
     private telemetryReactionDisposer: (() => void) | null = null
     private pingIntervalId: ReturnType<typeof setInterval> | null = null
     private focusHandler: (() => void) | null = null
@@ -735,6 +737,7 @@ export class CodeStore {
             runInAction(() => {
                 this.runtimeProductSnapshot = null
                 this.runtimeProductTasks.clear()
+                this.runtimeProductTaskReadLoadedAt.clear()
                 this.runtimeProductStoreStatus = "disabled"
                 this.runtimeProductStoreError = null
             })
@@ -762,6 +765,7 @@ export class CodeStore {
             runInAction(() => {
                 this.runtimeProductSnapshot = null
                 this.runtimeProductTasks.clear()
+                this.runtimeProductTaskReadLoadedAt.clear()
                 this.runtimeProductStoreStatus = "error"
                 this.runtimeProductStoreError = message
             })
@@ -809,7 +813,10 @@ export class CodeStore {
     private pruneRuntimeProductTasks(snapshot: OpenADESnapshot): void {
         const taskIds = new Set(snapshot.repos.flatMap((repo) => repo.tasks.map((task) => task.id)))
         for (const taskId of this.runtimeProductTasks.keys()) {
-            if (!taskIds.has(taskId)) this.runtimeProductTasks.delete(taskId)
+            if (!taskIds.has(taskId)) {
+                this.runtimeProductTasks.delete(taskId)
+                this.runtimeProductTaskReadLoadedAt.delete(taskId)
+            }
         }
     }
 
@@ -820,6 +827,14 @@ export class CodeStore {
     ): Promise<OpenADETask | null> {
         if (!this.runtimeProductStore) return null
         const key = runtimeProductTaskReadKey(repoId, taskId, options)
+        if (options.hydrateSessionEvents !== true) {
+            const loadedAt = this.runtimeProductTaskReadLoadedAt.get(taskId) ?? 0
+            const cachedTask = this.runtimeProductStore.getCachedTask(repoId, taskId)
+            if (cachedTask && Date.now() - loadedAt < RUNTIME_TASK_LIGHTWEIGHT_CACHE_FRESH_MS) {
+                return cachedTask
+            }
+        }
+
         let request = this.runtimeProductTaskReadInFlight.get(key)
         if (!request) {
             request = this.runtimeProductStore.getTask(repoId, taskId, options).finally(() => {
@@ -832,6 +847,7 @@ export class CodeStore {
         if (task) {
             runInAction(() => {
                 this.cacheRuntimeProductTask(task)
+                this.runtimeProductTaskReadLoadedAt.set(task.id, Date.now())
             })
         }
         return task
@@ -958,6 +974,7 @@ export class CodeStore {
                 const taskId = typeof params.taskId === "string" ? params.taskId : null
                 if (notification.method === "openade/task/deleted" && taskId) {
                     this.runtimeProductTasks.delete(taskId)
+                    this.runtimeProductTaskReadLoadedAt.delete(taskId)
                 } else if (repoId && taskId) {
                     const task = this.runtimeProductStore?.getCachedTask(repoId, taskId)
                     if (task) this.cacheRuntimeProductTask(task)
@@ -1282,6 +1299,7 @@ export class CodeStore {
         if (this.shouldUseRuntimeProductReads()) {
             runInAction(() => {
                 this.runtimeProductTasks.delete(taskId)
+                this.runtimeProductTaskReadLoadedAt.delete(taskId)
             })
             await this.refreshRuntimeProductSnapshot()
             return
@@ -1865,6 +1883,7 @@ export class CodeStore {
         this.runtimeProductSnapshot = null
         this.runtimeProductTasks.clear()
         this.runtimeProductTaskReadInFlight.clear()
+        this.runtimeProductTaskReadLoadedAt.clear()
         this.trackedRuntimeProductFallbackKeys.clear()
         this.runtimeProductStoreStatus = "disabled"
         this.runtimeProductStoreError = null

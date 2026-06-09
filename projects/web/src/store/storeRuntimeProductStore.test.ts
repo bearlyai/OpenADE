@@ -1505,18 +1505,11 @@ describe("CodeStore runtime product store bridge", () => {
             expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
 
             state.taskReadRequests = []
-            await Promise.all([
-                codeStore.loadRuntimeProductTask("repo-1", "task-1", { hydrateSessionEvents: false }),
-                codeStore.loadRuntimeProductTask("repo-1", "task-1", { hydrateSessionEvents: true }),
-            ])
+            await expect(codeStore.loadRuntimeProductTask("repo-1", "task-1", { hydrateSessionEvents: false })).resolves.toMatchObject({ id: "task-1" })
+            expect(state.taskReadRequests).toEqual([])
 
-            expect(state.taskReadRequests).toEqual(
-                expect.arrayContaining([
-                    { repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false },
-                    { repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: true },
-                ])
-            )
-            expect(state.taskReadRequests).toHaveLength(2)
+            await expect(codeStore.loadRuntimeProductTask("repo-1", "task-1", { hydrateSessionEvents: true })).resolves.toMatchObject({ id: "task-1" })
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: true }])
         } finally {
             codeStore.disconnectAllStores()
             await runtime.close()
