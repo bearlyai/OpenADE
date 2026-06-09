@@ -524,6 +524,8 @@ Update docs in the same change when behavior changes:
 
 ## Decision Log
 
+- 2026-06-09: Cold repo git-info detection now coalesces per repo in `RepoManager.getGitInfo()`, preventing concurrent environment setup, task creation, and sidebar reads from issuing duplicate `openade/project/git/info/read` or legacy `gitApi.isGitDirectory()` calls. A real `RuntimeServer`/`OpenADEClient` bridge regression calls `getGitInfo("repo-1")` twice concurrently and proves one product git-info read while branch, summary, and gh-status reads still use product APIs.
+
 - 2026-06-09: Lightweight runtime task reads now use a short renderer fresh-cache window in `CodeStore.getRuntimeProductTask()`. Duplicate in-flight reads still coalesce, immediate route/render churn can reuse the cached OpenADE task DTO without another `openade/task/read`, and explicit `{ hydrateSessionEvents: true }` full-history requests still fetch. The cache freshness marker is pruned on snapshot/task deletion and cleared with runtime-product store teardown. A focused real `RuntimeServer`/`OpenADEClient` bridge regression proves duplicate lightweight reads coalesce, a fresh lightweight reread does not hit runtime, and full-history hydration still does.
 
 - 2026-06-09: SmartEditor file mentions no longer run host/product fuzzy search for empty queries. `warmFileMentionSearch()` and the empty `@` popup path now return local frecency favorites without calling `openade/project/files/fuzzySearch` or the legacy `filesApi.fuzzySearch()` fallback; non-empty queries still use the real scoped search path. Focused SmartEditorManager tests cover runtime product context, empty-query favorites, empty legacy fallback, and non-empty legacy search.

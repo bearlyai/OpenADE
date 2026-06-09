@@ -44,6 +44,7 @@ export class RepoManager {
     reposLoading = false
     // In-memory cache (cleared on app restart, or when repo.path changes)
     private gitInfoCache: Map<string, GitInfo | null> = new Map()
+    private gitInfoInFlight: Map<string, Promise<GitInfo | null>> = new Map()
 
     constructor(private store: CodeStore) {
         makeAutoObservable(this, {
@@ -106,7 +107,7 @@ export class RepoManager {
 
         // Clear git info cache if path changed
         if (updates.path !== undefined) {
-            this.gitInfoCache.delete(id)
+            this.clearGitInfoCache(id)
         }
 
         await this.store.updateProductRepo({ repoId: id, ...updates })
@@ -129,7 +130,7 @@ export class RepoManager {
         if (!this.store.repoStore && !this.store.shouldUseRuntimeProductReads()) return false
 
         // Clean up cache
-        this.gitInfoCache.delete(id)
+        this.clearGitInfoCache(id)
 
         await this.store.deleteProductRepo({ repoId: id })
         await this.store.refreshProductStateAfterRepoMutation()
@@ -151,10 +152,21 @@ export class RepoManager {
             return this.gitInfoCache.get(repoId) ?? null
         }
 
+        const existing = this.gitInfoInFlight.get(repoId)
+        if (existing) return existing
+
+        const request = this.loadGitInfo(repoId, repo.path).finally(() => {
+            this.gitInfoInFlight.delete(repoId)
+        })
+        this.gitInfoInFlight.set(repoId, request)
+        return request
+    }
+
+    private async loadGitInfo(repoId: string, repoPath: string): Promise<GitInfo | null> {
         try {
             const response = this.store.shouldUseRuntimeProductReads()
                 ? await this.store.readProductProjectGitInfo({ repoId })
-                : await gitApi.isGitDirectory({ directory: repo.path })
+                : await gitApi.isGitDirectory({ directory: repoPath })
             const gitInfo: GitInfo | null =
                 "isGitRepo" in response
                     ? response.isGitRepo
@@ -193,6 +205,7 @@ export class RepoManager {
     /** Clear cached git info for a repo */
     clearGitInfoCache(repoId: string): void {
         this.gitInfoCache.delete(repoId)
+        this.gitInfoInFlight.delete(repoId)
     }
 
     /**

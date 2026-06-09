@@ -2941,12 +2941,15 @@ describe("CodeStore runtime product store bridge", () => {
         try {
             await codeStore.initializeRuntimeProductStore()
 
-            await expect(codeStore.repos.getGitInfo("repo-1")).resolves.toMatchObject({
+            const [firstGitInfo, secondGitInfo] = await Promise.all([codeStore.repos.getGitInfo("repo-1"), codeStore.repos.getGitInfo("repo-1")])
+            expect(firstGitInfo).toMatchObject({
                 repoRoot: "/tmp/runtime-repo",
                 relativePath: "",
                 mainBranch: "main",
                 hasGhCli: false,
             })
+            expect(secondGitInfo).toEqual(firstGitInfo)
+            expect(productInfoRead).toHaveBeenCalledTimes(1)
             await expect(codeStore.repos.listBranches("repo-1", { includeRemote: true })).resolves.toMatchObject({
                 defaultBranch: "main",
                 branches: [expect.objectContaining({ name: "main", isDefault: true })],
