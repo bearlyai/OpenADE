@@ -234,7 +234,7 @@ export class InputManager {
         this.rememberQueuedTurn(type, result, input, taskModel, options)
         try {
             if (useRuntimeProductReads) {
-                await Promise.all([this.store.refreshRuntimeProductSnapshot(), this.store.refreshRuntimeProductTaskForTaskId(this.taskId)])
+                await Promise.all([this.store.refreshRuntimeProductSnapshot({ bypassCache: true }), this.store.refreshRuntimeProductTaskForTaskId(this.taskId)])
             } else {
                 await this.store.refreshTaskStoreFromStorage(this.taskId)
             }

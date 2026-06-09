@@ -1084,12 +1084,12 @@ function createRuntimeBackedClient(state: RuntimeBridgeState = createBridgeState
     }
 }
 
-function runtimeRecord(status: RuntimeRecord["status"], updatedAt: string): RuntimeRecord {
+function runtimeRecord(status: RuntimeRecord["status"], updatedAt: string, ownerId = "task-1", runtimeId = "runtime-1"): RuntimeRecord {
     return {
-        runtimeId: "runtime-1",
+        runtimeId,
         kind: "agent",
         status,
-        scope: { ownerType: "openade-task", ownerId: "task-1" },
+        scope: { ownerType: "openade-task", ownerId },
         startedAt: now,
         updatedAt,
         lastActivityAt: updatedAt,
@@ -3334,6 +3334,54 @@ describe("CodeStore runtime product store bridge", () => {
                 expect(codeStore.tasks.getTaskModel("task-1")).toBeNull()
             })
         } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("does not read uncached task detail when a background runtime settles", async () => {
+        const state = createBridgeState()
+        state.task = {
+            ...cloneTask(task),
+            id: "task-background",
+            slug: "task-background",
+            title: "Background runtime task",
+            events: [],
+            comments: [],
+        }
+        state.taskReadRequests = []
+        const { client, runtime, server } = createRuntimeBackedClient(state)
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const afterEvents: Array<{ taskId: string; eventType: string }> = []
+        const unsubscribe = codeStore.execution.onAfterEvent((taskId, eventType) => {
+            afterEvents.push({ taskId, eventType })
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([expect.objectContaining({ id: "task-background" })])
+            state.taskReadRequests = []
+
+            server.notify("runtime/updated", runtimeRecord("running", "2026-05-31T00:01:00.000Z", "task-background", "runtime-background"))
+            await waitForRuntimeBridge(() => {
+                expect(codeStore.runtimes.isTaskRunning("task-background")).toBe(true)
+            })
+
+            server.notify("runtime/completed", runtimeRecord("completed", "2026-05-31T00:02:00.000Z", "task-background", "runtime-background"))
+            await waitForRuntimeBridge(() => {
+                expect(codeStore.runtimes.isTaskRunning("task-background")).toBe(false)
+            })
+
+            expect(state.taskReadRequests).toEqual([])
+            expect(afterEvents).toEqual([])
+        } finally {
+            unsubscribe()
             codeStore.disconnectAllStores()
             await runtime.close()
         }

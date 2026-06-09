@@ -823,11 +823,12 @@ export class CodeStore {
     async getRuntimeProductTask(
         repoId: string,
         taskId: string,
-        options: OpenADETaskReadOptions = LIGHTWEIGHT_RUNTIME_TASK_READ_OPTIONS
+        options: OpenADETaskReadOptions = LIGHTWEIGHT_RUNTIME_TASK_READ_OPTIONS,
+        readOptions: OpenADEProductReadOptions = {}
     ): Promise<OpenADETask | null> {
         if (!this.runtimeProductStore) return null
         const key = runtimeProductTaskReadKey(repoId, taskId, options)
-        if (options.hydrateSessionEvents !== true) {
+        if (options.hydrateSessionEvents !== true && !readOptions.bypassCache) {
             const loadedAt = this.runtimeProductTaskReadLoadedAt.get(taskId) ?? 0
             const cachedTask = this.runtimeProductStore.getCachedTask(repoId, taskId)
             if (cachedTask && Date.now() - loadedAt < RUNTIME_TASK_LIGHTWEIGHT_CACHE_FRESH_MS) {
@@ -837,7 +838,7 @@ export class CodeStore {
 
         let request = this.runtimeProductTaskReadInFlight.get(key)
         if (!request) {
-            request = this.runtimeProductStore.getTask(repoId, taskId, options).finally(() => {
+            request = this.runtimeProductStore.getTask(repoId, taskId, options, readOptions).finally(() => {
                 this.runtimeProductTaskReadInFlight.delete(key)
             })
             this.runtimeProductTaskReadInFlight.set(key, request)
@@ -866,18 +867,19 @@ export class CodeStore {
 
     async refreshRuntimeProductTaskForTaskId(
         taskId: string,
-        options: OpenADETaskReadOptions = LIGHTWEIGHT_RUNTIME_TASK_READ_OPTIONS
+        options: OpenADETaskReadOptions = LIGHTWEIGHT_RUNTIME_TASK_READ_OPTIONS,
+        readOptions: OpenADEProductReadOptions = { bypassCache: true }
     ): Promise<OpenADETask | null> {
         if (!this.runtimeProductStore || !this.shouldUseRuntimeProductReads()) return null
 
         let repoId = this.runtimeProductTasks.get(taskId)?.repoId ?? this.findRuntimeProductRepoIdForTask(taskId)
         if (!repoId) {
-            await this.refreshRuntimeProductSnapshot()
+            await this.refreshRuntimeProductSnapshot({ bypassCache: true })
             repoId = this.findRuntimeProductRepoIdForTask(taskId)
         }
         if (!repoId) return null
 
-        const task = await this.getRuntimeProductTask(repoId, taskId, options)
+        const task = await this.getRuntimeProductTask(repoId, taskId, options, readOptions)
         if (task) this.tasks.getTaskModel(taskId)?.syncHarnessFromHistory()
         return task
     }
@@ -996,7 +998,8 @@ export class CodeStore {
     }
 
     private async notifyRuntimeTaskSettled(taskId: string): Promise<void> {
-        await this.refreshProductTaskAfterRuntimeNotification(taskId)
+        const refreshed = await this.refreshProductTaskAfterRuntimeNotification(taskId)
+        if (!refreshed) return
         const events = this.tasks.getTask(taskId)?.events ?? []
         for (let index = events.length - 1; index >= 0; index--) {
             const event = events[index]
@@ -1016,13 +1019,20 @@ export class CodeStore {
         await this.refreshRepoStoreFromStorage()
     }
 
-    private async refreshProductTaskAfterRuntimeNotification(taskId: string): Promise<void> {
+    private shouldRefreshRuntimeProductTaskDetail(taskId: string): boolean {
+        if (!this.shouldUseRuntimeProductReads()) return true
+        return this.runtimeProductTasks.has(taskId) || this.getCachedRuntimeProductOpenADETask(taskId) !== null
+    }
+
+    private async refreshProductTaskAfterRuntimeNotification(taskId: string): Promise<boolean> {
         if (this.shouldUseRuntimeProductReads()) {
+            if (!this.shouldRefreshRuntimeProductTaskDetail(taskId)) return false
             await this.refreshRuntimeProductTaskForTaskId(taskId, { hydrateSessionEvents: false })
-            return
+            return true
         }
 
         await this.refreshTaskStoreFromStorage(taskId)
+        return true
     }
 
     private async initializeAnalytics(personalSettings: PersonalSettingsStore): Promise<void> {
@@ -1253,7 +1263,7 @@ export class CodeStore {
     async refreshRepoStoreFromStorage(): Promise<void> {
         await this.repoStoreConnection?.refresh()
         if (this.shouldUseRuntimeProductReads()) {
-            await this.refreshRuntimeProductSnapshot()
+            await this.refreshRuntimeProductSnapshot({ bypassCache: true })
         }
     }
 
@@ -1274,7 +1284,7 @@ export class CodeStore {
 
     async refreshProductStateAfterTaskMutation(taskId: string): Promise<void> {
         if (this.shouldUseRuntimeProductReads()) {
-            await Promise.all([this.refreshRuntimeProductSnapshot(), this.refreshRuntimeProductTaskForTaskId(taskId)])
+            await Promise.all([this.refreshRuntimeProductSnapshot({ bypassCache: true }), this.refreshRuntimeProductTaskForTaskId(taskId)])
             return
         }
 
@@ -1284,8 +1294,8 @@ export class CodeStore {
 
     async refreshProductStateAfterTaskCreation(repoId: string, taskId: string): Promise<void> {
         if (this.shouldUseRuntimeProductReads()) {
-            await this.refreshRuntimeProductSnapshot()
-            await this.getRuntimeProductTask(repoId, taskId)
+            await this.refreshRuntimeProductSnapshot({ bypassCache: true })
+            await this.getRuntimeProductTask(repoId, taskId, LIGHTWEIGHT_RUNTIME_TASK_READ_OPTIONS, { bypassCache: true })
             return
         }
 
@@ -1301,7 +1311,7 @@ export class CodeStore {
                 this.runtimeProductTasks.delete(taskId)
                 this.runtimeProductTaskReadLoadedAt.delete(taskId)
             })
-            await this.refreshRuntimeProductSnapshot()
+            await this.refreshRuntimeProductSnapshot({ bypassCache: true })
             return
         }
 
@@ -1310,7 +1320,7 @@ export class CodeStore {
 
     async refreshProductStateAfterRepoMutation(): Promise<void> {
         if (this.shouldUseRuntimeProductReads()) {
-            await this.refreshRuntimeProductSnapshot()
+            await this.refreshRuntimeProductSnapshot({ bypassCache: true })
             return
         }
 

@@ -219,7 +219,7 @@ describe("InputManager queueable desktop commands", () => {
 
         expect(store.getTaskStore).not.toHaveBeenCalled()
         expect(store.refreshTaskStoreFromStorage).not.toHaveBeenCalled()
-        expect(store.refreshRuntimeProductSnapshot).toHaveBeenCalledTimes(1)
+        expect(store.refreshRuntimeProductSnapshot).toHaveBeenCalledWith({ bypassCache: true })
         expect(store.refreshRuntimeProductTaskForTaskId).toHaveBeenCalledWith("task-1")
     })
 
