@@ -86,13 +86,15 @@ func newRuntimeHarnessWithConfigStoreSetupAndOptions(t *testing.T, configureConf
 	}
 	blobDir := filepath.Join(t.TempDir(), "blobs")
 	worktreeBaseDir := filepath.Join(t.TempDir(), "worktrees")
+	processOutputDir := filepath.Join(t.TempDir(), "process-output")
 	httpHandler := core.NewHTTPServer(cfg, slog.New(slog.NewTextHandler(&strings.Builder{}, nil)))
 	product.ConfigureDeviceAuthentication(httpHandler, store)
 	options := product.Options{
-		Version:         "test-version",
-		HostName:        "test-host",
-		BlobDir:         blobDir,
-		WorktreeBaseDir: worktreeBaseDir,
+		Version:          "test-version",
+		HostName:         "test-host",
+		BlobDir:          blobDir,
+		WorktreeBaseDir:  worktreeBaseDir,
+		ProcessOutputDir: processOutputDir,
 	}
 	if configure != nil {
 		configure(&options)

@@ -486,12 +486,42 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
         await smokePage.waitForFunction(() => "openadeAPI" in window, null, { timeout: 30_000 })
         return { app: launchedApp, page: smokePage }
     }
+    const closeManagedCoreSmokeApp = async () => {
+        const appToClose = app
+        if (!appToClose) return
+        app = undefined
+        const closePromise = appToClose.close().then(
+            () => "closed" as const,
+            () => "closed" as const
+        )
+        const closeResult = await Promise.race([
+            closePromise,
+            new Promise<"timeout">((resolveTimeout) => setTimeout(() => resolveTimeout("timeout"), 10_000)),
+        ])
+        if (closeResult === "closed") return
+
+        appToClose.process().kill("SIGTERM")
+        await Promise.race([closePromise, new Promise<"timeout">((resolveTimeout) => setTimeout(() => resolveTimeout("timeout"), 5_000))])
+    }
 
     try {
         writeFileSync(join(repoDir, "README.md"), "OpenADE managed Core smoke fixture\n")
+        const managedCoreLongProcessCommand =
+            "printf 'managed core process before restart\\n'; i=0; while [ ! -f managed-core-process-release ] && [ \"$i\" -lt 2400 ]; do i=$((i + 1)); sleep 0.05; done; if [ -f managed-core-process-release ]; then printf 'managed core process after restart\\n'; else printf 'managed core process timed out\\n'; fi"
         writeFileSync(
             join(repoDir, "openade.toml"),
-            '[[process]]\nname = "Managed Core Echo"\ncommand = "echo managed core scoped process ok"\ntype = "task"\n'
+            [
+                '[[process]]',
+                'name = "Managed Core Echo"',
+                'command = "echo managed core scoped process ok"',
+                'type = "task"',
+                '',
+                '[[process]]',
+                'name = "Managed Core Long Runner"',
+                `command = ${JSON.stringify(managedCoreLongProcessCommand)}`,
+                'type = "daemon"',
+                '',
+            ].join("\n")
         )
         execFileSync("git", ["init"], { cwd: repoDir, stdio: "ignore" })
         execFileSync("git", ["config", "user.email", "managed-core-smoke@example.com"], { cwd: repoDir, stdio: "ignore" })
@@ -569,6 +599,14 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
                 completed?: boolean
                 output?: Array<{ type: "stdout" | "stderr"; data: string }>
             }
+            type LongProcessLifecycle =
+                | {
+                      skipped: false
+                      start: ProjectProcessStartResult
+                      output: ProjectProcessReconnectResult
+                      runtime: RuntimeReadResult
+                  }
+                | { skipped: true; reason: string }
             type TaskTerminalStartResult = { terminalId: string; runtimeId: string; ok: boolean }
             type TaskTerminalReconnectResult = {
                 found: boolean
@@ -790,6 +828,24 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
                 processId: processStart.processId,
                 clientRequestId: `${smokeRepoId}-process-stop`,
             })
+            let longProcessLifecycle: LongProcessLifecycle
+            if (hostPlatform === "win32") {
+                longProcessLifecycle = { skipped: true, reason: "process adoption smoke is unix-only" }
+            } else {
+                const longProcessStart = await request<ProjectProcessStartResult>("openade/project/process/start", {
+                    repoId: repoCreate.repoId,
+                    definitionId: "openade.toml::Managed Core Long Runner",
+                    clientRequestId: `${smokeRepoId}-long-process-start`,
+                })
+                const longProcessOutput = await waitForProcessOutput(longProcessStart.processId, "managed core process before restart")
+                const longProcessRuntime = await request<RuntimeReadResult>("runtime/read", { runtimeId: longProcessStart.runtimeId })
+                longProcessLifecycle = {
+                    skipped: false,
+                    start: longProcessStart,
+                    output: longProcessOutput,
+                    runtime: longProcessRuntime,
+                }
+            }
             const taskCreate = await request<TaskCreateResult>("openade/task/create", {
                 repoId: repoCreate.repoId,
                 input: "Managed Core task create smoke",
@@ -941,6 +997,7 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
                 processStart,
                 processOutput,
                 processStop,
+                longProcessLifecycle,
                 taskCreate,
                 turnStart,
                 turnTask,
@@ -1021,10 +1078,10 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
         expect(coreSmoke.projectGitSummary.untracked).toEqual(
             expect.arrayContaining([expect.objectContaining({ path: "notes/managed-core.txt" })])
         )
-        expect(coreSmoke.processes).toMatchObject({
-            errors: [],
-            processes: [expect.objectContaining({ id: "openade.toml::Managed Core Echo", name: "Managed Core Echo" })],
-        })
+        expect(coreSmoke.processes.errors).toEqual([])
+        expect(coreSmoke.processes.processes).toEqual(
+            expect.arrayContaining([expect.objectContaining({ id: "openade.toml::Managed Core Echo", name: "Managed Core Echo" })])
+        )
         expect(coreSmoke.processStart).toMatchObject({
             definitionId: "openade.toml::Managed Core Echo",
             runtimeId: `process:${coreSmoke.processStart.processId}`,
@@ -1032,6 +1089,25 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
         expect(coreSmoke.processOutput).toMatchObject({ found: true })
         expect(coreSmoke.processOutput.output?.map((chunk) => chunk.data).join("")).toContain("managed core scoped process ok")
         expect(coreSmoke.processStop.ok).toBe(true)
+        if (process.platform === "win32") {
+            expect(coreSmoke.longProcessLifecycle).toEqual({ skipped: true, reason: "process adoption smoke is unix-only" })
+        } else {
+            expect(coreSmoke.longProcessLifecycle.skipped).toBe(false)
+            if (coreSmoke.longProcessLifecycle.skipped) throw new Error("long process adoption lifecycle should run on non-Windows smoke")
+            expect(coreSmoke.longProcessLifecycle.start).toMatchObject({
+                definitionId: "openade.toml::Managed Core Long Runner",
+                runtimeId: `process:${coreSmoke.longProcessLifecycle.start.processId}`,
+            })
+            expect(coreSmoke.longProcessLifecycle.output).toMatchObject({ found: true })
+            expect(coreSmoke.longProcessLifecycle.output.output?.map((chunk) => chunk.data).join("")).toContain(
+                "managed core process before restart"
+            )
+            expect(coreSmoke.longProcessLifecycle.runtime).toMatchObject({
+                runtimeId: coreSmoke.longProcessLifecycle.start.runtimeId,
+                kind: "process",
+                status: "running",
+            })
+        }
         expect(coreSmoke.taskCreate.title).toBe("Managed Core Smoke Task")
         expect(coreSmoke.turnStart).toMatchObject({
             taskId: coreSmoke.taskCreate.taskId,
@@ -1212,8 +1288,7 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
             throw new Error(`Live recovery runtime did not start with process metadata: ${JSON.stringify(runtime)}`)
         }, { smokeRepoId: repoId, smokeTaskId: coreSmoke.taskCreate.taskId, prompt: liveRecoveryPrompt })
 
-        await app.close()
-        app = undefined
+        await closeManagedCoreSmokeApp()
 
         const relaunched = await launchManagedCoreSmokeApp()
         app = relaunched.app
@@ -1226,6 +1301,159 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
             legacyYjsDocumentsPresent: false,
             legacyYjsMigrationAccepted: false,
         })
+        let recoveredLiveProcess:
+            | {
+                  skipped: false
+                  runtimeBeforeRelease: { runtimeId: string; kind?: string; status?: string }
+                  outputBeforeRelease: { found: boolean; completed?: boolean; output?: Array<{ type: "stdout" | "stderr"; data: string }> }
+                  releaseWrite: { path: string; size: number }
+                  runtimeAfterRelease: { runtimeId: string; kind?: string; status?: string; exitCode?: number | null }
+                  outputAfterRelease: { found: boolean; completed?: boolean; output?: Array<{ type: "stdout" | "stderr"; data: string }> }
+              }
+            | { skipped: true; reason: string }
+        if (coreSmoke.longProcessLifecycle.skipped) {
+            recoveredLiveProcess = { skipped: true, reason: coreSmoke.longProcessLifecycle.reason }
+        } else {
+            recoveredLiveProcess = await relaunched.page.evaluate(async ({ smokeRepoId, processId, runtimeId }) => {
+                type RuntimeResponse<T> = { id: number; result?: T; error?: { code?: string; message?: string } }
+                type RuntimeReadResult = { runtimeId: string; kind?: string; status?: string; exitCode?: number | null; processStdoutFile?: string }
+                type ProjectFileWriteResult = { path: string; size: number }
+                type ProjectProcessReconnectResult = {
+                    found: boolean
+                    completed?: boolean
+                    output?: Array<{ type: "stdout" | "stderr"; data: string }>
+                }
+
+                const endpoint = window.openadeAPI?.core?.runtimeEndpoint
+                if (!endpoint) throw new Error("openadeAPI.core.runtimeEndpoint is not available for process adoption")
+                const socket = new WebSocket(endpoint.url, [`bearer.${endpoint.token}`])
+                await new Promise<void>((resolveSocket, rejectSocket) => {
+                    const timeout = window.setTimeout(() => rejectSocket(new Error("Core WebSocket timed out for process adoption")), 3_000)
+                    socket.addEventListener(
+                        "open",
+                        () => {
+                            window.clearTimeout(timeout)
+                            resolveSocket()
+                        },
+                        { once: true }
+                    )
+                    socket.addEventListener(
+                        "error",
+                        () => {
+                            window.clearTimeout(timeout)
+                            rejectSocket(new Error("Core WebSocket connection failed for process adoption"))
+                        },
+                        { once: true }
+                    )
+                })
+                let nextId = 1
+                const request = async <T>(method: string, params?: unknown): Promise<T> => {
+                    const id = nextId++
+                    const responsePromise = new Promise<RuntimeResponse<T>>((resolveResponse, rejectResponse) => {
+                        const timeout = window.setTimeout(() => rejectResponse(new Error(`Timed out waiting for ${method}`)), 12_000)
+                        const onMessage = (event: MessageEvent<string>) => {
+                            const parsed = JSON.parse(event.data) as RuntimeResponse<T> | { method?: string }
+                            if (!("id" in parsed) || parsed.id !== id) return
+                            window.clearTimeout(timeout)
+                            socket.removeEventListener("message", onMessage)
+                            resolveResponse(parsed)
+                        }
+                        socket.addEventListener("message", onMessage)
+                    })
+                    socket.send(JSON.stringify(params === undefined ? { id, method } : { id, method, params }))
+                    const response = await responsePromise
+                    if (response.error) throw new Error(response.error.message ?? `Core request failed: ${method}`)
+                    return response.result as T
+                }
+                const sleep = (ms: number) => new Promise((resolveDelay) => window.setTimeout(resolveDelay, ms))
+                const reconnectUntil = async (expectedOutput: string, requireCompleted: boolean): Promise<ProjectProcessReconnectResult> => {
+                    let lastResult: ProjectProcessReconnectResult | null = null
+                    for (let attempt = 0; attempt < 100; attempt++) {
+                        const result = await request<ProjectProcessReconnectResult>("openade/project/process/reconnect", {
+                            repoId: smokeRepoId,
+                            processId,
+                        })
+                        lastResult = result
+                        const output = result.output?.map((chunk) => chunk.data).join("") ?? ""
+                        if (result.found && output.includes(expectedOutput) && (!requireCompleted || result.completed === true)) return result
+                        await sleep(250)
+                    }
+                    throw new Error(
+                        `Managed Core adopted process ${processId} did not produce ${expectedOutput}; last result: ${JSON.stringify(lastResult)}`
+                    )
+                }
+                await request("initialize", {
+                    clientName: "OpenADE packaged managed Core process adoption smoke",
+                    clientPlatform: "desktop",
+                    protocolVersion: 1,
+                })
+                const runtimeBeforeRelease = await request<RuntimeReadResult>("runtime/read", { runtimeId })
+                if (runtimeBeforeRelease.processStdoutFile !== undefined) {
+                    throw new Error(`Core exposed private process stdout path: ${JSON.stringify(runtimeBeforeRelease)}`)
+                }
+                const outputBeforeRelease = await reconnectUntil("managed core process before restart", false)
+                const releaseWrite = await request<ProjectFileWriteResult>("openade/project/file/write", {
+                    repoId: smokeRepoId,
+                    path: "managed-core-process-release",
+                    encoding: "utf8",
+                    content: "release\n",
+                    clientRequestId: `${smokeRepoId}-long-process-release`,
+                })
+                let runtimeAfterRelease: RuntimeReadResult | null = null
+                let outputAfterRelease: ProjectProcessReconnectResult | null = null
+                for (let attempt = 0; attempt < 100; attempt++) {
+                    runtimeAfterRelease = await request<RuntimeReadResult>("runtime/read", { runtimeId })
+                    outputAfterRelease = await reconnectUntil("managed core process after restart", false)
+                    if (runtimeAfterRelease?.status === "completed" && outputAfterRelease.completed === true) {
+                        socket.close()
+                        return {
+                            skipped: false,
+                            runtimeBeforeRelease,
+                            outputBeforeRelease,
+                            releaseWrite,
+                            runtimeAfterRelease,
+                            outputAfterRelease,
+                        }
+                    }
+                    if (runtimeAfterRelease?.status === "failed" || runtimeAfterRelease?.status === "stopped") {
+                        throw new Error(`Adopted process settled incorrectly: ${JSON.stringify({ runtimeAfterRelease, outputAfterRelease })}`)
+                    }
+                    await sleep(250)
+                }
+                throw new Error(`Adopted process did not complete after release: ${JSON.stringify({ runtimeAfterRelease, outputAfterRelease })}`)
+            }, {
+                smokeRepoId: repoId,
+                processId: coreSmoke.longProcessLifecycle.start.processId,
+                runtimeId: coreSmoke.longProcessLifecycle.start.runtimeId,
+            })
+        }
+        if (process.platform === "win32") {
+            expect(recoveredLiveProcess).toEqual({ skipped: true, reason: "process adoption smoke is unix-only" })
+        } else {
+            expect(recoveredLiveProcess.skipped).toBe(false)
+            if (recoveredLiveProcess.skipped) throw new Error("recovered live process should run on non-Windows smoke")
+            expect(recoveredLiveProcess.runtimeBeforeRelease).toMatchObject({
+                runtimeId: coreSmoke.longProcessLifecycle.start.runtimeId,
+                kind: "process",
+                status: "running",
+            })
+            expect(recoveredLiveProcess.outputBeforeRelease).toMatchObject({ found: true })
+            expect(recoveredLiveProcess.releaseWrite).toMatchObject({
+                path: "managed-core-process-release",
+            })
+            expect(recoveredLiveProcess.runtimeAfterRelease).toMatchObject({
+                runtimeId: coreSmoke.longProcessLifecycle.start.runtimeId,
+                kind: "process",
+                status: "completed",
+            })
+            expect(recoveredLiveProcess.outputAfterRelease).toMatchObject({
+                found: true,
+                completed: true,
+            })
+            const adoptedOutput = recoveredLiveProcess.outputAfterRelease.output?.map((chunk) => chunk.data).join("") ?? ""
+            expect(adoptedOutput).toContain("managed core process before restart")
+            expect(adoptedOutput).toContain("managed core process after restart")
+        }
         const recoveredLiveTurn = await relaunched.page.evaluate(async ({ smokeRepoId, smokeTaskId, eventId, runtimeId, prompt }) => {
             type RuntimeResponse<T> = { id: number; result?: T; error?: { code?: string; message?: string } }
             type RuntimeReadResult = { runtimeId: string; kind?: string; status?: string; processStartedAt?: string }
@@ -1334,9 +1562,7 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
 
         passed = true
     } finally {
-        if (app) {
-            await app.close().catch(() => undefined)
-        }
+        await closeManagedCoreSmokeApp()
         if (passed || process.env.OPENADE_SMOKE_KEEP_ARTIFACTS !== "1") {
             rmSync(userDataDir, { recursive: true, force: true })
             rmSync(repoDir, { recursive: true, force: true })

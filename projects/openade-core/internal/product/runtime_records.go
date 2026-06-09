@@ -24,36 +24,46 @@ type runtimeScopeDTO struct {
 }
 
 type runtimeRecordDTO struct {
-	RuntimeID        string          `json:"runtimeId"`
-	Kind             string          `json:"kind"`
-	Status           string          `json:"status"`
-	Scope            runtimeScopeDTO `json:"scope"`
-	StartedAt        string          `json:"startedAt"`
-	UpdatedAt        string          `json:"updatedAt"`
-	LastActivityAt   string          `json:"lastActivityAt"`
-	NativeID         string          `json:"nativeId,omitempty"`
-	PID              *int            `json:"pid,omitempty"`
-	PGID             *int            `json:"pgid,omitempty"`
-	ProcessLabel     string          `json:"processLabel,omitempty"`
-	ProcessStartedAt string          `json:"processStartedAt,omitempty"`
-	ExitedAt         string          `json:"exitedAt,omitempty"`
-	ExitCode         *int            `json:"exitCode,omitempty"`
-	Signal           *string         `json:"signal,omitempty"`
-	Error            string          `json:"error,omitempty"`
-	RecoveryFile     string          `json:"-"`
+	RuntimeID           string          `json:"runtimeId"`
+	Kind                string          `json:"kind"`
+	Status              string          `json:"status"`
+	Scope               runtimeScopeDTO `json:"scope"`
+	StartedAt           string          `json:"startedAt"`
+	UpdatedAt           string          `json:"updatedAt"`
+	LastActivityAt      string          `json:"lastActivityAt"`
+	NativeID            string          `json:"nativeId,omitempty"`
+	PID                 *int            `json:"pid,omitempty"`
+	PGID                *int            `json:"pgid,omitempty"`
+	ProcessLabel        string          `json:"processLabel,omitempty"`
+	ProcessStartedAt    string          `json:"processStartedAt,omitempty"`
+	ExitedAt            string          `json:"exitedAt,omitempty"`
+	ExitCode            *int            `json:"exitCode,omitempty"`
+	Signal              *string         `json:"signal,omitempty"`
+	Error               string          `json:"error,omitempty"`
+	RecoveryFile        string          `json:"-"`
+	ProcessDefinitionID string          `json:"-"`
+	ProcessStdoutFile   string          `json:"-"`
+	ProcessStderrFile   string          `json:"-"`
+	ProcessStdoutOffset int64           `json:"-"`
+	ProcessStderrOffset int64           `json:"-"`
 }
 
 type runtimeRecordPayloadDTO struct {
-	NativeID         string  `json:"nativeId,omitempty"`
-	PID              *int    `json:"pid,omitempty"`
-	PGID             *int    `json:"pgid,omitempty"`
-	ProcessLabel     string  `json:"processLabel,omitempty"`
-	ProcessStartedAt string  `json:"processStartedAt,omitempty"`
-	ExitedAt         string  `json:"exitedAt,omitempty"`
-	ExitCode         *int    `json:"exitCode,omitempty"`
-	Signal           *string `json:"signal,omitempty"`
-	Error            string  `json:"error,omitempty"`
-	RecoveryFile     string  `json:"recoveryFile,omitempty"`
+	NativeID            string  `json:"nativeId,omitempty"`
+	PID                 *int    `json:"pid,omitempty"`
+	PGID                *int    `json:"pgid,omitempty"`
+	ProcessLabel        string  `json:"processLabel,omitempty"`
+	ProcessStartedAt    string  `json:"processStartedAt,omitempty"`
+	ExitedAt            string  `json:"exitedAt,omitempty"`
+	ExitCode            *int    `json:"exitCode,omitempty"`
+	Signal              *string `json:"signal,omitempty"`
+	Error               string  `json:"error,omitempty"`
+	RecoveryFile        string  `json:"recoveryFile,omitempty"`
+	ProcessDefinitionID string  `json:"processDefinitionId,omitempty"`
+	ProcessStdoutFile   string  `json:"processStdoutFile,omitempty"`
+	ProcessStderrFile   string  `json:"processStderrFile,omitempty"`
+	ProcessStdoutOffset int64   `json:"processStdoutOffset,omitempty"`
+	ProcessStderrOffset int64   `json:"processStderrOffset,omitempty"`
 }
 
 type runtimeReconcileDTO struct {
@@ -354,6 +364,7 @@ func (service *Service) markActiveRuntimesOrphaned() {
 		return
 	}
 	service.recoverOrAdoptStoredAgentWorkers(ctx)
+	service.adoptStoredProjectProcesses(ctx)
 	service.stopStoredLiveOrphanedAgentWorkers(ctx)
 	service.reconcileStoredDeadProcessBackedRuntimes(ctx)
 	service.reconcileStoredAgentActionEvents(ctx, updatedAt)
@@ -816,23 +827,28 @@ func runtimeRecordToDTO(record storage.RuntimeRecord) (runtimeRecordDTO, *core.R
 		}
 	}
 	return runtimeRecordDTO{
-		RuntimeID:        record.RuntimeID,
-		Kind:             record.Kind,
-		Status:           record.Status,
-		Scope:            scope,
-		StartedAt:        formatTime(record.StartedAt),
-		UpdatedAt:        formatTime(record.UpdatedAt),
-		LastActivityAt:   formatTime(record.LastActivityAt),
-		NativeID:         payload.NativeID,
-		PID:              cloneIntPointer(payload.PID),
-		PGID:             cloneIntPointer(payload.PGID),
-		ProcessLabel:     payload.ProcessLabel,
-		ProcessStartedAt: payload.ProcessStartedAt,
-		ExitedAt:         payload.ExitedAt,
-		ExitCode:         cloneIntPointer(payload.ExitCode),
-		Signal:           cloneStringPointer(payload.Signal),
-		Error:            payload.Error,
-		RecoveryFile:     payload.RecoveryFile,
+		RuntimeID:           record.RuntimeID,
+		Kind:                record.Kind,
+		Status:              record.Status,
+		Scope:               scope,
+		StartedAt:           formatTime(record.StartedAt),
+		UpdatedAt:           formatTime(record.UpdatedAt),
+		LastActivityAt:      formatTime(record.LastActivityAt),
+		NativeID:            payload.NativeID,
+		PID:                 cloneIntPointer(payload.PID),
+		PGID:                cloneIntPointer(payload.PGID),
+		ProcessLabel:        payload.ProcessLabel,
+		ProcessStartedAt:    payload.ProcessStartedAt,
+		ExitedAt:            payload.ExitedAt,
+		ExitCode:            cloneIntPointer(payload.ExitCode),
+		Signal:              cloneStringPointer(payload.Signal),
+		Error:               payload.Error,
+		RecoveryFile:        payload.RecoveryFile,
+		ProcessDefinitionID: payload.ProcessDefinitionID,
+		ProcessStdoutFile:   payload.ProcessStdoutFile,
+		ProcessStderrFile:   payload.ProcessStderrFile,
+		ProcessStdoutOffset: payload.ProcessStdoutOffset,
+		ProcessStderrOffset: payload.ProcessStderrOffset,
 	}, nil
 }
 
@@ -852,16 +868,21 @@ func runtimeDTOToStorage(dto runtimeRecordDTO) (storage.RuntimeRecord, *core.Run
 		return storage.RuntimeRecord{}, handlerError(err)
 	}
 	payloadJSON, err := json.Marshal(runtimeRecordPayloadDTO{
-		NativeID:         dto.NativeID,
-		PID:              cloneIntPointer(dto.PID),
-		PGID:             cloneIntPointer(dto.PGID),
-		ProcessLabel:     dto.ProcessLabel,
-		ProcessStartedAt: dto.ProcessStartedAt,
-		ExitedAt:         dto.ExitedAt,
-		ExitCode:         cloneIntPointer(dto.ExitCode),
-		Signal:           cloneStringPointer(dto.Signal),
-		Error:            dto.Error,
-		RecoveryFile:     dto.RecoveryFile,
+		NativeID:            dto.NativeID,
+		PID:                 cloneIntPointer(dto.PID),
+		PGID:                cloneIntPointer(dto.PGID),
+		ProcessLabel:        dto.ProcessLabel,
+		ProcessStartedAt:    dto.ProcessStartedAt,
+		ExitedAt:            dto.ExitedAt,
+		ExitCode:            cloneIntPointer(dto.ExitCode),
+		Signal:              cloneStringPointer(dto.Signal),
+		Error:               dto.Error,
+		RecoveryFile:        dto.RecoveryFile,
+		ProcessDefinitionID: dto.ProcessDefinitionID,
+		ProcessStdoutFile:   dto.ProcessStdoutFile,
+		ProcessStderrFile:   dto.ProcessStderrFile,
+		ProcessStdoutOffset: dto.ProcessStdoutOffset,
+		ProcessStderrOffset: dto.ProcessStderrOffset,
 	})
 	if err != nil {
 		return storage.RuntimeRecord{}, handlerError(err)

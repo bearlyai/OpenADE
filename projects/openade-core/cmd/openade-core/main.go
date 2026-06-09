@@ -44,11 +44,12 @@ func main() {
 	}
 	product.ConfigureDeviceAuthentication(httpHandler, store)
 	productService := product.Register(httpHandler.Runtime, store, product.Options{
-		Version:         cfg.ServerVersion,
-		HostName:        hostName,
-		BlobDir:         filepath.Join(cfg.DataDir, "blobs"),
-		WorktreeBaseDir: filepath.Join(cfg.DataDir, "worktrees"),
-		AgentExecutor:   agentExecutor,
+		Version:          cfg.ServerVersion,
+		HostName:         hostName,
+		BlobDir:          filepath.Join(cfg.DataDir, "blobs"),
+		WorktreeBaseDir:  filepath.Join(cfg.DataDir, "worktrees"),
+		ProcessOutputDir: filepath.Join(cfg.DataDir, "process-output"),
+		AgentExecutor:    agentExecutor,
 	})
 	productService.ConfigurePairing(httpHandler)
 

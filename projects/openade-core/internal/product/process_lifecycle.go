@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -18,11 +19,12 @@ import (
 )
 
 const (
-	projectProcessDefaultTimeout = 10 * time.Minute
-	projectProcessDaemonTimeout  = 24 * time.Hour
-	projectProcessMaxTimeout     = 24 * time.Hour
-	projectProcessMaxOutput      = 2000
-	projectProcessCleanupDelay   = 30 * time.Minute
+	projectProcessDefaultTimeout     = 10 * time.Minute
+	projectProcessDaemonTimeout      = 24 * time.Hour
+	projectProcessMaxTimeout         = 24 * time.Hour
+	projectProcessMaxOutput          = 2000
+	projectProcessCleanupDelay       = 30 * time.Minute
+	projectProcessOutputPollInterval = 100 * time.Millisecond
 )
 
 type projectProcessOutputChunkDTO struct {
@@ -65,6 +67,7 @@ type projectProcessStartedNotificationDTO struct {
 	ProcessID        string `json:"processId"`
 	RuntimeID        string `json:"runtimeId"`
 	PID              *int   `json:"pid,omitempty"`
+	PGID             *int   `json:"pgid,omitempty"`
 	Cwd              string `json:"cwd"`
 	Label            string `json:"label"`
 	ProcessStartedAt string `json:"processStartedAt,omitempty"`
@@ -104,8 +107,22 @@ type projectProcessState struct {
 	signal       *string
 	errorMessage string
 	pid          *int
+	pgid         *int
+	stdoutFile   string
+	stderrFile   string
+	stdoutOffset int64
+	stderrOffset int64
+	stdoutWriter *os.File
+	stderrWriter *os.File
 	startedAt    time.Time
 	cleanupTimer *time.Timer
+}
+
+type projectProcessOutputFiles struct {
+	stdoutPath   string
+	stderrPath   string
+	stdoutWriter *os.File
+	stderrWriter *os.File
 }
 
 func (service *Service) handleProjectProcessStart(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
@@ -224,20 +241,34 @@ func (service *Service) startProjectProcess(
 	processContext, cancel := context.WithTimeout(context.Background(), timeout)
 	command, args := processShellCommand(definition.Command)
 	cmd := exec.CommandContext(processContext, command, args...)
+	configureProjectProcess(cmd)
 	cmd.Dir = definition.Cwd
 	cmd.Env = environmentWithOverrides(os.Environ(), envVars)
 
-	stdout, err := cmd.StdoutPipe()
+	outputFiles, err := service.openProjectProcessOutputFiles(processID)
 	if err != nil {
 		cancel()
 		return projectProcessStartDTO{}, err
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		cancel()
-		return projectProcessStartDTO{}, err
+	var stdout io.Reader
+	var stderr io.Reader
+	if outputFiles.stdoutWriter != nil && outputFiles.stderrWriter != nil {
+		cmd.Stdout = outputFiles.stdoutWriter
+		cmd.Stderr = outputFiles.stderrWriter
+	} else {
+		stdout, err = cmd.StdoutPipe()
+		if err != nil {
+			cancel()
+			return projectProcessStartDTO{}, err
+		}
+		stderr, err = cmd.StderrPipe()
+		if err != nil {
+			cancel()
+			return projectProcessStartDTO{}, err
+		}
 	}
 	if err := cmd.Start(); err != nil {
+		closeProjectProcessOutputFiles(outputFiles)
 		cancel()
 		return projectProcessStartDTO{}, err
 	}
@@ -251,6 +282,10 @@ func (service *Service) startProjectProcess(
 		command:      definition.Command,
 		cmd:          cmd,
 		cancel:       cancel,
+		stdoutFile:   outputFiles.stdoutPath,
+		stderrFile:   outputFiles.stderrPath,
+		stdoutWriter: outputFiles.stdoutWriter,
+		stderrWriter: outputFiles.stderrWriter,
 		output:       []projectProcessOutputChunkDTO{},
 		completed:    false,
 		startedAt:    time.Now().UTC(),
@@ -258,6 +293,7 @@ func (service *Service) startProjectProcess(
 	if cmd.Process != nil {
 		pid := cmd.Process.Pid
 		state.pid = &pid
+		state.pgid = projectProcessGroupID(cmd)
 	}
 
 	service.processMu.Lock()
@@ -267,16 +303,22 @@ func (service *Service) startProjectProcess(
 	if err != nil {
 		service.removeProjectProcessState(processID)
 		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
+			_ = terminateProjectProcess(cmd.Process, state.pgid)
 		}
+		closeProjectProcessOutputFiles(outputFiles)
 		cancel()
 		return projectProcessStartDTO{}, err
 	}
 	service.runtime.Notify("runtime/created", runtimeRecord)
 	service.notifyProjectProcessStarted(state)
 
-	go service.readProjectProcessOutput(processID, "stdout", stdout)
-	go service.readProjectProcessOutput(processID, "stderr", stderr)
+	if outputFiles.stdoutPath != "" && outputFiles.stderrPath != "" {
+		go service.tailProjectProcessOutputFile(processContext, processID, "stdout", outputFiles.stdoutPath, 0)
+		go service.tailProjectProcessOutputFile(processContext, processID, "stderr", outputFiles.stderrPath, 0)
+	} else {
+		go service.readProjectProcessOutput(processID, "stdout", stdout)
+		go service.readProjectProcessOutput(processID, "stderr", stderr)
+	}
 	go service.waitProjectProcess(processID, cmd)
 
 	return projectProcessStartDTO{
@@ -295,6 +337,55 @@ func processShellCommand(command string) (string, []string) {
 	return "/bin/sh", []string{"-c", command}
 }
 
+func (service *Service) openProjectProcessOutputFiles(processID string) (projectProcessOutputFiles, error) {
+	outputDir := strings.TrimSpace(service.options.ProcessOutputDir)
+	if outputDir == "" {
+		return projectProcessOutputFiles{}, nil
+	}
+	processDir := filepath.Join(outputDir, processID)
+	if err := os.MkdirAll(processDir, 0o700); err != nil {
+		return projectProcessOutputFiles{}, err
+	}
+	stdoutPath := filepath.Join(processDir, "stdout.log")
+	stderrPath := filepath.Join(processDir, "stderr.log")
+	stdoutWriter, err := os.OpenFile(stdoutPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return projectProcessOutputFiles{}, err
+	}
+	stderrWriter, err := os.OpenFile(stderrPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		_ = stdoutWriter.Close()
+		return projectProcessOutputFiles{}, err
+	}
+	return projectProcessOutputFiles{
+		stdoutPath:   stdoutPath,
+		stderrPath:   stderrPath,
+		stdoutWriter: stdoutWriter,
+		stderrWriter: stderrWriter,
+	}, nil
+}
+
+func closeProjectProcessOutputFiles(files projectProcessOutputFiles) {
+	if files.stdoutWriter != nil {
+		_ = files.stdoutWriter.Close()
+	}
+	if files.stderrWriter != nil {
+		_ = files.stderrWriter.Close()
+	}
+}
+
+func closeProjectProcessStateOutputFiles(state *projectProcessState) {
+	if state == nil {
+		return
+	}
+	closeProjectProcessOutputFiles(projectProcessOutputFiles{
+		stdoutWriter: state.stdoutWriter,
+		stderrWriter: state.stderrWriter,
+	})
+	state.stdoutWriter = nil
+	state.stderrWriter = nil
+}
+
 func (service *Service) readProjectProcessOutput(processID string, outputType string, reader io.Reader) {
 	buffered := bufio.NewReader(reader)
 	for {
@@ -305,6 +396,79 @@ func (service *Service) readProjectProcessOutput(processID string, outputType st
 				Data:      chunk,
 				Timestamp: time.Now().UnixMilli(),
 			})
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (service *Service) tailProjectProcessOutputFile(ctx context.Context, processID string, outputType string, path string, startOffset int64) {
+	file, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	if startOffset > 0 {
+		if _, err := file.Seek(startOffset, io.SeekStart); err != nil {
+			return
+		}
+	}
+	offset := startOffset
+	buffer := make([]byte, 4096)
+	for {
+		count, err := file.Read(buffer)
+		if count > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			offset += int64(count)
+			service.appendProjectProcessOutput(processID, projectProcessOutputChunkDTO{
+				Type:      outputType,
+				Data:      string(buffer[:count]),
+				Timestamp: time.Now().UnixMilli(),
+			})
+			service.updateProjectProcessRuntimeOutputOffset(processID, outputType, offset)
+		}
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, io.EOF) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(projectProcessOutputPollInterval):
+		}
+	}
+}
+
+func (service *Service) drainProjectProcessOutputFile(processID string, outputType string, path string, startOffset int64) {
+	file, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	if startOffset > 0 {
+		if _, err := file.Seek(startOffset, io.SeekStart); err != nil {
+			return
+		}
+	}
+	offset := startOffset
+	buffer := make([]byte, 4096)
+	for {
+		count, err := file.Read(buffer)
+		if count > 0 {
+			offset += int64(count)
+			service.appendProjectProcessOutput(processID, projectProcessOutputChunkDTO{
+				Type:      outputType,
+				Data:      string(buffer[:count]),
+				Timestamp: time.Now().UnixMilli(),
+			})
+			service.updateProjectProcessRuntimeOutputOffset(processID, outputType, offset)
 		}
 		if err != nil {
 			return
@@ -346,11 +510,22 @@ func (service *Service) waitProjectProcess(processID string, cmd *exec.Cmd) {
 	if state.cancel != nil {
 		state.cancel()
 	}
+	closeProjectProcessStateOutputFiles(state)
+	stdoutFile := state.stdoutFile
+	stderrFile := state.stderrFile
+	stdoutOffset := state.stdoutOffset
+	stderrOffset := state.stderrOffset
 	exitCode := cloneIntPointer(state.exitCode)
 	signal := cloneStringPointer(state.signal)
 	errorMessage := state.errorMessage
 	service.scheduleProjectProcessCleanupLocked(processID, state)
 	service.processMu.Unlock()
+	if stdoutFile != "" {
+		service.drainProjectProcessOutputFile(processID, "stdout", stdoutFile, stdoutOffset)
+	}
+	if stderrFile != "" {
+		service.drainProjectProcessOutputFile(processID, "stderr", stderrFile, stderrOffset)
+	}
 	if errorMessage != "" {
 		runtimeRecord := service.updateProjectProcessRuntimeTerminal(processID, "failed", errorMessage, exitCode, signal)
 		if runtimeRecord != nil {
@@ -408,6 +583,7 @@ func (service *Service) notifyProjectProcessStarted(state *projectProcessState) 
 		ProcessID:        state.processID,
 		RuntimeID:        "process:" + state.processID,
 		PID:              cloneIntPointer(state.pid),
+		PGID:             cloneIntPointer(state.pgid),
 		Cwd:              state.cwd,
 		Label:            state.command,
 		ProcessStartedAt: formatTime(state.startedAt),
@@ -488,6 +664,162 @@ func (service *Service) reconnectStoredProjectProcess(repoID string, taskID stri
 	return result
 }
 
+func (service *Service) adoptStoredProjectProcesses(ctx context.Context) {
+	records, err := service.store.ListRuntimes(ctx)
+	if err != nil {
+		return
+	}
+	for _, record := range records {
+		dto, runtimeErr := runtimeRecordToDTO(record)
+		if runtimeErr != nil || dto.Kind != "process" || dto.Status != "orphaned" {
+			continue
+		}
+		_ = service.adoptStoredProjectProcess(ctx, dto)
+	}
+}
+
+func (service *Service) adoptStoredProjectProcess(ctx context.Context, dto runtimeRecordDTO) bool {
+	if dto.NativeID == "" || dto.PID == nil || !runtimeProcessIsRunning(*dto.PID) || dto.ProcessStdoutFile == "" || dto.ProcessStderrFile == "" {
+		return false
+	}
+	repoID := ""
+	taskID := ""
+	if dto.Scope.Labels != nil {
+		repoID = dto.Scope.Labels["repoId"]
+		taskID = dto.Scope.Labels["taskId"]
+	}
+	if repoID == "" {
+		return false
+	}
+	output := service.storedProjectProcessOutput(dto.NativeID)
+	startedAt := parseProjectProcessStartedAt(dto)
+	tailCtx, cancelTail := context.WithCancel(context.Background())
+	state := &projectProcessState{
+		processID:    dto.NativeID,
+		repoID:       repoID,
+		taskID:       taskID,
+		definitionID: dto.ProcessDefinitionID,
+		cwd:          dto.Scope.RootPath,
+		command:      dto.ProcessLabel,
+		cancel:       cancelTail,
+		output:       output,
+		completed:    false,
+		pid:          cloneIntPointer(dto.PID),
+		pgid:         cloneIntPointer(dto.PGID),
+		stdoutFile:   dto.ProcessStdoutFile,
+		stderrFile:   dto.ProcessStderrFile,
+		stdoutOffset: dto.ProcessStdoutOffset,
+		stderrOffset: dto.ProcessStderrOffset,
+		startedAt:    startedAt,
+	}
+	service.processMu.Lock()
+	if existing := service.processes[state.processID]; existing != nil {
+		service.processMu.Unlock()
+		cancelTail()
+		return false
+	}
+	service.processes[state.processID] = state
+	service.processMu.Unlock()
+
+	dto.Status = "running"
+	updatedAt := time.Now().UTC()
+	dto.UpdatedAt = formatTime(updatedAt)
+	dto.LastActivityAt = dto.UpdatedAt
+	record, runtimeErr := runtimeDTOToStorage(dto)
+	if runtimeErr != nil {
+		service.removeProjectProcessState(state.processID)
+		cancelTail()
+		return false
+	}
+	if err := service.store.UpsertRuntime(ctx, record); err != nil {
+		service.removeProjectProcessState(state.processID)
+		cancelTail()
+		return false
+	}
+	service.runtime.Notify("runtime/updated", dto)
+	service.notifyProjectProcessStarted(state)
+	go service.tailProjectProcessOutputFile(tailCtx, state.processID, "stdout", state.stdoutFile, state.stdoutOffset)
+	go service.tailProjectProcessOutputFile(tailCtx, state.processID, "stderr", state.stderrFile, state.stderrOffset)
+	go service.monitorAdoptedProjectProcess(tailCtx, state.processID, cloneIntPointer(state.pid))
+	return true
+}
+
+func parseProjectProcessStartedAt(dto runtimeRecordDTO) time.Time {
+	if dto.ProcessStartedAt != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, dto.ProcessStartedAt); err == nil {
+			return parsed
+		}
+	}
+	if dto.StartedAt != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, dto.StartedAt); err == nil {
+			return parsed
+		}
+	}
+	return time.Now().UTC()
+}
+
+func (service *Service) storedProjectProcessOutput(processID string) []projectProcessOutputChunkDTO {
+	chunks, err := service.store.ListRuntimeOutputChunks(context.Background(), "process:"+processID, projectProcessMaxOutput)
+	if err != nil {
+		return []projectProcessOutputChunkDTO{}
+	}
+	output := make([]projectProcessOutputChunkDTO, 0, len(chunks))
+	for _, chunk := range chunks {
+		output = append(output, projectProcessOutputChunkDTO{
+			Type:      chunk.Stream,
+			Data:      chunk.Data,
+			Timestamp: chunk.TimestampMs,
+		})
+	}
+	return output
+}
+
+func (service *Service) monitorAdoptedProjectProcess(ctx context.Context, processID string, pid *int) {
+	ticker := time.NewTicker(projectProcessOutputPollInterval)
+	defer ticker.Stop()
+	for {
+		if pid == nil || !runtimeProcessIsRunning(*pid) {
+			service.completeAdoptedProjectProcess(processID)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (service *Service) completeAdoptedProjectProcess(processID string) {
+	service.processMu.Lock()
+	state := service.processes[processID]
+	if state == nil || state.completed {
+		service.processMu.Unlock()
+		return
+	}
+	state.completed = true
+	if state.cancel != nil {
+		state.cancel()
+	}
+	stdoutFile := state.stdoutFile
+	stderrFile := state.stderrFile
+	stdoutOffset := state.stdoutOffset
+	stderrOffset := state.stderrOffset
+	service.scheduleProjectProcessCleanupLocked(processID, state)
+	service.processMu.Unlock()
+	if stdoutFile != "" {
+		service.drainProjectProcessOutputFile(processID, "stdout", stdoutFile, stdoutOffset)
+	}
+	if stderrFile != "" {
+		service.drainProjectProcessOutputFile(processID, "stderr", stderrFile, stderrOffset)
+	}
+	runtimeRecord := service.updateProjectProcessRuntimeTerminal(processID, "completed", "", nil, nil)
+	if runtimeRecord != nil {
+		service.runtime.Notify("runtime/completed", *runtimeRecord)
+	}
+	service.runtime.Notify("process/exit", projectProcessExitNotificationDTO{Type: "exit", ProcessID: processID, ExitCode: nil, Signal: nil})
+}
+
 func storedProjectProcessMatchesScope(dto runtimeRecordDTO, repoID string, taskID string) bool {
 	if dto.Scope.Labels == nil {
 		return false
@@ -518,8 +850,19 @@ func (service *Service) stopProjectProcessWithReason(repoID string, taskID strin
 	if state.cancel != nil {
 		state.cancel()
 	}
+	closeProjectProcessStateOutputFiles(state)
 	if state.cmd != nil && state.cmd.Process != nil && !state.completed {
-		if err := state.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		if err := terminateProjectProcess(state.cmd.Process, state.pgid); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return projectProcessStopDTO{RepoID: repoID, TaskID: taskID, ProcessID: processID, OK: false, Error: err.Error()}
+		}
+		signal := signalValue
+		runtimeRecord := service.updateProjectProcessRuntimeTerminal(processID, "stopped", reason, nil, &signal)
+		if runtimeRecord != nil {
+			service.runtime.Notify("runtime/stopped", *runtimeRecord)
+		}
+		service.runtime.Notify("process/exit", projectProcessExitNotificationDTO{Type: "exit", ProcessID: processID, ExitCode: nil, Signal: &signal})
+	} else if state.cmd == nil && state.pid != nil && !state.completed {
+		if err := terminateProjectProcessID(state.pid, state.pgid); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return projectProcessStopDTO{RepoID: repoID, TaskID: taskID, ProcessID: processID, OK: false, Error: err.Error()}
 		}
 		signal := signalValue
@@ -547,21 +890,27 @@ func (service *Service) stopProjectProcessByRuntime(processID string, reason str
 
 func (service *Service) persistProjectProcessRuntime(state *projectProcessState, status string, errorMessage string, exitCode *int, signal *string, exitedAt string) (runtimeRecordDTO, error) {
 	dto := runtimeRecordDTO{
-		RuntimeID:        "process:" + state.processID,
-		Kind:             "process",
-		Status:           status,
-		Scope:            runtimeScopeDTO{OwnerType: "process", OwnerID: state.processID, RootPath: state.cwd, Labels: map[string]string{"repoId": state.repoID, "taskId": state.taskID}},
-		StartedAt:        formatTime(state.startedAt),
-		UpdatedAt:        formatTime(time.Now().UTC()),
-		LastActivityAt:   formatTime(time.Now().UTC()),
-		NativeID:         state.processID,
-		PID:              cloneIntPointer(state.pid),
-		ProcessLabel:     state.command,
-		ProcessStartedAt: formatTime(state.startedAt),
-		ExitedAt:         exitedAt,
-		ExitCode:         cloneIntPointer(exitCode),
-		Signal:           cloneStringPointer(signal),
-		Error:            errorMessage,
+		RuntimeID:           "process:" + state.processID,
+		Kind:                "process",
+		Status:              status,
+		Scope:               runtimeScopeDTO{OwnerType: "process", OwnerID: state.processID, RootPath: state.cwd, Labels: map[string]string{"repoId": state.repoID, "taskId": state.taskID}},
+		StartedAt:           formatTime(state.startedAt),
+		UpdatedAt:           formatTime(time.Now().UTC()),
+		LastActivityAt:      formatTime(time.Now().UTC()),
+		NativeID:            state.processID,
+		PID:                 cloneIntPointer(state.pid),
+		PGID:                cloneIntPointer(state.pgid),
+		ProcessLabel:        state.command,
+		ProcessDefinitionID: state.definitionID,
+		ProcessStdoutFile:   state.stdoutFile,
+		ProcessStderrFile:   state.stderrFile,
+		ProcessStdoutOffset: state.stdoutOffset,
+		ProcessStderrOffset: state.stderrOffset,
+		ProcessStartedAt:    formatTime(state.startedAt),
+		ExitedAt:            exitedAt,
+		ExitCode:            cloneIntPointer(exitCode),
+		Signal:              cloneStringPointer(signal),
+		Error:               errorMessage,
 	}
 	record, runtimeErr := runtimeDTOToStorage(dto)
 	if runtimeErr != nil {
@@ -584,6 +933,46 @@ func (service *Service) persistProjectProcessOutput(processID string, chunk proj
 
 func (service *Service) touchProjectProcessRuntime(processID string) {
 	_ = service.store.TouchActiveRuntime(context.Background(), "process:"+processID, time.Now().UTC())
+}
+
+func (service *Service) updateProjectProcessRuntimeOutputOffset(processID string, outputType string, offset int64) {
+	if offset <= 0 {
+		return
+	}
+	service.processMu.Lock()
+	state := service.processes[processID]
+	if state != nil {
+		if outputType == "stdout" {
+			state.stdoutOffset = offset
+		} else if outputType == "stderr" {
+			state.stderrOffset = offset
+		}
+	}
+	service.processMu.Unlock()
+
+	record, ok, err := service.store.GetRuntime(context.Background(), "process:"+processID)
+	if err != nil || !ok {
+		return
+	}
+	dto, runtimeErr := runtimeRecordToDTO(record)
+	if runtimeErr != nil || !isActiveRuntimeStatus(dto.Status) {
+		return
+	}
+	if outputType == "stdout" {
+		dto.ProcessStdoutOffset = offset
+	} else if outputType == "stderr" {
+		dto.ProcessStderrOffset = offset
+	} else {
+		return
+	}
+	now := time.Now().UTC()
+	dto.UpdatedAt = formatTime(now)
+	dto.LastActivityAt = dto.UpdatedAt
+	updated, runtimeErr := runtimeDTOToStorage(dto)
+	if runtimeErr != nil {
+		return
+	}
+	_ = service.store.UpsertRuntime(context.Background(), updated)
 }
 
 func (service *Service) updateProjectProcessRuntimeTerminal(processID string, status string, errorMessage string, exitCode *int, signal *string) *runtimeRecordDTO {

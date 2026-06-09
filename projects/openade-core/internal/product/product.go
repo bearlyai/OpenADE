@@ -22,11 +22,12 @@ import (
 )
 
 type Options struct {
-	Version         string
-	HostName        string
-	BlobDir         string
-	WorktreeBaseDir string
-	AgentExecutor   AgentExecutor
+	Version          string
+	HostName         string
+	BlobDir          string
+	WorktreeBaseDir  string
+	ProcessOutputDir string
+	AgentExecutor    AgentExecutor
 }
 
 type Service struct {
