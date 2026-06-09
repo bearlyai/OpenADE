@@ -18,6 +18,7 @@ export function remoteRefreshPlan(notification: RuntimeNotification, selectedTas
 
     switch (notification.method) {
         case "openade/task/updated":
+        case "openade/queuedTurn/updated":
             if (taskId && taskId === selectedTaskId) return { type: "task", repoId, taskId }
             return { type: "none" }
         case "openade/task/previewChanged":

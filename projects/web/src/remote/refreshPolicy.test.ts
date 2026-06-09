@@ -16,6 +16,17 @@ describe("remoteRefreshPlan", () => {
         })
     })
 
+    it("refreshes only the open task for selected queued-turn update notifications", () => {
+        expect(remoteRefreshPlan({ method: "openade/queuedTurn/updated", params: { repoId: "repo-1", taskId: "task-1" } }, "task-1")).toEqual({
+            type: "task",
+            repoId: "repo-1",
+            taskId: "task-1",
+        })
+        expect(remoteRefreshPlan({ method: "openade/queuedTurn/updated", params: { repoId: "repo-1", taskId: "task-2" } }, "task-1")).toEqual({
+            type: "none",
+        })
+    })
+
     it("uses snapshot refreshes for list-level notifications", () => {
         expect(remoteRefreshPlan({ method: "openade/task/previewChanged", params: { repoId: "repo-1", taskId: "task-1" } }, "task-1")).toEqual({
             type: "snapshot",

@@ -47,7 +47,8 @@ import { beginRemoteSubmission, finishRemoteSubmission } from "./submission"
 type CommandType = OpenADETurnStartRequest["type"]
 type PendingConnection = PairingTarget & { mode: "pair" | "manual" }
 type RemoteScreen = OpenADEShellScreen
-type SnapshotRefreshOptions = { repairNavigation?: boolean }
+type SnapshotRefreshOptions = { repairNavigation?: boolean; bypassCache?: boolean }
+type TaskRefreshOptions = { hydrateSessionEvents?: boolean; bypassCache?: boolean }
 
 export const REMOTE_THEME_STORAGE_KEY = "openade-companion-theme"
 
@@ -265,7 +266,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
 
     const refreshSnapshot = async (nextConfig = config, options: SnapshotRefreshOptions = {}): Promise<OpenADESnapshot | null> => {
         if (!nextConfig) return null
-        const next = await retryRemoteRead(() => getRemoteProductStore(nextConfig).refreshSnapshot())
+        const next = await retryRemoteRead(() => getRemoteProductStore(nextConfig).refreshSnapshot({ bypassCache: options.bypassCache === true }))
         const currentRepoId = selectedRepoIdRef.current
         const currentTaskId = selectedTaskIdRef.current
         const shouldRepairNavigation = options.repairNavigation === true
@@ -317,10 +318,14 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         nextConfig = config,
         repoId: string | null | undefined = selectedRepoIdRef.current ?? selectedRepo?.id,
         taskId: string | null | undefined = selectedTaskIdRef.current,
-        options: { hydrateSessionEvents?: boolean } = { hydrateSessionEvents: false }
+        options: TaskRefreshOptions = { hydrateSessionEvents: false }
     ) => {
         if (!nextConfig || !repoId || !taskId) return
-        const nextTask = await retryRemoteRead(() => getRemoteProductStore(nextConfig).getTask(repoId, taskId, options))
+        const taskOptions = { hydrateSessionEvents: options.hydrateSessionEvents ?? false }
+        const nextTask = await retryRemoteRead(() => {
+            const store = getRemoteProductStore(nextConfig)
+            return options.bypassCache === true ? store.refreshTask(repoId, taskId, taskOptions) : store.getTask(repoId, taskId, taskOptions)
+        })
         if (selectedTaskIdRef.current === taskId) setTask(nextTask)
         return nextTask
     }
@@ -397,7 +402,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             const repairNavigation = snapshotRefreshRepairsNavigationRef.current
             snapshotRefreshRepairsNavigationRef.current = false
             void runBackgroundRefresh(async () => {
-                await refreshSnapshot(configRef.current, { repairNavigation })
+                await refreshSnapshot(configRef.current, { repairNavigation, bypassCache: options.bypassCache === true })
             }, "Unable to refresh projects")
         }, delayMs)
     }
@@ -411,7 +416,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         taskRefreshInFlightRef.current = true
         try {
             await runBackgroundRefresh(async () => {
-                await refreshTask(configRef.current, pending.repoId, pending.taskId, { hydrateSessionEvents: false })
+                await refreshTask(configRef.current, pending.repoId, pending.taskId, { hydrateSessionEvents: false, bypassCache: true })
             }, "Unable to refresh task")
         } finally {
             lastTaskRefreshAtRef.current = Date.now()
@@ -471,11 +476,11 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
                 const repairNavigation = notification.method === "openade/repo/deleted" || notification.method === "openade/task/deleted"
                 const taskWasDeleted = notification.method === "openade/task/deleted"
                 if (plan.type === "snapshot") {
-                    scheduleSnapshotRefresh(300, { repairNavigation })
+                    scheduleSnapshotRefresh(300, { repairNavigation, bypassCache: true })
                 } else if (plan.type === "task") {
                     scheduleTaskRefresh(plan.repoId ?? selectedRepoIdRef.current, plan.taskId)
                 } else if (plan.type === "snapshot-and-task") {
-                    scheduleSnapshotRefresh(300, { repairNavigation })
+                    scheduleSnapshotRefresh(300, { repairNavigation, bypassCache: true })
                     if (!taskWasDeleted) scheduleTaskRefresh(plan.repoId ?? selectedRepoIdRef.current, plan.taskId ?? selectedTaskIdRef.current)
                 } else if (plan.type === "sessions" && screenRef.current === "sessions") {
                     scheduleSessionSnapshotsRefresh()

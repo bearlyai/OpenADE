@@ -104,6 +104,7 @@ function createRuntimeBackedConstructors(state: {
 }): {
     RuntimeClient: RuntimeClientConstructor
     OpenADEClient: typeof OpenADEClient
+    publishQueuedTurnUpdated(turn: OpenADEQueuedTurn): void
 } {
     const server = new RuntimeServer({ serverName: "remote-app-test-runtime", protocolVersion: 1 })
     const preview: OpenADETaskPreview = {
@@ -134,6 +135,12 @@ function createRuntimeBackedConstructors(state: {
 
     function publishTaskChanged(previewChanged = true): void {
         publishOpenADECompanionEvent(server, { type: "task_changed", repoId: "repo-1", taskId: state.task.id, previewChanged, at: now })
+    }
+
+    function publishQueuedTurnUpdated(turn: OpenADEQueuedTurn): void {
+        state.queuedTurn = { ...turn }
+        state.task.queuedTurns = [{ ...turn }]
+        server.notify("openade/queuedTurn/updated", { repoId: "repo-1", taskId: state.task.id, turn })
     }
 
     function readTaskDto(): OpenADETask {
@@ -520,7 +527,7 @@ function createRuntimeBackedConstructors(state: {
         }
     }
 
-    return { RuntimeClient: TestRuntimeClient, OpenADEClient }
+    return { RuntimeClient: TestRuntimeClient, OpenADEClient, publishQueuedTurnUpdated }
 }
 
 function seededTask(): { taskDeleted: boolean; processRunning: boolean; selfRevoked: boolean; task: OpenADETask; queuedTurn: OpenADEQueuedTurn } {
@@ -769,6 +776,34 @@ describe("RemoteApp runtime-backed product controls", () => {
         expect(loadRemoteConfig()?.id).toBe("session-2")
         expect(localStorage.getItem(REMOTE_THEME_STORAGE_KEY)).toBe("code-theme-dracula")
         expect(shellRootClassName(container)).toContain("code-theme-dracula")
+    })
+
+    it("refreshes the selected task from a queued-turn runtime notification", async () => {
+        const state = seededTask()
+        const runtimeHarness = createRuntimeBackedConstructors(state)
+        restoreClientConstructors = __setRemoteClientConstructorsForTest(runtimeHarness)
+
+        await act(async () => {
+            root.render(createElement(RemoteApp))
+        })
+
+        await click(await waitForElement(() => buttonByText(container, "Runtime Repo"), "project row"))
+        await click(await waitForElement(() => buttonByText(container, "Original task"), "task row"))
+        await waitForElement(() => (container.textContent?.includes("Run this after the current turn") ? container : null), "initial queued turn")
+
+        await act(async () => {
+            runtimeHarness.publishQueuedTurnUpdated({
+                ...state.queuedTurn,
+                input: "Queued turn promoted by core",
+                status: "running",
+                updatedAt: now,
+            })
+        })
+
+        await waitForElement(
+            () => (container.textContent?.includes("Queued turn promoted by core") && container.textContent.includes("running") ? container : null),
+            "queued turn refresh from notification"
+        )
     })
 
     it("drives task metadata, comments, queued turns, review, and delete through a real runtime client", async () => {
