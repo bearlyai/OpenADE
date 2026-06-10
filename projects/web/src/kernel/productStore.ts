@@ -87,6 +87,7 @@ import type {
     OpenADETaskImageWriteResult,
     OpenADETaskMetadataUpdateRequest,
     OpenADETaskPreview,
+    OpenADETaskPreviewUsage,
     OpenADETaskReadOptions,
     OpenADETaskResourceInventoryReadRequest,
     OpenADETaskResourceInventoryReadResult,
@@ -250,6 +251,10 @@ function commentFromAcceptedCreate(args: OpenADECommentCreateRequest, result: Op
         author: args.author,
         createdAt: result.createdAt,
     }
+}
+
+function queuedTurnsWithCancelledTurn(task: OpenADETask, queuedTurnId: string): OpenADETask["queuedTurns"] {
+    return task.queuedTurns?.map((turn) => (turn.id === queuedTurnId ? { ...turn, status: "cancelled" } : turn))
 }
 
 export class OpenADEProductStore {
@@ -598,7 +603,7 @@ export class OpenADEProductStore {
 
     async cancelQueuedTurn(args: OpenADEQueuedTurnCancelRequest, options: OpenADERequestOptions = {}): Promise<OpenADEQueuedTurnCancelResult> {
         const result = await this.client.cancelQueuedTurn(args, options)
-        await this.refreshTask(args.repoId, args.taskId)
+        this.applyQueuedTurnCancelled(args)
         return result
     }
 
@@ -609,15 +614,13 @@ export class OpenADEProductStore {
 
     async backfillTaskUsage(args: OpenADETaskUsageBackfillRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskUsageBackfillResult> {
         const result = await this.client.backfillTaskUsage(args, options)
-        await this.refreshSnapshot({ bypassCache: true })
+        this.applyUsageBackfill(result)
         return result
     }
 
     async recalculateTaskUsage(args: OpenADETaskUsageRecalculateRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskUsageRecalculateResult> {
         const result = await this.client.recalculateTaskUsage(args, options)
-        const cached = [...this.tasks.values()].find((task) => task.id === args.taskId)
-        if (cached) await this.refreshTask(cached.repoId, args.taskId)
-        await this.refreshSnapshot({ bypassCache: true })
+        this.applyUsageUpdate(args.repoId, args.taskId, result.usage)
         return result
     }
 
@@ -639,8 +642,7 @@ export class OpenADEProductStore {
 
     async deleteTask(args: OpenADETaskDeleteRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskDeleteResult> {
         const result = await this.client.deleteTask(args, options)
-        this.clearTaskCache(args.repoId, args.taskId)
-        await this.refreshSnapshot({ bypassCache: true })
+        this.applyTaskDeleted(args.repoId, args.taskId)
         return result
     }
 
@@ -711,6 +713,47 @@ export class OpenADEProductStore {
                 tasks: repo.tasks.map((task) => (task.id === args.taskId ? taskPreviewWithMetadataUpdate(task, args) : task)),
             })),
         }
+    }
+
+    private applyQueuedTurnCancelled(args: OpenADEQueuedTurnCancelRequest): void {
+        this.patchCachedTaskById(args.taskId, (task) => ({
+            ...task,
+            queuedTurns: queuedTurnsWithCancelledTurn(task, args.queuedTurnId),
+        }))
+    }
+
+    private applyUsageBackfill(result: OpenADETaskUsageBackfillResult): void {
+        for (const task of result.tasks) {
+            this.applyUsageUpdate(task.repoId, task.taskId, task.usage)
+        }
+    }
+
+    private applyUsageUpdate(repoId: string, taskId: string, usage: OpenADETaskPreviewUsage): void {
+        if (!this.snapshot) return
+        this.snapshot = {
+            ...this.snapshot,
+            repos: this.snapshot.repos.map((repo) =>
+                repo.id === repoId
+                    ? {
+                          ...repo,
+                          tasks: repo.tasks.map((task) => (task.id === taskId ? { ...task, usage } : task)),
+                      }
+                    : repo
+            ),
+        }
+        this.snapshotLoadedAt = Date.now()
+    }
+
+    private applyTaskDeleted(repoId: string, taskId: string): void {
+        this.clearTaskCache(repoId, taskId)
+        this.clearGitSummaryCacheForScope(repoId, taskId)
+        if (!this.snapshot) return
+        this.snapshot = {
+            ...this.snapshot,
+            repos: this.snapshot.repos.map((repo) => (repo.id === repoId ? { ...repo, tasks: repo.tasks.filter((task) => task.id !== taskId) } : repo)),
+            workingTaskIds: this.snapshot.workingTaskIds.filter((id) => id !== taskId),
+        }
+        this.snapshotLoadedAt = Date.now()
     }
 
     private patchCachedTaskById(taskId: string, patchTask: (task: OpenADETask) => OpenADETask): void {

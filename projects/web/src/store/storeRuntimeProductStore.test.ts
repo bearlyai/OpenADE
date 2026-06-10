@@ -1800,11 +1800,13 @@ describe("CodeStore runtime product store bridge", () => {
             state.taskReadRequests = []
             state.usageBackfillRequests = []
             state.usageRecalculateRequests = []
+            const snapshotReadsAfterInitialize = state.snapshotReadCount ?? 0
             await codeStore.backfillTaskUsagePreviews([{ repoId: "repo-1", taskId: "task-1" }])
 
             expect(state.usageBackfillRequests).toEqual([{ repoId: "repo-1", taskIds: ["task-1"], force: undefined }])
             expect(state.usageRecalculateRequests).toEqual([])
             expect(state.taskReadRequests).toEqual([])
+            expect(state.snapshotReadCount).toBe(snapshotReadsAfterInitialize)
             expect(legacyTaskRead).not.toHaveBeenCalled()
             expect(legacyRepoRefresh).not.toHaveBeenCalled()
             expect(codeStore.getTaskPreviewReposForStats()[0]?.tasks[0]?.usage).toMatchObject({
@@ -1940,6 +1942,7 @@ describe("CodeStore runtime product store bridge", () => {
             await codeStore.refreshProductStateAfterTaskMutation("task-1")
             expect(codeStore.tasks.getTask("task-1")?.events).toEqual(expect.arrayContaining([expect.objectContaining({ id: "event-started" })]))
 
+            const snapshotReadsBeforeDelete = state.snapshotReadCount ?? 0
             await codeStore.tasks.deepRemoveTask("task-1", {
                 deleteSnapshots: false,
                 deleteImages: false,
@@ -1948,6 +1951,7 @@ describe("CodeStore runtime product store bridge", () => {
             })
             expect(codeStore.tasks.getTask("task-1")).toBeNull()
             expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([])
+            expect(state.snapshotReadCount).toBe(snapshotReadsBeforeDelete)
 
             expect(legacyTaskRead).not.toHaveBeenCalled()
             expect(legacyTaskRefresh).not.toHaveBeenCalled()

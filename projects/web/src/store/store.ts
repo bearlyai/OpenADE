@@ -1310,8 +1310,9 @@ export class CodeStore {
             runInAction(() => {
                 this.runtimeProductTasks.delete(taskId)
                 this.runtimeProductTaskReadLoadedAt.delete(taskId)
+                this.runtimeProductSnapshot = this.runtimeProductStore?.snapshot ?? this.runtimeProductSnapshot
+                if (this.runtimeProductSnapshot) this.pruneRuntimeProductTasks(this.runtimeProductSnapshot)
             })
-            await this.refreshRuntimeProductSnapshot({ bypassCache: true })
             return
         }
 
@@ -1549,7 +1550,9 @@ export class CodeStore {
 
     async deleteProductTask(params: OpenADETaskDeleteRequest): Promise<OpenADETaskDeleteResult> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
-            return this.runtimeProductStore.deleteTask(params)
+            const result = await this.runtimeProductStore.deleteTask(params)
+            this.syncRuntimeProductStoreCache()
+            return result
         }
 
         return localOpenADEClient.deleteTask(params)

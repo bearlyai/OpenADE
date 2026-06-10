@@ -10,6 +10,7 @@ import type {
     OpenADETask,
     OpenADETaskMetadataUpdateRequest,
     OpenADETaskReadOptions,
+    OpenADETaskPreviewUsage,
     OpenADETaskPreview,
     OpenADETurnStartRequest,
 } from "../../../openade-module/src/types"
@@ -541,7 +542,12 @@ function createRuntimeBackedStore(): {
         startTurn,
         startReview: async (params) => ({ taskId: params.taskId }),
         interruptTurn: async () => undefined,
-        cancelQueuedTurn: async (params) => ({ taskId: params.taskId, queuedTurnId: params.queuedTurnId, cancelled: true }),
+        cancelQueuedTurn: async (params) => {
+            const current = tasks.get(params.taskId)
+            if (!current) throw new Error(`Task ${params.taskId} not found`)
+            current.queuedTurns = (current.queuedTurns ?? []).map((turn) => (turn.id === params.queuedTurnId ? { ...turn, status: "cancelled" } : turn))
+            return { taskId: params.taskId, queuedTurnId: params.queuedTurnId, cancelled: true }
+        },
         deleteTask: async (params) => {
             tasks.delete(params.taskId)
             project.tasks = project.tasks.filter((candidate) => candidate.id !== params.taskId)
@@ -579,6 +585,39 @@ function createRuntimeBackedStore(): {
         editComment,
         deleteComment,
         updateTaskMetadata,
+        backfillTaskUsage: async (params) => {
+            const taskIds = params.taskIds ?? [...tasks.keys()]
+            const updatedTasks = taskIds.map((taskId) => {
+                const current = tasks.get(taskId)
+                if (!current) throw new Error(`Task ${taskId} not found`)
+                const usage: OpenADETaskPreviewUsage = {
+                    usageVersion: 2,
+                    inputTokens: 11,
+                    outputTokens: 7,
+                    totalCostUsd: 0.001,
+                    eventCount: current.events.length,
+                    costByModel: { "model-1": 0.001 },
+                    durationMs: 50,
+                }
+                return { repoId: params.repoId ?? current.repoId, taskId, usage }
+            })
+            return { updatedTasks: updatedTasks.length, skippedTasks: 0, tasks: updatedTasks }
+        },
+        recalculateTaskUsage: async (params) => {
+            const current = tasks.get(params.taskId)
+            if (!current) throw new Error(`Task ${params.taskId} not found`)
+            return {
+                usage: {
+                    usageVersion: 2,
+                    inputTokens: 17,
+                    outputTokens: 13,
+                    totalCostUsd: 0.002,
+                    eventCount: current.events.length,
+                    costByModel: { "model-2": 0.002 },
+                    durationMs: 80,
+                },
+            }
+        },
     }
     server.registerModule(createOpenADEModule(adapters))
 
@@ -816,6 +855,50 @@ describe("OpenADEProductStore", () => {
 
             await store.deleteComment({ taskId: "task-1", commentId: "comment-local" }, { clientRequestId: "comment-delete-cache" })
             expect(store.getCachedTask("repo-1", "task-1")?.comments).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "comment-local" })]))
+
+            expect(taskReadRequests).toEqual([])
+            expect(snapshotRequestCount()).toBe(existingSnapshotRequests)
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("patches accepted queue, usage, and task deletion mutations locally without task or snapshot rereads", async () => {
+        const { store, runtime, taskReadRequests, snapshotRequestCount } = createRuntimeBackedStore()
+
+        try {
+            await store.refreshSnapshot()
+            await store.getTask("repo-1", "task-1")
+            await store.updateTaskMetadata({
+                taskId: "task-1",
+                queuedTurns: [
+                    {
+                        id: "queued-1",
+                        type: "do",
+                        input: "Queued runtime follow-up",
+                        status: "queued",
+                        createdAt: "2026-01-01T00:00:00.000Z",
+                        updatedAt: "2026-01-01T00:00:00.000Z",
+                    },
+                ],
+            })
+
+            taskReadRequests.length = 0
+            const existingSnapshotRequests = snapshotRequestCount()
+
+            await store.cancelQueuedTurn({ repoId: "repo-1", taskId: "task-1", queuedTurnId: "queued-1" }, { clientRequestId: "queue-cancel-cache" })
+            expect(store.getCachedTask("repo-1", "task-1")?.queuedTurns).toEqual([expect.objectContaining({ id: "queued-1", status: "cancelled" })])
+
+            await store.backfillTaskUsage({ repoId: "repo-1", taskIds: ["task-1"] }, { clientRequestId: "usage-backfill-cache" })
+            expect(store.snapshot?.repos[0]?.tasks[0]?.usage).toMatchObject({ usageVersion: 2, inputTokens: 11 })
+
+            await store.recalculateTaskUsage({ repoId: "repo-1", taskId: "task-1" }, { clientRequestId: "usage-recalculate-cache" })
+            expect(store.snapshot?.repos[0]?.tasks[0]?.usage).toMatchObject({ usageVersion: 2, inputTokens: 17 })
+
+            await store.deleteTask({ repoId: "repo-1", taskId: "task-1" }, { clientRequestId: "task-delete-cache" })
+            expect(store.getCachedTask("repo-1", "task-1")).toBeNull()
+            expect(store.snapshot?.repos[0]?.tasks).toEqual([])
 
             expect(taskReadRequests).toEqual([])
             expect(snapshotRequestCount()).toBe(existingSnapshotRequests)
