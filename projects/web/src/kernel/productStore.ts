@@ -237,6 +237,21 @@ function projectWithAcceptedUpdate(project: OpenADEProject, args: OpenADERepoUpd
     }
 }
 
+function isCommentRecord(value: unknown): value is Record<string, unknown> & { id: string } {
+    return typeof value === "object" && value !== null && !Array.isArray(value) && "id" in value && typeof value.id === "string"
+}
+
+function commentFromAcceptedCreate(args: OpenADECommentCreateRequest, result: OpenADECommentCreateResult): Record<string, unknown> {
+    return {
+        id: result.commentId,
+        content: args.content,
+        source: args.source,
+        selectedText: args.selectedText,
+        author: args.author,
+        createdAt: result.createdAt,
+    }
+}
+
 export class OpenADEProductStore {
     snapshot: OpenADESnapshot | null = null
     readonly runtimes = new RuntimeRecordCache()
@@ -527,8 +542,7 @@ export class OpenADEProductStore {
 
     async generateTaskTitle(args: OpenADETaskTitleGenerateRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskTitleGenerateResult> {
         const result = await this.client.generateTaskTitle(args, options)
-        await this.refreshTask(args.repoId, args.taskId)
-        await this.refreshSnapshot({ bypassCache: true })
+        this.applyTaskMetadataUpdate({ taskId: result.taskId, title: result.title })
         return result
     }
 
@@ -609,21 +623,18 @@ export class OpenADEProductStore {
 
     async createComment(args: OpenADECommentCreateRequest, options: OpenADERequestOptions = {}): Promise<OpenADECommentCreateResult> {
         const result = await this.client.createComment(args, options)
-        const cached = [...this.tasks.values()].find((task) => task.id === args.taskId)
-        if (cached) await this.refreshTask(cached.repoId, args.taskId)
+        this.applyCommentCreated(args, result)
         return result
     }
 
     async editComment(args: OpenADECommentEditRequest, options: OpenADERequestOptions = {}): Promise<void> {
         await this.client.editComment(args, options)
-        const cached = [...this.tasks.values()].find((task) => task.id === args.taskId)
-        if (cached) await this.refreshTask(cached.repoId, args.taskId)
+        this.applyCommentEdited(args)
     }
 
     async deleteComment(args: OpenADECommentDeleteRequest, options: OpenADERequestOptions = {}): Promise<void> {
         await this.client.deleteComment(args, options)
-        const cached = [...this.tasks.values()].find((task) => task.id === args.taskId)
-        if (cached) await this.refreshTask(cached.repoId, args.taskId)
+        this.applyCommentDeleted(args)
     }
 
     async deleteTask(args: OpenADETaskDeleteRequest, options: OpenADERequestOptions = {}): Promise<OpenADETaskDeleteResult> {
@@ -700,6 +711,47 @@ export class OpenADEProductStore {
                 tasks: repo.tasks.map((task) => (task.id === args.taskId ? taskPreviewWithMetadataUpdate(task, args) : task)),
             })),
         }
+    }
+
+    private patchCachedTaskById(taskId: string, patchTask: (task: OpenADETask) => OpenADETask): void {
+        const patchedAt = Date.now()
+        for (const [key, task] of this.tasks) {
+            if (task.id !== taskId) continue
+            this.tasks.set(key, patchTask(task))
+            this.taskLoadedAt.set(key, patchedAt)
+        }
+    }
+
+    private applyCommentCreated(args: OpenADECommentCreateRequest, result: OpenADECommentCreateResult): void {
+        const comment = commentFromAcceptedCreate(args, result)
+        this.patchCachedTaskById(args.taskId, (task) => ({
+            ...task,
+            comments: [...task.comments.filter((candidate) => !isCommentRecord(candidate) || candidate.id !== result.commentId), comment],
+            updatedAt: result.createdAt ?? task.updatedAt,
+        }))
+    }
+
+    private applyCommentEdited(args: OpenADECommentEditRequest): void {
+        this.patchCachedTaskById(args.taskId, (task) => ({
+            ...task,
+            comments: task.comments.map((comment) => {
+                if (!isCommentRecord(comment) || comment.id !== args.commentId) return comment
+                return {
+                    ...comment,
+                    content: args.content,
+                    ...(args.updatedAt !== undefined ? { updatedAt: args.updatedAt } : {}),
+                }
+            }),
+            updatedAt: args.updatedAt ?? task.updatedAt,
+        }))
+    }
+
+    private applyCommentDeleted(args: OpenADECommentDeleteRequest): void {
+        this.patchCachedTaskById(args.taskId, (task) => ({
+            ...task,
+            comments: task.comments.filter((comment) => !isCommentRecord(comment) || comment.id !== args.commentId),
+            updatedAt: args.updatedAt ?? task.updatedAt,
+        }))
     }
 
     subscribe(): () => void {

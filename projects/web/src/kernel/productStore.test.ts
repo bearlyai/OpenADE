@@ -3,6 +3,8 @@ import { OpenADEClient } from "../../../openade-client/src"
 import { createOpenADEModule, publishOpenADECompanionEvent, type OpenADEModuleAdapters } from "../../../openade-module/src/module"
 import type {
     OpenADECommentCreateRequest,
+    OpenADECommentDeleteRequest,
+    OpenADECommentEditRequest,
     OpenADEProject,
     OpenADESnapshot,
     OpenADETask,
@@ -19,6 +21,10 @@ import { OpenADEProductStore } from "./productStore"
 
 function now(): string {
     return "2026-05-31T00:00:00.000Z"
+}
+
+function isCommentRecord(value: unknown): value is Record<string, unknown> & { id: string } {
+    return typeof value === "object" && value !== null && !Array.isArray(value) && "id" in value && typeof value.id === "string"
 }
 
 function createLocalRuntimeClient(server: RuntimeServer): RuntimeLocalClient {
@@ -173,6 +179,23 @@ function createRuntimeBackedStore(): {
         ]
         publishTaskChanged(false)
         return { commentId, createdAt: params.createdAt ?? now() }
+    }
+
+    async function editComment(params: OpenADECommentEditRequest): Promise<void> {
+        const current = tasks.get(params.taskId)
+        if (!current) throw new Error(`Task ${params.taskId} not found`)
+        current.comments = current.comments.map((comment) => {
+            if (!isCommentRecord(comment) || comment.id !== params.commentId) return comment
+            return { ...comment, content: params.content, ...(params.updatedAt !== undefined ? { updatedAt: params.updatedAt } : {}) }
+        })
+        publishTaskChanged(false)
+    }
+
+    async function deleteComment(params: OpenADECommentDeleteRequest): Promise<void> {
+        const current = tasks.get(params.taskId)
+        if (!current) throw new Error(`Task ${params.taskId} not found`)
+        current.comments = current.comments.filter((comment) => !isCommentRecord(comment) || comment.id !== params.commentId)
+        publishTaskChanged(false)
     }
 
     async function startTurn(params: OpenADETurnStartRequest): Promise<{ taskId: string; eventId: string }> {
@@ -553,8 +576,8 @@ function createRuntimeBackedStore(): {
         setHyperPlanReconcileLabels: async () => undefined,
         createSnapshotEvent: async () => ({ eventId: "snapshot-1", createdAt: now() }),
         createComment,
-        editComment: async () => undefined,
-        deleteComment: async () => undefined,
+        editComment,
+        deleteComment,
         updateTaskMetadata,
     }
     server.registerModule(createOpenADEModule(adapters))
@@ -745,6 +768,57 @@ describe("OpenADEProductStore", () => {
             await store.deleteRepo({ repoId: "repo-created" }, { clientRequestId: "repo-delete-cache" })
             expect(snapshotRequestCount()).toBe(existingSnapshotRequests)
             expect(store.snapshot?.repos.some((repo) => repo.id === "repo-created")).toBe(false)
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("patches accepted title and comment mutations locally without post-accept task or snapshot rereads", async () => {
+        const { store, runtime, taskReadRequests, snapshotRequestCount } = createRuntimeBackedStore()
+
+        try {
+            await store.refreshSnapshot()
+            await store.getTask("repo-1", "task-1")
+
+            taskReadRequests.length = 0
+            const existingSnapshotRequests = snapshotRequestCount()
+
+            await store.generateTaskTitle({ repoId: "repo-1", taskId: "task-1", harnessId: "codex" }, { clientRequestId: "title-cache" })
+            expect(store.snapshot?.repos[0]?.tasks[0]?.title).toBe("Generated task title")
+            expect(store.getCachedTask("repo-1", "task-1")?.title).toBe("Generated task title")
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }])
+            taskReadRequests.length = 0
+
+            await store.createComment(
+                {
+                    taskId: "task-1",
+                    commentId: "comment-local",
+                    content: "Accepted comment",
+                    source: { type: "manual" },
+                    selectedText: { text: "accepted", linesBefore: "", linesAfter: "" },
+                    author: { id: "user-1", email: "user@example.com" },
+                    createdAt: "2026-01-01T00:00:00.000Z",
+                },
+                { clientRequestId: "comment-create-cache" }
+            )
+            expect(store.getCachedTask("repo-1", "task-1")?.comments).toEqual(
+                expect.arrayContaining([expect.objectContaining({ id: "comment-local", content: "Accepted comment" })])
+            )
+
+            await store.editComment(
+                { taskId: "task-1", commentId: "comment-local", content: "Edited accepted comment", updatedAt: "2026-01-01T00:01:00.000Z" },
+                { clientRequestId: "comment-edit-cache" }
+            )
+            expect(store.getCachedTask("repo-1", "task-1")?.comments).toEqual(
+                expect.arrayContaining([expect.objectContaining({ id: "comment-local", content: "Edited accepted comment" })])
+            )
+
+            await store.deleteComment({ taskId: "task-1", commentId: "comment-local" }, { clientRequestId: "comment-delete-cache" })
+            expect(store.getCachedTask("repo-1", "task-1")?.comments).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "comment-local" })]))
+
+            expect(taskReadRequests).toEqual([])
+            expect(snapshotRequestCount()).toBe(existingSnapshotRequests)
         } finally {
             store.destroy()
             await runtime.close()

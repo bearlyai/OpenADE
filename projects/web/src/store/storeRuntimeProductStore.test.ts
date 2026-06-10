@@ -1876,6 +1876,7 @@ describe("CodeStore runtime product store bridge", () => {
             const legacyTaskRefresh = vi.spyOn(codeStore, "refreshTaskStoreFromStorage")
             const legacyRepoRefresh = vi.spyOn(codeStore, "refreshRepoStoreFromStorage")
 
+            state.taskReadRequests = []
             const commentId = await codeStore.comments.addComment(
                 "task-1",
                 { type: "llm_output", eventId: "event-1", lineStart: 1, lineEnd: 1 },
@@ -1891,6 +1892,10 @@ describe("CodeStore runtime product store bridge", () => {
             expect(codeStore.tasks.getTask("task-1")?.comments).toEqual(
                 expect.arrayContaining([expect.objectContaining({ id: "comment-created", content: "Edited runtime comment" })])
             )
+
+            await codeStore.comments.removeComment("task-1", commentId)
+            expect(codeStore.tasks.getTask("task-1")?.comments).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "comment-created" })]))
+            expect(state.taskReadRequests).toEqual([])
 
             await codeStore.tasks.markTaskViewed("task-1")
             expect(codeStore.getTaskPreviewsForRepo("repo-1")[0]?.lastViewedAt).toBeDefined()
@@ -1934,9 +1939,6 @@ describe("CodeStore runtime product store bridge", () => {
             })
             await codeStore.refreshProductStateAfterTaskMutation("task-1")
             expect(codeStore.tasks.getTask("task-1")?.events).toEqual(expect.arrayContaining([expect.objectContaining({ id: "event-started" })]))
-
-            await codeStore.comments.removeComment("task-1", commentId)
-            expect(codeStore.tasks.getTask("task-1")?.comments).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "comment-created" })]))
 
             await codeStore.tasks.deepRemoveTask("task-1", {
                 deleteSnapshots: false,
