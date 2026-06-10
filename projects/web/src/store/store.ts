@@ -1329,7 +1329,9 @@ export class CodeStore {
 
     async createProductRepo(params: OpenADERepoCreateRequest): Promise<OpenADERepoCreateResult> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
-            return this.runtimeProductStore.createRepo(params)
+            const result = await this.runtimeProductStore.createRepo(params)
+            this.syncRuntimeProductStoreCache()
+            return result
         }
 
         return localOpenADEClient.createRepo(params)
@@ -1338,6 +1340,7 @@ export class CodeStore {
     async updateProductRepo(params: OpenADERepoUpdateRequest): Promise<void> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
             await this.runtimeProductStore.updateRepo(params)
+            this.syncRuntimeProductStoreCache()
             return
         }
 
@@ -1347,6 +1350,7 @@ export class CodeStore {
     async deleteProductRepo(params: OpenADERepoDeleteRequest): Promise<void> {
         if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
             await this.runtimeProductStore.deleteRepo(params)
+            this.syncRuntimeProductStoreCache()
             return
         }
 

@@ -97,7 +97,7 @@ export class RepoManager {
             path: params.path,
             createdBy: this.store.currentUser,
         })
-        await this.store.refreshProductStateAfterRepoMutation()
+        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterRepoMutation()
 
         return this.getRepo(result.repoId) ?? null
     }
@@ -111,7 +111,7 @@ export class RepoManager {
         }
 
         await this.store.updateProductRepo({ repoId: id, ...updates })
-        await this.store.refreshProductStateAfterRepoMutation()
+        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterRepoMutation()
 
         return this.getRepo(id) ?? null
     }
@@ -119,7 +119,7 @@ export class RepoManager {
     async setRepoArchived(id: string, archived: boolean): Promise<void> {
         if (!this.store.repoStore && !this.store.shouldUseRuntimeProductReads()) return
         await this.store.updateProductRepo({ repoId: id, archived })
-        await this.store.refreshProductStateAfterRepoMutation()
+        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterRepoMutation()
     }
 
     async removeRepo(id: string): Promise<boolean> {
@@ -133,7 +133,7 @@ export class RepoManager {
         this.clearGitInfoCache(id)
 
         await this.store.deleteProductRepo({ repoId: id })
-        await this.store.refreshProductStateAfterRepoMutation()
+        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterRepoMutation()
         return true
     }
 

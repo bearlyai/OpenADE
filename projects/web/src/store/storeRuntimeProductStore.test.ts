@@ -1819,8 +1819,8 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
-    it("refreshes runtime repo state after repo mutations without using legacy store refreshes", async () => {
-        const { client, runtime } = createRuntimeBackedClient({ project: null, task: null })
+    it("syncs accepted runtime repo mutations without broad snapshot or legacy refreshes", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient({ project: null, task: null })
         const codeStore = new CodeStore({
             getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
             navigateToTask: () => undefined,
@@ -1832,6 +1832,8 @@ describe("CodeStore runtime product store bridge", () => {
         try {
             await codeStore.initializeRuntimeProductStore()
             const legacyRepoRefresh = vi.spyOn(codeStore, "refreshRepoStoreFromStorage")
+            const runtimeSnapshotRefresh = vi.spyOn(codeStore, "refreshRuntimeProductSnapshot")
+            const snapshotReadsAfterInitialize = state.snapshotReadCount ?? 0
 
             const created = await codeStore.repos.createRepo({ name: "New Runtime Repo", path: "/tmp/new-runtime-repo" })
             expect(created).toEqual(expect.objectContaining({ id: "repo-created", name: "New Runtime Repo", path: "/tmp/new-runtime-repo" }))
@@ -1849,6 +1851,8 @@ describe("CodeStore runtime product store bridge", () => {
             expect(codeStore.runtimeProductSnapshot?.repos).toEqual([])
             expect(codeStore.repos.repos).toEqual([])
             expect(legacyRepoRefresh).not.toHaveBeenCalled()
+            expect(runtimeSnapshotRefresh).not.toHaveBeenCalled()
+            expect(state.snapshotReadCount).toBe(snapshotReadsAfterInitialize)
         } finally {
             codeStore.disconnectAllStores()
             await runtime.close()

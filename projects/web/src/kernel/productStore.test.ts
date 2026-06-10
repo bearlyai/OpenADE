@@ -512,7 +512,7 @@ function createRuntimeBackedStore(): {
         },
         saveDataDocumentBase64: async () => undefined,
         deleteDataDocument: async () => undefined,
-        createRepo: async () => ({ repoId: "repo-created", createdAt: now() }),
+        createRepo: async (params) => ({ repoId: params.repoId ?? "repo-created", createdAt: params.createdAt ?? now() }),
         updateRepo: async () => undefined,
         deleteRepo: async () => undefined,
         startTurn,
@@ -700,6 +700,51 @@ describe("OpenADEProductStore", () => {
                 queuedTurns: [],
                 updatedAt,
             })
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("patches accepted repo mutations locally without re-reading the snapshot", async () => {
+        const { store, runtime, snapshotRequestCount } = createRuntimeBackedStore()
+
+        try {
+            await store.refreshSnapshot()
+            const existingSnapshotRequests = snapshotRequestCount()
+
+            await store.createRepo(
+                { repoId: "repo-1", name: "Existing repo", path: "/tmp/existing", createdBy: { id: "user-1", email: "user@example.com" } },
+                { clientRequestId: "repo-create-existing-cache" }
+            )
+            expect(snapshotRequestCount()).toBe(existingSnapshotRequests)
+            expect(store.snapshot?.repos.find((repo) => repo.id === "repo-1")).toEqual(
+                expect.objectContaining({
+                    id: "repo-1",
+                    name: "Existing repo",
+                    path: "/tmp/existing",
+                    tasks: [expect.objectContaining({ id: "task-1" })],
+                })
+            )
+
+            await store.createRepo(
+                { repoId: "repo-created", name: "Created repo", path: "/tmp/created", createdBy: { id: "user-1", email: "user@example.com" } },
+                { clientRequestId: "repo-create-cache" }
+            )
+            expect(snapshotRequestCount()).toBe(existingSnapshotRequests)
+            expect(store.snapshot?.repos).toEqual(
+                expect.arrayContaining([expect.objectContaining({ id: "repo-created", name: "Created repo", path: "/tmp/created" })])
+            )
+
+            await store.updateRepo({ repoId: "repo-created", name: "Renamed repo", archived: true }, { clientRequestId: "repo-update-cache" })
+            expect(snapshotRequestCount()).toBe(existingSnapshotRequests)
+            expect(store.snapshot?.repos.find((repo) => repo.id === "repo-created")).toEqual(
+                expect.objectContaining({ id: "repo-created", name: "Renamed repo", path: "/tmp/created", archived: true })
+            )
+
+            await store.deleteRepo({ repoId: "repo-created" }, { clientRequestId: "repo-delete-cache" })
+            expect(snapshotRequestCount()).toBe(existingSnapshotRequests)
+            expect(store.snapshot?.repos.some((repo) => repo.id === "repo-created")).toBe(false)
         } finally {
             store.destroy()
             await runtime.close()

@@ -44,6 +44,7 @@ import type {
     OpenADEProjectProcessStopResult,
     OpenADEProjectSearchRequest,
     OpenADEProjectSearchResult,
+    OpenADEProject,
     OpenADEQueuedTurnCancelRequest,
     OpenADEQueuedTurnCancelResult,
     OpenADERepoCreateRequest,
@@ -215,6 +216,24 @@ function taskPreviewWithMetadataUpdate(task: OpenADETaskPreview, args: OpenADETa
         lastViewedAt: args.lastViewedAt ?? task.lastViewedAt,
         lastEventAt: args.lastEventAt ?? task.lastEventAt,
         usage: args.usage ?? task.usage,
+    }
+}
+
+function projectFromAcceptedCreate(args: OpenADERepoCreateRequest, result: OpenADERepoCreateResult): OpenADEProject {
+    return {
+        id: result.repoId,
+        name: args.name,
+        path: args.path,
+        tasks: [],
+    }
+}
+
+function projectWithAcceptedUpdate(project: OpenADEProject, args: OpenADERepoUpdateRequest): OpenADEProject {
+    return {
+        ...project,
+        name: args.name ?? project.name,
+        path: args.path ?? project.path,
+        archived: args.archived ?? project.archived,
     }
 }
 
@@ -527,7 +546,7 @@ export class OpenADEProductStore {
 
     async createRepo(args: OpenADERepoCreateRequest, options: OpenADERequestOptions = {}): Promise<OpenADERepoCreateResult> {
         const result = await this.client.createRepo(args, options)
-        await this.refreshSnapshot({ bypassCache: true })
+        this.applyRepoCreated(args, result)
         return result
     }
 
@@ -535,14 +554,14 @@ export class OpenADEProductStore {
         this.clearGitSummaryCacheForScope(args.repoId)
         await this.client.updateRepo(args, options)
         this.clearGitSummaryCacheForScope(args.repoId)
-        await this.refreshSnapshot({ bypassCache: true })
+        this.applyRepoUpdated(args)
     }
 
     async deleteRepo(args: OpenADERepoDeleteRequest, options: OpenADERequestOptions = {}): Promise<void> {
         this.clearGitSummaryCacheForScope(args.repoId)
         await this.client.deleteRepo(args, options)
         this.clearGitSummaryCacheForScope(args.repoId)
-        await this.refreshSnapshot({ bypassCache: true })
+        this.applyRepoDeleted(args.repoId)
     }
 
     async startTurn(args: OpenADETurnStartRequest, options: OpenADETurnStartOptions = {}): Promise<OpenADETurnStartResult> {
@@ -781,6 +800,59 @@ export class OpenADEProductStore {
         }
         for (const key of this.taskGitSummaryCache.keys()) {
             if (key.startsWith(`${repoId}\0`)) this.taskGitSummaryCache.delete(key)
+        }
+    }
+
+    private applyRepoCreated(args: OpenADERepoCreateRequest, result: OpenADERepoCreateResult): void {
+        if (!this.snapshot) return
+        const project = projectFromAcceptedCreate(args, result)
+        const exists = this.snapshot.repos.some((repo) => repo.id === project.id)
+        this.snapshot = {
+            ...this.snapshot,
+            repos: exists
+                ? this.snapshot.repos.map((repo) => (repo.id === project.id ? { ...repo, name: project.name, path: project.path } : repo))
+                : [...this.snapshot.repos, project],
+        }
+        this.snapshotLoadedAt = Date.now()
+    }
+
+    private applyRepoUpdated(args: OpenADERepoUpdateRequest): void {
+        this.clearProjectSearchCachesForScope(args.repoId)
+        this.clearProcessListCacheForScope(args.repoId)
+        if (!this.snapshot) return
+        this.snapshot = {
+            ...this.snapshot,
+            repos: this.snapshot.repos.map((repo) => (repo.id === args.repoId ? projectWithAcceptedUpdate(repo, args) : repo)),
+        }
+        this.snapshotLoadedAt = Date.now()
+    }
+
+    private applyRepoDeleted(repoId: string): void {
+        this.clearProjectSearchCachesForScope(repoId)
+        this.clearProcessListCacheForScope(repoId)
+        const deletedTaskIds = new Set(this.snapshot?.repos.find((repo) => repo.id === repoId)?.tasks.map((task) => task.id) ?? [])
+        for (const key of this.tasks.keys()) {
+            if (key.startsWith(`${repoId}\0`)) this.tasks.delete(key)
+        }
+        for (const key of this.taskLoadedAt.keys()) {
+            if (key.startsWith(`${repoId}\0`)) this.taskLoadedAt.delete(key)
+        }
+        this.clearPendingNotificationsForRepo(repoId)
+        if (!this.snapshot) return
+        this.snapshot = {
+            ...this.snapshot,
+            repos: this.snapshot.repos.filter((repo) => repo.id !== repoId),
+            workingTaskIds: this.snapshot.workingTaskIds.filter((taskId) => !deletedTaskIds.has(taskId)),
+        }
+        this.snapshotLoadedAt = Date.now()
+    }
+
+    private clearPendingNotificationsForRepo(repoId: string): void {
+        for (const [key, timer] of this.taskUpdateNotificationTimers) {
+            if (!key.startsWith(`${repoId}\0`)) continue
+            clearTimeout(timer)
+            this.taskUpdateNotificationTimers.delete(key)
+            this.pendingTaskUpdateNotifications.delete(key)
         }
     }
 }
