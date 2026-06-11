@@ -21,6 +21,12 @@ export interface GitInfo {
     hasGhCli: boolean
 }
 
+export function projectPathFromGitInfo(gitInfo: GitInfo): string {
+    const repoRoot = gitInfo.repoRoot.replace(/[\\/]+$/, "")
+    const relativePath = gitInfo.relativePath.replace(/^[\\/]+/, "").replace(/[\\/]+$/, "")
+    return relativePath ? `${repoRoot}/${relativePath}` : repoRoot
+}
+
 function emptyGitSummary(): GitSummaryResponse {
     return {
         branch: null,
@@ -55,8 +61,9 @@ export class RepoManager {
     // ==================== Computed from RepoStore ====================
 
     get repos(): Repo[] {
-        if (this.store.runtimeProductSnapshot) {
-            return this.store.runtimeProductSnapshot.repos.map((item) => ({
+        const runtimeProjectProjection = this.store.getRuntimeProductProjectProjection()
+        if (runtimeProjectProjection) {
+            return runtimeProjectProjection.map((item) => ({
                 id: item.id,
                 name: item.name,
                 path: item.path,
@@ -90,20 +97,23 @@ export class RepoManager {
     }
 
     async createRepo(params: { name: string; path: string }): Promise<Repo | null> {
-        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductReads()) return null
+        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductAPI()) return null
 
         const result = await this.store.createProductRepo({
             name: params.name,
             path: params.path,
             createdBy: this.store.currentUser,
         })
-        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterRepoMutation()
 
+        const repo = this.getRepo(result.repoId)
+        if (repo || this.store.shouldUseRuntimeProductAPI()) return repo ?? null
+
+        await this.store.refreshProductStateAfterRepoMutation()
         return this.getRepo(result.repoId) ?? null
     }
 
     async updateRepo(id: string, updates: Partial<Pick<Repo, "name" | "path">>): Promise<Repo | null> {
-        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductReads()) return null
+        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductAPI()) return null
 
         // Clear git info cache if path changed
         if (updates.path !== undefined) {
@@ -111,15 +121,21 @@ export class RepoManager {
         }
 
         await this.store.updateProductRepo({ repoId: id, ...updates })
-        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterRepoMutation()
+        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterRepoMutation()
 
+        const repo = this.getRepo(id)
+        if (repo || this.store.shouldUseRuntimeProductAPI()) return repo ?? null
+
+        await this.store.refreshProductStateAfterRepoMutation()
         return this.getRepo(id) ?? null
     }
 
     async setRepoArchived(id: string, archived: boolean): Promise<void> {
-        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductReads()) return
+        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductAPI()) return
         await this.store.updateProductRepo({ repoId: id, archived })
-        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterRepoMutation()
+        if (!this.store.shouldUseRuntimeProductAPI()) {
+            await this.store.refreshProductStateAfterRepoMutation()
+        }
     }
 
     async removeRepo(id: string): Promise<boolean> {
@@ -127,13 +143,13 @@ export class RepoManager {
     }
 
     async deleteRepo(id: string): Promise<boolean> {
-        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductReads()) return false
+        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductAPI()) return false
 
         // Clean up cache
         this.clearGitInfoCache(id)
 
         await this.store.deleteProductRepo({ repoId: id })
-        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterRepoMutation()
+        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterRepoMutation()
         return true
     }
 
@@ -145,7 +161,7 @@ export class RepoManager {
      */
     async getGitInfo(repoId: string): Promise<GitInfo | null> {
         const repo = this.getRepo(repoId)
-        if (!repo) return null
+        if (!repo && !this.store.shouldUseRuntimeProductAPI()) return null
 
         // Check cache
         if (this.gitInfoCache.has(repoId)) {
@@ -155,7 +171,7 @@ export class RepoManager {
         const existing = this.gitInfoInFlight.get(repoId)
         if (existing) return existing
 
-        const request = this.loadGitInfo(repoId, repo.path).finally(() => {
+        const request = this.loadGitInfo(repoId, repo?.path ?? "").finally(() => {
             this.gitInfoInFlight.delete(repoId)
         })
         this.gitInfoInFlight.set(repoId, request)
@@ -164,7 +180,7 @@ export class RepoManager {
 
     private async loadGitInfo(repoId: string, repoPath: string): Promise<GitInfo | null> {
         try {
-            const response = this.store.shouldUseRuntimeProductReads()
+            const response = this.store.shouldUseRuntimeProductAPI()
                 ? await this.store.readProductProjectGitInfo({ repoId })
                 : await gitApi.isGitDirectory({ directory: repoPath })
             const gitInfo: GitInfo | null =
@@ -214,7 +230,7 @@ export class RepoManager {
      */
     async refreshGhCliStatus(repoId: string): Promise<boolean> {
         try {
-            const hasGhCli = this.store.shouldUseRuntimeProductReads()
+            const hasGhCli = this.store.shouldUseRuntimeProductAPI()
                 ? await this.store.readProductProjectGitInfo({ repoId }).then((result) => (result.isGitRepo === true ? result.hasGhCli : false))
                 : await gitApi.checkGhCli().then((result) => result.hasGhCli)
 
@@ -249,7 +265,7 @@ export class RepoManager {
             return { branches: [], defaultBranch: "main" }
         }
 
-        if (this.store.shouldUseRuntimeProductReads()) {
+        if (this.store.shouldUseRuntimeProductAPI()) {
             const result = await this.store.readProductProjectGitBranches({ repoId, includeRemote })
             return {
                 branches: result.branches,
@@ -277,7 +293,7 @@ export class RepoManager {
             return emptyGitSummary()
         }
 
-        if (this.store.shouldUseRuntimeProductReads()) {
+        if (this.store.shouldUseRuntimeProductAPI()) {
             const result = await this.store.readProductProjectGitSummary({ repoId })
             return {
                 branch: result.branch,
@@ -316,9 +332,10 @@ export class RepoManager {
         try {
             // Initialize stores if not done
             await this.store.initializeStores()
-            if (!this.store.runtimeProductSnapshot && this.store.repoStore?.repos.all().length) {
-                this.store.trackRuntimeProductFallback("repo_list", "snapshot_unavailable")
+            if (this.store.shouldUseRuntimeProductProjectListProjection()) {
+                await this.store.loadRuntimeProductProjects()
             }
+            this.store.trackRepoListFallbackIfNeeded()
         } finally {
             runInAction(() => {
                 this.reposLoading = false

@@ -107,7 +107,9 @@ func (service *Service) startClaimedQueuedTurn(ctx context.Context, repo storage
 			CreatedAt:   now,
 			PayloadJSON: sql.NullString{String: string(actionPayload), Valid: true},
 		},
-		UpdatedAt: now,
+		UpdatedAt:       now,
+		UpdateLastEvent: true,
+		UpdatePreview:   true,
 	})
 	if err != nil {
 		return taskEventWriteRuntimeError(err)
@@ -131,7 +133,7 @@ func (service *Service) startClaimedQueuedTurn(ctx context.Context, repo storage
 		return handlerError(err)
 	}
 	service.runtime.Notify("runtime/created", runtimeDTO)
-	notification := map[string]string{"repoId": task.RepoID, "taskId": task.ID}
+	notification := actionEventTaskUpdatedNotification(task.RepoID, task.ID, event.ID, "in_progress")
 	service.runtime.Notify("openade/task/updated", notification)
 	service.runtime.Notify("openade/queuedTurn/updated", queuedTurnUpdatedNotificationDTO{
 		RepoID: task.RepoID,

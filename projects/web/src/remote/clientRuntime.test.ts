@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { OpenADEClientOptions } from "../../../openade-client/src"
 import type {
+    OpenADECronDefinitionsReadRequest,
     OpenADECronInstallStateReadRequest,
     OpenADECronInstallStateReplaceRequest,
     OpenADEMCPServer,
     OpenADEPersonalSettingsReplaceRequest,
+    OpenADEQueuedTurn,
     OpenADESnapshot,
     OpenADETask,
+    OpenADETaskPreview,
     OpenADETurnStartResult,
 } from "../../../openade-module/src"
 import type { RuntimeClientOptions } from "../../../runtime-client/src"
@@ -35,9 +38,15 @@ class OpenADEClient {
         async (): Promise<OpenADESnapshot> => ({
             repos: [],
             workingTaskIds: [],
-            server: { version: "test", hostName: "test", theme: { setting: "system", className: "code-theme-light" } },
+            server: {
+                version: "test",
+                hostName: "test",
+                theme: { setting: "system", className: "code-theme-light" },
+            },
         })
     )
+    listProjects = vi.fn(async () => [])
+    listTasks = vi.fn(async (): Promise<OpenADETaskPreview[]> => [])
     listRuntimes = vi.fn(async () => [])
     getTask = vi.fn(async (): Promise<OpenADETask> => {
         if (getTaskFailures > 0) {
@@ -56,15 +65,36 @@ class OpenADEClient {
         }
     })
     startTurn = vi.fn(async (): Promise<OpenADETurnStartResult> => startTurnResult)
-    listProjectFiles = vi.fn(async () => ({ repoId: "repo-1", path: "", entries: [], truncated: false }))
-    readProjectFile = vi.fn(async () => ({ repoId: "repo-1", path: "README.md", encoding: "utf8" as const, size: 0, tooLarge: false, content: "" }))
-    fuzzySearchProjectFiles = vi.fn(async () => ({ repoId: "repo-1", results: [], truncated: false, source: "filesystem" as const }))
+    listProjectFiles = vi.fn(async () => ({
+        repoId: "repo-1",
+        path: "",
+        entries: [],
+        truncated: false,
+    }))
+    readProjectFile = vi.fn(async () => ({
+        repoId: "repo-1",
+        path: "README.md",
+        encoding: "utf8" as const,
+        size: 0,
+        tooLarge: false,
+        content: "",
+    }))
+    fuzzySearchProjectFiles = vi.fn(async () => ({
+        repoId: "repo-1",
+        results: [],
+        truncated: false,
+        source: "filesystem" as const,
+    }))
     writeProjectFile = vi.fn(async (args: { repoId: string; path: string; content: string }) => ({
         repoId: args.repoId,
         path: args.path,
         size: args.content.length,
     }))
-    searchProject = vi.fn(async () => ({ repoId: "repo-1", matches: [], truncated: false }))
+    searchProject = vi.fn(async () => ({
+        repoId: "repo-1",
+        matches: [],
+        truncated: false,
+    }))
     readProjectGitInfo = vi.fn(async () => ({
         repoId: "repo-1",
         isGitRepo: true as const,
@@ -84,8 +114,14 @@ class OpenADEClient {
         headCommit: "abc123",
         ahead: 0,
         hasChanges: false,
-        staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
-        unstaged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+        staged: {
+            files: [],
+            stats: { filesChanged: 0, insertions: 0, deletions: 0 },
+        },
+        unstaged: {
+            files: [],
+            stats: { filesChanged: 0, insertions: 0, deletions: 0 },
+        },
         untracked: [],
     }))
     listProjectProcesses = vi.fn(async () => ({
@@ -103,8 +139,17 @@ class OpenADEClient {
         processId: "proc-remote-test",
         runtimeId: "process:proc-remote-test",
     }))
-    reconnectProjectProcess = vi.fn(async () => ({ repoId: "repo-1", processId: "proc-remote-test", found: true, output: [] }))
-    stopProjectProcess = vi.fn(async () => ({ repoId: "repo-1", processId: "proc-remote-test", ok: true }))
+    reconnectProjectProcess = vi.fn(async () => ({
+        repoId: "repo-1",
+        processId: "proc-remote-test",
+        found: true,
+        output: [],
+    }))
+    stopProjectProcess = vi.fn(async () => ({
+        repoId: "repo-1",
+        processId: "proc-remote-test",
+        ok: true,
+    }))
     startTaskTerminal = vi.fn(async () => ({
         repoId: "repo-1",
         taskId: "task-1",
@@ -112,11 +157,37 @@ class OpenADEClient {
         runtimeId: "pty:openade-task-terminal-test",
         ok: true,
     }))
-    reconnectTaskTerminal = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", terminalId: "openade-task-terminal-test", found: true, output: [] }))
-    writeTaskTerminal = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", terminalId: "openade-task-terminal-test", ok: true }))
-    resizeTaskTerminal = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", terminalId: "openade-task-terminal-test", ok: true }))
-    stopTaskTerminal = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", terminalId: "openade-task-terminal-test", ok: true }))
-    importLegacyResources = vi.fn(async () => ({ images: null, snapshots: null, sessions: null, skipped: [] }))
+    reconnectTaskTerminal = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        terminalId: "openade-task-terminal-test",
+        found: true,
+        output: [],
+    }))
+    writeTaskTerminal = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        terminalId: "openade-task-terminal-test",
+        ok: true,
+    }))
+    resizeTaskTerminal = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        terminalId: "openade-task-terminal-test",
+        ok: true,
+    }))
+    stopTaskTerminal = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        terminalId: "openade-task-terminal-test",
+        ok: true,
+    }))
+    importLegacyResources = vi.fn(async () => ({
+        images: null,
+        snapshots: null,
+        sessions: null,
+        skipped: [],
+    }))
     readTaskGitSummary = vi.fn(async () => ({
         repoId: "repo-1",
         taskId: "task-1",
@@ -124,8 +195,14 @@ class OpenADEClient {
         headCommit: "abc123",
         ahead: 0,
         hasChanges: false,
-        staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
-        unstaged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+        staged: {
+            files: [],
+            stats: { filesChanged: 0, insertions: 0, deletions: 0 },
+        },
+        unstaged: {
+            files: [],
+            stats: { filesChanged: 0, insertions: 0, deletions: 0 },
+        },
         untracked: [],
     }))
     readTaskGitScopes = vi.fn(async () => ({
@@ -133,11 +210,31 @@ class OpenADEClient {
         taskId: "task-1",
         defaultBranch: "main",
         scopes: [
-            { id: "branch:HEAD", type: "branch" as const, name: "HEAD", ref: "HEAD", isDefault: false, isRemote: false },
-            { id: "branch:main", type: "branch" as const, name: "main", ref: "main", isDefault: true, isRemote: false },
+            {
+                id: "branch:HEAD",
+                type: "branch" as const,
+                name: "HEAD",
+                ref: "HEAD",
+                isDefault: false,
+                isRemote: false,
+            },
+            {
+                id: "branch:main",
+                type: "branch" as const,
+                name: "main",
+                ref: "main",
+                isDefault: true,
+                isRemote: false,
+            },
         ],
     }))
-    readTaskChanges = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", files: [], fromTreeish: "HEAD", toTreeish: "" }))
+    readTaskChanges = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        files: [],
+        fromTreeish: "HEAD",
+        toTreeish: "",
+    }))
     readTaskDiff = vi.fn(async () => ({
         repoId: "repo-1",
         taskId: "task-1",
@@ -158,8 +255,18 @@ class OpenADEClient {
         before: "before\n",
         after: "after\n",
     }))
-    readTaskGitLog = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", commits: [], hasMore: false }))
-    readTaskGitCommitFiles = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", commit: "abc123", files: [] }))
+    readTaskGitLog = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        commits: [],
+        hasMore: false,
+    }))
+    readTaskGitCommitFiles = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        commit: "abc123",
+        files: [],
+    }))
     readTaskGitFileAtTreeish = vi.fn(async () => ({
         repoId: "repo-1",
         taskId: "task-1",
@@ -178,16 +285,40 @@ class OpenADEClient {
         heavy: false,
         stats: { insertions: 0, deletions: 0, changedLines: 0, hunkCount: 0 },
     }))
-    commitTaskGit = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", committed: false, status: "nothing_to_commit" as const }))
-    readTaskImage = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", imageId: "image-1", ext: "png", mediaType: "image/png", data: "" }))
-    readStagedTaskImage = vi.fn(async () => ({ imageId: "image-1", ext: "png", mediaType: "image/png", data: "" }))
-    writeTaskImage = vi.fn(async (args: { imageId: string; ext: string; mediaType: string; data: string }) => ({
-        imageId: args.imageId,
-        ext: args.ext,
-        mediaType: args.mediaType,
-        size: args.data.length,
-        sha256: "remote-image-sha256",
+    commitTaskGit = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        committed: false,
+        status: "nothing_to_commit" as const,
     }))
+    readTaskImage = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        imageId: "image-1",
+        ext: "png",
+        mediaType: "image/png",
+        data: "",
+    }))
+    readStagedTaskImage = vi.fn(async () => ({
+        imageId: "image-1",
+        ext: "png",
+        mediaType: "image/png",
+        data: "",
+    }))
+    writeTaskImage = vi.fn(
+        async (args: {
+            imageId: string
+            ext: string
+            mediaType: string
+            data: string
+        }) => ({
+            imageId: args.imageId,
+            ext: args.ext,
+            mediaType: args.mediaType,
+            size: args.data.length,
+            sha256: "remote-image-sha256",
+        })
+    )
     readTaskResourceInventory = vi.fn(async () => ({
         repoId: "repo-1",
         taskId: "task-1",
@@ -199,12 +330,30 @@ class OpenADEClient {
         worktree: null,
     }))
     readMcpServers = vi.fn(async () => ({ servers: [] }))
-    replaceMcpServers = vi.fn(async (args: { servers: OpenADEMCPServer[] }) => ({ servers: args.servers, replacedServers: args.servers.length }))
-    upsertMcpServer = vi.fn(async (args: { server: OpenADEMCPServer }) => ({ server: args.server, created: true }))
-    deleteMcpServer = vi.fn(async (args: { serverId: string }) => ({ serverId: args.serverId, deleted: true }))
+    replaceMcpServers = vi.fn(async (args: { servers: OpenADEMCPServer[] }) => ({
+        servers: args.servers,
+        replacedServers: args.servers.length,
+    }))
+    upsertMcpServer = vi.fn(async (args: { server: OpenADEMCPServer }) => ({
+        server: args.server,
+        created: true,
+    }))
+    deleteMcpServer = vi.fn(async (args: { serverId: string }) => ({
+        serverId: args.serverId,
+        deleted: true,
+    }))
     readCronInstallState = vi.fn(async (args: OpenADECronInstallStateReadRequest) => ({
         repoId: args.repoId,
         installations: {},
+    }))
+    readCronDefinitions = vi.fn(async (args: OpenADECronDefinitionsReadRequest) => ({
+        repoId: args.repoId,
+        taskId: args.taskId,
+        searchRoot: "/tmp/repo",
+        repoRoot: "/tmp/repo",
+        isWorktree: false,
+        configs: [],
+        errors: [],
     }))
     replaceCronInstallState = vi.fn(async (args: OpenADECronInstallStateReplaceRequest) => ({
         repoId: args.repoId,
@@ -212,7 +361,11 @@ class OpenADEClient {
         replacedInstallations: Object.keys(args.installations).length,
     }))
     readPersonalSettings = vi.fn(async () => ({
-        settings: { envVars: {}, theme: "system" as const, renderMarkdownMessages: true },
+        settings: {
+            envVars: {},
+            theme: "system" as const,
+            renderMarkdownMessages: true,
+        },
     }))
     replacePersonalSettings = vi.fn(async (args: OpenADEPersonalSettingsReplaceRequest) => ({
         settings: args.settings,
@@ -222,14 +375,76 @@ class OpenADEClient {
         taskId: "task-1",
         title: "Generated task title",
     }))
-    readTaskSnapshotPatch = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", eventId: "snapshot-1", patch: "" }))
-    readTaskSnapshotIndex = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", eventId: "snapshot-1", index: null }))
-    readTaskSnapshotPatchSlice = vi.fn(async () => ({ repoId: "repo-1", taskId: "task-1", eventId: "snapshot-1", patch: "" }))
-    createRepo = vi.fn(async () => ({ repoId: "repo-1", createdAt: "2026-05-31T00:00:00.000Z" }))
+    readTaskSnapshotPatch = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        eventId: "snapshot-1",
+        patch: "",
+    }))
+    readTaskSnapshotIndex = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        eventId: "snapshot-1",
+        index: null,
+    }))
+    readTaskSnapshotPatchSlice = vi.fn(async () => ({
+        repoId: "repo-1",
+        taskId: "task-1",
+        eventId: "snapshot-1",
+        patch: "",
+    }))
+    createRepo = vi.fn(async () => ({
+        repoId: "repo-1",
+        createdAt: "2026-05-31T00:00:00.000Z",
+    }))
     updateRepo = vi.fn(async () => undefined)
     deleteRepo = vi.fn(async () => undefined)
-    startReview = vi.fn(async (args: { taskId: string }) => ({ taskId: args.taskId }))
+    createTask = vi.fn(async (args: { taskId?: string; slug?: string; title?: string; createdAt?: string }) => ({
+        taskId: args.taskId ?? "task-created",
+        slug: args.slug ?? "task-created",
+        title: args.title ?? "Created task",
+        createdAt: args.createdAt ?? "2026-05-31T00:00:00.000Z",
+    }))
+    startReview = vi.fn(async (args: { taskId: string }) => ({
+        taskId: args.taskId,
+    }))
     interruptTurn = vi.fn(async () => undefined)
+    enqueueQueuedTurn = vi.fn(
+        async (args: {
+            taskId: string
+            type: "do" | "ask"
+            input: string
+            queuedTurnId?: string
+            clientRequestId?: string
+        }) => {
+            const createdAt = "2026-05-31T00:00:00.000Z"
+            const turn: OpenADEQueuedTurn = {
+                id: args.queuedTurnId ?? "queued-remote-test",
+                clientRequestId: args.clientRequestId,
+                type: args.type,
+                input: args.input,
+                status: "queued",
+                createdAt,
+                updatedAt: createdAt,
+            }
+            return { taskId: args.taskId, queuedTurnId: turn.id, queued: true, turn }
+        }
+    )
+    reorderQueuedTurns = vi.fn(async (args: { taskId: string; queuedTurnIds: string[] }) => ({
+        taskId: args.taskId,
+        reordered: true,
+        turns: args.queuedTurnIds.map((queuedTurnId): OpenADEQueuedTurn => {
+            const updatedAt = "2026-05-31T00:00:00.000Z"
+            return {
+                id: queuedTurnId,
+                type: "do",
+                input: "Queued remote test",
+                status: "queued",
+                createdAt: updatedAt,
+                updatedAt,
+            }
+        }),
+    }))
     cancelQueuedTurn = vi.fn(async (args: { taskId: string; queuedTurnId: string }) => ({
         taskId: args.taskId,
         queuedTurnId: args.queuedTurnId,
@@ -252,10 +467,17 @@ class OpenADEClient {
             durationMs: 0,
         },
     }))
-    createComment = vi.fn(async (args: { commentId?: string }) => ({ commentId: args.commentId ?? "comment-1", createdAt: "2026-05-31T00:00:00.000Z" }))
+    createComment = vi.fn(async (args: { commentId?: string }) => ({
+        commentId: args.commentId ?? "comment-1",
+        createdAt: "2026-05-31T00:00:00.000Z",
+    }))
     editComment = vi.fn(async () => undefined)
     deleteComment = vi.fn(async () => undefined)
-    deleteTask = vi.fn(async (args: { repoId: string; taskId: string }) => ({ repoId: args.repoId, taskId: args.taskId, deleted: true as const }))
+    deleteTask = vi.fn(async (args: { repoId: string; taskId: string }) => ({
+        repoId: args.repoId,
+        taskId: args.taskId,
+        deleted: true as const,
+    }))
     setupTaskEnvironment = vi.fn(async () => undefined)
     prepareTaskEnvironment = vi.fn(async (args: { repoId: string; taskId: string }) => ({
         repoId: args.repoId,
@@ -332,7 +554,9 @@ describe("companion remote runtime client cache", () => {
         expect(openadeClients).toHaveLength(1)
         expect(openadeClients[0].getSnapshot).toHaveBeenCalledTimes(2)
         expect(openadeClients[0].getTask).toHaveBeenCalledTimes(2)
-        expect(openadeClients[0].getTask).toHaveBeenCalledWith("repo-1", "task-1", { hydrateSessionEvents: false })
+        expect(openadeClients[0].getTask).toHaveBeenCalledWith("repo-1", "task-1", {
+            hydrateSessionEvents: false,
+        })
         expect(openadeClients[0].subscribeToChanges).toHaveBeenCalledTimes(2)
         expect(openadeClients[0].startTurn).toHaveBeenCalledWith({ repoId: "repo-1", type: "ask", input: "hello" }, {})
 
@@ -343,9 +567,13 @@ describe("companion remote runtime client cache", () => {
     it("passes task read hydration options through to the runtime protocol", async () => {
         const remote = config()
 
-        await getRemoteProductStore(remote).getTask("repo-1", "task-1", { hydrateSessionEvents: false })
+        await getRemoteProductStore(remote).getTask("repo-1", "task-1", {
+            hydrateSessionEvents: false,
+        })
 
-        expect(openadeClients[0].getTask).toHaveBeenCalledWith("repo-1", "task-1", { hydrateSessionEvents: false })
+        expect(openadeClients[0].getTask).toHaveBeenCalledWith("repo-1", "task-1", {
+            hydrateSessionEvents: false,
+        })
     })
 
     it("retries transient runtime socket failures for reads", async () => {
@@ -353,7 +581,11 @@ describe("companion remote runtime client cache", () => {
         getTaskFailures = 1
         const remote = config()
 
-        const task = retryRemoteRead(() => getRemoteProductStore(remote).getTask("repo-1", "task-1", { hydrateSessionEvents: false }))
+        const task = retryRemoteRead(() =>
+            getRemoteProductStore(remote).getTask("repo-1", "task-1", {
+                hydrateSessionEvents: false,
+            })
+        )
         await vi.advanceTimersByTimeAsync(250)
 
         await expect(task).resolves.toEqual(
@@ -382,9 +614,14 @@ describe("companion remote runtime client cache", () => {
         const onStatus = vi.fn()
 
         subscribeRemoteChanges(config(), onEvent, onStatus)
-        const runtimeOptions = runtimeClients[0].options as { onStatus?: (status: string) => void }
+        const runtimeOptions = runtimeClients[0].options as {
+            onStatus?: (status: string) => void
+        }
         runtimeOptions.onStatus?.("connected")
-        changeListeners[0]({ method: "connection/lagged", params: { requestedCursor: "1", oldestCursor: "10" } })
+        changeListeners[0]({
+            method: "connection/lagged",
+            params: { requestedCursor: "1", oldestCursor: "10" },
+        })
 
         expect(onStatus).toHaveBeenCalledWith("connected")
         expect(onStatus).not.toHaveBeenCalledWith("lagged")
@@ -397,7 +634,9 @@ describe("companion remote runtime client cache", () => {
         const firstStatus = vi.fn()
 
         const unsubscribe = subscribeRemoteChanges(remote, vi.fn(), firstStatus)
-        const runtimeOptions = runtimeClients[0].options as { onStatus?: (status: string) => void }
+        const runtimeOptions = runtimeClients[0].options as {
+            onStatus?: (status: string) => void
+        }
         runtimeOptions.onStatus?.("connected")
         unsubscribe()
 
@@ -410,9 +649,19 @@ describe("companion remote runtime client cache", () => {
     })
 
     it("preserves queued turn start results from the runtime protocol", async () => {
-        startTurnResult = { taskId: "task-1", queued: true, queuedTurnId: "queued-1" }
+        startTurnResult = {
+            taskId: "task-1",
+            queued: true,
+            queuedTurnId: "queued-1",
+        }
 
-        await expect(getRemoteProductStore(config()).startTurn({ repoId: "repo-1", type: "do", input: "after this" })).resolves.toEqual({
+        await expect(
+            getRemoteProductStore(config()).startTurn({
+                repoId: "repo-1",
+                type: "do",
+                input: "after this",
+            })
+        ).resolves.toEqual({
             taskId: "task-1",
             queued: true,
             queuedTurnId: "queued-1",
@@ -433,13 +682,24 @@ describe("companion remote runtime client cache", () => {
                 modelId: "model-1",
             })
         ).resolves.toEqual({ taskId: "task-1" })
-        await expect(store.cancelQueuedTurn({ repoId: "repo-1", taskId: "task-1", queuedTurnId: "queued-1" })).resolves.toEqual({
+        await expect(
+            store.cancelQueuedTurn({
+                repoId: "repo-1",
+                taskId: "task-1",
+                queuedTurnId: "queued-1",
+            })
+        ).resolves.toEqual({
             taskId: "task-1",
             queuedTurnId: "queued-1",
             cancelled: true,
         })
         await store.updateTaskMetadata({ taskId: "task-1", title: "Updated" })
-        await expect(store.reconnectProjectProcess({ repoId: "repo-1", processId: "proc-remote-test" })).resolves.toEqual({
+        await expect(
+            store.reconnectProjectProcess({
+                repoId: "repo-1",
+                processId: "proc-remote-test",
+            })
+        ).resolves.toEqual({
             repoId: "repo-1",
             processId: "proc-remote-test",
             found: true,
@@ -454,17 +714,33 @@ describe("companion remote runtime client cache", () => {
                 selectedText: { text: "Comment", linesBefore: "", linesAfter: "" },
                 author: { id: "user-1", email: "user@example.com" },
             })
-        ).resolves.toEqual({ commentId: "comment-1", createdAt: "2026-05-31T00:00:00.000Z" })
+        ).resolves.toEqual({
+            commentId: "comment-1",
+            createdAt: "2026-05-31T00:00:00.000Z",
+        })
         await expect(store.deleteTask({ repoId: "repo-1", taskId: "task-1" })).resolves.toEqual({
             repoId: "repo-1",
             taskId: "task-1",
             deleted: true,
         })
 
-        expect(openadeClients[0].startReview).toHaveBeenCalledWith(expect.objectContaining({ repoId: "repo-1", taskId: "task-1", reviewType: "work" }), {})
-        expect(openadeClients[0].cancelQueuedTurn).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1", queuedTurnId: "queued-1" }, {})
-        expect(openadeClients[0].updateTaskMetadata).toHaveBeenCalledWith({ taskId: "task-1", title: "Updated" }, {})
-        expect(openadeClients[0].reconnectProjectProcess).toHaveBeenCalledWith({ repoId: "repo-1", processId: "proc-remote-test" })
+        expect(openadeClients[0].startReview).toHaveBeenCalledWith(
+            expect.objectContaining({
+                repoId: "repo-1",
+                taskId: "task-1",
+                reviewType: "work",
+            }),
+            {}
+        )
+        expect(openadeClients[0].cancelQueuedTurn).toHaveBeenCalledWith(
+            expect.objectContaining({ repoId: "repo-1", taskId: "task-1", queuedTurnId: "queued-1" }),
+            {}
+        )
+        expect(openadeClients[0].updateTaskMetadata).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-1", title: "Updated" }), {})
+        expect(openadeClients[0].reconnectProjectProcess).toHaveBeenCalledWith({
+            repoId: "repo-1",
+            processId: "proc-remote-test",
+        })
         expect(openadeClients[0].createComment).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-1", commentId: "comment-1" }), {})
         expect(openadeClients[0].deleteTask).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1" }, {})
     })

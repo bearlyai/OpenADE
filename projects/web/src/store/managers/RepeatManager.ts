@@ -131,7 +131,7 @@ export class RepeatManager {
         const taskId = this.activeTaskId
         void (async () => {
             try {
-                if (!this.store.shouldUseRuntimeProductReads()) {
+                if (!this.store.shouldUseRuntimeProductAPI()) {
                     await this.store.getTaskStore(taskModel.repoId, taskId)
                 }
                 await this.store.startProductTurn({
@@ -148,7 +148,7 @@ export class RepeatManager {
                     label: REPEAT_LABEL,
                     includeComments: false,
                 })
-                if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
+                if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(taskId)
             } catch (err) {
                 console.error("[RepeatManager] Failed to start repeat turn:", err)
                 if (this.activeTaskId === taskId) this.cleanup()

@@ -475,7 +475,7 @@ export class McpServerManager {
     // ==================== Runtime Product Settings Projection ====================
 
     private canUseProductSettings(): boolean {
-        return this.store.shouldUseRuntimeProductReads()
+        return this.store.shouldUseRuntimeProductAPI()
     }
 
     private recordProductSettingsError(action: string, err: unknown): void {

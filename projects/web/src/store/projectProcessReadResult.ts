@@ -1,4 +1,4 @@
-import type { OpenADEProjectProcessListResult } from "../../../openade-module/src"
+import type { OpenADECronDefinitionsReadResult, OpenADEProjectProcessListResult } from "../../../openade-module/src"
 import type { ProcsConfig, ReadProcsResult } from "../electronAPI/procs"
 
 export function readProcsResultFromProductProcesses(result: OpenADEProjectProcessListResult): ReadProcsResult {
@@ -9,6 +9,21 @@ export function readProcsResultFromProductProcesses(result: OpenADEProjectProces
         isWorktree: result.isWorktree,
         worktreeRoot: result.worktreeRoot,
         configs,
+        errors: result.errors,
+    }
+}
+
+export function readProcsResultFromProductCronDefinitions(result: OpenADECronDefinitionsReadResult): ReadProcsResult {
+    return {
+        repoRoot: result.repoRoot,
+        searchRoot: result.searchRoot,
+        isWorktree: result.isWorktree,
+        worktreeRoot: result.worktreeRoot,
+        configs: result.configs.map((config) => ({
+            relativePath: config.relativePath,
+            processes: [],
+            crons: config.crons,
+        })),
         errors: result.errors,
     }
 }

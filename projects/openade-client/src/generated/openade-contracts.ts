@@ -18,6 +18,8 @@ import type {
     OpenADECommentCreateResult,
     OpenADECommentDeleteRequest,
     OpenADECommentEditRequest,
+    OpenADECronDefinitionsReadRequest,
+    OpenADECronDefinitionsReadResult,
     OpenADECronInstallStateReadRequest,
     OpenADECronInstallStateReadResult,
     OpenADECronInstallStateReplaceRequest,
@@ -38,6 +40,7 @@ import type {
     OpenADEPersonalSettingsReadResult,
     OpenADEPersonalSettingsReplaceRequest,
     OpenADEPersonalSettingsReplaceResult,
+    OpenADEProject,
     OpenADEProjectFileReadRequest,
     OpenADEProjectFileReadResult,
     OpenADEProjectFileWriteRequest,
@@ -75,6 +78,7 @@ import type {
     OpenADERepoDeleteRequest,
     OpenADERepoUpdateRequest,
     OpenADEReviewStartRequest,
+    OpenADEReviewStartResult,
     OpenADESnapshot,
     OpenADESnapshotEventCreateRequest,
     OpenADESnapshotEventCreateResult,
@@ -121,6 +125,7 @@ import type {
     OpenADETaskImagesImportLegacyRequest,
     OpenADETaskImagesImportLegacyResult,
     OpenADETaskMetadataUpdateRequest,
+    OpenADETaskPreview,
     OpenADETaskReadOptions,
     OpenADETaskResourceInventoryReadRequest,
     OpenADETaskResourceInventoryReadResult,
@@ -154,12 +159,14 @@ export type OpenADEEmptyRequest = Record<string, never>
 
 export type OpenADETaskReadRequest = { repoId: string; taskId: string } & OpenADETaskReadOptions
 
-export type OpenADEReviewStartResult = { taskId: string }
+export type OpenADETaskListRequest = { repoId: string }
 
 export type OpenADETurnInterruptRequest = OpenADEClientRequest & { taskId: string }
 
 export const OPENADE_METHODS = [
     "openade/snapshot/read",
+    "openade/project/list",
+    "openade/task/list",
     "openade/task/read",
     "openade/project/file/read",
     "openade/project/files/tree",
@@ -170,6 +177,7 @@ export const OPENADE_METHODS = [
     "openade/project/git/branches/read",
     "openade/project/git/summary/read",
     "openade/project/process/list",
+    "openade/cron/definitions/read",
     "openade/project/process/start",
     "openade/project/process/reconnect",
     "openade/project/process/stop",
@@ -246,8 +254,40 @@ export const OPENADE_METHODS = [
 
 export type OpenADEMethod = (typeof OPENADE_METHODS)[number]
 
+export const OPENADE_NOTIFICATIONS = [
+    "openade/snapshotChanged",
+    "openade/repo/updated",
+    "openade/repo/deleted",
+    "openade/task/previewChanged",
+    "openade/task/updated",
+    "openade/task/deleted",
+    "openade/queuedTurn/updated",
+    "openade/workingTasks",
+    "remote/device/changed",
+] as const
+
+export type OpenADENotificationMethod = (typeof OPENADE_NOTIFICATIONS)[number]
+
+export const OPENADE_ERROR_CODES = [
+    "conflict",
+    "handler_error",
+    "invalid_params",
+    "invalid_request",
+    "method_not_found",
+    "not_found",
+    "not_initialized",
+    "parse_error",
+    "permission_denied",
+    "stop_failed",
+    "unsupported_protocol_version",
+] as const
+
+export type OpenADEErrorCode = (typeof OPENADE_ERROR_CODES)[number]
+
 export const OPENADE_READ_METHODS_TO_COALESCE = [
     "openade/snapshot/read",
+    "openade/project/list",
+    "openade/task/list",
     "openade/settings/mcpServers/read",
     "openade/settings/personal/read",
     "openade/task/read",
@@ -259,6 +299,7 @@ export const OPENADE_READ_METHODS_TO_COALESCE = [
     "openade/project/git/branches/read",
     "openade/project/git/summary/read",
     "openade/project/process/list",
+    "openade/cron/definitions/read",
     "openade/cron/installState/read",
     "openade/task/changes/read",
     "openade/task/git/summary/read",
@@ -279,6 +320,8 @@ export const OPENADE_READ_METHODS_TO_COALESCE = [
 
 export interface OpenADERequestByMethod {
     "openade/snapshot/read": undefined
+    "openade/project/list": undefined
+    "openade/task/list": OpenADETaskListRequest
     "openade/task/read": OpenADETaskReadRequest
     "openade/project/file/read": OpenADEProjectFileReadRequest
     "openade/project/files/tree": OpenADEProjectFilesTreeRequest
@@ -289,6 +332,7 @@ export interface OpenADERequestByMethod {
     "openade/project/git/branches/read": OpenADEProjectGitBranchesReadRequest
     "openade/project/git/summary/read": OpenADEProjectGitSummaryReadRequest
     "openade/project/process/list": OpenADEProjectProcessListRequest
+    "openade/cron/definitions/read": OpenADECronDefinitionsReadRequest
     "openade/project/process/start": OpenADEProjectProcessStartRequest
     "openade/project/process/reconnect": OpenADEProjectProcessReconnectRequest
     "openade/project/process/stop": OpenADEProjectProcessStopRequest
@@ -365,6 +409,8 @@ export interface OpenADERequestByMethod {
 
 export interface OpenADEResponseByMethod {
     "openade/snapshot/read": OpenADESnapshot
+    "openade/project/list": OpenADEProject[]
+    "openade/task/list": OpenADETaskPreview[]
     "openade/task/read": OpenADETask
     "openade/project/file/read": OpenADEProjectFileReadResult
     "openade/project/files/tree": OpenADEProjectFilesTreeResult
@@ -375,6 +421,7 @@ export interface OpenADEResponseByMethod {
     "openade/project/git/branches/read": OpenADEProjectGitBranchesReadResult
     "openade/project/git/summary/read": OpenADEProjectGitSummaryReadResult
     "openade/project/process/list": OpenADEProjectProcessListResult
+    "openade/cron/definitions/read": OpenADECronDefinitionsReadResult
     "openade/project/process/start": OpenADEProjectProcessStartResult
     "openade/project/process/reconnect": OpenADEProjectProcessReconnectResult
     "openade/project/process/stop": OpenADEProjectProcessStopResult

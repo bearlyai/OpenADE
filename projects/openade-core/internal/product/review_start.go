@@ -59,8 +59,10 @@ After findings, add a short section titled 'Things that might be intentional (co
 )
 
 type reviewStartResultDTO struct {
-	TaskID  string `json:"taskId"`
-	EventID string `json:"eventId,omitempty"`
+	TaskID      string `json:"taskId"`
+	EventID     string `json:"eventId,omitempty"`
+	ExecutionID string `json:"executionId,omitempty"`
+	CreatedAt   string `json:"createdAt,omitempty"`
 }
 
 type reviewPromptDTO struct {
@@ -94,6 +96,8 @@ func (service *Service) startReview(ctx context.Context, raw json.RawMessage) (c
 		ReviewType         string `json:"reviewType"`
 		HarnessID          string `json:"harnessId"`
 		ModelID            string `json:"modelId"`
+		Thinking           string `json:"thinking"`
+		FastMode           *bool  `json:"fastMode"`
 		CustomInstructions string `json:"customInstructions"`
 	}
 	if runtimeErr := decodeObject(raw, &params); runtimeErr != nil {
@@ -118,6 +122,9 @@ func (service *Service) startReview(ctx context.Context, raw json.RawMessage) (c
 	}
 	if modelID == "" {
 		return nil, invalidParams("modelId is invalid")
+	}
+	if params.Thinking != "" && validThinking(params.Thinking) == "" {
+		return nil, invalidParams("thinking must be low, med, high, or max")
 	}
 
 	repo, task, runtimeErr := service.taskRepo(ctx, repoID, taskID)
@@ -164,6 +171,7 @@ func (service *Service) startReview(ctx context.Context, raw json.RawMessage) (c
 		Source:             sourceRaw,
 		IncludesCommentIDs: []string{},
 		ModelID:            modelID,
+		FastMode:           params.FastMode,
 	})
 	if runtimeErr != nil {
 		return nil, runtimeErr
@@ -179,7 +187,9 @@ func (service *Service) startReview(ctx context.Context, raw json.RawMessage) (c
 			CreatedAt:   now,
 			PayloadJSON: sql.NullString{String: string(payload), Valid: true},
 		},
-		UpdatedAt: now,
+		UpdatedAt:       now,
+		UpdateLastEvent: true,
+		UpdatePreview:   true,
 	})
 	if err != nil {
 		return nil, taskEventWriteRuntimeError(err)
@@ -209,14 +219,16 @@ func (service *Service) startReview(ctx context.Context, raw json.RawMessage) (c
 		EnabledMCPServerIDs: enabledMCPServerIDs,
 		MCPServerConfigs:    mcpServerConfigs,
 		ReadOnly:            true,
+		Thinking:            validThinking(params.Thinking),
+		FastMode:            params.FastMode,
 		Source:              append(json.RawMessage(nil), sourceRaw...),
-		OnCompleted:         service.reviewFollowUpCompletionHook(reviewType, userLabel, modelID),
+		OnCompleted:         service.reviewFollowUpCompletionHook(reviewType, userLabel, modelID, validThinking(params.Thinking), params.FastMode),
 	})
 
-	return reviewStartResultDTO{TaskID: task.ID, EventID: event.ID}, nil
+	return reviewStartResultDTO{TaskID: task.ID, EventID: event.ID, ExecutionID: executionID, CreatedAt: formatTime(now)}, nil
 }
 
-func (service *Service) reviewFollowUpCompletionHook(reviewType string, userLabel string, modelID string) func(context.Context, AgentExecutionRequest, AgentExecutionResult) {
+func (service *Service) reviewFollowUpCompletionHook(reviewType string, userLabel string, modelID string, thinking string, fastMode *bool) func(context.Context, AgentExecutionRequest, AgentExecutionResult) {
 	return func(ctx context.Context, request AgentExecutionRequest, _ AgentExecutionResult) {
 		reviewText, runtimeErr := service.completedReviewText(ctx, request.TaskID, request.EventID, request.HarnessID)
 		if runtimeErr != nil || strings.TrimSpace(reviewText) == "" {
@@ -226,11 +238,11 @@ func (service *Service) reviewFollowUpCompletionHook(reviewType string, userLabe
 		if runtimeErr != nil {
 			return
 		}
-		_ = service.startReviewFollowUp(ctx, repo, task, reviewType, userLabel, request.HarnessID, modelID, reviewText, time.Now().UTC())
+		_ = service.startReviewFollowUp(ctx, repo, task, reviewType, userLabel, request.HarnessID, modelID, thinking, fastMode, reviewText, time.Now().UTC())
 	}
 }
 
-func (service *Service) startReviewFollowUp(ctx context.Context, repo storage.Repo, task storage.Task, reviewType string, userLabel string, harnessID string, modelID string, reviewText string, now time.Time) *core.RuntimeError {
+func (service *Service) startReviewFollowUp(ctx context.Context, repo storage.Repo, task storage.Task, reviewType string, userLabel string, harnessID string, modelID string, thinking string, fastMode *bool, reviewText string, now time.Time) *core.RuntimeError {
 	followUpLabel := userLabel + " Follow-up"
 	sourceRaw, runtimeErr := reviewFollowUpSourceRaw(reviewFollowUpSourceDTO{
 		Type:      "ask",
@@ -252,6 +264,7 @@ func (service *Service) startReviewFollowUp(ctx context.Context, repo storage.Re
 		Source:             sourceRaw,
 		IncludesCommentIDs: []string{},
 		ModelID:            modelID,
+		FastMode:           fastMode,
 	})
 	if runtimeErr != nil {
 		return runtimeErr
@@ -267,7 +280,9 @@ func (service *Service) startReviewFollowUp(ctx context.Context, repo storage.Re
 			CreatedAt:   now,
 			PayloadJSON: sql.NullString{String: string(payload), Valid: true},
 		},
-		UpdatedAt: now,
+		UpdatedAt:       now,
+		UpdateLastEvent: true,
+		UpdatePreview:   true,
 	})
 	if err != nil {
 		return taskEventWriteRuntimeError(err)
@@ -296,6 +311,8 @@ func (service *Service) startReviewFollowUp(ctx context.Context, repo storage.Re
 		EnabledMCPServerIDs: enabledMCPServerIDs,
 		MCPServerConfigs:    mcpServerConfigs,
 		ReadOnly:            true,
+		Thinking:            thinking,
+		FastMode:            fastMode,
 		Source:              append(json.RawMessage(nil), sourceRaw...),
 	})
 	return nil
@@ -320,7 +337,7 @@ func (service *Service) createAgentRuntime(ctx context.Context, repo storage.Rep
 		return handlerError(err)
 	}
 	service.runtime.Notify("runtime/created", runtimeDTO)
-	service.runtime.Notify("openade/task/updated", map[string]string{"repoId": task.RepoID, "taskId": task.ID})
+	service.runtime.Notify("openade/task/updated", actionEventTaskUpdatedNotification(task.RepoID, task.ID, eventID, "in_progress"))
 	service.notifyWorkingTasks(ctx, now)
 	return nil
 }

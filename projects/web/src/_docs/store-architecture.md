@@ -49,7 +49,7 @@ Runtime lifecycle notifications update `RuntimeManager`. Check with `codeStore.i
 
 ### Durable Mutations
 
-Repo, task, comment, plan-cancel, turn, review, queued-turn, environment-setup, and preview-usage mutations should enter through `CodeStore` product helpers such as `startProductTurn()`, `updateProductTaskMetadata()`, and `createProductComment()`. When runtime product reads are active, those helpers use the injected `OpenADEProductStore`; otherwise they fall back to `runtime/localOpenADEClient.ts` and the legacy Yjs refresh path. The renderer store is a cache/view over persisted product state and should refresh through runtime DTO helpers or explicit legacy `refresh*FromStorage()` calls only on the fallback path.
+Repo, task, comment, plan-cancel, turn, review, queued-turn, environment-setup, and preview-usage mutations should enter through `CodeStore` product helpers such as `startProductTurn()`, `updateProductTaskMetadata()`, and `createProductComment()`. When the runtime product API is active, those helpers use the injected `OpenADEProductStore`; otherwise they fall back to `runtime/localOpenADEClient.ts` and the legacy Yjs refresh path. The renderer store is a cache/view over persisted product state and should refresh through runtime DTO helpers or explicit legacy `refresh*FromStorage()` calls only on the fallback path.
 
 ### Task Scoped Git Reads
 
@@ -57,7 +57,7 @@ The classic desktop task page uses `CodeStore.readProductTaskGitSummary()` for l
 
 ### Task Snapshot Reads
 
-The classic desktop snapshot event UI stays on `SnapshotEventItem` and `ViewPatch`, but external patch, index, and slice reads should use `CodeStore.readProductTaskSnapshotPatch()`, `readProductTaskSnapshotIndex()`, and `readProductTaskSnapshotPatchSlice()` when runtime product reads are active. Raw `snapshotsApi` reads are the trusted-local fallback only.
+The classic desktop snapshot event UI stays on `SnapshotEventItem` and `ViewPatch`, but external patch, index, and slice reads should use `CodeStore.readProductTaskSnapshotPatch()`, `readProductTaskSnapshotIndex()`, and `readProductTaskSnapshotPatchSlice()` when the runtime product API is active. Raw `snapshotsApi` reads are the trusted-local fallback only.
 
 ## Environment Classes
 

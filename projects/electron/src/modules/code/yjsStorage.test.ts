@@ -28,6 +28,18 @@ function updateWithValue(value: string): Uint8Array {
     }
 }
 
+function sequentialUpdatesWithValues(first: string, second: string): [Uint8Array, Uint8Array] {
+    const doc = new Y.Doc()
+    try {
+        doc.getMap("pending").set("value", first)
+        const firstUpdate = Y.encodeStateAsUpdate(doc)
+        doc.getMap("pending").set("value", second)
+        return [firstUpdate, Y.encodeStateAsUpdate(doc)]
+    } finally {
+        doc.destroy()
+    }
+}
+
 function docPath(id: string): string {
     return path.join(storageDir, id.replace(/:/g, "_"))
 }
@@ -64,14 +76,15 @@ describe("Yjs filesystem storage", () => {
     it("invalidates cached reads after saving a document", async () => {
         storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "openade-yjs-storage-"))
         process.env.OPENADE_YJS_STORAGE_DIR = storageDir
+        const [beforeUpdate, afterUpdate] = sequentialUpdatesWithValues("before", "after")
 
-        await saveYjsDocument("code:cached-read", updateWithValue("before"))
+        await saveYjsDocument("code:cached-read", beforeUpdate)
 
         const firstLoaded = await loadYjsDocument("code:cached-read")
         if (!firstLoaded) throw new Error("Expected cached-read document")
         expect(valueFromUpdate(firstLoaded, "value")).toBe("before")
 
-        await saveYjsDocument("code:cached-read", updateWithValue("after"))
+        await saveYjsDocument("code:cached-read", afterUpdate)
 
         const secondLoaded = await loadYjsDocument("code:cached-read")
         if (!secondLoaded) throw new Error("Expected cached-read document after save")
@@ -91,6 +104,26 @@ describe("Yjs filesystem storage", () => {
         const loaded = await loadYjsDocument(id)
         if (!loaded) throw new Error("Expected cached-refresh-loop document")
         expect(valueFromUpdate(loaded, "value")).toBe("before")
+    })
+
+    it("keeps the load cache warm after an unchanged save", async () => {
+        storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "openade-yjs-storage-"))
+        process.env.OPENADE_YJS_STORAGE_DIR = storageDir
+
+        const id = "code:unchanged-save-cache"
+        await saveYjsDocument(id, updateWithValue("before"))
+        const cached = await loadYjsDocument(id)
+        if (!cached) throw new Error("Expected unchanged-save-cache document")
+
+        const persisted = new Uint8Array(fs.readFileSync(docPath(id)))
+        const debug = vi.spyOn(logger, "debug").mockImplementation(() => undefined)
+        await saveYjsDocument(id, persisted)
+        debug.mockClear()
+
+        const loaded = await loadYjsDocument(id)
+        if (!loaded) throw new Error("Expected unchanged-save-cache document after unchanged save")
+        expect(valueFromUpdate(loaded, "value")).toBe("before")
+        expect(debug.mock.calls.some(([message]) => String(message).includes(`Loaded document: ${id}`))).toBe(false)
     })
 
     it("adds runtime method context to slow document load logs", async () => {

@@ -37,8 +37,8 @@ function ImageThumbnail({ image, taskId }: { image: ImageAttachment; taskId: str
 
         async function loadImage() {
             try {
-                if (codeStore.shouldUseRuntimeProductReads()) {
-                    const repoId = codeStore.findRuntimeProductRepoIdForTask(taskId)
+                if (codeStore.shouldUseRuntimeProductAPI()) {
+                    const repoId = codeStore.findProductRepoIdForTask(taskId)
                     if (!repoId) return
                     const result = await codeStore.readProductTaskImage({
                         repoId,

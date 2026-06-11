@@ -172,6 +172,7 @@ func newRuntimeHarnessWithConfigStoreSetupAndOptions(t *testing.T, configureConf
 		"openade/project/process/start",
 		"openade/project/process/reconnect",
 		"openade/project/process/stop",
+		"openade/cron/definitions/read",
 		"openade/cron/installState/read",
 		"openade/cron/installState/replace",
 		"openade/task/terminal/start",
@@ -248,7 +249,11 @@ func TestProductPairedPermissionProfile(t *testing.T) {
 		"subscription/update",
 		"remote/device/selfRevoke",
 		"openade/task/read",
+		"openade/task/delete",
 		"openade/turn/start",
+		"openade/queued-turn/enqueue",
+		"openade/queued-turn/reorder",
+		"openade/queued-turn/cancel",
 		"notify:remote/device/changed",
 		"notify:openade/*",
 	} {
@@ -561,7 +566,7 @@ func TestProductDeviceBearerTokenAuthenticatesPairedClientOverRuntime(t *testing
 	initialized := resultObject(t, requestOnConn(t, conn, "initialize", map[string]any{"protocolVersion": core.DefaultProtocolVersion}))
 	resultObject(t, requestOnConn(t, siblingConn, "initialize", map[string]any{"protocolVersion": core.DefaultProtocolVersion}))
 	methods := stringSet(arrayField(t, objectField(t, initialized, "capabilities"), "methods"))
-	if !methods["remote/device/selfRevoke"] || !methods["openade/task/read"] {
+	if !methods["remote/device/selfRevoke"] || !methods["openade/task/read"] || !methods["openade/task/delete"] {
 		t.Fatalf("paired device capabilities missing safe methods: %#v", methods)
 	}
 	for _, method := range []string{"remote/device/list", "remote/device/revoke", "openade/project/file/write", "openade/task/terminal/start"} {
@@ -619,9 +624,14 @@ func TestProductPairedPermissionProfileFiltersCapabilitiesOverRuntime(t *testing
 		"openade/snapshot/read",
 		"openade/project/file/read",
 		"openade/project/process/reconnect",
+		"openade/cron/definitions/read",
 		"openade/task/read",
 		"openade/task/create",
+		"openade/task/delete",
 		"openade/turn/start",
+		"openade/queued-turn/enqueue",
+		"openade/queued-turn/reorder",
+		"openade/queued-turn/cancel",
 		"openade/comment/create",
 	} {
 		if !methods[method] {
@@ -708,6 +718,51 @@ func TestProductPairedPermissionProfileFiltersCapabilitiesOverRuntime(t *testing
 	})
 	harness.runtime.Notify("pty/output", map[string]string{"ptyId": "pty-secret", "data": "secret terminal output"})
 	resultObject(t, harness.request(t, "server/status/read", nil))
+}
+
+func TestProductPairedTaskDeleteAllowsPlainDeleteAndDeniesCleanupOptions(t *testing.T) {
+	harness := newRuntimeHarnessWithConfigStoreSetupAndOptions(
+		t,
+		func(cfg *core.Config) {
+			cfg.PermissionProfile = product.PermissionProfilePaired
+			applied, err := product.ApplyPermissionProfile(*cfg)
+			if err != nil {
+				t.Fatalf("apply paired profile: %v", err)
+			}
+			*cfg = applied
+		},
+		func(ctx context.Context, store *storage.Store) {
+			seedProductData(t, store)
+		},
+		nil,
+	)
+
+	cleanupDenied := harness.request(t, "openade/task/delete", map[string]any{
+		"repoId": "repo-1",
+		"taskId": "task-1",
+		"options": map[string]any{
+			"deleteImages": true,
+		},
+	})
+	if runtimeErrorCode(t, cleanupDenied) != "permission_denied" {
+		t.Fatalf("paired cleanup delete should be denied: %#v", cleanupDenied)
+	}
+
+	stillPresent := resultObject(t, harness.request(t, "openade/task/read", map[string]any{
+		"repoId": "repo-1",
+		"taskId": "task-1",
+	}))
+	if stillPresent["id"] != "task-1" {
+		t.Fatalf("task should remain after denied cleanup delete: %#v", stillPresent)
+	}
+
+	deleted := resultObject(t, harness.request(t, "openade/task/delete", map[string]any{
+		"repoId": "repo-1",
+		"taskId": "task-1",
+	}))
+	if deleted["repoId"] != "repo-1" || deleted["taskId"] != "task-1" || deleted["deleted"] != true {
+		t.Fatalf("paired plain task delete = %#v", deleted)
+	}
 }
 
 func TestProductPersonalSettingsReadReplace(t *testing.T) {
@@ -3545,6 +3600,7 @@ func TestProductTaskMetadataUpdateOverRuntime(t *testing.T) {
 			"costByModel":  map[string]any{"gpt-test": 0.56},
 			"durationMs":   890,
 		},
+		"clientRequestId": "metadata-update-1",
 	}))
 	if result["ok"] != true {
 		t.Fatalf("metadata update result = %#v", result)
@@ -3557,6 +3613,9 @@ func TestProductTaskMetadataUpdateOverRuntime(t *testing.T) {
 		params := objectField(t, notification, "params")
 		if params["repoId"] != "repo-1" || params["taskId"] != "task-1" {
 			t.Fatalf("notification params = %#v", params)
+		}
+		if params["clientRequestId"] != "metadata-update-1" {
+			t.Fatalf("metadata notification client request id = %#v", params)
 		}
 	}
 	if !seen["openade/task/updated"] || !seen["openade/task/previewChanged"] {
@@ -6115,6 +6174,87 @@ func TestProductCronInstallStateOverRuntime(t *testing.T) {
 	}
 }
 
+func TestProductCronDefinitionsReadOverRuntime(t *testing.T) {
+	harness := newRuntimeHarness(t)
+	ctx := context.Background()
+	projectDir := t.TempDir()
+	now := time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
+	writeFile(t, filepath.Join(projectDir, "openade.toml"), []byte(`[[process]]
+name = "Dev"
+command = "npm run dev"
+type = "daemon"
+
+[[cron]]
+name = "Morning"
+schedule = "* * * * *"
+type = "do"
+prompt = "Run scheduled maintenance"
+append_system_prompt = "scheduled policy"
+harness = "codex"
+isolation = "head"
+images = ["img-1"]
+`))
+	mkdirAll(t, filepath.Join(projectDir, "invalid"))
+	writeFile(t, filepath.Join(projectDir, "invalid", "openade.toml"), []byte(`[[cron]]
+name = "Bad"
+schedule = "* * * * *"
+type = "nope"
+`))
+	if err := harness.store.UpsertRepo(ctx, storage.Repo{
+		ID:        "repo-cron-definitions",
+		Name:      "Cron Definitions Repo",
+		Path:      projectDir,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("upsert cron definitions repo: %v", err)
+	}
+
+	definitions := resultObject(t, harness.request(t, "openade/cron/definitions/read", map[string]any{
+		"repoId": "repo-cron-definitions",
+	}))
+	if definitions["repoId"] != "repo-cron-definitions" || definitions["searchRoot"] != projectDir || definitions["repoRoot"] != projectDir || definitions["isWorktree"] != false {
+		t.Fatalf("cron definitions roots = %#v", definitions)
+	}
+	if _, hasProcesses := definitions["processes"]; hasProcesses {
+		t.Fatalf("cron definitions response should not include process definitions: %#v", definitions)
+	}
+	if _, hasInstances := definitions["instances"]; hasInstances {
+		t.Fatalf("cron definitions response should not include process instances: %#v", definitions)
+	}
+	configs := arrayField(t, definitions, "configs")
+	if len(configs) != 1 {
+		t.Fatalf("cron definition configs = %#v", configs)
+	}
+	config := objectValue(t, configs[0])
+	if config["relativePath"] != "openade.toml" {
+		t.Fatalf("cron definition config = %#v", config)
+	}
+	if _, hasProcesses := config["processes"]; hasProcesses {
+		t.Fatalf("cron definition config should not include process definitions: %#v", config)
+	}
+	crons := arrayField(t, config, "crons")
+	if len(crons) != 1 {
+		t.Fatalf("cron definitions = %#v", crons)
+	}
+	cron := objectValue(t, crons[0])
+	if cron["id"] != "openade.toml::Morning" || cron["name"] != "Morning" || cron["harness"] != "codex" || cron["appendSystemPrompt"] != "scheduled policy" || cron["isolation"] != "head" {
+		t.Fatalf("cron definition = %#v", cron)
+	}
+	assertStringSetEquals(t, stringsFromAny(arrayField(t, cron, "images")), []string{"img-1"})
+	errors := arrayField(t, definitions, "errors")
+	if len(errors) != 1 || objectValue(t, errors[0])["relativePath"] != "invalid/openade.toml" {
+		t.Fatalf("cron definition errors = %#v", errors)
+	}
+
+	missingRepo := harness.request(t, "openade/cron/definitions/read", map[string]any{
+		"repoId": "missing-repo",
+	})
+	if runtimeErrorCode(t, missingRepo) != "not_found" {
+		t.Fatalf("missing repo cron definitions response = %#v", missingRepo)
+	}
+}
+
 func TestProductCronSchedulerStartsDueTurnOverRuntime(t *testing.T) {
 	requests := make(chan product.AgentExecutionRequest, 1)
 	harness := newRuntimeHarnessWithProductOptions(t, func(options *product.Options) {
@@ -7164,6 +7304,8 @@ func TestProductReviewStartRunsReadOnlyReviewAndFollowUpOverRuntime(t *testing.T
 		"reviewType":         "plan",
 		"harnessId":          "claude-code",
 		"modelId":            "sonnet-test",
+		"thinking":           "max",
+		"fastMode":           true,
 		"customInstructions": "Focus on runtime boundaries",
 		"clientRequestId":    "review-start",
 	}))
@@ -7174,6 +7316,8 @@ func TestProductReviewStartRunsReadOnlyReviewAndFollowUpOverRuntime(t *testing.T
 		"reviewType":         "plan",
 		"harnessId":          "claude-code",
 		"modelId":            "sonnet-test",
+		"thinking":           "max",
+		"fastMode":           true,
 		"customInstructions": "Focus on runtime boundaries",
 		"clientRequestId":    "review-start",
 	}))
@@ -7184,6 +7328,9 @@ func TestProductReviewStartRunsReadOnlyReviewAndFollowUpOverRuntime(t *testing.T
 	reviewRequest := receiveAgentExecutionRequest(t, requests)
 	if reviewRequest.RuntimeID != "openade-review:"+eventID || reviewRequest.TurnType != "review" || !reviewRequest.ReadOnly {
 		t.Fatalf("review executor request = %#v", reviewRequest)
+	}
+	if reviewRequest.Thinking != "max" || reviewRequest.FastMode == nil || *reviewRequest.FastMode != true {
+		t.Fatalf("review agent options = thinking %q fast %#v", reviewRequest.Thinking, reviewRequest.FastMode)
 	}
 	if reviewRequest.Input == "" || !strings.Contains(reviewRequest.Input, "Review this plan") || !strings.Contains(reviewRequest.Input, "Plan text from prior turn") || !strings.Contains(reviewRequest.Input, "Focus on runtime boundaries") {
 		t.Fatalf("review prompt missing expected content: %s", reviewRequest.Input)
@@ -7226,6 +7373,9 @@ func TestProductReviewStartRunsReadOnlyReviewAndFollowUpOverRuntime(t *testing.T
 	followUpRequest := receiveAgentExecutionRequest(t, requests)
 	if followUpRequest.TurnType != "ask" || !followUpRequest.ReadOnly || followUpRequest.RuntimeID != "openade-review-follow-up:"+followUpRequest.EventID {
 		t.Fatalf("follow-up executor request = %#v", followUpRequest)
+	}
+	if followUpRequest.Thinking != "max" || followUpRequest.FastMode == nil || *followUpRequest.FastMode != true {
+		t.Fatalf("follow-up agent options = thinking %q fast %#v", followUpRequest.Thinking, followUpRequest.FastMode)
 	}
 	if !strings.Contains(followUpRequest.Input, "<review_feedback>") || !strings.Contains(followUpRequest.Input, "Review output for "+eventID) || !strings.Contains(followUpRequest.Input, "Would you like me to proceed") {
 		t.Fatalf("follow-up prompt missing review handoff: %s", followUpRequest.Input)
@@ -7279,6 +7429,17 @@ func TestProductReviewStartRunsReadOnlyReviewAndFollowUpOverRuntime(t *testing.T
 	})
 	if runtimeErrorCode(t, invalid) != "invalid_params" {
 		t.Fatalf("invalid review start = %#v", invalid)
+	}
+	invalidThinking := harness.request(t, "openade/review/start", map[string]any{
+		"repoId":     "repo-review-start",
+		"taskId":     "task-review-start",
+		"reviewType": "plan",
+		"harnessId":  "claude-code",
+		"modelId":    "sonnet-test",
+		"thinking":   "medium-ish",
+	})
+	if runtimeErrorCode(t, invalidThinking) != "invalid_params" {
+		t.Fatalf("invalid review thinking = %#v", invalidThinking)
 	}
 }
 
@@ -8832,22 +8993,34 @@ func TestProductCommentMutationsOverRuntime(t *testing.T) {
 			"id":    "user-1",
 			"email": "user@example.com",
 		},
-		"commentId": "comment-runtime",
-		"createdAt": "2026-06-05T12:08:00Z",
+		"commentId":       "comment-runtime",
+		"createdAt":       "2026-06-05T12:08:00Z",
+		"clientRequestId": "comment-create-1",
 	}))
 	if created["commentId"] != "comment-runtime" || created["createdAt"] != "2026-06-05T12:08:00Z" {
 		t.Fatalf("created comment = %#v", created)
 	}
-	harness.waitForNotifications(t, notificationStart, 1)
+	createNotifications := harness.waitForNotifications(t, notificationStart, 1)
+	createParams := objectField(t, createNotifications[0], "params")
+	if createParams["clientRequestId"] != "comment-create-1" {
+		t.Fatalf("comment create notification params = %#v", createParams)
+	}
 
+	editNotificationStart := len(harness.notifications)
 	edited := resultObject(t, harness.request(t, "openade/comment/edit", map[string]any{
-		"taskId":    "task-1",
-		"commentId": "comment-runtime",
-		"content":   "Edited runtime comment",
-		"updatedAt": "2026-06-05T12:09:00Z",
+		"taskId":          "task-1",
+		"commentId":       "comment-runtime",
+		"content":         "Edited runtime comment",
+		"updatedAt":       "2026-06-05T12:09:00Z",
+		"clientRequestId": "comment-edit-1",
 	}))
 	if edited["ok"] != true {
 		t.Fatalf("edited comment result = %#v", edited)
+	}
+	editNotifications := harness.waitForNotifications(t, editNotificationStart, 1)
+	editParams := objectField(t, editNotifications[0], "params")
+	if editParams["clientRequestId"] != "comment-edit-1" {
+		t.Fatalf("comment edit notification params = %#v", editParams)
 	}
 	task := resultObject(t, harness.request(t, "openade/task/read", map[string]any{
 		"repoId": "repo-1",
@@ -8869,13 +9042,20 @@ func TestProductCommentMutationsOverRuntime(t *testing.T) {
 		t.Fatalf("comment compatibility fields = %#v", createdComment)
 	}
 
+	deleteNotificationStart := len(harness.notifications)
 	deleted := resultObject(t, harness.request(t, "openade/comment/delete", map[string]any{
-		"taskId":    "task-1",
-		"commentId": "comment-runtime",
-		"updatedAt": "2026-06-05T12:10:00Z",
+		"taskId":          "task-1",
+		"commentId":       "comment-runtime",
+		"updatedAt":       "2026-06-05T12:10:00Z",
+		"clientRequestId": "comment-delete-1",
 	}))
 	if deleted["ok"] != true {
 		t.Fatalf("deleted comment result = %#v", deleted)
+	}
+	deleteNotifications := harness.waitForNotifications(t, deleteNotificationStart, 1)
+	deleteParams := objectField(t, deleteNotifications[0], "params")
+	if deleteParams["clientRequestId"] != "comment-delete-1" {
+		t.Fatalf("comment delete notification params = %#v", deleteParams)
 	}
 	task = resultObject(t, harness.request(t, "openade/task/read", map[string]any{
 		"repoId": "repo-1",
@@ -9069,6 +9249,9 @@ func TestProductQueuedTurnCancelOverRuntime(t *testing.T) {
 		params := objectField(t, notification, "params")
 		if params["repoId"] != "repo-1" || params["taskId"] != "task-1" {
 			t.Fatalf("queued turn notification params = %#v", params)
+		}
+		if params["clientRequestId"] != "cancel-queued-1" {
+			t.Fatalf("queued turn notification client request id = %#v", params)
 		}
 		if method == "openade/queuedTurn/updated" {
 			turn := objectField(t, params, "turn")

@@ -10,8 +10,8 @@
       "imports": ["OpenADETaskReadOptions"]
     },
     {
-      "name": "OpenADEReviewStartResult",
-      "definition": "{ taskId: string }"
+      "name": "OpenADETaskListRequest",
+      "definition": "{ repoId: string }"
     },
     {
       "name": "OpenADETurnInterruptRequest",
@@ -19,8 +19,34 @@
       "imports": ["OpenADEClientRequest"]
     }
   ],
+  "notifications": [
+    "openade/snapshotChanged",
+    "openade/repo/updated",
+    "openade/repo/deleted",
+    "openade/task/previewChanged",
+    "openade/task/updated",
+    "openade/task/deleted",
+    "openade/queuedTurn/updated",
+    "openade/workingTasks",
+    "remote/device/changed"
+  ],
+  "errorCodes": [
+    "conflict",
+    "handler_error",
+    "invalid_params",
+    "invalid_request",
+    "method_not_found",
+    "not_found",
+    "not_initialized",
+    "parse_error",
+    "permission_denied",
+    "stop_failed",
+    "unsupported_protocol_version"
+  ],
   "readMethodsToCoalesce": [
     "openade/snapshot/read",
+    "openade/project/list",
+    "openade/task/list",
     "openade/settings/mcpServers/read",
     "openade/settings/personal/read",
     "openade/task/read",
@@ -32,6 +58,7 @@
     "openade/project/git/branches/read",
     "openade/project/git/summary/read",
     "openade/project/process/list",
+    "openade/cron/definitions/read",
     "openade/cron/installState/read",
     "openade/task/changes/read",
     "openade/task/git/summary/read",
@@ -51,6 +78,8 @@
   ],
   "methods": [
     { "method": "openade/snapshot/read", "request": "undefined", "response": "OpenADESnapshot", "imports": ["OpenADESnapshot"] },
+    { "method": "openade/project/list", "request": "undefined", "response": "OpenADEProject[]", "imports": ["OpenADEProject"] },
+    { "method": "openade/task/list", "request": "OpenADETaskListRequest", "response": "OpenADETaskPreview[]", "imports": ["OpenADETaskPreview"] },
     { "method": "openade/task/read", "request": "OpenADETaskReadRequest", "response": "OpenADETask", "imports": ["OpenADETask"] },
     { "method": "openade/project/file/read", "request": "OpenADEProjectFileReadRequest", "response": "OpenADEProjectFileReadResult", "imports": ["OpenADEProjectFileReadRequest", "OpenADEProjectFileReadResult"] },
     { "method": "openade/project/files/tree", "request": "OpenADEProjectFilesTreeRequest", "response": "OpenADEProjectFilesTreeResult", "imports": ["OpenADEProjectFilesTreeRequest", "OpenADEProjectFilesTreeResult"] },
@@ -61,6 +90,7 @@
     { "method": "openade/project/git/branches/read", "request": "OpenADEProjectGitBranchesReadRequest", "response": "OpenADEProjectGitBranchesReadResult", "imports": ["OpenADEProjectGitBranchesReadRequest", "OpenADEProjectGitBranchesReadResult"] },
     { "method": "openade/project/git/summary/read", "request": "OpenADEProjectGitSummaryReadRequest", "response": "OpenADEProjectGitSummaryReadResult", "imports": ["OpenADEProjectGitSummaryReadRequest", "OpenADEProjectGitSummaryReadResult"] },
     { "method": "openade/project/process/list", "request": "OpenADEProjectProcessListRequest", "response": "OpenADEProjectProcessListResult", "imports": ["OpenADEProjectProcessListRequest", "OpenADEProjectProcessListResult"] },
+    { "method": "openade/cron/definitions/read", "request": "OpenADECronDefinitionsReadRequest", "response": "OpenADECronDefinitionsReadResult", "imports": ["OpenADECronDefinitionsReadRequest", "OpenADECronDefinitionsReadResult"] },
     { "method": "openade/project/process/start", "request": "OpenADEProjectProcessStartRequest", "response": "OpenADEProjectProcessStartResult", "imports": ["OpenADEProjectProcessStartRequest", "OpenADEProjectProcessStartResult"] },
     { "method": "openade/project/process/reconnect", "request": "OpenADEProjectProcessReconnectRequest", "response": "OpenADEProjectProcessReconnectResult", "imports": ["OpenADEProjectProcessReconnectRequest", "OpenADEProjectProcessReconnectResult"] },
     { "method": "openade/project/process/stop", "request": "OpenADEProjectProcessStopRequest", "response": "OpenADEProjectProcessStopResult", "imports": ["OpenADEProjectProcessStopRequest", "OpenADEProjectProcessStopResult"] },
@@ -106,7 +136,7 @@
     { "method": "openade/repo/update", "request": "OpenADERepoUpdateRequest", "response": "void", "imports": ["OpenADERepoUpdateRequest"] },
     { "method": "openade/repo/delete", "request": "OpenADERepoDeleteRequest", "response": "void", "imports": ["OpenADERepoDeleteRequest"] },
     { "method": "openade/turn/start", "request": "OpenADETurnStartRequest", "response": "OpenADETurnStartResult", "imports": ["OpenADETurnStartRequest", "OpenADETurnStartResult"] },
-    { "method": "openade/review/start", "request": "OpenADEReviewStartRequest", "response": "OpenADEReviewStartResult", "imports": ["OpenADEReviewStartRequest"] },
+    { "method": "openade/review/start", "request": "OpenADEReviewStartRequest", "response": "OpenADEReviewStartResult", "imports": ["OpenADEReviewStartRequest", "OpenADEReviewStartResult"] },
     { "method": "openade/turn/interrupt", "request": "OpenADETurnInterruptRequest", "response": "void" },
     { "method": "openade/queued-turn/cancel", "request": "OpenADEQueuedTurnCancelRequest", "response": "OpenADEQueuedTurnCancelResult", "imports": ["OpenADEQueuedTurnCancelRequest", "OpenADEQueuedTurnCancelResult"] },
     { "method": "openade/queued-turn/enqueue", "request": "OpenADEQueuedTurnEnqueueRequest", "response": "OpenADEQueuedTurnEnqueueResult", "imports": ["OpenADEQueuedTurnEnqueueRequest", "OpenADEQueuedTurnEnqueueResult"] },

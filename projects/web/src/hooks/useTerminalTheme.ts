@@ -28,7 +28,6 @@ export function useTerminalTheme(ref: RefObject<HTMLElement | null>): TerminalTh
 
         const updateTheme = () => {
             const themeName = getComputedStyle(el).getPropertyValue("--terminal-theme").trim()
-            console.log("USING THEME", themeName)
             const resolvedTheme = TERMINAL_THEMES[themeName] ?? DEFAULT_TERMINAL_THEME
             setTheme(resolvedTheme)
         }
@@ -49,6 +48,5 @@ export function useTerminalTheme(ref: RefObject<HTMLElement | null>): TerminalTh
         return () => observer.disconnect()
     }, [ref])
 
-    console.log("GOT THEME", theme)
     return theme
 }

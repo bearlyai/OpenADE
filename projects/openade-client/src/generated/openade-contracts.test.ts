@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process"
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import { RuntimeClient, RuntimeClientError } from "../../../runtime-client/src"
 import { runtimeSocketUrl } from "../../../web/src/kernel/session"
 import { OpenADEClient } from "../index"
-import { OPENADE_METHODS } from "./openade-contracts"
+import { OPENADE_ERROR_CODES, OPENADE_METHODS, OPENADE_NOTIFICATIONS } from "./openade-contracts"
 
 const CORE_TOKEN = "openade-client-contract-test-token"
 const TEST_TIMEOUT_MS = 120_000
@@ -30,6 +30,7 @@ interface InitializeResult {
     serverName: string
     capabilities: {
         methods: string[]
+        notifications: string[]
     }
 }
 
@@ -71,10 +72,13 @@ describe("generated OpenADE contracts", () => {
             const initialize = await initializeRuntime(core.port)
             const advertised = new Set(initialize.capabilities.methods)
             const missingMethods = OPENADE_METHODS.filter((method) => !advertised.has(method))
+            const advertisedNotifications = new Set(initialize.capabilities.notifications)
+            const missingNotifications = OPENADE_NOTIFICATIONS.filter((notification) => !advertisedNotifications.has(notification))
 
             expect(initialize.protocolVersion).toBe(1)
             expect(initialize.serverName).toBe("openade-core")
             expect(missingMethods).toEqual([])
+            expect(missingNotifications).toEqual([])
 
             const runtime = new RuntimeClient({
                 url: runtimeUrl(core.port),
@@ -115,6 +119,13 @@ describe("generated OpenADE contracts", () => {
                     isolationStrategy: { type: "head" },
                     clientRequestId: "contract-task-create",
                 })
+                const taskPreviews = await client.listTasks("repo-contract")
+                expect(taskPreviews).toEqual([
+                    expect.objectContaining({
+                        id: createdTask.taskId,
+                        title: "Contract task",
+                    }),
+                ])
                 await client.createActionEvent({
                     taskId: createdTask.taskId,
                     eventId: "event-contract-usage",
@@ -209,6 +220,17 @@ describe("generated OpenADE contracts", () => {
             try {
                 const repoPath = path.join(core.dataDir, "paired-repo")
                 mkdirSync(repoPath, { recursive: true })
+                writeFileSync(
+                    path.join(repoPath, "openade.toml"),
+                    [
+                        "[[cron]]",
+                        'name = "Paired Nightly"',
+                        'schedule = "0 9 * * 1"',
+                        'type = "ask"',
+                        'prompt = "Summarize paired contract progress"',
+                        "",
+                    ].join("\n")
+                )
                 await trustedClient.createRepo({
                     repoId: "repo-paired-contract",
                     name: "Paired Contract Repo",
@@ -228,11 +250,21 @@ describe("generated OpenADE contracts", () => {
                 const pairedInitialize = await initializeRuntime(core.port, paired.deviceToken, "mobile")
                 const pairedMethods = new Set(pairedInitialize.capabilities.methods)
                 expect(pairedMethods.has("openade/snapshot/read")).toBe(true)
+                expect(pairedMethods.has("openade/task/list")).toBe(true)
+                expect(pairedMethods.has("openade/task/create")).toBe(true)
                 expect(pairedMethods.has("openade/turn/start")).toBe(true)
+                expect(pairedMethods.has("openade/cron/definitions/read")).toBe(true)
+                expect(pairedMethods.has("openade/queued-turn/enqueue")).toBe(true)
+                expect(pairedMethods.has("openade/queued-turn/reorder")).toBe(true)
+                expect(pairedMethods.has("openade/queued-turn/cancel")).toBe(true)
                 expect(pairedMethods.has("remote/device/selfRevoke")).toBe(true)
                 expect(pairedMethods.has("openade/project/file/write")).toBe(false)
                 expect(pairedMethods.has("openade/repo/create")).toBe(false)
                 expect(pairedMethods.has("remote/pairing/start")).toBe(false)
+                const pairedNotifications = new Set(pairedInitialize.capabilities.notifications)
+                expect(pairedNotifications.has("openade/task/updated")).toBe(true)
+                expect(pairedNotifications.has("remote/device/changed")).toBe(true)
+                expect(pairedNotifications.has("runtime/completed")).toBe(false)
 
                 const pairedRuntime = new RuntimeClient({
                     url: runtimeUrl(core.port),
@@ -250,6 +282,23 @@ describe("generated OpenADE contracts", () => {
                 try {
                     const snapshot = await pairedClient.getSnapshot()
                     expect(snapshot.repos.map((repo) => repo.id)).toContain("repo-paired-contract")
+                    const initialTaskPreviews = await pairedClient.listTasks("repo-paired-contract")
+                    expect(initialTaskPreviews).toEqual([])
+
+                    const cronDefinitions = await pairedClient.readCronDefinitions({ repoId: "repo-paired-contract" })
+                    expect(cronDefinitions.configs).toEqual([
+                        expect.objectContaining({
+                            relativePath: "openade.toml",
+                            crons: [
+                                expect.objectContaining({
+                                    id: "openade.toml::Paired Nightly",
+                                    name: "Paired Nightly",
+                                    prompt: "Summarize paired contract progress",
+                                    type: "ask",
+                                }),
+                            ],
+                        }),
+                    ])
 
                     const turn = await pairedClient.startTurn({
                         repoId: "repo-paired-contract",
@@ -269,6 +318,65 @@ describe("generated OpenADE contracts", () => {
                         type: "action",
                         userInput: "Can a paired client attach through Core?",
                     })
+                    const pairedTaskPreviews = await pairedClient.listTasks("repo-paired-contract")
+                    expect(pairedTaskPreviews).toEqual([
+                        expect.objectContaining({
+                            id: turn.taskId,
+                            title: "Paired attach contract",
+                        }),
+                    ])
+
+                    const firstQueued = await pairedClient.enqueueQueuedTurn({
+                        repoId: "repo-paired-contract",
+                        taskId: turn.taskId,
+                        type: "ask",
+                        input: "First paired queued turn",
+                        clientRequestId: "paired-contract-queue-first",
+                    })
+                    const secondQueued = await pairedClient.enqueueQueuedTurn({
+                        repoId: "repo-paired-contract",
+                        taskId: turn.taskId,
+                        type: "do",
+                        input: "Second paired queued turn",
+                        clientRequestId: "paired-contract-queue-second",
+                    })
+                    expect(firstQueued).toMatchObject({
+                        taskId: turn.taskId,
+                        queued: true,
+                        turn: expect.objectContaining({
+                            input: "First paired queued turn",
+                            status: "queued",
+                        }),
+                    })
+                    expect(secondQueued).toMatchObject({
+                        taskId: turn.taskId,
+                        queued: true,
+                        turn: expect.objectContaining({
+                            input: "Second paired queued turn",
+                            status: "queued",
+                        }),
+                    })
+
+                    const reordered = await pairedClient.reorderQueuedTurns({
+                        repoId: "repo-paired-contract",
+                        taskId: turn.taskId,
+                        queuedTurnIds: [secondQueued.queuedTurnId, firstQueued.queuedTurnId],
+                        clientRequestId: "paired-contract-queue-reorder",
+                    })
+                    expect(reordered).toMatchObject({
+                        taskId: turn.taskId,
+                        reordered: true,
+                    })
+                    expect(reordered.turns.map((queuedTurn) => queuedTurn.id)).toEqual([
+                        secondQueued.queuedTurnId,
+                        firstQueued.queuedTurnId,
+                    ])
+
+                    const taskAfterQueue = await pairedClient.getTask("repo-paired-contract", turn.taskId)
+                    expect(taskAfterQueue.queuedTurns?.map((queuedTurn) => queuedTurn.id)).toEqual([
+                        secondQueued.queuedTurnId,
+                        firstQueued.queuedTurnId,
+                    ])
 
                     await pairedClient.interruptTurn(turn.taskId, { clientRequestId: "paired-contract-turn-interrupt" })
 
@@ -281,9 +389,10 @@ describe("generated OpenADE contracts", () => {
                             clientRequestId: "paired-contract-file-write-denied",
                         })
                     )
-                    expect(deniedWrite).toBeInstanceOf(RuntimeClientError)
-                    if (!(deniedWrite instanceof RuntimeClientError)) throw deniedWrite
-                    expect(deniedWrite.code).toBe("permission_denied")
+                    expectRuntimeClientErrorCode(deniedWrite, "permission_denied")
+
+                    const unknownMethod = await rejectedError(() => pairedRuntime.request("openade/contract-test/unknown"))
+                    expectRuntimeClientErrorCode(unknownMethod, "method_not_found")
 
                     const selfRevoked = await pairedRuntime.request<{ ok: boolean; revoked: boolean }>("remote/device/selfRevoke")
                     expect(selfRevoked).toEqual({ ok: true, revoked: true })
@@ -461,6 +570,13 @@ async function rejectedError(action: () => Promise<unknown>): Promise<unknown> {
     throw new Error("Expected request to reject")
 }
 
+function expectRuntimeClientErrorCode(error: unknown, code: (typeof OPENADE_ERROR_CODES)[number]): asserts error is RuntimeClientError {
+    expect(error).toBeInstanceOf(RuntimeClientError)
+    if (!(error instanceof RuntimeClientError)) throw error
+    expect(error.code).toBe(code)
+    expect(OPENADE_ERROR_CODES).toContain(error.code)
+}
+
 function parseInitializeResponse(raw: string): InitializeResult {
     const value: unknown = JSON.parse(raw)
     if (!isRecord(value)) throw new Error("Initialize response is not an object")
@@ -472,12 +588,13 @@ function parseInitializeResponse(raw: string): InitializeResult {
     if (!isRecord(value.result)) throw new Error("Initialize response is missing result")
     if (!isRecord(value.result.capabilities)) throw new Error("Initialize response is missing capabilities")
     const methods = stringArray(value.result.capabilities.methods)
+    const notifications = stringArray(value.result.capabilities.notifications)
     const protocolVersion = typeof value.result.protocolVersion === "number" ? value.result.protocolVersion : 0
     const serverName = typeof value.result.serverName === "string" ? value.result.serverName : ""
     return {
         protocolVersion,
         serverName,
-        capabilities: { methods },
+        capabilities: { methods, notifications },
     }
 }
 

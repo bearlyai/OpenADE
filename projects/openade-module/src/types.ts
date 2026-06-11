@@ -47,6 +47,10 @@ export interface OpenADETurnStartRequest extends OpenADEClientRequest {
 export interface OpenADETurnStartResult {
     taskId: string
     eventId?: string
+    executionId?: string
+    createdAt?: string
+    task?: OpenADETask
+    preview?: OpenADETaskPreview
     queued?: boolean
     queuedTurnId?: string
 }
@@ -165,7 +169,16 @@ export interface OpenADEReviewStartRequest extends OpenADEClientRequest {
     reviewType: "plan" | "work"
     harnessId: string
     modelId: string
+    thinking?: "low" | "med" | "high" | "max"
+    fastMode?: boolean
     customInstructions?: string
+}
+
+export interface OpenADEReviewStartResult {
+    taskId: string
+    eventId?: string
+    executionId?: string
+    createdAt?: string
 }
 
 export interface OpenADEAgentCouplet {
@@ -695,6 +708,29 @@ export interface OpenADECronInstallStateReplaceResult {
     repoId: string
     installations: Record<string, OpenADECronInstallState>
     replacedInstallations: number
+}
+
+export interface OpenADECronDefinitionsConfig {
+    relativePath: string
+    crons: OpenADEProcsCronDef[]
+}
+
+export type OpenADECronDefinitionsConfigError = OpenADEProcsConfigError
+
+export interface OpenADECronDefinitionsReadRequest {
+    repoId: string
+    taskId?: string
+}
+
+export interface OpenADECronDefinitionsReadResult {
+    repoId: string
+    taskId?: string
+    repoRoot: string
+    searchRoot: string
+    isWorktree: boolean
+    worktreeRoot?: string
+    configs: OpenADECronDefinitionsConfig[]
+    errors: OpenADECronDefinitionsConfigError[]
 }
 
 export interface OpenADEProcsConfig {

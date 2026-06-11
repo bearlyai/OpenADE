@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type {
+    OpenADECronDefinitionsReadResult,
     OpenADEProjectFileReadResult,
+    OpenADEProjectFilesFuzzySearchResult,
     OpenADEProjectFilesTreeResult,
+    OpenADEProjectGitBranchesReadResult,
+    OpenADEProjectGitInfoResult,
+    OpenADEProjectGitSummaryReadResult,
     OpenADEProjectProcessListResult,
     OpenADEProjectProcessReconnectResult,
     OpenADEProjectSearchResult,
@@ -9,17 +14,41 @@ import type {
     OpenADETask,
     OpenADETaskChangesReadResult,
     OpenADETaskDiffReadResult,
+    OpenADETaskFilePairReadResult,
     OpenADETaskGitChangedFile,
+    OpenADETaskGitCommitFilePatchResult,
+    OpenADETaskGitCommitFilesResult,
+    OpenADETaskGitFileAtTreeishResult,
     OpenADETaskGitLogResult,
+    OpenADETaskGitLogEntry,
+    OpenADETaskGitScopesReadResult,
+    OpenADETaskGitSummaryResult,
+    OpenADETaskPreview,
+    OpenADETaskResourceInventoryReadResult,
+    OpenADESnapshotPatchFile,
+    OpenADETaskSnapshotPatchReadResult,
     OpenADETurnStartRequest,
 } from "../../../openade-module/src"
+import type { RuntimeNotification } from "../../../runtime-protocol/src"
 import { DEFAULT_HARNESS_ID, getDefaultModelForHarness } from "../constants"
+import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { type OpenADEThemeSetting, isOpenADEThemeSetting } from "../shell/OpenADESessionScreens"
 import { OpenADEShell, type OpenADEShellScreen } from "../shell/OpenADEShell"
 import { RemotePairingScreen } from "../shell/RemotePairingScreen"
-import type { TaskImageLoader } from "../shell/task/TaskEventThread"
-import type { OpenADETaskCommentView, TaskReviewType } from "../shell/task/TaskProductPanel"
-import type { TaskImageAttachment } from "../shell/task/taskEventPresentation"
+import type { TaskTerminalProductAccess } from "../components/terminalSession"
+import type { TaskImageLoader, TaskSnapshotPatchView } from "../shell/task/TaskEventThread"
+import type { TaskGitCapabilities } from "../shell/task/TaskGitPanel"
+import type { OpenADETaskCommentView, TaskProductCapabilities, TaskReviewType } from "../shell/task/TaskProductPanel"
+import type { TaskImageAttachment, TaskSnapshotBlock } from "../shell/task/taskEventPresentation"
+import { canQueueTaskCommandWhileRunning } from "../shell/task/taskCommands"
+import type { ThinkingLevel } from "../store/TaskModel"
+import type {
+    ProjectCronCapabilities,
+    ProjectFileCapabilities,
+    ProjectGitCapabilities,
+    ProjectProcessCapabilities,
+    ProjectSearchCapabilities,
+} from "../shell/project/ProjectHostPanels"
 import {
     type PairingTarget,
     type RemoteConfig,
@@ -32,6 +61,7 @@ import {
     loadRemoteConfigs,
     pairRemote,
     parsePairingCode,
+    remoteHasRuntimeMethods,
     remoteErrorMessage,
     removeRemoteConfig,
     retryRemoteRead,
@@ -47,10 +77,69 @@ import { beginRemoteSubmission, finishRemoteSubmission } from "./submission"
 type CommandType = OpenADETurnStartRequest["type"]
 type PendingConnection = PairingTarget & { mode: "pair" | "manual" }
 type RemoteScreen = OpenADEShellScreen
-type SnapshotRefreshOptions = { repairNavigation?: boolean; bypassCache?: boolean }
-type TaskRefreshOptions = { hydrateSessionEvents?: boolean; bypassCache?: boolean }
+type SnapshotRefreshOptions = {
+    repairNavigation?: boolean
+    bypassCache?: boolean
+}
+type TaskRefreshOptions = {
+    hydrateSessionEvents?: boolean
+    bypassCache?: boolean
+}
+type PendingTaskRefresh = {
+    repoId: string
+    taskId: string
+    eventId?: string
+    eventStatus?: string
+}
 
 export const REMOTE_THEME_STORAGE_KEY = "openade-companion-theme"
+const TASK_LIST_METHOD = "openade/task/list"
+const TASK_TERMINAL_METHODS = [
+    "openade/task/terminal/start",
+    "openade/task/terminal/reconnect",
+    "openade/task/terminal/write",
+    "openade/task/terminal/resize",
+    "openade/task/terminal/stop",
+]
+const PROJECT_PROCESS_LIST_METHOD = "openade/project/process/list"
+const PROJECT_PROCESS_START_METHOD = "openade/project/process/start"
+const PROJECT_PROCESS_RECONNECT_METHOD = "openade/project/process/reconnect"
+const PROJECT_PROCESS_STOP_METHOD = "openade/project/process/stop"
+const PROJECT_FILES_TREE_METHOD = "openade/project/files/tree"
+const PROJECT_FILES_FUZZY_SEARCH_METHOD = "openade/project/files/fuzzySearch"
+const PROJECT_FILE_READ_METHOD = "openade/project/file/read"
+const PROJECT_FILE_WRITE_METHOD = "openade/project/file/write"
+const PROJECT_SEARCH_METHOD = "openade/project/search"
+const PROJECT_GIT_METHODS = ["openade/project/git/info/read", "openade/project/git/branches/read", "openade/project/git/summary/read"]
+const PROJECT_CRON_DEFINITIONS_METHOD = "openade/cron/definitions/read"
+const TASK_GIT_BASE_METHODS = ["openade/task/changes/read", "openade/task/git/log", "openade/task/git/summary/read", "openade/task/git/scopes/read"]
+const TASK_DIFF_METHOD = "openade/task/diff/read"
+const TASK_FILE_PAIR_METHOD = "openade/task/filePair/read"
+const TASK_COMMIT_FILES_METHOD = "openade/task/git/commit/files/read"
+const TASK_FILE_AT_TREEISH_METHOD = "openade/task/git/fileAtTreeish/read"
+const TASK_COMMIT_FILE_PATCH_METHOD = "openade/task/git/commit/filePatch/read"
+const TASK_GIT_COMMIT_METHOD = "openade/task/git/commit"
+const TASK_RESOURCE_INVENTORY_METHOD = "openade/task/resourceInventory/read"
+const TASK_IMAGE_READ_METHOD = "openade/task/image/read"
+const TASK_SNAPSHOT_PATCH_READ_METHOD = "openade/task/snapshot/patch/read"
+const TASK_SNAPSHOT_INDEX_READ_METHOD = "openade/task/snapshot/index/read"
+const TASK_SNAPSHOT_PATCH_SLICE_READ_METHOD = "openade/task/snapshot/patch/readSlice"
+const TASK_CREATE_METHOD = "openade/task/create"
+const TASK_DELETE_METHOD = "openade/task/delete"
+const TURN_START_METHOD = "openade/turn/start"
+const TURN_INTERRUPT_METHOD = "openade/turn/interrupt"
+const REVIEW_START_METHOD = "openade/review/start"
+const TASK_METADATA_UPDATE_METHOD = "openade/task/metadata/update"
+const TASK_TITLE_GENERATE_METHOD = "openade/task/title/generate"
+const TASK_ENVIRONMENT_PREPARE_METHOD = "openade/task/environment/prepare"
+const COMMENT_CREATE_METHOD = "openade/comment/create"
+const COMMENT_EDIT_METHOD = "openade/comment/edit"
+const COMMENT_DELETE_METHOD = "openade/comment/delete"
+const QUEUED_TURN_ENQUEUE_METHOD = "openade/queued-turn/enqueue"
+const QUEUED_TURN_CANCEL_METHOD = "openade/queued-turn/cancel"
+const QUEUED_TURN_REORDER_METHOD = "openade/queued-turn/reorder"
+const REMOTE_DEVICE_SELF_REVOKE_METHOD = "remote/device/selfRevoke"
+const REMOTE_TASK_CREATED_BY = { id: "remote-companion", email: "remote-companion@openade.local" }
 
 function loadOpenADEThemeSetting(): OpenADEThemeSetting {
     const value = window.localStorage.getItem(REMOTE_THEME_STORAGE_KEY)
@@ -105,6 +194,32 @@ function remoteImageMediaType(image: TaskImageAttachment, value?: string): strin
     return image.ext === "jpg" ? "image/jpeg" : `image/${image.ext}`
 }
 
+function remoteSnapshotPatchFileKey(file: Pick<OpenADESnapshotPatchFile, "path" | "oldPath" | "patchStart" | "patchEnd">): string {
+    return `${file.path}:${file.oldPath ?? ""}:${file.patchStart}:${file.patchEnd}`
+}
+
+function remoteSnapshotPatchFileLabel(file: Pick<OpenADESnapshotPatchFile, "path" | "oldPath">): string {
+    return file.oldPath && file.oldPath !== file.path ? `${file.oldPath} -> ${file.path}` : file.path
+}
+
+function remoteSnapshotPatchActionId(eventId: string, file: Pick<OpenADESnapshotPatchFile, "patchStart" | "patchEnd">): string {
+    return `${eventId}:${file.patchStart}:${file.patchEnd}`
+}
+
+function runtimeNotificationParams(notification: RuntimeNotification): Record<string, unknown> {
+    return typeof notification.params === "object" && notification.params !== null && !Array.isArray(notification.params)
+        ? (notification.params as Record<string, unknown>)
+        : {}
+}
+
+function acceptedActionStartKey(repoId: string, taskId: string, eventId: string): string {
+    return `${repoId}\0${taskId}\0${eventId}`
+}
+
+function taskCommitFileActionKey(commit: string, filePath: string, oldPath?: string): string {
+    return `${commit}\0${oldPath ?? ""}\0${filePath}`
+}
+
 function useSmoothedRemoteStatus(rawStatus: RemoteRealtimeConnectionStatus): RemoteRealtimeConnectionStatus {
     const [visibleStatus, setVisibleStatus] = useState(rawStatus)
 
@@ -137,18 +252,41 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const [projectFilesLoading, setProjectFilesLoading] = useState(false)
     const [projectFileRead, setProjectFileRead] = useState<OpenADEProjectFileReadResult | null>(null)
     const [projectFileActionPath, setProjectFileActionPath] = useState<string | null>(null)
+    const [projectFileSearchQuery, setProjectFileSearchQuery] = useState("")
+    const [projectFileSearchResult, setProjectFileSearchResult] = useState<OpenADEProjectFilesFuzzySearchResult | null>(null)
+    const [projectFileSearchLoading, setProjectFileSearchLoading] = useState(false)
     const [projectSearchQuery, setProjectSearchQuery] = useState("")
     const [projectSearchResult, setProjectSearchResult] = useState<OpenADEProjectSearchResult | null>(null)
     const [projectSearchLoading, setProjectSearchLoading] = useState(false)
+    const [projectGitInfo, setProjectGitInfo] = useState<OpenADEProjectGitInfoResult | null>(null)
+    const [projectGitBranches, setProjectGitBranches] = useState<OpenADEProjectGitBranchesReadResult | null>(null)
+    const [projectGitSummary, setProjectGitSummary] = useState<OpenADEProjectGitSummaryReadResult | null>(null)
+    const [projectGitLoading, setProjectGitLoading] = useState(false)
+    const [projectCronDefinitions, setProjectCronDefinitions] = useState<OpenADECronDefinitionsReadResult | null>(null)
+    const [projectCronDefinitionsLoading, setProjectCronDefinitionsLoading] = useState(false)
     const [projectProcesses, setProjectProcesses] = useState<OpenADEProjectProcessListResult | null>(null)
     const [projectProcessesLoading, setProjectProcessesLoading] = useState(false)
     const [projectProcessActionId, setProjectProcessActionId] = useState<string | null>(null)
     const [projectProcessOutput, setProjectProcessOutput] = useState<OpenADEProjectProcessReconnectResult | null>(null)
     const [taskChanges, setTaskChanges] = useState<OpenADETaskChangesReadResult | null>(null)
     const [taskGitLog, setTaskGitLog] = useState<OpenADETaskGitLogResult | null>(null)
+    const [taskGitSummary, setTaskGitSummary] = useState<OpenADETaskGitSummaryResult | null>(null)
+    const [taskGitScopes, setTaskGitScopes] = useState<OpenADETaskGitScopesReadResult | null>(null)
     const [taskChangesLoading, setTaskChangesLoading] = useState(false)
     const [taskDiff, setTaskDiff] = useState<OpenADETaskDiffReadResult | null>(null)
     const [taskDiffActionPath, setTaskDiffActionPath] = useState<string | null>(null)
+    const [taskFilePair, setTaskFilePair] = useState<OpenADETaskFilePairReadResult | null>(null)
+    const [taskFilePairActionPath, setTaskFilePairActionPath] = useState<string | null>(null)
+    const [taskCommitFiles, setTaskCommitFiles] = useState<OpenADETaskGitCommitFilesResult | null>(null)
+    const [taskCommitFilesActionSha, setTaskCommitFilesActionSha] = useState<string | null>(null)
+    const [taskCommitPatch, setTaskCommitPatch] = useState<OpenADETaskGitCommitFilePatchResult | null>(null)
+    const [taskCommitPatchActionKey, setTaskCommitPatchActionKey] = useState<string | null>(null)
+    const [taskTreeishFile, setTaskTreeishFile] = useState<OpenADETaskGitFileAtTreeishResult | null>(null)
+    const [taskTreeishFileActionKey, setTaskTreeishFileActionKey] = useState<string | null>(null)
+    const [taskResources, setTaskResources] = useState<OpenADETaskResourceInventoryReadResult | null>(null)
+    const [taskResourcesLoading, setTaskResourcesLoading] = useState(false)
+    const [taskSnapshotPatches, setTaskSnapshotPatches] = useState<Record<string, TaskSnapshotPatchView>>({})
+    const [taskSnapshotPatchActionId, setTaskSnapshotPatchActionId] = useState<string | null>(null)
     const [showArchivedProjects, setShowArchivedProjects] = useState(false)
     const [themeSetting, setThemeSetting] = useState<OpenADEThemeSetting>(() => loadOpenADEThemeSetting())
     const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null)
@@ -165,6 +303,10 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const [newTaskMode, setNewTaskMode] = useState<CommandType>("do")
     const [newTaskTitle, setNewTaskTitle] = useState("")
     const [newTaskPrompt, setNewTaskPrompt] = useState("")
+    const [agentHarnessId, setAgentHarnessId] = useState<HarnessId>(DEFAULT_HARNESS_ID)
+    const [agentModelId, setAgentModelId] = useState(() => getDefaultModelForHarness(DEFAULT_HARNESS_ID))
+    const [agentThinking, setAgentThinking] = useState<ThinkingLevel>("max")
+    const [agentFastMode, setAgentFastMode] = useState(false)
     const [isLoading, setIsLoading] = useState(false)
     const [isSubmitting, setIsSubmitting] = useState(false)
     const [rawConnectionStatus, setRawConnectionStatus] = useState<RemoteRealtimeConnectionStatus>("disconnected")
@@ -180,9 +322,11 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const taskRefreshTimerRef = useRef<number | null>(null)
     const sessionRefreshTimerRef = useRef<number | null>(null)
     const taskRefreshInFlightRef = useRef(false)
-    const taskRefreshPendingRef = useRef<{ repoId: string; taskId: string } | null>(null)
+    const taskRefreshPendingRef = useRef<PendingTaskRefresh | null>(null)
     const lastTaskRefreshAtRef = useRef(0)
     const submitLockRef = useRef(false)
+    const acceptedActionStartNotificationsRef = useRef(new Map<string, number>())
+    const acceptedMutationNotificationsRef = useRef(new Map<string, number>())
 
     const setScreenState = (nextScreen: RemoteScreen) => {
         screenRef.current = nextScreen
@@ -199,6 +343,84 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         setSelectedTaskId(nextTaskId)
     }
 
+    const handleAgentHarnessChange = (harnessId: HarnessId) => {
+        setAgentHarnessId(harnessId)
+        setAgentModelId(getDefaultModelForHarness(harnessId))
+    }
+
+    const cleanupAcceptedActionStartNotifications = () => {
+        const nowMs = Date.now()
+        for (const [key, expiresAt] of acceptedActionStartNotificationsRef.current) {
+            if (expiresAt <= nowMs) acceptedActionStartNotificationsRef.current.delete(key)
+        }
+    }
+
+    const trackAcceptedActionStartNotification = (repoId: string, taskId: string, eventId: string) => {
+        cleanupAcceptedActionStartNotifications()
+        acceptedActionStartNotificationsRef.current.set(acceptedActionStartKey(repoId, taskId, eventId), Date.now() + 2_000)
+    }
+
+    const cleanupAcceptedMutationNotifications = () => {
+        const nowMs = Date.now()
+        for (const [clientRequestId, expiresAt] of acceptedMutationNotificationsRef.current) {
+            if (expiresAt <= nowMs) acceptedMutationNotificationsRef.current.delete(clientRequestId)
+        }
+    }
+
+    const trackAcceptedMutationNotification = (clientRequestId: string) => {
+        cleanupAcceptedMutationNotifications()
+        acceptedMutationNotificationsRef.current.set(clientRequestId, Date.now() + 2_000)
+    }
+
+    const consumeAcceptedMutationNotification = (notification: RuntimeNotification): boolean => {
+        const params = runtimeNotificationParams(notification)
+        const clientRequestId = typeof params.clientRequestId === "string" ? params.clientRequestId : ""
+        if (!clientRequestId) return false
+
+        cleanupAcceptedMutationNotifications()
+        return acceptedMutationNotificationsRef.current.has(clientRequestId)
+    }
+
+    const consumeAcceptedActionStartNotification = (notification: RuntimeNotification): boolean => {
+        if (notification.method !== "openade/task/updated") return false
+        const params = runtimeNotificationParams(notification)
+        const repoId = typeof params.repoId === "string" ? params.repoId : ""
+        const taskId = typeof params.taskId === "string" ? params.taskId : ""
+        const eventId = typeof params.eventId === "string" ? params.eventId : ""
+        if (!repoId || !taskId || !eventId || params.eventStatus !== "in_progress") return false
+
+        cleanupAcceptedActionStartNotifications()
+        const key = acceptedActionStartKey(repoId, taskId, eventId)
+        if (!acceptedActionStartNotificationsRef.current.has(key)) return false
+        acceptedActionStartNotificationsRef.current.delete(key)
+        return true
+    }
+
+    const cancelPendingAcceptedActionStartRefresh = (repoId: string, taskId: string, eventId: string) => {
+        const pending = taskRefreshPendingRef.current
+        if (!pending || pending.repoId !== repoId || pending.taskId !== taskId || pending.eventId !== eventId || pending.eventStatus !== "in_progress") return
+
+        if (taskRefreshTimerRef.current) window.clearTimeout(taskRefreshTimerRef.current)
+        taskRefreshTimerRef.current = null
+        taskRefreshPendingRef.current = null
+        acceptedActionStartNotificationsRef.current.delete(acceptedActionStartKey(repoId, taskId, eventId))
+    }
+
+    const pendingTaskRefreshFromNotification = (
+        notification: RuntimeNotification,
+        repoId: string | undefined | null,
+        taskId: string | undefined | null
+    ): PendingTaskRefresh | null => {
+        if (!repoId || !taskId) return null
+        const params = runtimeNotificationParams(notification)
+        return {
+            repoId,
+            taskId,
+            eventId: typeof params.eventId === "string" ? params.eventId : undefined,
+            eventStatus: typeof params.eventStatus === "string" ? params.eventStatus : undefined,
+        }
+    }
+
     const visibleRepos = snapshot?.repos.filter((repo) => showArchivedProjects || !repo.archived) ?? []
     const selectedRepo = selectedRepoId ? (snapshot?.repos.find((repo) => repo.id === selectedRepoId) ?? null) : null
     const selectedTask = selectedRepo?.tasks.find((item) => item.id === selectedTaskId) ?? null
@@ -208,19 +430,134 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const connectionStatus = useSmoothedRemoteStatus(rawConnectionStatus)
     const status = statusCopy(connectionStatus)
     const isOnline = isRemoteRealtimeOnline(connectionStatus)
+    const projectProcessCapabilities = useMemo<ProjectProcessCapabilities>(() => {
+        if (!config) {
+            return {
+                canRead: false,
+                canStart: false,
+                canReconnect: false,
+                canStop: false,
+            }
+        }
+        return {
+            canRead: remoteHasRuntimeMethods(config, [PROJECT_PROCESS_LIST_METHOD]),
+            canStart: remoteHasRuntimeMethods(config, [PROJECT_PROCESS_START_METHOD]),
+            canReconnect: remoteHasRuntimeMethods(config, [PROJECT_PROCESS_RECONNECT_METHOD]),
+            canStop: remoteHasRuntimeMethods(config, [PROJECT_PROCESS_STOP_METHOD]),
+        }
+    }, [config, connectionStatus])
+    const projectFileCapabilities = useMemo<ProjectFileCapabilities>(
+        () => ({
+            canList: config ? remoteHasRuntimeMethods(config, [PROJECT_FILES_TREE_METHOD]) : false,
+            canRead: config ? remoteHasRuntimeMethods(config, [PROJECT_FILE_READ_METHOD]) : false,
+            canSearch: config ? remoteHasRuntimeMethods(config, [PROJECT_FILES_FUZZY_SEARCH_METHOD]) : false,
+            canWrite: config ? remoteHasRuntimeMethods(config, [PROJECT_FILE_WRITE_METHOD]) : false,
+        }),
+        [config, connectionStatus]
+    )
+    const projectSearchCapabilities = useMemo<ProjectSearchCapabilities>(
+        () => ({
+            canSearch: config ? remoteHasRuntimeMethods(config, [PROJECT_SEARCH_METHOD]) : false,
+            canOpenFile: config ? remoteHasRuntimeMethods(config, [PROJECT_FILE_READ_METHOD]) : false,
+        }),
+        [config, connectionStatus]
+    )
+    const projectGitCapabilities = useMemo<ProjectGitCapabilities>(
+        () => ({
+            canRead: config ? remoteHasRuntimeMethods(config, PROJECT_GIT_METHODS) : false,
+        }),
+        [config, connectionStatus]
+    )
+    const projectCronCapabilities = useMemo<ProjectCronCapabilities>(
+        () => ({
+            canRead: config ? remoteHasRuntimeMethods(config, [PROJECT_CRON_DEFINITIONS_METHOD]) : false,
+        }),
+        [config, connectionStatus]
+    )
+    const taskGitCapabilities = useMemo<TaskGitCapabilities>(
+        () => ({
+            canRead: config ? remoteHasRuntimeMethods(config, TASK_GIT_BASE_METHODS) : false,
+            canReadDiff: config ? remoteHasRuntimeMethods(config, [TASK_DIFF_METHOD]) : false,
+            canReadFilePair: config ? remoteHasRuntimeMethods(config, [TASK_FILE_PAIR_METHOD]) : false,
+            canReadCommitFiles: config ? remoteHasRuntimeMethods(config, [TASK_COMMIT_FILES_METHOD]) : false,
+            canReadCommitFilePatch: config ? remoteHasRuntimeMethods(config, [TASK_COMMIT_FILE_PATCH_METHOD]) : false,
+            canReadFileAtTreeish: config ? remoteHasRuntimeMethods(config, [TASK_FILE_AT_TREEISH_METHOD]) : false,
+            canCommit: config ? remoteHasRuntimeMethods(config, [TASK_GIT_COMMIT_METHOD]) : false,
+        }),
+        [config, connectionStatus]
+    )
+    const taskCanReadResources = useMemo(() => (config ? remoteHasRuntimeMethods(config, [TASK_RESOURCE_INVENTORY_METHOD]) : false), [config, connectionStatus])
+    const taskCanReadSnapshotPatch = useMemo(() => {
+        if (!config) return false
+        return (
+            remoteHasRuntimeMethods(config, [TASK_SNAPSHOT_PATCH_READ_METHOD]) ||
+            remoteHasRuntimeMethods(config, [TASK_SNAPSHOT_INDEX_READ_METHOD, TASK_SNAPSHOT_PATCH_SLICE_READ_METHOD])
+        )
+    }, [config, connectionStatus])
+    const taskCanReadSnapshotPatchSlice = useMemo(
+        () => (config ? remoteHasRuntimeMethods(config, [TASK_SNAPSHOT_INDEX_READ_METHOD, TASK_SNAPSHOT_PATCH_SLICE_READ_METHOD]) : false),
+        [config, connectionStatus]
+    )
+    const taskCanReadImages = useMemo(() => (config ? remoteHasRuntimeMethods(config, [TASK_IMAGE_READ_METHOD]) : false), [config, connectionStatus])
+    const taskCanCreate = useMemo(() => (config ? remoteHasRuntimeMethods(config, [TASK_CREATE_METHOD]) : false), [config, connectionStatus])
+    const taskCanDelete = useMemo(() => (config ? remoteHasRuntimeMethods(config, [TASK_DELETE_METHOD]) : false), [config, connectionStatus])
+    const projectTaskListCanRead = useMemo(() => (config ? remoteHasRuntimeMethods(config, [TASK_LIST_METHOD]) : false), [config, connectionStatus])
+    const taskCanStartTurn = useMemo(() => (config ? remoteHasRuntimeMethods(config, [TURN_START_METHOD]) : false), [config, connectionStatus])
+    const taskCanEnqueueQueuedTurn = useMemo(() => (config ? remoteHasRuntimeMethods(config, [QUEUED_TURN_ENQUEUE_METHOD]) : false), [config, connectionStatus])
+    const taskCanInterrupt = useMemo(() => (config ? remoteHasRuntimeMethods(config, [TURN_INTERRUPT_METHOD]) : false), [config, connectionStatus])
+    const settingsCanSelfRevoke = useMemo(
+        () => (config ? remoteHasRuntimeMethods(config, [REMOTE_DEVICE_SELF_REVOKE_METHOD]) : false),
+        [config, connectionStatus]
+    )
+    const taskProductCapabilities = useMemo<TaskProductCapabilities>(
+        () => ({
+            canUpdateMetadata: config ? remoteHasRuntimeMethods(config, [TASK_METADATA_UPDATE_METHOD]) : false,
+            canGenerateTitle: config ? remoteHasRuntimeMethods(config, [TASK_TITLE_GENERATE_METHOD]) : false,
+            canPrepareEnvironment: config ? remoteHasRuntimeMethods(config, [TASK_ENVIRONMENT_PREPARE_METHOD]) : false,
+            canStartReview: config ? remoteHasRuntimeMethods(config, [REVIEW_START_METHOD]) : false,
+            canCreateComment: config ? remoteHasRuntimeMethods(config, [COMMENT_CREATE_METHOD]) : false,
+            canEditComment: config ? remoteHasRuntimeMethods(config, [COMMENT_EDIT_METHOD]) : false,
+            canDeleteComment: config ? remoteHasRuntimeMethods(config, [COMMENT_DELETE_METHOD]) : false,
+            canCancelQueuedTurn: config ? remoteHasRuntimeMethods(config, [QUEUED_TURN_CANCEL_METHOD]) : false,
+            canReorderQueuedTurns: config ? remoteHasRuntimeMethods(config, [QUEUED_TURN_REORDER_METHOD]) : false,
+        }),
+        [config, connectionStatus]
+    )
     const loadTaskImage = useCallback<TaskImageLoader>(
         async (image) => {
             const currentConfig = configRef.current
             const currentTask = task
             if (!currentConfig || !currentTask) return null
+            if (!remoteHasRuntimeMethods(currentConfig, [TASK_IMAGE_READ_METHOD])) return null
             const result = await retryRemoteRead(() =>
-                getRemoteProductStore(currentConfig).readTaskImage({ repoId: currentTask.repoId, taskId: currentTask.id, imageId: image.id, ext: image.ext })
+                getRemoteProductStore(currentConfig).readTaskImage({
+                    repoId: currentTask.repoId,
+                    taskId: currentTask.id,
+                    imageId: image.id,
+                    ext: image.ext,
+                })
             )
             if (!result.data) return null
             return `data:${remoteImageMediaType(image, result.mediaType)};base64,${result.data}`
         },
         [task]
     )
+    const taskTerminalProductAccess = useMemo<TaskTerminalProductAccess | null>(() => {
+        if (!config || !selectedRepoId || !selectedTaskId) return null
+        if (!remoteHasRuntimeMethods(config, TASK_TERMINAL_METHODS)) return null
+        const repoId = selectedRepoId
+        const taskId = selectedTaskId
+        const store = getRemoteProductStore(config)
+        return {
+            repoId,
+            taskId,
+            startTaskTerminal: (args) => store.startTaskTerminal({ repoId, taskId, ...args }),
+            reconnectTaskTerminal: (args) => store.reconnectTaskTerminal({ repoId, taskId, ...args }),
+            writeTaskTerminal: (args) => store.writeTaskTerminal({ repoId, taskId, ...args }),
+            resizeTaskTerminal: (args) => store.resizeTaskTerminal({ repoId, taskId, ...args }),
+            stopTaskTerminal: (args) => store.stopTaskTerminal({ repoId, taskId, ...args }),
+        }
+    }, [config, connectionStatus, selectedRepoId, selectedTaskId])
 
     useEffect(() => {
         selectedRepoIdRef.current = selectedRepoId
@@ -235,6 +572,8 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             if (snapshotRefreshTimerRef.current) window.clearTimeout(snapshotRefreshTimerRef.current)
             if (taskRefreshTimerRef.current) window.clearTimeout(taskRefreshTimerRef.current)
             if (sessionRefreshTimerRef.current) window.clearTimeout(sessionRefreshTimerRef.current)
+            acceptedActionStartNotificationsRef.current.clear()
+            acceptedMutationNotificationsRef.current.clear()
         }
     }, [])
 
@@ -249,6 +588,8 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         setSelectedTaskState(null)
         setTask(null)
         setRawConnectionStatus("disconnected")
+        acceptedActionStartNotificationsRef.current.clear()
+        acceptedMutationNotificationsRef.current.clear()
         setScreenState("projects")
     }
 
@@ -264,9 +605,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         return () => window.removeEventListener("openade-pairing-url", updateFromUrl)
     }, [])
 
-    const refreshSnapshot = async (nextConfig = config, options: SnapshotRefreshOptions = {}): Promise<OpenADESnapshot | null> => {
-        if (!nextConfig) return null
-        const next = await retryRemoteRead(() => getRemoteProductStore(nextConfig).refreshSnapshot({ bypassCache: options.bypassCache === true }))
+    const applySnapshotResult = (nextConfig: RemoteConfig, next: OpenADESnapshot, options: SnapshotRefreshOptions = {}): OpenADESnapshot => {
         const currentRepoId = selectedRepoIdRef.current
         const currentTaskId = selectedTaskIdRef.current
         const shouldRepairNavigation = options.repairNavigation === true
@@ -295,6 +634,55 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         return next
     }
 
+    const applyProjectTaskListResult = (
+        nextConfig: RemoteConfig,
+        repoId: string,
+        tasks: OpenADETaskPreview[],
+        options: SnapshotRefreshOptions = {}
+    ): OpenADESnapshot | null => {
+        const current = snapshotRef.current ?? getRemoteProductStore(nextConfig).snapshot
+        if (!current || !current.repos.some((repo) => repo.id === repoId)) return current
+        return applySnapshotResult(
+            nextConfig,
+            {
+                ...current,
+                repos: current.repos.map((repo) => (repo.id === repoId ? { ...repo, tasks } : repo)),
+            },
+            options
+        )
+    }
+
+    const refreshSnapshot = async (nextConfig = config, options: SnapshotRefreshOptions = {}): Promise<OpenADESnapshot | null> => {
+        if (!nextConfig) return null
+        const next = await retryRemoteRead(() =>
+            getRemoteProductStore(nextConfig).refreshSnapshot({
+                bypassCache: options.bypassCache === true,
+            })
+        )
+        return applySnapshotResult(nextConfig, next, options)
+    }
+
+    const refreshProjectTaskList = async (
+        nextConfig = config,
+        repoId: string | null | undefined = selectedRepoIdRef.current,
+        options: SnapshotRefreshOptions = {}
+    ): Promise<OpenADETaskPreview[] | null> => {
+        if (!projectTaskListCanRead) return null
+        if (!nextConfig || !repoId) return null
+        const tasks = await retryRemoteRead(() => getRemoteProductStore(nextConfig).listTasks(repoId, { bypassCache: options.bypassCache === true }))
+        applyProjectTaskListResult(nextConfig, repoId, tasks, options)
+        return tasks
+    }
+
+    const syncCachedProductState = (nextConfig: RemoteConfig, repoId: string, taskId: string): boolean => {
+        const store = getRemoteProductStore(nextConfig)
+        if (store.snapshot) applySnapshotResult(nextConfig, store.snapshot)
+        const cachedTask = store.getCachedTask(repoId, taskId)
+        if (!cachedTask) return false
+        if (selectedTaskIdRef.current === taskId) setTask(cachedTask)
+        return true
+    }
+
     const refreshSessionSnapshots = async () => {
         const entries = await Promise.all(
             configs.map(async (item) => {
@@ -321,7 +709,9 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         options: TaskRefreshOptions = { hydrateSessionEvents: false }
     ) => {
         if (!nextConfig || !repoId || !taskId) return
-        const taskOptions = { hydrateSessionEvents: options.hydrateSessionEvents ?? false }
+        const taskOptions = {
+            hydrateSessionEvents: options.hydrateSessionEvents ?? false,
+        }
         const nextTask = await retryRemoteRead(() => {
             const store = getRemoteProductStore(nextConfig)
             return options.bypassCache === true ? store.refreshTask(repoId, taskId, taskOptions) : store.getTask(repoId, taskId, taskOptions)
@@ -331,6 +721,11 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     }
 
     const refreshProjectProcesses = async (nextConfig = config, repoId: string | null | undefined = selectedRepoIdRef.current) => {
+        if (!projectProcessCapabilities.canRead) {
+            setProjectProcesses(null)
+            setProjectProcessOutput(null)
+            return null
+        }
         if (!nextConfig || !repoId) {
             setProjectProcesses(null)
             setProjectProcessOutput(null)
@@ -347,17 +742,81 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     }
 
     const refreshProjectFiles = async (nextConfig = config, repoId: string | null | undefined = selectedRepoIdRef.current) => {
+        if (!projectFileCapabilities.canList) {
+            setProjectFiles(null)
+            setProjectFileRead(null)
+            return null
+        }
         if (!nextConfig || !repoId) {
             setProjectFiles(null)
             return null
         }
         setProjectFilesLoading(true)
         try {
-            const result = await retryRemoteRead(() => getRemoteProductStore(nextConfig).listProjectFiles({ repoId, maxDepth: 2, maxEntries: 40 }))
+            const result = await retryRemoteRead(() =>
+                getRemoteProductStore(nextConfig).listProjectFiles({
+                    repoId,
+                    maxDepth: 2,
+                    maxEntries: 40,
+                })
+            )
             if (selectedRepoIdRef.current === repoId) setProjectFiles(result)
             return result
         } finally {
             setProjectFilesLoading(false)
+        }
+    }
+
+    const refreshProjectGit = async (nextConfig = config, repoId: string | null | undefined = selectedRepoIdRef.current) => {
+        if (!projectGitCapabilities.canRead) {
+            setProjectGitInfo(null)
+            setProjectGitBranches(null)
+            setProjectGitSummary(null)
+            return null
+        }
+        if (!nextConfig || !repoId) {
+            setProjectGitInfo(null)
+            setProjectGitBranches(null)
+            setProjectGitSummary(null)
+            return null
+        }
+        setProjectGitLoading(true)
+        try {
+            const store = getRemoteProductStore(nextConfig)
+            const result = await retryRemoteRead(() =>
+                Promise.all([
+                    store.readProjectGitInfo({ repoId }),
+                    store.readProjectGitBranches({ repoId }),
+                    store.readProjectGitSummary({ repoId }, { bypassCache: true }),
+                ])
+            )
+            if (selectedRepoIdRef.current === repoId) {
+                setProjectGitInfo(result[0])
+                setProjectGitBranches(result[1])
+                setProjectGitSummary(result[2])
+            }
+            return result
+        } finally {
+            setProjectGitLoading(false)
+        }
+    }
+
+    const refreshProjectCronDefinitions = async (nextConfig = config, repoId: string | null | undefined = selectedRepoIdRef.current) => {
+        if (!projectCronCapabilities.canRead) {
+            setProjectCronDefinitions(null)
+            return null
+        }
+        if (!nextConfig || !repoId) {
+            setProjectCronDefinitions(null)
+            return null
+        }
+        setProjectCronDefinitionsLoading(true)
+        try {
+            const result = await retryRemoteRead(() => getRemoteProductStore(nextConfig).readCronDefinitions({ repoId }))
+            if (selectedRepoIdRef.current === repoId) setProjectCronDefinitions(result)
+            return result
+        } finally {
+            setProjectCronDefinitionsLoading(false)
         }
     }
 
@@ -366,22 +825,38 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         repoId: string | null | undefined = selectedRepoIdRef.current,
         taskId: string | null | undefined = selectedTaskIdRef.current
     ) => {
+        if (!taskGitCapabilities.canRead) {
+            setTaskChanges(null)
+            setTaskGitLog(null)
+            setTaskGitSummary(null)
+            setTaskGitScopes(null)
+            return null
+        }
         if (!nextConfig || !repoId || !taskId) {
             setTaskChanges(null)
             setTaskGitLog(null)
+            setTaskGitSummary(null)
+            setTaskGitScopes(null)
             return null
         }
         setTaskChangesLoading(true)
         try {
-            const [changes, gitLog] = await retryRemoteRead(() => {
+            const [changes, gitLog, gitSummary, gitScopes] = await retryRemoteRead(() => {
                 const store = getRemoteProductStore(nextConfig)
-                return Promise.all([store.readTaskChanges({ repoId, taskId }), store.readTaskGitLog({ repoId, taskId, limit: 5 })])
+                return Promise.all([
+                    store.readTaskChanges({ repoId, taskId }),
+                    store.readTaskGitLog({ repoId, taskId, limit: 5 }),
+                    store.readTaskGitSummary({ repoId, taskId }, { bypassCache: true }),
+                    store.readTaskGitScopes({ repoId, taskId }),
+                ])
             })
             if (selectedRepoIdRef.current === repoId && selectedTaskIdRef.current === taskId) {
                 setTaskChanges(changes)
                 setTaskGitLog(gitLog)
+                setTaskGitSummary(gitSummary)
+                setTaskGitScopes(gitScopes)
             }
-            return { changes, gitLog }
+            return { changes, gitLog, gitSummary, gitScopes }
         } finally {
             setTaskChangesLoading(false)
         }
@@ -402,7 +877,10 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             const repairNavigation = snapshotRefreshRepairsNavigationRef.current
             snapshotRefreshRepairsNavigationRef.current = false
             void runBackgroundRefresh(async () => {
-                await refreshSnapshot(configRef.current, { repairNavigation, bypassCache: options.bypassCache === true })
+                await refreshSnapshot(configRef.current, {
+                    repairNavigation,
+                    bypassCache: options.bypassCache === true,
+                })
             }, "Unable to refresh projects")
         }, delayMs)
     }
@@ -416,25 +894,32 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         taskRefreshInFlightRef.current = true
         try {
             await runBackgroundRefresh(async () => {
-                await refreshTask(configRef.current, pending.repoId, pending.taskId, { hydrateSessionEvents: false, bypassCache: true })
+                await refreshTask(configRef.current, pending.repoId, pending.taskId, {
+                    hydrateSessionEvents: false,
+                    bypassCache: true,
+                })
             }, "Unable to refresh task")
         } finally {
             lastTaskRefreshAtRef.current = Date.now()
             taskRefreshInFlightRef.current = false
-            const nextPending = taskRefreshPendingRef.current as { repoId: string; taskId: string } | null
-            if (nextPending) scheduleTaskRefresh(nextPending.repoId, nextPending.taskId)
+            const nextPending = taskRefreshPendingRef.current
+            if (nextPending) scheduleTaskRefresh(nextPending)
         }
     }
 
-    const scheduleTaskRefresh = (repoId: string | undefined | null, taskId: string | undefined | null, delayMs = 150) => {
-        if (!repoId || !taskId) return
-        taskRefreshPendingRef.current = { repoId, taskId }
+    const scheduleTaskRefresh = (pending: PendingTaskRefresh | null, delayMs = 150) => {
+        if (!pending) return
+        taskRefreshPendingRef.current = pending
         if (taskRefreshTimerRef.current || taskRefreshInFlightRef.current) return
         taskRefreshTimerRef.current = window.setTimeout(
             () => {
                 void runQueuedTaskRefresh()
             },
-            nextRemoteRefreshDelay({ now: Date.now(), lastRefreshAt: lastTaskRefreshAtRef.current, requestedDelayMs: delayMs })
+            nextRemoteRefreshDelay({
+                now: Date.now(),
+                lastRefreshAt: lastTaskRefreshAtRef.current,
+                requestedDelayMs: delayMs,
+            })
         )
     }
 
@@ -472,16 +957,23 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         return subscribeRemoteChanges(
             config,
             (notification) => {
+                if (consumeAcceptedMutationNotification(notification)) return
                 const plan = remoteRefreshPlan(notification, selectedTaskIdRef.current)
                 const repairNavigation = notification.method === "openade/repo/deleted" || notification.method === "openade/task/deleted"
                 const taskWasDeleted = notification.method === "openade/task/deleted"
                 if (plan.type === "snapshot") {
                     scheduleSnapshotRefresh(300, { repairNavigation, bypassCache: true })
                 } else if (plan.type === "task") {
-                    scheduleTaskRefresh(plan.repoId ?? selectedRepoIdRef.current, plan.taskId)
+                    if (consumeAcceptedActionStartNotification(notification)) return
+                    const pending = pendingTaskRefreshFromNotification(notification, plan.repoId ?? selectedRepoIdRef.current, plan.taskId)
+                    scheduleTaskRefresh(pending, pending?.eventId && pending.eventStatus === "in_progress" ? 500 : 150)
                 } else if (plan.type === "snapshot-and-task") {
                     scheduleSnapshotRefresh(300, { repairNavigation, bypassCache: true })
-                    if (!taskWasDeleted) scheduleTaskRefresh(plan.repoId ?? selectedRepoIdRef.current, plan.taskId ?? selectedTaskIdRef.current)
+                    if (!taskWasDeleted) {
+                        scheduleTaskRefresh(
+                            pendingTaskRefreshFromNotification(notification, plan.repoId ?? selectedRepoIdRef.current, plan.taskId ?? selectedTaskIdRef.current)
+                        )
+                    }
                 } else if (plan.type === "sessions" && screenRef.current === "sessions") {
                     scheduleSessionSnapshotsRefresh()
                 }
@@ -493,7 +985,9 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     useEffect(() => {
         if (!config || screen !== "task" || !selectedRepoId || !selectedTaskId) return
         setIsLoading(true)
-        void refreshTask(config, selectedRepoId, selectedTaskId, { hydrateSessionEvents: false })
+        void refreshTask(config, selectedRepoId, selectedTaskId, {
+            hydrateSessionEvents: false,
+        })
             .catch((err) => {
                 if (!isTransientRemoteRefreshError(err)) setError(remoteErrorMessage(err, "Unable to load task"))
             })
@@ -501,17 +995,23 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     }, [config, screen, selectedRepoId, selectedTaskId])
 
     useEffect(() => {
-        if (!config || screen !== "task" || !selectedRepoId || !selectedTaskId) {
-            setTaskChanges(null)
-            setTaskGitLog(null)
-            setTaskChangesLoading(false)
-            setTaskDiff(null)
-            setTaskDiffActionPath(null)
-            return
-        }
-        void runBackgroundRefresh(async () => {
-            await refreshTaskGit(config, selectedRepoId, selectedTaskId)
-        }, "Unable to load task changes")
+        setTaskChanges(null)
+        setTaskGitLog(null)
+        setTaskGitSummary(null)
+        setTaskGitScopes(null)
+        setTaskChangesLoading(false)
+        setTaskDiff(null)
+        setTaskDiffActionPath(null)
+        setTaskFilePair(null)
+        setTaskFilePairActionPath(null)
+        setTaskCommitFiles(null)
+        setTaskCommitFilesActionSha(null)
+        setTaskCommitPatch(null)
+        setTaskCommitPatchActionKey(null)
+        setTaskTreeishFile(null)
+        setTaskTreeishFileActionKey(null)
+        setTaskSnapshotPatches({})
+        setTaskSnapshotPatchActionId(null)
     }, [config, screen, selectedRepoId, selectedTaskId])
 
     useEffect(() => {
@@ -522,13 +1022,21 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             setProjectFiles(null)
             setProjectFilesLoading(false)
             setProjectFileRead(null)
+            setProjectFileSearchResult(null)
+            setProjectFileSearchLoading(false)
             setProjectSearchResult(null)
             setProjectSearchLoading(false)
+            setProjectGitInfo(null)
+            setProjectGitBranches(null)
+            setProjectGitSummary(null)
+            setProjectGitLoading(false)
+            setProjectCronDefinitions(null)
+            setProjectCronDefinitionsLoading(false)
             return
         }
         setProjectProcessOutput(null)
         void runBackgroundRefresh(async () => {
-            await Promise.all([refreshProjectProcesses(config, selectedRepoId), refreshProjectFiles(config, selectedRepoId)])
+            await refreshProjectTaskList(config, selectedRepoId, { bypassCache: true })
         }, "Unable to load project details")
     }, [config, screen, selectedRepoId])
 
@@ -544,6 +1052,8 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         setEditingCommentId(null)
         setEditingCommentDraft("")
         setReviewInstructions("")
+        setTaskResources(null)
+        setTaskResourcesLoading(false)
     }, [task?.id, selectedTask?.id])
 
     const handleSelectProject = async (configId: string, repoId: string) => {
@@ -557,6 +1067,12 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         setTask(null)
         setNewTaskRepoId(repoId)
         setProjectProcessOutput(null)
+        setProjectGitInfo(null)
+        setProjectGitBranches(null)
+        setProjectGitSummary(null)
+        setProjectGitLoading(false)
+        setProjectCronDefinitions(null)
+        setProjectCronDefinitionsLoading(false)
         setScreenState("project")
         const nextSnapshot = sessionSnapshots[configId] ?? (await refreshSnapshot(nextConfig))
         if (nextSnapshot) setSnapshot(nextSnapshot)
@@ -571,7 +1087,10 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     const beginConnection = (mode: PendingConnection["mode"], nextBaseUrl = baseUrl, nextToken = pairToken) => {
         setError(null)
         try {
-            setPendingConnection({ ...buildPairingTarget(nextBaseUrl.replace(/\/$/, ""), nextToken, pairHostId), mode })
+            setPendingConnection({
+                ...buildPairingTarget(nextBaseUrl.replace(/\/$/, ""), nextToken, pairHostId),
+                mode,
+            })
         } catch (err) {
             setError(err instanceof Error ? err.message : "Invalid pairing target")
         }
@@ -667,24 +1186,66 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
 
     const handleRunInTask = async () => {
         if (!config || !selectedRepo || !input.trim()) return
+        const submittedInput = input
+        const submittedType = commandType
+        const selectedTaskIsRunning = Boolean(selectedTask && snapshot?.workingTaskIds.includes(selectedTask.id))
+        const canStartSubmittedTurn = !selectedTaskIsRunning && taskCanStartTurn
+        const canEnqueueSubmittedTurn = selectedTaskIsRunning && taskCanEnqueueQueuedTurn && canQueueTaskCommandWhileRunning(submittedType)
+        if (!canStartSubmittedTurn && !canEnqueueSubmittedTurn) return
         if (!beginSubmission()) return
         setError(null)
         setNotice(null)
-        const submittedInput = input
-        const submittedType = commandType
         const submittedTaskId = task?.unavailableReason ? undefined : selectedTaskId
+        const submittedHarnessId = agentHarnessId
+        const submittedModelId = agentModelId
+        const submittedThinking = agentThinking
+        const submittedFastMode = agentFastMode
         try {
-            const result = await getRemoteProductStore(config).startTurn({
+            const store = getRemoteProductStore(config)
+            if (canEnqueueSubmittedTurn && selectedTask) {
+                const clientRequestId = newClientRequestId("remote-queued-turn-enqueue")
+                trackAcceptedMutationNotification(clientRequestId)
+                await store.enqueueQueuedTurn(
+                    {
+                        repoId: selectedRepo.id,
+                        taskId: selectedTask.id,
+                        type: submittedType,
+                        input: submittedInput,
+                        harnessId: submittedHarnessId,
+                        modelId: submittedModelId,
+                        thinking: submittedThinking,
+                        fastMode: submittedFastMode,
+                    },
+                    { clientRequestId }
+                )
+                setInput("")
+                setNotice("Queued. It will run after the current turn finishes.")
+                return
+            }
+
+            const result = await store.startTurn({
                 repoId: selectedRepo.id,
                 type: submittedType,
                 input: submittedInput,
                 inTaskId: submittedTaskId,
+                harnessId: submittedHarnessId,
+                modelId: submittedModelId,
+                thinking: submittedThinking,
+                fastMode: submittedFastMode,
             })
             setInput("")
             setSelectedTaskState(result.taskId)
+            if (result.eventId) {
+                trackAcceptedActionStartNotification(selectedRepo.id, result.taskId, result.eventId)
+                cancelPendingAcceptedActionStartRefresh(selectedRepo.id, result.taskId, result.eventId)
+            }
             setScreenState("task")
-            await refreshSnapshot(config)
-            await refreshTask(config, selectedRepo.id, result.taskId, { hydrateSessionEvents: false })
+            if (!syncCachedProductState(config, selectedRepo.id, result.taskId)) {
+                await refreshSnapshot(config)
+                await refreshTask(config, selectedRepo.id, result.taskId, {
+                    hydrateSessionEvents: false,
+                })
+            }
             if (result.queued) setNotice("Queued. It will run after the current turn finishes.")
         } catch (err) {
             setError(remoteErrorMessage(err, "Run failed"))
@@ -695,6 +1256,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
 
     const handleCreateTask = async () => {
         const repoId = newTaskRepoId ?? selectedRepo?.id
+        if (!taskCanCreate) return
         if (!config || !repoId || !newTaskPrompt.trim()) return
         if (!beginSubmission()) return
         setError(null)
@@ -702,20 +1264,52 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         const submittedTitle = newTaskTitle
         const submittedPrompt = newTaskPrompt
         const submittedMode = newTaskMode
+        const submittedHarnessId = agentHarnessId
+        const submittedModelId = agentModelId
+        const submittedThinking = agentThinking
+        const submittedFastMode = agentFastMode
         try {
-            const result = await getRemoteProductStore(config).startTurn({
-                repoId,
-                type: submittedMode,
-                input: submittedPrompt,
-                title: submittedTitle.trim() || undefined,
-            })
+            const store = getRemoteProductStore(config)
+            const createClientRequestId = newClientRequestId("remote-task-create")
+            trackAcceptedMutationNotification(createClientRequestId)
+            const created = await store.createTask(
+                {
+                    repoId,
+                    input: submittedPrompt,
+                    title: submittedTitle.trim() || undefined,
+                    createdBy: REMOTE_TASK_CREATED_BY,
+                    deviceId: config.hostId ?? config.id,
+                    isolationStrategy: { type: "head" },
+                },
+                { clientRequestId: createClientRequestId }
+            )
+            const started = taskCanStartTurn
+                ? await store.startTurn({
+                      repoId,
+                      inTaskId: created.taskId,
+                      type: submittedMode,
+                      input: submittedPrompt,
+                      harnessId: submittedHarnessId,
+                      modelId: submittedModelId,
+                      thinking: submittedThinking,
+                      fastMode: submittedFastMode,
+                  })
+                : null
             setNewTaskPrompt("")
             setNewTaskTitle("")
             setSelectedRepoState(repoId)
-            setSelectedTaskState(result.taskId)
+            setSelectedTaskState(created.taskId)
+            if (started?.eventId) {
+                trackAcceptedActionStartNotification(repoId, created.taskId, started.eventId)
+                cancelPendingAcceptedActionStartRefresh(repoId, created.taskId, started.eventId)
+            }
             setScreenState("task")
-            await refreshSnapshot(config)
-            await refreshTask(config, repoId, result.taskId, { hydrateSessionEvents: false })
+            if (!syncCachedProductState(config, repoId, created.taskId)) {
+                await refreshTask(config, repoId, created.taskId, {
+                    hydrateSessionEvents: false,
+                })
+            }
+            if (!taskCanStartTurn) setNotice("Task created.")
         } catch (err) {
             setError(remoteErrorMessage(err, "Task creation failed"))
         } finally {
@@ -724,12 +1318,14 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     }
 
     const handleAbort = async () => {
+        if (!taskCanInterrupt) return
         if (!config || !selectedTaskId) return
         await getRemoteProductStore(config).interruptTurn(selectedTaskId)
         await refreshAll()
     }
 
     const handleRefreshTaskGit = async () => {
+        if (!taskGitCapabilities.canRead) return
         setError(null)
         try {
             await refreshTaskGit()
@@ -739,6 +1335,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     }
 
     const handleReadTaskDiff = async (file: OpenADETaskGitChangedFile) => {
+        if (!taskGitCapabilities.canReadDiff) return
         if (!config || !selectedRepoId || !selectedTaskId) return
         setError(null)
         setTaskDiffActionPath(file.path)
@@ -761,7 +1358,245 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         }
     }
 
+    const handleReadTaskFilePair = async (file: OpenADETaskGitChangedFile) => {
+        if (!taskGitCapabilities.canReadFilePair) return
+        if (!config || !selectedRepoId || !selectedTaskId) return
+        setError(null)
+        setTaskFilePairActionPath(file.path)
+        try {
+            const result = await retryRemoteRead(() =>
+                getRemoteProductStore(config).readTaskFilePair({
+                    repoId: selectedRepoId,
+                    taskId: selectedTaskId,
+                    filePath: file.path,
+                    oldPath: file.oldPath,
+                })
+            )
+            setTaskFilePair(result)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to read file pair"))
+        } finally {
+            setTaskFilePairActionPath(null)
+        }
+    }
+
+    const handleReadTaskCommitFiles = async (commit: OpenADETaskGitLogEntry) => {
+        if (!taskGitCapabilities.canReadCommitFiles) return
+        if (!config || !selectedRepoId || !selectedTaskId) return
+        const repoId = selectedRepoId
+        const taskId = selectedTaskId
+        setError(null)
+        setTaskCommitFilesActionSha(commit.sha)
+        setTaskCommitPatch(null)
+        setTaskTreeishFile(null)
+        try {
+            const result = await retryRemoteRead(() =>
+                getRemoteProductStore(config).readTaskGitCommitFiles({
+                    repoId,
+                    taskId,
+                    commit: commit.sha,
+                })
+            )
+            if (selectedRepoIdRef.current === repoId && selectedTaskIdRef.current === taskId) setTaskCommitFiles(result)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to read commit files"))
+        } finally {
+            setTaskCommitFilesActionSha(null)
+        }
+    }
+
+    const handleReadTaskCommitFilePatch = async (file: OpenADETaskGitChangedFile) => {
+        if (!taskGitCapabilities.canReadCommitFilePatch) return
+        if (!config || !selectedRepoId || !selectedTaskId || !taskCommitFiles) return
+        const repoId = selectedRepoId
+        const taskId = selectedTaskId
+        const commit = taskCommitFiles.commit
+        const key = taskCommitFileActionKey(commit, file.path, file.oldPath)
+        setError(null)
+        setTaskCommitPatchActionKey(key)
+        try {
+            const result = await retryRemoteRead(() =>
+                getRemoteProductStore(config).readTaskGitCommitFilePatch({
+                    repoId,
+                    taskId,
+                    commit,
+                    filePath: file.path,
+                    oldPath: file.oldPath,
+                    contextLines: 3,
+                    allowTruncation: true,
+                })
+            )
+            if (selectedRepoIdRef.current === repoId && selectedTaskIdRef.current === taskId) setTaskCommitPatch(result)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to read commit patch"))
+        } finally {
+            setTaskCommitPatchActionKey(null)
+        }
+    }
+
+    const handleReadTaskCommitFileAtTreeish = async (file: OpenADETaskGitChangedFile) => {
+        if (!taskGitCapabilities.canReadFileAtTreeish) return
+        if (!config || !selectedRepoId || !selectedTaskId || !taskCommitFiles) return
+        const repoId = selectedRepoId
+        const taskId = selectedTaskId
+        const treeish = taskCommitFiles.commit
+        const key = taskCommitFileActionKey(treeish, file.path, file.oldPath)
+        setError(null)
+        setTaskTreeishFileActionKey(key)
+        try {
+            const result = await retryRemoteRead(() =>
+                getRemoteProductStore(config).readTaskGitFileAtTreeish({
+                    repoId,
+                    taskId,
+                    treeish,
+                    filePath: file.path,
+                })
+            )
+            if (selectedRepoIdRef.current === repoId && selectedTaskIdRef.current === taskId) setTaskTreeishFile(result)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to read commit file"))
+        } finally {
+            setTaskTreeishFileActionKey(null)
+        }
+    }
+
+    const handleCommitTaskGit = async (message: string) => {
+        if (!taskGitCapabilities.canCommit) return
+        if (!config || !selectedRepoId || !selectedTaskId || !message.trim()) return
+        if (!beginSubmission()) return
+        const repoId = selectedRepoId
+        const taskId = selectedTaskId
+        setError(null)
+        setNotice(null)
+        try {
+            const result = await getRemoteProductStore(config).commitTaskGit(
+                {
+                    repoId,
+                    taskId,
+                    message: message.trim(),
+                },
+                { clientRequestId: newClientRequestId("remote-task-git-commit") }
+            )
+            setNotice(result.committed ? `Committed ${result.sha?.slice(0, 8) ?? "changes"}` : "Nothing to commit")
+            if (taskGitCapabilities.canRead) await refreshTaskGit(config, repoId, taskId)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to commit task changes"))
+        } finally {
+            finishSubmission()
+        }
+    }
+
+    const handleRefreshTaskResources = async () => {
+        if (!taskCanReadResources) return
+        if (!config || !selectedRepoId || !selectedTaskId) return
+        setError(null)
+        setTaskResourcesLoading(true)
+        try {
+            const result = await retryRemoteRead(() =>
+                getRemoteProductStore(config).readTaskResourceInventory({
+                    repoId: selectedRepoId,
+                    taskId: selectedTaskId,
+                })
+            )
+            setTaskResources(result)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to read task resources"))
+        } finally {
+            setTaskResourcesLoading(false)
+        }
+    }
+
+    const handleLoadTaskSnapshotPatch = async (block: TaskSnapshotBlock) => {
+        if (!taskCanReadSnapshotPatch) return
+        if (!config || !selectedRepoId || !selectedTaskId) return
+        setError(null)
+        setTaskSnapshotPatchActionId(block.id)
+        try {
+            if (remoteHasRuntimeMethods(config, [TASK_SNAPSHOT_INDEX_READ_METHOD, TASK_SNAPSHOT_PATCH_SLICE_READ_METHOD])) {
+                const result = await retryRemoteRead(() =>
+                    getRemoteProductStore(config).readTaskSnapshotIndex({
+                        repoId: selectedRepoId,
+                        taskId: selectedTaskId,
+                        eventId: block.id,
+                    })
+                )
+                setTaskSnapshotPatches((current) => ({
+                    ...current,
+                    [block.id]: {
+                        eventId: result.eventId,
+                        patchFileId: result.patchFileId,
+                        index: result.index,
+                        slices: current[block.id]?.slices,
+                    },
+                }))
+                return
+            }
+            const result: OpenADETaskSnapshotPatchReadResult = await retryRemoteRead(() =>
+                getRemoteProductStore(config).readTaskSnapshotPatch({
+                    repoId: selectedRepoId,
+                    taskId: selectedTaskId,
+                    eventId: block.id,
+                })
+            )
+            setTaskSnapshotPatches((current) => ({
+                ...current,
+                [block.id]: {
+                    eventId: result.eventId,
+                    patchFileId: result.patchFileId,
+                    patch: result.patch,
+                },
+            }))
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to read snapshot patch"))
+        } finally {
+            setTaskSnapshotPatchActionId(null)
+        }
+    }
+
+    const handleLoadTaskSnapshotPatchSlice = async (block: TaskSnapshotBlock, file: OpenADESnapshotPatchFile) => {
+        if (!taskCanReadSnapshotPatchSlice) return
+        if (!config || !selectedRepoId || !selectedTaskId) return
+        const actionId = remoteSnapshotPatchActionId(block.id, file)
+        setError(null)
+        setTaskSnapshotPatchActionId(actionId)
+        try {
+            const result = await retryRemoteRead(() =>
+                getRemoteProductStore(config).readTaskSnapshotPatchSlice({
+                    repoId: selectedRepoId,
+                    taskId: selectedTaskId,
+                    eventId: block.id,
+                    start: file.patchStart,
+                    end: file.patchEnd,
+                })
+            )
+            const sliceKey = remoteSnapshotPatchFileKey(file)
+            setTaskSnapshotPatches((current) => {
+                const existing = current[block.id] ?? { eventId: result.eventId }
+                return {
+                    ...current,
+                    [block.id]: {
+                        ...existing,
+                        eventId: result.eventId,
+                        patchFileId: result.patchFileId ?? existing.patchFileId,
+                        slices: {
+                            ...existing.slices,
+                            [sliceKey]: {
+                                filePath: remoteSnapshotPatchFileLabel(file),
+                                patch: result.patch,
+                            },
+                        },
+                    },
+                }
+            })
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to read snapshot patch file"))
+        } finally {
+            setTaskSnapshotPatchActionId(null)
+        }
+    }
+
     const handleRefreshProjectProcesses = async () => {
+        if (!projectProcessCapabilities.canRead) return
         setError(null)
         try {
             await refreshProjectProcesses()
@@ -771,6 +1606,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     }
 
     const handleRefreshProjectFiles = async () => {
+        if (!projectFileCapabilities.canList) return
         setError(null)
         try {
             await refreshProjectFiles()
@@ -779,13 +1615,38 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         }
     }
 
+    const handleRefreshProjectGit = async () => {
+        if (!projectGitCapabilities.canRead) return
+        setError(null)
+        try {
+            await refreshProjectGit()
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to refresh git"))
+        }
+    }
+
+    const handleRefreshProjectCronDefinitions = async () => {
+        if (!projectCronCapabilities.canRead) return
+        setError(null)
+        try {
+            await refreshProjectCronDefinitions()
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to refresh crons"))
+        }
+    }
+
     const handleReadProjectFile = async (filePath: string) => {
+        if (!projectFileCapabilities.canRead) return
         if (!config || !selectedRepoId) return
         setError(null)
         setProjectFileActionPath(filePath)
         try {
             const result = await retryRemoteRead(() =>
-                getRemoteProductStore(config).readProjectFile({ repoId: selectedRepoId, path: filePath, maxBytes: 64 * 1024 })
+                getRemoteProductStore(config).readProjectFile({
+                    repoId: selectedRepoId,
+                    path: filePath,
+                    maxBytes: 64 * 1024,
+                })
             )
             setProjectFileRead(result)
         } catch (err) {
@@ -795,13 +1656,71 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         }
     }
 
+    const handleWriteProjectFile = async (filePath: string, content: string) => {
+        if (!projectFileCapabilities.canWrite) return
+        if (!config || !selectedRepoId) return
+        setError(null)
+        setProjectFileActionPath(filePath)
+        try {
+            const result = await getRemoteProductStore(config).writeProjectFile(
+                {
+                    repoId: selectedRepoId,
+                    path: filePath,
+                    content,
+                    encoding: "utf8",
+                },
+                { clientRequestId: newClientRequestId("remote-project-file-write") }
+            )
+            setProjectFileRead({
+                repoId: result.repoId,
+                taskId: result.taskId,
+                path: result.path,
+                encoding: "utf8",
+                size: result.size,
+                tooLarge: false,
+                content,
+            })
+            await refreshProjectFiles(config, selectedRepoId)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to write file"))
+        } finally {
+            setProjectFileActionPath(null)
+        }
+    }
+
+    const handleSearchProjectFiles = async () => {
+        if (!projectFileCapabilities.canSearch) return
+        if (!config || !selectedRepoId || !projectFileSearchQuery.trim()) return
+        setError(null)
+        setProjectFileSearchLoading(true)
+        try {
+            const result = await retryRemoteRead(() =>
+                getRemoteProductStore(config).fuzzySearchProjectFiles({
+                    repoId: selectedRepoId,
+                    query: projectFileSearchQuery.trim(),
+                    limit: 25,
+                })
+            )
+            if (selectedRepoIdRef.current === selectedRepoId) setProjectFileSearchResult(result)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to find files"))
+        } finally {
+            setProjectFileSearchLoading(false)
+        }
+    }
+
     const handleSearchProject = async () => {
+        if (!projectSearchCapabilities.canSearch) return
         if (!config || !selectedRepoId || !projectSearchQuery.trim()) return
         setError(null)
         setProjectSearchLoading(true)
         try {
             const result = await retryRemoteRead(() =>
-                getRemoteProductStore(config).searchProject({ repoId: selectedRepoId, query: projectSearchQuery.trim(), limit: 25 })
+                getRemoteProductStore(config).searchProject({
+                    repoId: selectedRepoId,
+                    query: projectSearchQuery.trim(),
+                    limit: 25,
+                })
             )
             if (selectedRepoIdRef.current === selectedRepoId) setProjectSearchResult(result)
         } catch (err) {
@@ -812,6 +1731,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     }
 
     const handleStartProjectProcess = async (definitionId: string) => {
+        if (!projectProcessCapabilities.canStart) return
         if (!config || !selectedRepoId) return
         setError(null)
         setProjectProcessActionId(definitionId)
@@ -830,12 +1750,18 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     }
 
     const handleReconnectProjectProcess = async (processId: string) => {
+        if (!projectProcessCapabilities.canReconnect) return
         if (!config || !selectedRepoId) return
         const repoId = selectedRepoId
         setError(null)
         setProjectProcessActionId(processId)
         try {
-            const result = await retryRemoteRead(() => getRemoteProductStore(config).reconnectProjectProcess({ repoId, processId }))
+            const result = await retryRemoteRead(() =>
+                getRemoteProductStore(config).reconnectProjectProcess({
+                    repoId,
+                    processId,
+                })
+            )
             if (selectedRepoIdRef.current === repoId) setProjectProcessOutput(result)
             await refreshProjectProcesses(config, repoId)
         } catch (err) {
@@ -846,6 +1772,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     }
 
     const handleStopProjectProcess = async (processId: string) => {
+        if (!projectProcessCapabilities.canStop) return
         if (!config || !selectedRepoId) return
         setError(null)
         setProjectProcessActionId(processId)
@@ -863,37 +1790,102 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
         }
     }
 
-    const refreshSelectedTaskAfterMutation = async () => {
-        if (!config || !selectedRepoIdRef.current || !selectedTaskIdRef.current) return
-        await Promise.all([
-            refreshSnapshot(config, { repairNavigation: true }),
-            refreshTask(config, selectedRepoIdRef.current, selectedTaskIdRef.current, { hydrateSessionEvents: false }),
-        ])
+    const syncTaskAfterAcceptedMutation = async (repoId: string | undefined | null, taskId: string | undefined | null) => {
+        if (!config || !repoId || !taskId) return
+        if (syncCachedProductState(config, repoId, taskId)) return
+        await Promise.all([refreshSnapshot(config, { repairNavigation: true }), refreshTask(config, repoId, taskId, { hydrateSessionEvents: false })])
     }
 
     const handleSaveTaskTitle = async () => {
-        if (!config || !selectedTaskId || !taskTitleDraft.trim()) return
+        if (!taskProductCapabilities.canUpdateMetadata) return
+        if (!config || !selectedRepoId || !selectedTaskId || !taskTitleDraft.trim()) return
+        const repoId = selectedRepoId
+        const taskId = selectedTaskId
+        const clientRequestId = newClientRequestId("remote-task-title")
         setError(null)
         try {
-            await getRemoteProductStore(config).updateTaskMetadata({ taskId: selectedTaskId, title: taskTitleDraft.trim() })
-            await refreshSelectedTaskAfterMutation()
+            trackAcceptedMutationNotification(clientRequestId)
+            await getRemoteProductStore(config).updateTaskMetadata({
+                taskId,
+                title: taskTitleDraft.trim(),
+                clientRequestId,
+            })
+            await syncTaskAfterAcceptedMutation(repoId, taskId)
         } catch (err) {
             setError(remoteErrorMessage(err, "Unable to update task title"))
         }
     }
 
+    const handleGenerateTaskTitle = async () => {
+        if (!taskProductCapabilities.canGenerateTitle) return
+        if (!config || !selectedRepoId || !selectedTaskId) return
+        if (!beginSubmission()) return
+        const repoId = selectedRepoId
+        const taskId = selectedTaskId
+        const clientRequestId = newClientRequestId("remote-task-title-generate")
+        setError(null)
+        setNotice(null)
+        try {
+            trackAcceptedMutationNotification(clientRequestId)
+            const result = await getRemoteProductStore(config).generateTaskTitle(
+                {
+                    repoId,
+                    taskId,
+                    harnessId: agentHarnessId,
+                },
+                { clientRequestId }
+            )
+            setTaskTitleDraft(result.title)
+            await syncTaskAfterAcceptedMutation(repoId, taskId)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to generate task title"))
+        } finally {
+            finishSubmission()
+        }
+    }
+
+    const handlePrepareTaskEnvironment = async () => {
+        if (!taskProductCapabilities.canPrepareEnvironment) return
+        if (!config || !selectedRepoId || !selectedTaskId) return
+        if (!beginSubmission()) return
+        const repoId = selectedRepoId
+        const taskId = selectedTaskId
+        const clientRequestId = newClientRequestId("remote-task-environment-prepare")
+        setError(null)
+        setNotice(null)
+        try {
+            trackAcceptedMutationNotification(clientRequestId)
+            await getRemoteProductStore(config).prepareTaskEnvironment({ repoId, taskId }, { clientRequestId })
+            await syncTaskAfterAcceptedMutation(repoId, taskId)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to prepare task environment"))
+        } finally {
+            finishSubmission()
+        }
+    }
+
     const handleToggleTaskClosed = async () => {
-        if (!config || !selectedTaskId) return
+        if (!taskProductCapabilities.canUpdateMetadata) return
+        if (!config || !selectedRepoId || !selectedTaskId) return
+        const repoId = selectedRepoId
+        const taskId = selectedTaskId
+        const clientRequestId = newClientRequestId("remote-task-closed")
         setError(null)
         try {
-            await getRemoteProductStore(config).updateTaskMetadata({ taskId: selectedTaskId, closed: !(task?.closed ?? selectedTask?.closed ?? false) })
-            await refreshSelectedTaskAfterMutation()
+            trackAcceptedMutationNotification(clientRequestId)
+            await getRemoteProductStore(config).updateTaskMetadata({
+                taskId,
+                closed: !(task?.closed ?? selectedTask?.closed ?? false),
+                clientRequestId,
+            })
+            await syncTaskAfterAcceptedMutation(repoId, taskId)
         } catch (err) {
             setError(remoteErrorMessage(err, "Unable to update task"))
         }
     }
 
     const handleDeleteTask = async () => {
+        if (!taskCanDelete) return
         if (!config || !selectedRepoId || !selectedTaskId) return
         if (!window.confirm("Delete this task?")) return
         setError(null)
@@ -901,101 +1893,178 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             await getRemoteProductStore(config).deleteTask({
                 repoId: selectedRepoId,
                 taskId: selectedTaskId,
-                options: { deleteSnapshots: false, deleteImages: false, deleteSessions: false, deleteWorktrees: false },
+                options: {
+                    deleteSnapshots: false,
+                    deleteImages: false,
+                    deleteSessions: false,
+                    deleteWorktrees: false,
+                },
             })
             setSelectedTaskState(null)
             setTask(null)
             setScreenState("project")
-            await refreshSnapshot(config, { repairNavigation: true })
+            const taskList = await refreshProjectTaskList(config, selectedRepoId, {
+                repairNavigation: true,
+                bypassCache: true,
+            })
+            if (!taskList) await refreshSnapshot(config, { repairNavigation: true })
         } catch (err) {
             setError(remoteErrorMessage(err, "Unable to delete task"))
         }
     }
 
     const handleCreateComment = async () => {
-        if (!config || !selectedTaskId || !commentDraft.trim()) return
+        if (!taskProductCapabilities.canCreateComment) return
+        if (!config || !selectedRepoId || !selectedTaskId || !commentDraft.trim()) return
+        const repoId = selectedRepoId
+        const taskId = selectedTaskId
+        const clientRequestId = newClientRequestId("remote-comment")
         setError(null)
         try {
+            trackAcceptedMutationNotification(clientRequestId)
             await getRemoteProductStore(config).createComment({
-                taskId: selectedTaskId,
+                taskId,
                 content: commentDraft.trim(),
                 source: { type: "companion" },
                 selectedText: { text: "", linesBefore: "", linesAfter: "" },
                 author: { id: "companion", email: "companion@openade.local" },
-                clientRequestId: newClientRequestId("remote-comment"),
+                clientRequestId,
             })
             setCommentDraft("")
-            await refreshSelectedTaskAfterMutation()
+            await syncTaskAfterAcceptedMutation(repoId, taskId)
         } catch (err) {
             setError(remoteErrorMessage(err, "Unable to create comment"))
         }
     }
 
     const handleStartEditComment = (comment: OpenADETaskCommentView) => {
+        if (!taskProductCapabilities.canEditComment) return
         setEditingCommentId(comment.id)
         setEditingCommentDraft(comment.content)
     }
 
     const handleSaveComment = async (commentId: string) => {
-        if (!config || !selectedTaskId || !editingCommentDraft.trim()) return
+        if (!taskProductCapabilities.canEditComment) return
+        if (!config || !selectedRepoId || !selectedTaskId || !editingCommentDraft.trim()) return
+        const repoId = selectedRepoId
+        const taskId = selectedTaskId
+        const clientRequestId = newClientRequestId("remote-comment-edit")
         setError(null)
         try {
-            await getRemoteProductStore(config).editComment({ taskId: selectedTaskId, commentId, content: editingCommentDraft.trim() })
+            trackAcceptedMutationNotification(clientRequestId)
+            await getRemoteProductStore(config).editComment({
+                taskId,
+                commentId,
+                content: editingCommentDraft.trim(),
+                clientRequestId,
+            })
             setEditingCommentId(null)
             setEditingCommentDraft("")
-            await refreshSelectedTaskAfterMutation()
+            await syncTaskAfterAcceptedMutation(repoId, taskId)
         } catch (err) {
             setError(remoteErrorMessage(err, "Unable to edit comment"))
         }
     }
 
     const handleDeleteComment = async (commentId: string) => {
-        if (!config || !selectedTaskId) return
+        if (!taskProductCapabilities.canDeleteComment) return
+        if (!config || !selectedRepoId || !selectedTaskId) return
+        const repoId = selectedRepoId
+        const taskId = selectedTaskId
+        const clientRequestId = newClientRequestId("remote-comment-delete")
         setError(null)
         try {
-            await getRemoteProductStore(config).deleteComment({ taskId: selectedTaskId, commentId })
+            trackAcceptedMutationNotification(clientRequestId)
+            await getRemoteProductStore(config).deleteComment({
+                taskId,
+                commentId,
+                clientRequestId,
+            })
             if (editingCommentId === commentId) {
                 setEditingCommentId(null)
                 setEditingCommentDraft("")
             }
-            await refreshSelectedTaskAfterMutation()
+            await syncTaskAfterAcceptedMutation(repoId, taskId)
         } catch (err) {
             setError(remoteErrorMessage(err, "Unable to delete comment"))
         }
     }
 
     const handleCancelQueuedTurn = async (queuedTurnId: string) => {
+        if (!taskProductCapabilities.canCancelQueuedTurn) return
         if (!config || !selectedRepoId || !selectedTaskId) return
+        const repoId = selectedRepoId
+        const taskId = selectedTaskId
+        const clientRequestId = newClientRequestId("remote-queued-turn-cancel")
         setError(null)
         try {
-            await getRemoteProductStore(config).cancelQueuedTurn({ repoId: selectedRepoId, taskId: selectedTaskId, queuedTurnId })
-            await refreshSelectedTaskAfterMutation()
+            trackAcceptedMutationNotification(clientRequestId)
+            await getRemoteProductStore(config).cancelQueuedTurn({
+                repoId,
+                taskId,
+                queuedTurnId,
+                clientRequestId,
+            })
+            await syncTaskAfterAcceptedMutation(repoId, taskId)
         } catch (err) {
             setError(remoteErrorMessage(err, "Unable to cancel queued turn"))
         }
     }
 
+    const handleReorderQueuedTurns = async (queuedTurnIds: string[]) => {
+        if (!taskProductCapabilities.canReorderQueuedTurns) return
+        if (!config || !selectedRepoId || !selectedTaskId || queuedTurnIds.length === 0) return
+        const repoId = selectedRepoId
+        const taskId = selectedTaskId
+        const clientRequestId = newClientRequestId("remote-queued-turn-reorder")
+        setError(null)
+        try {
+            trackAcceptedMutationNotification(clientRequestId)
+            await getRemoteProductStore(config).reorderQueuedTurns({
+                repoId,
+                taskId,
+                queuedTurnIds,
+                clientRequestId,
+            })
+            await syncTaskAfterAcceptedMutation(repoId, taskId)
+        } catch (err) {
+            setError(remoteErrorMessage(err, "Unable to reorder queued turns"))
+        }
+    }
+
     const handleStartReview = async (reviewType: TaskReviewType) => {
+        if (!taskProductCapabilities.canStartReview) return
         if (!config || !selectedRepoId || !selectedTaskId) return
         if (!beginSubmission()) return
         setError(null)
         setNotice(null)
+        const repoId = selectedRepoId
+        const taskId = selectedTaskId
         try {
-            const harnessId = DEFAULT_HARNESS_ID
-            const modelId = getDefaultModelForHarness(harnessId)
             const result = await getRemoteProductStore(config).startReview({
-                repoId: selectedRepoId,
-                taskId: selectedTaskId,
+                repoId,
+                taskId,
                 reviewType,
-                harnessId,
-                modelId,
+                harnessId: agentHarnessId,
+                modelId: agentModelId,
+                thinking: agentThinking,
+                fastMode: agentFastMode,
                 customInstructions: reviewInstructions.trim() || undefined,
                 clientRequestId: newClientRequestId(`remote-review-${reviewType}`),
             })
             setReviewInstructions("")
             setSelectedTaskState(result.taskId)
+            if (result.eventId) {
+                trackAcceptedActionStartNotification(repoId, result.taskId, result.eventId)
+                cancelPendingAcceptedActionStartRefresh(repoId, result.taskId, result.eventId)
+            }
             setScreenState("task")
-            await refreshSelectedTaskAfterMutation()
+            if (!syncCachedProductState(config, repoId, result.taskId)) {
+                await refreshSnapshot(config)
+                await refreshTask(config, repoId, result.taskId, {
+                    hydrateSessionEvents: false,
+                })
+            }
         } catch (err) {
             setError(remoteErrorMessage(err, "Unable to start review"))
         } finally {
@@ -1018,6 +2087,7 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
     }
 
     const handleSelfRevoke = async () => {
+        if (!settingsCanSelfRevoke) return
         if (!config) return
         if (!window.confirm("Revoke this device?")) return
         setError(null)
@@ -1126,13 +2196,27 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             projectFilesLoading={projectFilesLoading}
             projectFileRead={projectFileRead}
             projectFileActionPath={projectFileActionPath}
+            projectFileSearchQuery={projectFileSearchQuery}
+            projectFileSearchResult={projectFileSearchResult}
+            projectFileSearchLoading={projectFileSearchLoading}
             projectSearchQuery={projectSearchQuery}
             projectSearchResult={projectSearchResult}
             projectSearchLoading={projectSearchLoading}
+            projectGitInfo={projectGitInfo}
+            projectGitBranches={projectGitBranches}
+            projectGitSummary={projectGitSummary}
+            projectGitLoading={projectGitLoading}
+            projectGitCapabilities={projectGitCapabilities}
+            projectCronDefinitions={projectCronDefinitions}
+            projectCronDefinitionsLoading={projectCronDefinitionsLoading}
+            projectCronCapabilities={projectCronCapabilities}
             projectProcesses={projectProcesses}
             projectProcessesLoading={projectProcessesLoading}
             projectProcessActionId={projectProcessActionId}
             projectProcessOutput={projectProcessOutput}
+            projectFileCapabilities={projectFileCapabilities}
+            projectSearchCapabilities={projectSearchCapabilities}
+            projectProcessCapabilities={projectProcessCapabilities}
             task={task}
             input={input}
             commandType={commandType}
@@ -1143,19 +2227,72 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             reviewInstructions={reviewInstructions}
             taskChanges={taskChanges}
             taskGitLog={taskGitLog}
+            taskGitSummary={taskGitSummary}
+            taskGitScopes={taskGitScopes}
             taskChangesLoading={taskChangesLoading}
             taskDiff={taskDiff}
             taskDiffActionPath={taskDiffActionPath}
+            taskFilePair={taskFilePair}
+            taskFilePairActionPath={taskFilePairActionPath}
+            taskCommitFiles={taskCommitFiles}
+            taskCommitFilesActionSha={taskCommitFilesActionSha}
+            taskCommitPatch={taskCommitPatch}
+            taskCommitPatchActionKey={taskCommitPatchActionKey}
+            taskTreeishFile={taskTreeishFile}
+            taskTreeishFileActionKey={taskTreeishFileActionKey}
+            taskResources={taskResources}
+            taskResourcesLoading={taskResourcesLoading}
+            taskTerminalProductAccess={taskTerminalProductAccess}
+            taskGitCapabilities={taskGitCapabilities}
+            taskProductCapabilities={taskProductCapabilities}
+            taskCanReadResources={taskCanReadResources}
+            taskCanDelete={taskCanDelete}
+            taskCanStartTurn={taskCanStartTurn}
+            taskCanEnqueueQueuedTurn={taskCanEnqueueQueuedTurn}
+            taskCanInterrupt={taskCanInterrupt}
+            taskCanReadSnapshotPatch={taskCanReadSnapshotPatch}
+            taskCanReadSnapshotPatchSlice={taskCanReadSnapshotPatchSlice}
+            taskAgentControls={{
+                harnessId: agentHarnessId,
+                allowHarnessSwitch: true,
+                selectedModel: agentModelId,
+                thinking: agentThinking,
+                fastMode: agentFastMode,
+                onHarnessChange: handleAgentHarnessChange,
+                onModelChange: setAgentModelId,
+                onThinkingChange: setAgentThinking,
+                onFastModeChange: setAgentFastMode,
+            }}
             newTaskRepoId={newTaskRepoId ?? selectedRepo?.id ?? null}
             newTaskMode={newTaskMode}
             newTaskTitle={newTaskTitle}
             newTaskPrompt={newTaskPrompt}
+            newTaskCanCreate={taskCanCreate}
+            newTaskCanStartTurn={taskCanStartTurn}
+            newTaskAgentControls={
+                taskCanStartTurn
+                    ? {
+                          harnessId: agentHarnessId,
+                          allowHarnessSwitch: true,
+                          selectedModel: agentModelId,
+                          thinking: agentThinking,
+                          fastMode: agentFastMode,
+                          onHarnessChange: handleAgentHarnessChange,
+                          onModelChange: setAgentModelId,
+                          onThinkingChange: setAgentThinking,
+                          onFastModeChange: setAgentFastMode,
+                      }
+                    : undefined
+            }
             configs={configs}
             activeConfigId={config.id}
             settingsConfig={config}
             snapshot={snapshot}
             themeSetting={themeSetting}
-            loadTaskImage={loadTaskImage}
+            settingsCanSelfRevoke={settingsCanSelfRevoke}
+            loadTaskImage={taskCanReadImages ? loadTaskImage : undefined}
+            taskSnapshotPatches={taskSnapshotPatches}
+            taskSnapshotPatchActionId={taskSnapshotPatchActionId}
             onBack={handleBack}
             onRefresh={refreshAll}
             onNavigate={setScreenState}
@@ -1173,12 +2310,19 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             onStopProjectProcess={handleStopProjectProcess}
             onRefreshProjectFiles={handleRefreshProjectFiles}
             onReadProjectFile={handleReadProjectFile}
+            onProjectFileSearchQueryChange={setProjectFileSearchQuery}
+            onSearchProjectFiles={handleSearchProjectFiles}
+            onWriteProjectFile={handleWriteProjectFile}
             onProjectSearchQueryChange={setProjectSearchQuery}
             onSearchProject={handleSearchProject}
+            onRefreshProjectGit={handleRefreshProjectGit}
+            onRefreshProjectCronDefinitions={handleRefreshProjectCronDefinitions}
             onInputChange={setInput}
             onCommandTypeChange={setCommandType}
             onTaskTitleChange={setTaskTitleDraft}
             onSaveTaskTitle={handleSaveTaskTitle}
+            onGenerateTaskTitle={handleGenerateTaskTitle}
+            onPrepareTaskEnvironment={handlePrepareTaskEnvironment}
             onToggleTaskClosed={handleToggleTaskClosed}
             onDeleteTask={handleDeleteTask}
             onCommentDraftChange={setCommentDraft}
@@ -1192,10 +2336,19 @@ export function RemoteApp({ scanPairingCode }: RemoteAppProps = {}) {
             }}
             onDeleteComment={handleDeleteComment}
             onCancelQueuedTurn={handleCancelQueuedTurn}
+            onReorderQueuedTurns={handleReorderQueuedTurns}
             onReviewInstructionsChange={setReviewInstructions}
             onStartReview={handleStartReview}
             onRefreshTaskGit={handleRefreshTaskGit}
             onReadTaskDiff={handleReadTaskDiff}
+            onReadTaskFilePair={handleReadTaskFilePair}
+            onReadTaskCommitFiles={handleReadTaskCommitFiles}
+            onReadTaskCommitFilePatch={handleReadTaskCommitFilePatch}
+            onReadTaskCommitFileAtTreeish={handleReadTaskCommitFileAtTreeish}
+            onCommitTaskGit={handleCommitTaskGit}
+            onRefreshTaskResources={handleRefreshTaskResources}
+            onLoadTaskSnapshotPatch={handleLoadTaskSnapshotPatch}
+            onLoadTaskSnapshotPatchSlice={handleLoadTaskSnapshotPatchSlice}
             onSendTaskInput={handleRunInTask}
             onAbortTask={handleAbort}
             onNewTaskRepoChange={setNewTaskRepoId}

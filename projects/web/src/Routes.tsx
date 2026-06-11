@@ -1,6 +1,6 @@
 import { Code, ListTodo, Loader2, Settings, Sparkles } from "lucide-react"
 import { observer } from "mobx-react"
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Navigate, useParams } from "react-router"
 import type { OpenADETaskPreview } from "../../openade-module/src"
 import { TaskStatsBar } from "./components/TaskStatsBar"
@@ -21,6 +21,37 @@ import { useCodeStore } from "./store/context"
 // Wrapper to inject isCodeModuleAvailable prop into CodeLayout
 const Layout = (props: Omit<CodeLayoutProps, "isCodeModuleAvailable">) => <CodeLayout {...props} isCodeModuleAvailable={isCodeModuleAvailable()} />
 
+function canUseMissingRepoProjection(codeStore: ReturnType<typeof useCodeStore>): boolean {
+    return codeStore.shouldUseRuntimeProductAPI() && codeStore.usesCleanManagedCoreRuntime()
+}
+
+function useCleanCoreProjectListLoad(codeStore: ReturnType<typeof useCodeStore>, shouldLoad: boolean, loadKey: string): boolean {
+    const [loadedProjectKey, setLoadedProjectKey] = useState<string | null>(null)
+    const shouldLoadProjectFromCore = shouldLoad && loadedProjectKey !== loadKey
+
+    useEffect(() => {
+        if (!shouldLoadProjectFromCore) return
+        let active = true
+        codeStore
+            .loadRuntimeProductProjects()
+            .catch((error) => {
+                console.warn("[Routes] Failed to load Core workspace projection:", error)
+            })
+            .finally(() => {
+                if (active) setLoadedProjectKey(loadKey)
+            })
+        return () => {
+            active = false
+        }
+    }, [codeStore, loadKey, shouldLoadProjectFromCore])
+
+    return shouldLoadProjectFromCore
+}
+
+function useCleanCoreWorkspaceProjectionLoad(codeStore: ReturnType<typeof useCodeStore>, workspaceId: string | undefined, repo: unknown): boolean {
+    return useCleanCoreProjectListLoad(codeStore, Boolean(workspaceId && !repo && canUseMissingRepoProjection(codeStore)), workspaceId ?? "workspace")
+}
+
 // ==================== Route: /dashboard/code ====================
 
 function getMostRecentTaskId(tasks: OpenADETaskPreview[]): string | undefined {
@@ -38,9 +69,25 @@ function getMostRecentTaskId(tasks: OpenADETaskPreview[]): string | undefined {
 export const CodeBaseRoute = observer(() => {
     const codeStore = useCodeStore()
     const navigate = useCodeNavigate()
+    const isLoadingCleanCoreProjects = useCleanCoreProjectListLoad(
+        codeStore,
+        !codeStore.repos.reposLoading && codeStore.repos.repos.length === 0 && codeStore.shouldUseRuntimeProductProjectListProjection(),
+        "base"
+    )
 
     // Wait for repos to load, then redirect
     if (codeStore.repos.reposLoading) {
+        return (
+            <Layout title="Code" icon={<Code size="1.25rem" className="text-muted" />}>
+                <div className="flex flex-col items-center justify-center h-full text-muted">
+                    <Loader2 size="2rem" className="animate-spin mb-4 opacity-50" />
+                    <div className="text-sm">Loading...</div>
+                </div>
+            </Layout>
+        )
+    }
+
+    if (isLoadingCleanCoreProjects) {
         return (
             <Layout title="Code" icon={<Code size="1.25rem" className="text-muted" />}>
                 <div className="flex flex-col items-center justify-center h-full text-muted">
@@ -118,11 +165,28 @@ export const CodeWorkspaceRoute = observer(() => {
     const { workspaceId } = useParams<{ workspaceId: string }>()
     const navigate = useCodeNavigate()
 
+    const repo = workspaceId ? codeStore.repos.getRepo(workspaceId) : null
+    const isLoadingCleanCoreProject = useCleanCoreWorkspaceProjectionLoad(codeStore, workspaceId, repo)
+
     if (!workspaceId) {
         return <Navigate to={navigate.path("Code")} replace />
     }
 
-    const repo = codeStore.repos.getRepo(workspaceId)
+    if (!repo && isLoadingCleanCoreProject) {
+        return (
+            <Layout workspaceId={workspaceId} title="Workspace" icon={<Code size="1.25rem" className="text-muted" />}>
+                <div className="flex flex-col items-center justify-center h-full text-muted">
+                    <Loader2 size="2rem" className="animate-spin mb-4 opacity-50" />
+                    <div className="text-sm">Loading workspace...</div>
+                </div>
+            </Layout>
+        )
+    }
+
+    if (!repo && canUseMissingRepoProjection(codeStore)) {
+        return <Navigate to={navigate.path("Code")} replace />
+    }
+
     const mostRecentTaskId = getMostRecentTaskId(codeStore.getTaskPreviewsForRepo(workspaceId))
 
     return (
@@ -147,8 +211,24 @@ export const CodeWorkspaceSettingsRoute = observer(() => {
     const navigate = useCodeNavigate()
 
     const repo = workspaceId ? codeStore.repos.getRepo(workspaceId) : null
+    const isLoadingCleanCoreProject = useCleanCoreWorkspaceProjectionLoad(codeStore, workspaceId, repo)
 
-    if (!workspaceId || !repo) {
+    if (!workspaceId) {
+        return <Navigate to={navigate.path("Code")} replace />
+    }
+
+    if (!repo && isLoadingCleanCoreProject) {
+        return (
+            <Layout title="Workspace Settings" icon={<Settings size="1.25rem" className="text-muted" />} workspaceId={workspaceId}>
+                <div className="flex flex-col items-center justify-center h-full text-muted">
+                    <Loader2 size="2rem" className="animate-spin mb-4 opacity-50" />
+                    <div className="text-sm">Loading workspace...</div>
+                </div>
+            </Layout>
+        )
+    }
+
+    if (!repo) {
         return <Navigate to={navigate.path("Code")} replace />
     }
 
@@ -172,8 +252,7 @@ export const CodeWorkspaceTaskCreateRoute = observer(() => {
         return <Navigate to={navigate.path("Code")} replace />
     }
 
-    // Workspace not found
-    if (!repo) {
+    if (!repo && !canUseMissingRepoProjection(codeStore)) {
         return (
             <Layout workspaceId={workspaceId} title="New Task" icon={<Code size="1.25rem" className="text-muted" />}>
                 <div className="flex flex-col items-center justify-center h-full text-muted">
@@ -192,7 +271,7 @@ export const CodeWorkspaceTaskCreateRoute = observer(() => {
             icon={<Code size="1.25rem" className="text-muted" />}
             navbarRight={<TaskCreateDraftsMenu workspaceId={workspaceId} />}
         >
-            <TaskCreatePage workspaceId={workspaceId} repo={repo} />
+            <TaskCreatePage workspaceId={workspaceId} repo={repo ?? null} />
         </Layout>
     )
 })
@@ -210,7 +289,7 @@ export const CodeWorkspaceTaskCreatingRoute = observer(() => {
         return <Navigate to={navigate.path("Code")} replace />
     }
 
-    if (!repo) {
+    if (!repo && !canUseMissingRepoProjection(codeStore)) {
         return (
             <Layout workspaceId={workspaceId} title="Creating Task" icon={<Loader2 size="1.25rem" className="text-muted animate-spin" />}>
                 <div className="flex flex-col items-center justify-center h-full text-muted">
@@ -311,8 +390,7 @@ export const CodeWorkspaceTaskRoute = observer(() => {
     const navbarIcon = <ListTodo size="1.25rem" className="text-muted" />
     const navbarRight = taskModel ? <TaskStatsBar taskModel={taskModel} /> : undefined
 
-    // Workspace not found
-    if (!repo) {
+    if (!repo && !canUseMissingRepoProjection(codeStore)) {
         return (
             <Layout workspaceId={workspaceId} taskId={taskId} title={navbarTitle} icon={navbarIcon} navbarRight={navbarRight}>
                 <div className="flex flex-col items-center justify-center h-full text-muted">

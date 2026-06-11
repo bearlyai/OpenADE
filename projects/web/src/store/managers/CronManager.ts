@@ -26,7 +26,7 @@ import { dataFolderApi } from "../../electronAPI/dataFolder"
 import type { CronDef, ReadProcsResult } from "../../electronAPI/procs"
 import { readProcs } from "../../electronAPI/procs"
 import type { HarnessId } from "../../types"
-import { readProcsResultFromProductProcesses } from "../projectProcessReadResult"
+import { readProcsResultFromProductCronDefinitions } from "../projectProcessReadResult"
 import type { CodeStore } from "../store"
 
 // ============================================================================
@@ -338,9 +338,9 @@ export class CronManager {
 
     private async refreshRepoConfigUncoalesced(repoState: RepoState): Promise<void> {
         try {
-            if (this.store.shouldUseRuntimeProductReads()) {
-                const result = await this.store.listProductProjectProcesses({ repoId: repoState.repoId })
-                this.applyProcsResult(repoState, readProcsResultFromProductProcesses(result))
+            if (this.store.shouldUseRuntimeProductAPI()) {
+                const result = await this.store.readProductCronDefinitions({ repoId: repoState.repoId })
+                this.applyProcsResult(repoState, readProcsResultFromProductCronDefinitions(result))
                 runInAction(() => {
                     repoState.configLoaded = true
                 })
@@ -410,7 +410,7 @@ export class CronManager {
     // ============================================================================
 
     private async loadInstallStates(repoState: RepoState): Promise<void> {
-        if (this.store.shouldUseRuntimeProductReads()) {
+        if (this.store.shouldUseRuntimeProductAPI()) {
             try {
                 const result = await this.store.readProductCronInstallState({ repoId: repoState.repoId })
                 runInAction(() => {
@@ -451,7 +451,7 @@ export class CronManager {
             installations: Object.fromEntries(repoState.installStates),
         }
 
-        if (this.store.shouldUseRuntimeProductReads()) {
+        if (this.store.shouldUseRuntimeProductAPI()) {
             try {
                 await this.store.replaceProductCronInstallState({ repoId: repoState.repoId, installations: data.installations })
                 return
@@ -634,7 +634,7 @@ export class CronManager {
             }
 
             const result = await this.store.startProductTurn(args)
-            if (!this.store.shouldUseRuntimeProductReads()) {
+            if (!this.store.shouldUseRuntimeProductAPI()) {
                 if (args.inTaskId) {
                     await this.store.refreshProductStateAfterTaskMutation(result.taskId)
                 } else {

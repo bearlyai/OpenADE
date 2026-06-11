@@ -12,6 +12,7 @@ const idleContext: TaskShellCommandContext = {
     retryable: false,
     actionHistory: true,
     gitWorkingChanges: false,
+    gitStateUnknown: false,
     unpushedCommits: false,
     commitAndPushInProgress: false,
 }
@@ -37,6 +38,7 @@ describe("buildTaskShellCommandDescriptors", () => {
         expect(ids({ ...idleContext, actionHistory: false, input: false })).toEqual(["do", "plan", "ask", "repeat", "close"])
         expect(buildTaskShellCommandDescriptors({ ...idleContext, gitWorkingChanges: true }).map((command) => command.id)).toContain("commitAndPush")
         expect(buildTaskShellCommandDescriptors({ ...idleContext, unpushedCommits: true }).map((command) => command.id)).toContain("commitAndPush")
+        expect(buildTaskShellCommandDescriptors({ ...idleContext, gitStateUnknown: true }).map((command) => command.id)).toContain("commitAndPush")
     })
 
     it("uses repeat-specific controls while repeat mode owns the task", () => {

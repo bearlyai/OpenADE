@@ -170,6 +170,169 @@ func TestRuntimeWritesResponsesAndNotificationsThroughWebSocket(t *testing.T) {
 	}
 }
 
+func TestRuntimeWebSocketIdleTimeDoesNotCountAsQueueWait(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.SlowRequestThreshold = 150 * time.Millisecond
+	server, httpServer := testServer(cfg)
+	defer httpServer.Close()
+
+	events := make(chan SlowRequestEvent, 4)
+	server.Runtime.SetSlowRequestObserver(func(event SlowRequestEvent) {
+		events <- event
+	})
+	server.Runtime.Register("test/fast", func(_ context.Context, _ *Connection, _ json.RawMessage) (JSONPayload, *RuntimeError) {
+		return map[string]bool{"ok": true}, nil
+	})
+
+	conn, _, err := websocket.Dial(context.Background(), wsURL(httpServer.URL, cfg.RuntimePath), nil)
+	if err != nil {
+		t.Fatalf("dial runtime websocket: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	writeRequest(t, conn, `{"id":1,"method":"initialize","params":{"protocolVersion":1}}`)
+	if response := readResponse(t, conn); response["error"] != nil {
+		t.Fatalf("initialize response = %#v", response)
+	}
+	time.Sleep(250 * time.Millisecond)
+
+	writeRequest(t, conn, `{"id":2,"method":"test/fast"}`)
+	response := readResponse(t, conn)
+	if response["error"] != nil {
+		t.Fatalf("fast response = %#v", response)
+	}
+	select {
+	case event := <-events:
+		t.Fatalf("idle websocket time was reported as a slow request: %#v", event)
+	default:
+	}
+}
+
+func TestRuntimeWebSocketQueueWaitIncludesRequestsBehindSlowHandler(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.SlowRequestThreshold = 20 * time.Millisecond
+	server, httpServer := testServer(cfg)
+	defer httpServer.Close()
+
+	events := make(chan SlowRequestEvent, 4)
+	server.Runtime.SetSlowRequestObserver(func(event SlowRequestEvent) {
+		events <- event
+	})
+	server.Runtime.Register("test/slow", func(_ context.Context, _ *Connection, _ json.RawMessage) (JSONPayload, *RuntimeError) {
+		time.Sleep(120 * time.Millisecond)
+		return map[string]bool{"ok": true}, nil
+	})
+	server.Runtime.Register("test/fast", func(_ context.Context, _ *Connection, _ json.RawMessage) (JSONPayload, *RuntimeError) {
+		return map[string]bool{"ok": true}, nil
+	})
+
+	conn, _, err := websocket.Dial(context.Background(), wsURL(httpServer.URL, cfg.RuntimePath), nil)
+	if err != nil {
+		t.Fatalf("dial runtime websocket: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	writeRequest(t, conn, `{"id":1,"method":"initialize","params":{"protocolVersion":1}}`)
+	if response := readResponse(t, conn); response["error"] != nil {
+		t.Fatalf("initialize response = %#v", response)
+	}
+
+	writeRequest(t, conn, `{"id":2,"method":"test/slow"}`)
+	writeRequest(t, conn, `{"id":3,"method":"test/fast"}`)
+	slowResponse := readResponse(t, conn)
+	fastResponse := readResponse(t, conn)
+	if slowResponse["id"] != float64(2) || slowResponse["error"] != nil {
+		t.Fatalf("slow response = %#v", slowResponse)
+	}
+	if fastResponse["id"] != float64(3) || fastResponse["error"] != nil {
+		t.Fatalf("fast response = %#v", fastResponse)
+	}
+
+	var fastEvent *SlowRequestEvent
+	deadline := time.After(time.Second)
+	for fastEvent == nil {
+		select {
+		case event := <-events:
+			if event.Method == "test/fast" {
+				copied := event
+				fastEvent = &copied
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for fast request slow-event")
+		}
+	}
+	if fastEvent.QueueWait < 75*time.Millisecond {
+		t.Fatalf("fast request queue wait did not include the slow handler ahead of it: %#v", fastEvent)
+	}
+	if fastEvent.Duration < fastEvent.QueueWait {
+		t.Fatalf("fast request duration is less than queue wait: %#v", fastEvent)
+	}
+}
+
+func TestRuntimeWebSocketProtocolErrorsEmitSlowRequestEvents(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.SlowRequestThreshold = 20 * time.Millisecond
+	server, httpServer := testServer(cfg)
+	defer httpServer.Close()
+
+	events := make(chan SlowRequestEvent, 4)
+	server.Runtime.SetSlowRequestObserver(func(event SlowRequestEvent) {
+		events <- event
+	})
+	server.Runtime.Register("test/slow", func(_ context.Context, _ *Connection, _ json.RawMessage) (JSONPayload, *RuntimeError) {
+		time.Sleep(120 * time.Millisecond)
+		return map[string]bool{"ok": true}, nil
+	})
+
+	conn, _, err := websocket.Dial(context.Background(), wsURL(httpServer.URL, cfg.RuntimePath), nil)
+	if err != nil {
+		t.Fatalf("dial runtime websocket: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	writeRequest(t, conn, `{"id":1,"method":"initialize","params":{"protocolVersion":1}}`)
+	if response := readResponse(t, conn); response["error"] != nil {
+		t.Fatalf("initialize response = %#v", response)
+	}
+
+	writeRequest(t, conn, `{"id":2,"method":"test/slow"}`)
+	writeRequest(t, conn, `{`)
+	if response := readResponse(t, conn); response["id"] != float64(2) || response["error"] != nil {
+		t.Fatalf("slow response = %#v", response)
+	}
+	protocolResponse := readResponse(t, conn)
+	if protocolResponse["id"] != "invalid-message" {
+		t.Fatalf("protocol response id = %#v", protocolResponse)
+	}
+	errorObject, ok := protocolResponse["error"].(map[string]any)
+	if !ok || errorObject["code"] != "invalid_request" {
+		t.Fatalf("protocol response error = %#v", protocolResponse)
+	}
+
+	var protocolEvent *SlowRequestEvent
+	deadline := time.After(time.Second)
+	for protocolEvent == nil {
+		select {
+		case event := <-events:
+			if event.Method == protocolDecodeMethod {
+				copied := event
+				protocolEvent = &copied
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for protocol error slow-event")
+		}
+	}
+	if protocolEvent.Service != DefaultServerName || protocolEvent.RequestID != "invalid-message" || protocolEvent.Connection != "go:1" {
+		t.Fatalf("protocol slow-event identity = %#v", protocolEvent)
+	}
+	if !protocolEvent.Failed || protocolEvent.ErrorCode != "invalid_request" {
+		t.Fatalf("protocol slow-event failure state = %#v", protocolEvent)
+	}
+	if protocolEvent.QueueWait < 75*time.Millisecond {
+		t.Fatalf("protocol slow-event did not include queue wait behind slow handler: %#v", protocolEvent)
+	}
+}
+
 func TestRuntimeFiltersCapabilitiesByPermission(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Permissions = []string{"initialize", "server/status/read"}

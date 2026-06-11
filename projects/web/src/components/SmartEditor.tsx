@@ -36,6 +36,8 @@ interface SmartEditorProps {
     fileMentionsDir: string | null
     /** Directory for /slash command autocomplete, null to disable */
     slashCommandsDir: string | null
+    /** Lazy directory resolver for runtime/Core sessions where task open intentionally does not load environment. */
+    resolveWorkingDir?: () => Promise<string | null>
     /** SDK capabilities manager for slash command discovery */
     sdkCapabilities?: SdkCapabilitiesManager
     persistImage?: PersistImage
@@ -235,8 +237,14 @@ interface FileSuggestionPopupState {
 interface SlashSuggestionPopupState {
     open: boolean
     items: SlashCommandEntry[]
+    query: string
     selectedIndex: number
     anchorRect: DOMRect | null
+}
+
+function filterSlashCommands(commands: SlashCommandEntry[], query: string): SlashCommandEntry[] {
+    const lower = query.toLowerCase()
+    return commands.filter((cmd) => cmd.name.toLowerCase().includes(lower))
 }
 
 // ============================================================================
@@ -256,12 +264,14 @@ export const SmartEditor = observer(
                 allowGlobalShortcutsWhenEmpty,
                 fileMentionsDir,
                 slashCommandsDir,
+                resolveWorkingDir,
                 sdkCapabilities,
                 persistImage,
             },
             ref
         ) => {
             const portalContainer = usePortalContainer()
+            const [resolvedWorkingDir, setResolvedWorkingDir] = useState<string | null>(null)
 
             // --- File mention suggestion state (@ trigger) ---
             const [fileSuggestion, setFileSuggestion] = useState<FileSuggestionPopupState>({
@@ -276,29 +286,32 @@ export const SmartEditor = observer(
             const [slashSuggestion, setSlashSuggestion] = useState<SlashSuggestionPopupState>({
                 open: false,
                 items: [],
+                query: "",
                 selectedIndex: 0,
                 anchorRect: null,
             })
 
             // Determine if features should be enabled
-            const mentionsEnabled = fileMentionsDir !== null && manager.canSearchFileMentions(fileMentionsDir)
-            const slashEnabled = slashCommandsDir !== null
+            const effectiveFileMentionsDir = fileMentionsDir ?? resolvedWorkingDir
+            const effectiveSlashCommandsDir = slashCommandsDir ?? resolvedWorkingDir
+            const canResolveWorkingDir = resolveWorkingDir !== undefined
+            const mentionsEnabled =
+                (effectiveFileMentionsDir !== null && manager.canSearchFileMentions(effectiveFileMentionsDir)) ||
+                (effectiveFileMentionsDir === null && canResolveWorkingDir)
+            const slashEnabled = effectiveSlashCommandsDir !== null || canResolveWorkingDir
 
-            // Load SDK capabilities when slashCommandsDir is provided
-            useEffect(() => {
-                if (slashCommandsDir && sdkCapabilities) {
-                    sdkCapabilities.loadCapabilities(slashCommandsDir)
-                }
-            }, [slashCommandsDir, sdkCapabilities])
+            const resolveEditorWorkingDir = useCallback(async (): Promise<string | null> => {
+                const current = fileMentionsDir ?? slashCommandsDir ?? resolvedWorkingDir
+                if (current) return current
+                const resolved = (await resolveWorkingDir?.()) ?? null
+                if (resolved) setResolvedWorkingDir(resolved)
+                return resolved
+            }, [fileMentionsDir, slashCommandsDir, resolvedWorkingDir, resolveWorkingDir])
 
-            // Warm up file search cache when fileMentionsDir is provided
-            useEffect(() => {
-                if (fileMentionsDir && mentionsEnabled) {
-                    manager.warmFileMentionSearch(fileMentionsDir).catch(() => {})
-                }
-            }, [fileMentionsDir, manager, mentionsEnabled])
-
-            const slashCommands = slashEnabled && sdkCapabilities ? sdkCapabilities.allCommands : []
+            const slashCommands = useMemo(
+                () => (slashEnabled && sdkCapabilities ? sdkCapabilities.allCommands : []),
+                [slashEnabled, sdkCapabilities?.skills, sdkCapabilities?.slashCommands]
+            )
 
             // --- File mention floating ---
             const { refs: fileRefs, floatingStyles: fileFloatingStyles } = useFloating({
@@ -339,7 +352,8 @@ export const SmartEditor = observer(
 
             const handleFileSearch = useCallback(
                 async (query: string) => {
-                    if (!fileMentionsDir) return
+                    const dir = effectiveFileMentionsDir ?? (await resolveEditorWorkingDir())
+                    if (!dir || !manager.canSearchFileMentions(dir)) return
 
                     if (searchTimeoutRef.current) {
                         clearTimeout(searchTimeoutRef.current)
@@ -350,7 +364,7 @@ export const SmartEditor = observer(
                     const delay = query ? 150 : 50
                     searchTimeoutRef.current = setTimeout(async () => {
                         try {
-                            const result = await manager.searchFileMentions(fileMentionsDir, query, 20)
+                            const result = await manager.searchFileMentions(dir, query, 20)
                             if (query === lastQueryRef.current) {
                                 const items = result.results.map((path) => ({
                                     type: "file" as const,
@@ -376,7 +390,7 @@ export const SmartEditor = observer(
                         }
                     }, delay)
                 },
-                [fileMentionsDir, manager]
+                [effectiveFileMentionsDir, manager, resolveEditorWorkingDir]
             )
 
             const fileDisplayItems: SuggestionItem[] = fileSuggestion.treeMatch
@@ -448,6 +462,30 @@ export const SmartEditor = observer(
             useEffect(() => {
                 slashCommandsRef.current = slashCommands
             }, [slashCommands])
+
+            const ensureSlashCapabilities = useCallback(() => {
+                if (!sdkCapabilities) return
+                const dir = effectiveSlashCommandsDir
+                if (dir) {
+                    void sdkCapabilities.loadCapabilities(dir)
+                    return
+                }
+                void resolveEditorWorkingDir().then((resolvedDir) => {
+                    if (resolvedDir) void sdkCapabilities.loadCapabilities(resolvedDir)
+                })
+            }, [effectiveSlashCommandsDir, resolveEditorWorkingDir, sdkCapabilities])
+
+            useEffect(() => {
+                if (!slashSuggestion.open) return
+                setSlashSuggestion((prev) => {
+                    const items = filterSlashCommands(slashCommands, prev.query)
+                    return {
+                        ...prev,
+                        items,
+                        selectedIndex: Math.min(prev.selectedIndex, Math.max(items.length - 1, 0)),
+                    }
+                })
+            }, [slashCommands, slashSuggestion.open])
 
             const handleSlashSelectItem = useCallback(
                 (index: number) => {
@@ -579,8 +617,7 @@ export const SmartEditor = observer(
                                         startOfLine: true,
                                         items: ({ query }) => {
                                             const commands = slashCommandsRef.current ?? []
-                                            const lower = query.toLowerCase()
-                                            return commands.filter((cmd) => cmd.name.toLowerCase().includes(lower))
+                                            return filterSlashCommands(commands, query)
                                         },
                                         command: ({ editor: e, range, props: item }) => {
                                             const cmd = item as unknown as SlashCommandEntry
@@ -588,21 +625,25 @@ export const SmartEditor = observer(
                                         },
                                         render: () => ({
                                             onStart: (props: SuggestionProps<SlashCommandEntry>) => {
+                                                ensureSlashCapabilities()
                                                 slashSuggestionPropsRef.current = props
                                                 const rect = props.clientRect?.()
                                                 setSlashSuggestion({
                                                     open: true,
                                                     items: props.items,
+                                                    query: props.query,
                                                     selectedIndex: 0,
                                                     anchorRect: rect ?? null,
                                                 })
                                             },
                                             onUpdate: (props: SuggestionProps<SlashCommandEntry>) => {
+                                                ensureSlashCapabilities()
                                                 slashSuggestionPropsRef.current = props
                                                 const rect = props.clientRect?.()
                                                 setSlashSuggestion((prev) => ({
                                                     ...prev,
                                                     items: props.items,
+                                                    query: props.query,
                                                     selectedIndex: 0,
                                                     anchorRect: rect ?? prev.anchorRect,
                                                 }))
@@ -615,6 +656,7 @@ export const SmartEditor = observer(
                                                 setSlashSuggestion({
                                                     open: false,
                                                     items: [],
+                                                    query: "",
                                                     selectedIndex: 0,
                                                     anchorRect: null,
                                                 })
@@ -628,7 +670,7 @@ export const SmartEditor = observer(
                 }
 
                 return baseExtensions
-            }, [mentionsEnabled, slashEnabled, placeholder, handleFileSearch])
+            }, [mentionsEnabled, slashEnabled, placeholder, handleFileSearch, ensureSlashCapabilities])
 
             const editor = useEditor(
                 {

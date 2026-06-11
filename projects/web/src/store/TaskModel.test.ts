@@ -63,7 +63,7 @@ function createStore(task: Task): CodeStore {
         tasks: {
             getTask: (taskId: string) => (taskId === task.id ? task : null),
         },
-        shouldUseRuntimeProductReads: () => false,
+        shouldUseRuntimeProductAPI: () => false,
     } as unknown as CodeStore
 }
 
@@ -89,7 +89,7 @@ describe("TaskModel harness lock", () => {
         })
         const store = {
             ...createStore(task),
-            shouldUseRuntimeProductReads: () => true,
+            shouldUseRuntimeProductAPI: () => true,
             readProductTaskGitSummary,
         } as unknown as CodeStore
         const model = new TaskModel(store, task.id)
@@ -494,7 +494,7 @@ describe("TaskModel stats", () => {
             tasks: {
                 getTask: (taskId: string) => (taskId === task.id ? task : null),
             },
-            shouldUseRuntimeProductReads: () => true,
+            shouldUseRuntimeProductAPI: () => true,
             getRuntimeProductTaskPreviewDto,
         } as unknown as CodeStore
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { OpenADEProjectProcessListResult } from "../../../../openade-module/src"
+import type { OpenADECronDefinitionsReadResult } from "../../../../openade-module/src"
 import type { CronDef, ReadProcsResult } from "../../electronAPI/procs"
 import type { CodeStore } from "../store"
 
@@ -41,16 +41,14 @@ function makeReadProcsResult(crons: CronDef[]): ReadProcsResult {
     }
 }
 
-function makeProductProcessListResult(crons: CronDef[]): OpenADEProjectProcessListResult {
+function makeProductCronDefinitionsResult(crons: CronDef[]): OpenADECronDefinitionsReadResult {
     return {
         repoId: "repo-1",
         repoRoot: "/repo",
         searchRoot: "/repo",
         isWorktree: false,
-        configs: [{ relativePath: "openade.toml", processes: [], crons }],
-        processes: [],
+        configs: [{ relativePath: "openade.toml", crons }],
         errors: [],
-        instances: [],
     }
 }
 
@@ -63,9 +61,10 @@ function makeMockStore(repos: Array<{ id: string; path: string }> = []): CodeSto
         refreshProductStateAfterTaskMutation: vi.fn().mockResolvedValue(undefined),
         refreshProductStateAfterTaskCreation: vi.fn().mockResolvedValue(undefined),
         getTaskStore: vi.fn().mockResolvedValue(undefined),
-        shouldUseRuntimeProductReads: vi.fn(() => false),
+        shouldUseRuntimeProductAPI: vi.fn(() => false),
         shouldUseCoreOwnedCronScheduler: vi.fn(() => false),
         listProductProjectProcesses: vi.fn(),
+        readProductCronDefinitions: vi.fn(),
         readProductCronInstallState: vi.fn().mockResolvedValue({ repoId: "repo-1", installations: {} }),
         replaceProductCronInstallState: vi.fn().mockResolvedValue({
             repoId: "repo-1",
@@ -246,10 +245,11 @@ describe("CronManager scheduling", () => {
             { id: "repo-1", path: "/repo-1" },
             { id: "repo-2", path: "/repo-2" },
         ])
-        vi.mocked(store.shouldUseRuntimeProductReads).mockReturnValue(true)
+        vi.mocked(store.shouldUseRuntimeProductAPI).mockReturnValue(true)
         vi.mocked(store.shouldUseCoreOwnedCronScheduler).mockReturnValue(true)
         vi.mocked(store.readProductCronInstallState).mockRejectedValue(new Error("renderer should not load product cron state on clean Core startup"))
         vi.mocked(store.listProductProjectProcesses).mockRejectedValue(new Error("renderer should not scan product processes on clean Core startup"))
+        vi.mocked(store.readProductCronDefinitions).mockRejectedValue(new Error("renderer should not scan product cron definitions on clean Core startup"))
         const manager = new CronManager(store)
 
         await manager.startAll()
@@ -257,12 +257,14 @@ describe("CronManager scheduling", () => {
         expect(manager.started).toBe(false)
         expect(store.readProductCronInstallState).not.toHaveBeenCalled()
         expect(store.listProductProjectProcesses).not.toHaveBeenCalled()
+        expect(store.readProductCronDefinitions).not.toHaveBeenCalled()
         expect(store.execution.onAfterEvent).not.toHaveBeenCalled()
 
         window.dispatchEvent(new Event("focus"))
         await vi.advanceTimersByTimeAsync(60_000)
 
         expect(store.listProductProjectProcesses).not.toHaveBeenCalled()
+        expect(store.readProductCronDefinitions).not.toHaveBeenCalled()
     })
 
     it("bounds concurrent procs refreshes for repos with installed crons", async () => {
@@ -391,7 +393,7 @@ describe("CronManager scheduling", () => {
 
         const cronDef = makeCronDef()
         const store = makeMockStore([{ id: "repo-1", path: "/repo" }])
-        vi.mocked(store.shouldUseRuntimeProductReads).mockReturnValue(true)
+        vi.mocked(store.shouldUseRuntimeProductAPI).mockReturnValue(true)
         vi.mocked(store.readProductCronInstallState).mockResolvedValue({
             repoId: "repo-1",
             installations: {
@@ -404,7 +406,7 @@ describe("CronManager scheduling", () => {
                 },
             },
         })
-        vi.mocked(store.listProductProjectProcesses).mockResolvedValue(makeProductProcessListResult([cronDef]))
+        vi.mocked(store.readProductCronDefinitions).mockResolvedValue(makeProductCronDefinitionsResult([cronDef]))
         vi.mocked(dataFolderApi.isAvailable).mockReturnValue(true)
         vi.mocked(dataFolderApi.load).mockRejectedValue(new Error("legacy cron data folder should not be used"))
         vi.mocked(dataFolderApi.save).mockRejectedValue(new Error("legacy cron data folder should not be used"))
@@ -413,6 +415,8 @@ describe("CronManager scheduling", () => {
         await manager.addRepo("repo-1", "/repo")
 
         expect(store.readProductCronInstallState).toHaveBeenCalledWith({ repoId: "repo-1" })
+        expect(store.readProductCronDefinitions).toHaveBeenCalledWith({ repoId: "repo-1" })
+        expect(store.listProductProjectProcesses).not.toHaveBeenCalled()
         expect(dataFolderApi.load).not.toHaveBeenCalled()
         expect(manager.getCronsForRepo("repo-1")[0]).toEqual(
             expect.objectContaining({
@@ -444,10 +448,10 @@ describe("CronManager scheduling", () => {
 
         const cronDef = makeCronDef()
         const store = makeMockStore([{ id: "repo-1", path: "/repo" }])
-        vi.mocked(store.shouldUseRuntimeProductReads).mockReturnValue(true)
+        vi.mocked(store.shouldUseRuntimeProductAPI).mockReturnValue(true)
         vi.mocked(store.shouldUseCoreOwnedCronScheduler).mockReturnValue(true)
         vi.mocked(store.readProductCronInstallState).mockResolvedValue({ repoId: "repo-1", installations: {} })
-        vi.mocked(store.listProductProjectProcesses).mockResolvedValue(makeProductProcessListResult([cronDef]))
+        vi.mocked(store.readProductCronDefinitions).mockResolvedValue(makeProductCronDefinitionsResult([cronDef]))
         const manager = new CronManager(store)
 
         await manager.addRepo("repo-1", "/repo")

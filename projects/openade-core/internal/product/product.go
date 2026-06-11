@@ -58,6 +58,7 @@ type idempotentMutationEntry struct {
 
 const idempotentMutationRetention = 10 * time.Minute
 const headlessRuntimeDeviceID = "headless-runtime"
+const taskDeleteCleanupPermission = "openade/task/delete/cleanup"
 
 type mutationOKDTO struct {
 	OK bool `json:"ok"`
@@ -422,6 +423,22 @@ type projectProcessListDTO struct {
 	Processes    []projectProcessDefinitionDTO `json:"processes"`
 	Errors       []procsConfigErrorDTO         `json:"errors"`
 	Instances    []projectProcessInstanceDTO   `json:"instances"`
+}
+
+type cronDefinitionsConfigDTO struct {
+	RelativePath string            `json:"relativePath"`
+	Crons        []procsCronDefDTO `json:"crons"`
+}
+
+type cronDefinitionsReadDTO struct {
+	RepoID       string                     `json:"repoId"`
+	TaskID       string                     `json:"taskId,omitempty"`
+	SearchRoot   string                     `json:"searchRoot"`
+	RepoRoot     string                     `json:"repoRoot"`
+	IsWorktree   bool                       `json:"isWorktree"`
+	WorktreeRoot string                     `json:"worktreeRoot,omitempty"`
+	Configs      []cronDefinitionsConfigDTO `json:"configs"`
+	Errors       []procsConfigErrorDTO      `json:"errors"`
 }
 
 type taskPreviewDTO struct {
@@ -792,10 +809,11 @@ type queuedTurnReorderResultDTO struct {
 }
 
 type queuedTurnUpdatedNotificationDTO struct {
-	RepoID string        `json:"repoId"`
-	TaskID string        `json:"taskId"`
-	Turn   queuedTurnDTO `json:"turn"`
-	At     string        `json:"at"`
+	RepoID          string        `json:"repoId"`
+	TaskID          string        `json:"taskId"`
+	Turn            queuedTurnDTO `json:"turn"`
+	At              string        `json:"at"`
+	ClientRequestID string        `json:"clientRequestId,omitempty"`
 }
 
 type userDTO struct {
@@ -911,6 +929,7 @@ func Register(runtime *core.Runtime, store *storage.Store, options Options) *Ser
 	runtime.Register("openade/task/git/commit/filePatch/read", service.handleTaskGitCommitFilePatch)
 	runtime.Register("openade/task/git/commit", service.handleTaskGitCommit)
 	runtime.Register("openade/project/process/list", service.handleProjectProcessList)
+	runtime.Register("openade/cron/definitions/read", service.handleCronDefinitionsRead)
 	runtime.Register("openade/project/process/start", service.handleProjectProcessStart)
 	runtime.Register("openade/project/process/reconnect", service.handleProjectProcessReconnect)
 	runtime.Register("openade/project/process/stop", service.handleProjectProcessStop)
@@ -1812,6 +1831,25 @@ func (service *Service) handleProjectProcessList(ctx context.Context, _ *core.Co
 	response := projectProcessListToDTO(repo.ID, params.TaskID, result)
 	response.Instances = service.projectProcessInstances(repo.ID, params.TaskID)
 	return response, nil
+}
+
+func (service *Service) handleCronDefinitionsRead(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
+	var params struct {
+		RepoID string `json:"repoId"`
+		TaskID string `json:"taskId"`
+	}
+	if runtimeErr := decodeObject(raw, &params); runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	repo, root, runtimeErr := service.projectHostRoot(ctx, params.RepoID, params.TaskID)
+	if runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	result, err := host.ListProjectProcesses(ctx, root)
+	if err != nil {
+		return nil, handlerError(err)
+	}
+	return cronDefinitionsReadToDTO(repo.ID, params.TaskID, result), nil
 }
 
 func (service *Service) handleTaskList(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
@@ -2973,12 +3011,16 @@ func (service *Service) enqueueQueuedTurn(ctx context.Context, raw json.RawMessa
 	dto := queuedTurnToDTO(turn)
 	if created {
 		notification := map[string]string{"repoId": params.RepoID, "taskId": params.TaskID}
+		if clientRequestID != "" {
+			notification["clientRequestId"] = clientRequestID
+		}
 		service.runtime.Notify("openade/task/updated", notification)
 		service.runtime.Notify("openade/queuedTurn/updated", queuedTurnUpdatedNotificationDTO{
-			RepoID: params.RepoID,
-			TaskID: params.TaskID,
-			Turn:   dto,
-			At:     formatTime(time.Now().UTC()),
+			RepoID:          params.RepoID,
+			TaskID:          params.TaskID,
+			Turn:            dto,
+			At:              formatTime(time.Now().UTC()),
+			ClientRequestID: clientRequestID,
 		})
 		go service.drainNextQueuedTurn(context.Background(), params.TaskID)
 	}
@@ -3106,6 +3148,7 @@ func (service *Service) reorderQueuedTurns(ctx context.Context, raw json.RawMess
 	if _, _, runtimeErr := service.taskRepo(ctx, params.RepoID, params.TaskID); runtimeErr != nil {
 		return nil, runtimeErr
 	}
+	clientRequestID := clientRequestIDFromRaw(raw)
 	updatedAt := time.Now().UTC()
 	if params.UpdatedAt != "" {
 		parsed, runtimeErr := parseParamTime("updatedAt", params.UpdatedAt)
@@ -3127,13 +3170,18 @@ func (service *Service) reorderQueuedTurns(ctx context.Context, raw json.RawMess
 	}
 	dtos := queuedTurnListDTO(turns)
 	if reordered {
-		service.runtime.Notify("openade/task/updated", map[string]string{"repoId": params.RepoID, "taskId": params.TaskID})
+		notification := map[string]string{"repoId": params.RepoID, "taskId": params.TaskID}
+		if clientRequestID != "" {
+			notification["clientRequestId"] = clientRequestID
+		}
+		service.runtime.Notify("openade/task/updated", notification)
 		for _, dto := range dtos {
 			service.runtime.Notify("openade/queuedTurn/updated", queuedTurnUpdatedNotificationDTO{
-				RepoID: params.RepoID,
-				TaskID: params.TaskID,
-				Turn:   dto,
-				At:     formatTime(time.Now().UTC()),
+				RepoID:          params.RepoID,
+				TaskID:          params.TaskID,
+				Turn:            dto,
+				At:              formatTime(time.Now().UTC()),
+				ClientRequestID: clientRequestID,
 			})
 		}
 	}
@@ -3142,10 +3190,11 @@ func (service *Service) reorderQueuedTurns(ctx context.Context, raw json.RawMess
 
 func (service *Service) cancelQueuedTurn(ctx context.Context, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
 	var params struct {
-		RepoID       string `json:"repoId"`
-		TaskID       string `json:"taskId"`
-		QueuedTurnID string `json:"queuedTurnId"`
-		UpdatedAt    string `json:"updatedAt"`
+		RepoID          string `json:"repoId"`
+		TaskID          string `json:"taskId"`
+		QueuedTurnID    string `json:"queuedTurnId"`
+		UpdatedAt       string `json:"updatedAt"`
+		ClientRequestID string `json:"clientRequestId"`
 	}
 	if runtimeErr := decodeObject(raw, &params); runtimeErr != nil {
 		return nil, runtimeErr
@@ -3181,12 +3230,16 @@ func (service *Service) cancelQueuedTurn(ctx context.Context, raw json.RawMessag
 	}
 	if cancelled {
 		notification := map[string]string{"repoId": params.RepoID, "taskId": params.TaskID}
+		if params.ClientRequestID != "" {
+			notification["clientRequestId"] = params.ClientRequestID
+		}
 		service.runtime.Notify("openade/task/updated", notification)
 		service.runtime.Notify("openade/queuedTurn/updated", queuedTurnUpdatedNotificationDTO{
-			RepoID: params.RepoID,
-			TaskID: params.TaskID,
-			Turn:   queuedTurnToDTO(turn),
-			At:     formatTime(time.Now().UTC()),
+			RepoID:          params.RepoID,
+			TaskID:          params.TaskID,
+			Turn:            queuedTurnToDTO(turn),
+			At:              formatTime(time.Now().UTC()),
+			ClientRequestID: params.ClientRequestID,
 		})
 	}
 	return queuedTurnCancelResultDTO{TaskID: params.TaskID, QueuedTurnID: params.QueuedTurnID, Cancelled: cancelled}, nil
@@ -3215,6 +3268,7 @@ func (service *Service) updateTaskMetadata(ctx context.Context, raw json.RawMess
 		CancelledPlanEventID *string         `json:"cancelledPlanEventId"`
 		Usage                json.RawMessage `json:"usage"`
 		UpdatedAt            *string         `json:"updatedAt"`
+		ClientRequestID      string          `json:"clientRequestId"`
 	}
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return nil, invalidParams("params must be an object")
@@ -3294,6 +3348,9 @@ func (service *Service) updateTaskMetadata(ctx context.Context, raw json.RawMess
 		return nil, &core.RuntimeError{Code: "not_found", Message: "Task not found"}
 	}
 	notification := map[string]string{"repoId": task.RepoID, "taskId": task.ID}
+	if params.ClientRequestID != "" {
+		notification["clientRequestId"] = params.ClientRequestID
+	}
 	service.runtime.Notify("openade/task/updated", notification)
 	service.runtime.Notify("openade/task/previewChanged", notification)
 	return mutationOKDTO{OK: true}, nil
@@ -3427,13 +3484,13 @@ func (service *Service) deleteRepo(ctx context.Context, raw json.RawMessage) (co
 	return mutationOKDTO{OK: true}, nil
 }
 
-func (service *Service) handleTaskDelete(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
+func (service *Service) handleTaskDelete(ctx context.Context, conn *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
 	return service.runIdempotentMutation("openade/task/delete", raw, func() (core.JSONPayload, *core.RuntimeError) {
-		return service.deleteTask(ctx, raw)
+		return service.deleteTask(ctx, conn, raw)
 	})
 }
 
-func (service *Service) deleteTask(ctx context.Context, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
+func (service *Service) deleteTask(ctx context.Context, conn *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
 	var params struct {
 		RepoID  string `json:"repoId"`
 		TaskID  string `json:"taskId"`
@@ -3452,6 +3509,10 @@ func (service *Service) deleteTask(ctx context.Context, raw json.RawMessage) (co
 	}
 	if params.TaskID == "" {
 		return nil, invalidParams("taskId is required")
+	}
+	if taskDeleteNeedsCleanup(params.Options.DeleteSnapshots, params.Options.DeleteImages, params.Options.DeleteSessions, params.Options.DeleteWorktrees) &&
+		!conn.CanInvoke(taskDeleteCleanupPermission) {
+		return nil, &core.RuntimeError{Code: "permission_denied", Message: "Task delete cleanup options are not available to this client"}
 	}
 	repo, task, runtimeErr := service.taskRepo(ctx, params.RepoID, params.TaskID)
 	if runtimeErr != nil {
@@ -3488,6 +3549,10 @@ func (service *Service) deleteTask(ctx context.Context, raw json.RawMessage) (co
 	service.runtime.Notify("openade/task/previewChanged", notification)
 	service.runtime.Notify("openade/snapshotChanged", notification)
 	return taskDeleteResultDTO{RepoID: params.RepoID, TaskID: params.TaskID, Deleted: true}, nil
+}
+
+func taskDeleteNeedsCleanup(deleteSnapshots bool, deleteImages bool, deleteSessions bool, deleteWorktrees bool) bool {
+	return deleteSnapshots || deleteImages || deleteSessions || deleteWorktrees
 }
 
 type taskHarnessSessionCleanup struct {
@@ -3756,13 +3821,14 @@ func (service *Service) handleCommentCreate(ctx context.Context, _ *core.Connect
 
 func (service *Service) createComment(ctx context.Context, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
 	var params struct {
-		TaskID       string          `json:"taskId"`
-		Content      string          `json:"content"`
-		Source       json.RawMessage `json:"source"`
-		SelectedText selectedTextDTO `json:"selectedText"`
-		Author       userDTO         `json:"author"`
-		CommentID    string          `json:"commentId"`
-		CreatedAt    string          `json:"createdAt"`
+		TaskID          string          `json:"taskId"`
+		Content         string          `json:"content"`
+		Source          json.RawMessage `json:"source"`
+		SelectedText    selectedTextDTO `json:"selectedText"`
+		Author          userDTO         `json:"author"`
+		CommentID       string          `json:"commentId"`
+		CreatedAt       string          `json:"createdAt"`
+		ClientRequestID string          `json:"clientRequestId"`
 	}
 	if runtimeErr := decodeObject(raw, &params); runtimeErr != nil {
 		return nil, runtimeErr
@@ -3816,9 +3882,13 @@ func (service *Service) createComment(ctx context.Context, raw json.RawMessage) 
 	if task, ok, err := service.store.GetTask(ctx, params.TaskID); err != nil {
 		return nil, handlerError(err)
 	} else if ok {
-		service.runtime.Notify("openade/task/updated", map[string]string{"repoId": task.RepoID, "taskId": task.ID})
+		service.runtime.Notify("openade/task/updated", taskUpdatedNotification(task.RepoID, task.ID, params.ClientRequestID))
 	} else {
-		service.runtime.Notify("openade/task/updated", map[string]string{"taskId": params.TaskID})
+		notification := map[string]string{"taskId": params.TaskID}
+		if params.ClientRequestID != "" {
+			notification["clientRequestId"] = params.ClientRequestID
+		}
+		service.runtime.Notify("openade/task/updated", notification)
 	}
 	return commentCreateResultDTO{CommentID: commentID, CreatedAt: formatTime(createdAt)}, nil
 }
@@ -3831,10 +3901,11 @@ func (service *Service) handleCommentEdit(ctx context.Context, _ *core.Connectio
 
 func (service *Service) editComment(ctx context.Context, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
 	var params struct {
-		TaskID    string `json:"taskId"`
-		CommentID string `json:"commentId"`
-		Content   string `json:"content"`
-		UpdatedAt string `json:"updatedAt"`
+		TaskID          string `json:"taskId"`
+		CommentID       string `json:"commentId"`
+		Content         string `json:"content"`
+		UpdatedAt       string `json:"updatedAt"`
+		ClientRequestID string `json:"clientRequestId"`
 	}
 	if runtimeErr := decodeObject(raw, &params); runtimeErr != nil {
 		return nil, runtimeErr
@@ -3866,7 +3937,7 @@ func (service *Service) editComment(ctx context.Context, raw json.RawMessage) (c
 	if !updated {
 		return nil, &core.RuntimeError{Code: "not_found", Message: "Comment not found"}
 	}
-	service.notifyTaskUpdatedForTaskID(ctx, params.TaskID)
+	service.notifyTaskUpdatedForTaskID(ctx, params.TaskID, params.ClientRequestID)
 	return mutationOKDTO{OK: true}, nil
 }
 
@@ -3878,9 +3949,10 @@ func (service *Service) handleCommentDelete(ctx context.Context, _ *core.Connect
 
 func (service *Service) deleteComment(ctx context.Context, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
 	var params struct {
-		TaskID    string `json:"taskId"`
-		CommentID string `json:"commentId"`
-		UpdatedAt string `json:"updatedAt"`
+		TaskID          string `json:"taskId"`
+		CommentID       string `json:"commentId"`
+		UpdatedAt       string `json:"updatedAt"`
+		ClientRequestID string `json:"clientRequestId"`
 	}
 	if runtimeErr := decodeObject(raw, &params); runtimeErr != nil {
 		return nil, runtimeErr
@@ -3906,7 +3978,7 @@ func (service *Service) deleteComment(ctx context.Context, raw json.RawMessage) 
 	if !deleted {
 		return nil, &core.RuntimeError{Code: "not_found", Message: "Comment not found"}
 	}
-	service.notifyTaskUpdatedForTaskID(ctx, params.TaskID)
+	service.notifyTaskUpdatedForTaskID(ctx, params.TaskID, params.ClientRequestID)
 	return mutationOKDTO{OK: true}, nil
 }
 
@@ -4575,13 +4647,25 @@ func (err errorString) Error() string {
 	return string(err)
 }
 
-func (service *Service) notifyTaskUpdatedForTaskID(ctx context.Context, taskID string) {
+func taskUpdatedNotification(repoID string, taskID string, clientRequestID string) map[string]string {
+	notification := map[string]string{"repoId": repoID, "taskId": taskID}
+	if clientRequestID != "" {
+		notification["clientRequestId"] = clientRequestID
+	}
+	return notification
+}
+
+func (service *Service) notifyTaskUpdatedForTaskID(ctx context.Context, taskID string, clientRequestID string) {
 	task, ok, err := service.store.GetTask(ctx, taskID)
 	if err == nil && ok {
-		service.runtime.Notify("openade/task/updated", map[string]string{"repoId": task.RepoID, "taskId": task.ID})
+		service.runtime.Notify("openade/task/updated", taskUpdatedNotification(task.RepoID, task.ID, clientRequestID))
 		return
 	}
-	service.runtime.Notify("openade/task/updated", map[string]string{"taskId": taskID})
+	notification := map[string]string{"taskId": taskID}
+	if clientRequestID != "" {
+		notification["clientRequestId"] = clientRequestID
+	}
+	service.runtime.Notify("openade/task/updated", notification)
 }
 
 func taskPreviewsDTO(previews []storage.TaskPreview) []taskPreviewDTO {
@@ -4850,6 +4934,30 @@ func procsConfigsToDTO(configs []host.ProcsConfig) []procsConfigDTO {
 		result = append(result, procsConfigDTO{
 			RelativePath: config.RelativePath,
 			Processes:    procsProcessDefsToDTO(config.Processes),
+			Crons:        procsCronDefsToDTO(config.Crons),
+		})
+	}
+	return result
+}
+
+func cronDefinitionsReadToDTO(repoID string, taskID string, result host.ProcessListResult) cronDefinitionsReadDTO {
+	return cronDefinitionsReadDTO{
+		RepoID:       repoID,
+		TaskID:       taskID,
+		SearchRoot:   result.SearchRoot,
+		RepoRoot:     result.RepoRoot,
+		IsWorktree:   result.IsWorktree,
+		WorktreeRoot: result.WorktreeRoot,
+		Configs:      cronDefinitionConfigsToDTO(result.Configs),
+		Errors:       processConfigErrorsToDTO(result.Errors),
+	}
+}
+
+func cronDefinitionConfigsToDTO(configs []host.ProcsConfig) []cronDefinitionsConfigDTO {
+	result := make([]cronDefinitionsConfigDTO, 0, len(configs))
+	for _, config := range configs {
+		result = append(result, cronDefinitionsConfigDTO{
+			RelativePath: config.RelativePath,
 			Crons:        procsCronDefsToDTO(config.Crons),
 		})
 	}

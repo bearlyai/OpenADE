@@ -1,14 +1,30 @@
 import { CheckCircle2, ChevronRight, CircleAlert, CircleDot, FolderOpen, Loader2, Plus } from "lucide-react"
 import type {
+    OpenADECronDefinitionsReadResult,
     OpenADEProject,
     OpenADEProjectFileReadResult,
+    OpenADEProjectFilesFuzzySearchResult,
     OpenADEProjectFilesTreeResult,
+    OpenADEProjectGitBranchesReadResult,
+    OpenADEProjectGitInfoResult,
+    OpenADEProjectGitSummaryReadResult,
     OpenADEProjectProcessListResult,
     OpenADEProjectProcessReconnectResult,
     OpenADEProjectSearchResult,
     OpenADETaskPreview,
 } from "../../../../openade-module/src"
-import { ProjectFilesPanel, ProjectProcessesPanel, ProjectSearchPanel } from "./ProjectHostPanels"
+import {
+    ProjectCronPanel,
+    type ProjectCronCapabilities,
+    type ProjectFileCapabilities,
+    ProjectFilesPanel,
+    type ProjectGitCapabilities,
+    ProjectGitPanel,
+    type ProjectProcessCapabilities,
+    ProjectProcessesPanel,
+    type ProjectSearchCapabilities,
+    ProjectSearchPanel,
+} from "./ProjectHostPanels"
 
 export function ProjectTasksScreen({
     repo,
@@ -17,19 +33,39 @@ export function ProjectTasksScreen({
     filesLoading,
     fileRead,
     fileActionPath,
+    fileSearchQuery,
+    fileSearchResult,
+    fileSearchLoading,
     searchQuery,
     searchResult,
     searchLoading,
+    gitInfo,
+    gitBranches,
+    gitSummary,
+    gitLoading,
+    gitCapabilities,
+    cronDefinitions,
+    cronDefinitionsLoading,
+    cronCapabilities,
     processes,
     processesLoading,
     processActionId,
     processOutput,
+    fileCapabilities,
+    searchCapabilities,
+    processCapabilities,
+    canCreateTask,
     onSelectTask,
     onNewTask,
     onRefreshFiles,
     onReadFile,
+    onFileSearchQueryChange,
+    onSearchFiles,
+    onWriteFile,
     onSearchQueryChange,
     onSearch,
+    onRefreshGit,
+    onRefreshCronDefinitions,
     onRefreshProcesses,
     onStartProcess,
     onReconnectProcess,
@@ -41,19 +77,39 @@ export function ProjectTasksScreen({
     filesLoading: boolean
     fileRead: OpenADEProjectFileReadResult | null
     fileActionPath: string | null
+    fileSearchQuery: string
+    fileSearchResult: OpenADEProjectFilesFuzzySearchResult | null
+    fileSearchLoading: boolean
     searchQuery: string
     searchResult: OpenADEProjectSearchResult | null
     searchLoading: boolean
+    gitInfo: OpenADEProjectGitInfoResult | null
+    gitBranches: OpenADEProjectGitBranchesReadResult | null
+    gitSummary: OpenADEProjectGitSummaryReadResult | null
+    gitLoading: boolean
+    gitCapabilities: ProjectGitCapabilities
+    cronDefinitions: OpenADECronDefinitionsReadResult | null
+    cronDefinitionsLoading: boolean
+    cronCapabilities: ProjectCronCapabilities
     processes: OpenADEProjectProcessListResult | null
     processesLoading: boolean
     processActionId: string | null
     processOutput: OpenADEProjectProcessReconnectResult | null
+    fileCapabilities: ProjectFileCapabilities
+    searchCapabilities: ProjectSearchCapabilities
+    processCapabilities: ProjectProcessCapabilities
+    canCreateTask: boolean
     onSelectTask: (taskId: string) => void
     onNewTask: () => void
     onRefreshFiles: () => void
     onReadFile: (path: string) => void
+    onFileSearchQueryChange: (value: string) => void
+    onSearchFiles: () => void
+    onWriteFile: (path: string, content: string) => void
     onSearchQueryChange: (value: string) => void
     onSearch: () => void
+    onRefreshGit: () => void
+    onRefreshCronDefinitions: () => void
     onRefreshProcesses: () => void
     onStartProcess: (definitionId: string) => void
     onReconnectProcess: (processId: string) => void
@@ -82,14 +138,16 @@ export function ProjectTasksScreen({
                             <div className="truncate text-base font-semibold">{repo.name}</div>
                             <div className="truncate text-xs text-muted">{repo.path}</div>
                         </div>
-                        <button
-                            type="button"
-                            onClick={onNewTask}
-                            className="btn flex h-10 shrink-0 items-center gap-1.5 bg-primary px-3 text-sm text-primary-content"
-                        >
-                            <Plus size={15} />
-                            New
-                        </button>
+                        {canCreateTask && (
+                            <button
+                                type="button"
+                                onClick={onNewTask}
+                                className="btn flex h-10 shrink-0 items-center gap-1.5 bg-primary px-3 text-sm text-primary-content"
+                            >
+                                <Plus size={15} />
+                                New
+                            </button>
+                        )}
                     </div>
                     <div className="flex flex-wrap gap-1.5 px-3 py-2">
                         <span className="border border-border bg-base-100/60 px-2 py-1 text-[11px] text-muted">
@@ -104,11 +162,28 @@ export function ProjectTasksScreen({
                     </div>
                 </div>
 
+                <ProjectGitPanel
+                    info={gitInfo}
+                    branches={gitBranches}
+                    summary={gitSummary}
+                    loading={gitLoading}
+                    capabilities={gitCapabilities}
+                    onRefresh={onRefreshGit}
+                />
+
+                <ProjectCronPanel
+                    definitions={cronDefinitions}
+                    loading={cronDefinitionsLoading}
+                    capabilities={cronCapabilities}
+                    onRefresh={onRefreshCronDefinitions}
+                />
+
                 <ProjectProcessesPanel
                     processes={processes}
                     loading={processesLoading}
                     actionId={processActionId}
                     output={processOutput}
+                    capabilities={processCapabilities}
                     onRefresh={onRefreshProcesses}
                     onStart={onStartProcess}
                     onReconnect={onReconnectProcess}
@@ -120,14 +195,22 @@ export function ProjectTasksScreen({
                     loading={filesLoading}
                     fileRead={fileRead}
                     actionPath={fileActionPath}
+                    fileSearchQuery={fileSearchQuery}
+                    fileSearchResult={fileSearchResult}
+                    fileSearchLoading={fileSearchLoading}
+                    capabilities={fileCapabilities}
                     onRefresh={onRefreshFiles}
                     onReadFile={onReadFile}
+                    onFileSearchQueryChange={onFileSearchQueryChange}
+                    onSearchFiles={onSearchFiles}
+                    onWriteFile={onWriteFile}
                 />
 
                 <ProjectSearchPanel
                     query={searchQuery}
                     result={searchResult}
                     loading={searchLoading}
+                    capabilities={searchCapabilities}
                     onQueryChange={onSearchQueryChange}
                     onSearch={onSearch}
                     onOpenFile={onReadFile}

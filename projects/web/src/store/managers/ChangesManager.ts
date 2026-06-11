@@ -184,8 +184,12 @@ export class ChangesManager {
         return this.taskModel.environment?.taskWorkingDir
     }
 
+    private get usesRuntimeProductGit(): boolean {
+        return this.taskModel.usesRuntimeProductAPI === true
+    }
+
     private get usesRuntimeScopedGit(): boolean {
-        return this.taskModel.usesRuntimeProductReads === true && !!this.taskModel.repoId
+        return this.usesRuntimeProductGit && !!this.taskModel.repoId
     }
 
     private get legacyFromTreeish(): string {
@@ -208,7 +212,7 @@ export class ChangesManager {
     private async loadFilePair(): Promise<void> {
         const file = this.selectedFile
         const dir = this.workDir
-        if (!file || (!this.usesRuntimeScopedGit && !dir)) {
+        if (!file || (this.usesRuntimeProductGit ? !this.usesRuntimeScopedGit : !dir)) {
             runInAction(() => {
                 this.filePair = null
                 this.filePairLoading = false
@@ -278,7 +282,7 @@ export class ChangesManager {
     private async loadFilePatch(contextLines: PatchContextLines = this.filePatchContextLines): Promise<void> {
         const file = this.selectedFile
         const dir = this.workDir
-        if (!file || (!this.usesRuntimeScopedGit && !dir)) {
+        if (!file || (this.usesRuntimeProductGit ? !this.usesRuntimeScopedGit : !dir)) {
             runInAction(() => {
                 this.filePatch = null
                 this.filePatchLoading = false
@@ -356,7 +360,7 @@ export class ChangesManager {
     private async loadFromBaseFiles(): Promise<void> {
         const dir = this.workDir
         const mergeBase = this.taskModel.environment?.mergeBaseCommit
-        if (!this.usesRuntimeScopedGit && (!dir || !mergeBase)) return
+        if (this.usesRuntimeProductGit ? !this.usesRuntimeScopedGit : !dir || !mergeBase) return
 
         this.fromBaseLoading = true
 

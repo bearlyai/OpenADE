@@ -4,6 +4,8 @@ import type {
     OpenADECommentCreateResult,
     OpenADECommentDeleteRequest,
     OpenADECommentEditRequest,
+    OpenADECronDefinitionsReadRequest,
+    OpenADECronDefinitionsReadResult,
     OpenADECronInstallStateReadRequest,
     OpenADECronInstallStateReadResult,
     OpenADECronInstallStateReplaceRequest,
@@ -49,6 +51,7 @@ import type {
     OpenADERepoDeleteRequest,
     OpenADERepoUpdateRequest,
     OpenADEReviewStartRequest,
+    OpenADEReviewStartResult,
     OpenADESnapshot,
     OpenADETask,
     OpenADETaskChangesReadRequest,
@@ -149,7 +152,7 @@ import { NotificationManager } from "./managers/NotificationManager"
 import { QueryManager } from "./managers/QueryManager"
 import { QueuedTurnManager } from "./managers/QueuedTurnManager"
 import { RepeatManager } from "./managers/RepeatManager"
-import { RepoManager } from "./managers/RepoManager"
+import { RepoManager, projectPathFromGitInfo } from "./managers/RepoManager"
 import { RepoProcessesManager } from "./managers/RepoProcessesManager"
 import { RuntimeManager } from "./managers/RuntimeManager"
 import { ScratchpadManager } from "./managers/ScratchpadManager"
@@ -287,6 +290,7 @@ export class CodeStore {
     storeInitialized = false
     storeInitializing = false
     runtimeProductSnapshot: OpenADESnapshot | null = null
+    runtimeProductProjects: Map<string, OpenADEProject> = new Map()
     runtimeProductTasks: Map<string, Task> = new Map()
     runtimeProductStoreStatus: RuntimeProductStoreStatus = "disabled"
     runtimeProductStoreError: string | null = null
@@ -337,6 +341,7 @@ export class CodeStore {
             storeInitialized: true,
             storeInitializing: true,
             runtimeProductSnapshot: true,
+            runtimeProductProjects: true,
             runtimeProductTasks: true,
             runtimeProductStoreStatus: true,
             runtimeProductStoreError: true,
@@ -369,24 +374,35 @@ export class CodeStore {
     }
 
     private getSmartEditorProductFileContext(id: string, workspaceId: string, dir: string): { repoId: string; taskId?: string } | null {
-        if (!this.shouldUseRuntimeProductReads()) return null
+        if (!this.shouldUseRuntimeProductAPI()) return null
 
         const normalizedDir = normalizedDirectoryPath(dir)
         if (id.startsWith("task-") && id !== "task-create") {
             const taskId = id.slice("task-".length)
-            const repoId = this.findRuntimeProductRepoIdForTask(taskId) ?? workspaceId
+            const task = this.tasks.getTask(taskId)
+            const repoId = task?.repoId ?? this.findRuntimeProductRepoIdForTask(taskId)
+            if (!repoId) return null
             const repo = this.repos.getRepo(repoId)
-            if (!repo) return null
 
             const taskModel = this.tasks.getTaskModel(taskId)
-            const taskDir = taskModel?.environment?.taskWorkingDir ?? repo.path
-            if (normalizedDirectoryPath(taskDir) !== normalizedDir) return null
+            const taskDir = taskModel?.environment?.taskWorkingDir ?? repo?.path
+            if (taskDir) {
+                if (normalizedDirectoryPath(taskDir) !== normalizedDir) return null
+            } else if (repoId !== workspaceId) {
+                return null
+            }
             return { repoId, taskId }
         }
 
-        const repo = this.repos.getRepo(workspaceId)
-        if (!repo || normalizedDirectoryPath(repo.path) !== normalizedDir) return null
+        const repoPath = this.repos.getRepo(workspaceId)?.path ?? this.smartEditorProjectPathFromCachedGitInfo(workspaceId)
+        if (!repoPath || normalizedDirectoryPath(repoPath) !== normalizedDir) return null
         return { repoId: workspaceId }
+    }
+
+    private smartEditorProjectPathFromCachedGitInfo(workspaceId: string): string | null {
+        if (!this.shouldUseRuntimeProductAPI()) return null
+        const gitInfo = this.repos.getGitInfoSync(workspaceId)
+        return gitInfo ? projectPathFromGitInfo(gitInfo) : null
     }
 
     async initializeStores(): Promise<void> {
@@ -417,7 +433,7 @@ export class CodeStore {
     }
 
     private connectPersonalSettingsStore(): Promise<PersonalSettingsStoreConnection> {
-        if (this.usesCleanManagedCoreRuntime() && this.runtimeProductStore && this.runtimeProductSnapshot) {
+        if (this.usesCleanManagedCoreRuntime() && this.runtimeProductStore) {
             return connectProductPersonalSettingsStore(this.runtimeProductStore)
         }
         return this.config.legacyStoreConnectors?.connectPersonalSettingsStore?.() ?? connectPersonalSettingsStore()
@@ -434,7 +450,7 @@ export class CodeStore {
     }
 
     shouldUseCoreOwnedCronScheduler(): boolean {
-        return this.usesCleanManagedCoreRuntime() && this.shouldUseRuntimeProductReads()
+        return this.usesCleanManagedCoreRuntime()
     }
 
     private shouldPushEnvVarsToElectronHost(): boolean {
@@ -472,12 +488,7 @@ export class CodeStore {
             this.resetRuntimeNotificationSubscription()
             let mcpConnection: McpServerStoreConnection
             if (initializeRuntimeBeforeLegacyRepoStore) {
-                if (this.runtimeProductSnapshot) {
-                    mcpConnection = this.connectEphemeralMcpServerProjectionStore()
-                } else {
-                    mcpConnection = await this.connectMcpServerStore()
-                    await this.connectLegacyRepoStoreFallback()
-                }
+                mcpConnection = this.connectEphemeralMcpServerProjectionStore()
             } else {
                 mcpConnection = await this.connectMcpServerStore()
                 await this.connectLegacyRepoStoreFallback()
@@ -491,12 +502,12 @@ export class CodeStore {
                 this.storeInitializing = false
             })
             await this.mcpServers.initializeProductSettingsProjection()
-            const runtimeHydrationSource = this.shouldUseRuntimeProductReads() ? this.runtimeProductStore : null
+            const runtimeHydrationSource = this.shouldUseRuntimeProductAPI() ? this.runtimeProductStore : null
             await this.runtimes.hydrateOpenADETasks(runtimeHydrationSource).catch((err) => {
                 console.warn("[CodeStore] Failed to hydrate runtime state:", err)
             })
 
-            if (!this.shouldUseCoreOwnedCronScheduler()) {
+            if (!this.usesCleanManagedCoreRuntime()) {
                 this.crons.startAll().catch((err) => {
                     console.error("[CodeStore] Failed to start cron manager:", err)
                 })
@@ -621,9 +632,11 @@ export class CodeStore {
         const params = typeof notification.params === "object" && notification.params !== null ? (notification.params as Record<string, unknown>) : {}
 
         const settledTaskIds = this.runtimes.applyNotification(notification)
-        const wasUsingRuntimeProductReads = this.shouldUseRuntimeProductReads()
+        const hadRuntimeProductSnapshotProjection = this.hasRuntimeProductSnapshotProjection()
+        const wasUsingRuntimeProductAPI = this.shouldUseRuntimeProductAPI()
         const runtimeProductNotificationHandled = await this.handleRuntimeProductStoreNotification(notification)
-        const shouldSkipLegacyNotificationRefresh = runtimeProductNotificationHandled && (wasUsingRuntimeProductReads || this.shouldUseRuntimeProductReads())
+        const shouldSkipLegacyNotificationRefresh =
+            runtimeProductNotificationHandled && (hadRuntimeProductSnapshotProjection || wasUsingRuntimeProductAPI || this.shouldUseRuntimeProductAPI())
         for (const taskId of settledTaskIds) {
             await this.notifyRuntimeTaskSettled(taskId)
         }
@@ -729,6 +742,14 @@ export class CodeStore {
         console.warn("[CodeStore] Runtime product store fallback:", properties)
     }
 
+    private legacyProductClient(method: string): typeof localOpenADEClient {
+        this.trackRuntimeProductFallback("legacy_product_client", method)
+        if (this.usesCleanManagedCoreRuntime()) {
+            throw new Error(`Clean managed Core cannot fall back to the legacy product client for ${method}`)
+        }
+        return localOpenADEClient
+    }
+
     async initializeRuntimeProductStore(): Promise<void> {
         if (!this.shouldEnableRuntimeProductStore()) {
             this.runtimeProductStore?.destroy()
@@ -736,6 +757,7 @@ export class CodeStore {
             this.trackedRuntimeProductFallbackKeys.clear()
             runInAction(() => {
                 this.runtimeProductSnapshot = null
+                this.runtimeProductProjects.clear()
                 this.runtimeProductTasks.clear()
                 this.runtimeProductTaskReadLoadedAt.clear()
                 this.runtimeProductStoreStatus = "disabled"
@@ -756,6 +778,7 @@ export class CodeStore {
             const snapshot = await productStore.refreshSnapshot()
             runInAction(() => {
                 this.runtimeProductSnapshot = snapshot
+                this.replaceRuntimeProductProjects(snapshot.repos)
                 this.pruneRuntimeProductTasks(snapshot)
                 this.runtimeProductStoreStatus = "ready"
                 this.runtimeProductStoreError = null
@@ -764,6 +787,7 @@ export class CodeStore {
             const message = this.runtimeProductErrorMessage(err)
             runInAction(() => {
                 this.runtimeProductSnapshot = null
+                this.runtimeProductProjects.clear()
                 this.runtimeProductTasks.clear()
                 this.runtimeProductTaskReadLoadedAt.clear()
                 this.runtimeProductStoreStatus = "error"
@@ -780,6 +804,7 @@ export class CodeStore {
             const snapshot = await this.runtimeProductStore.refreshSnapshot(options)
             runInAction(() => {
                 this.runtimeProductSnapshot = snapshot
+                this.replaceRuntimeProductProjects(snapshot.repos)
                 this.pruneRuntimeProductTasks(snapshot)
                 this.runtimeProductStoreStatus = "ready"
                 this.runtimeProductStoreError = null
@@ -796,8 +821,41 @@ export class CodeStore {
         }
     }
 
+    private shouldRefreshRuntimeProductProjectsWithoutSnapshot(): boolean {
+        return this.usesCleanManagedCoreRuntime() && !this.hasRuntimeProductSnapshotProjection()
+    }
+
+    private async refreshRuntimeProductProjection(options: OpenADEProductReadOptions = {}): Promise<void> {
+        if (this.shouldRefreshRuntimeProductProjectsWithoutSnapshot()) {
+            await this.loadRuntimeProductProjects(options)
+            return
+        }
+        await this.refreshRuntimeProductSnapshot(options)
+    }
+
+    async loadRuntimeProductProjects(options: OpenADEProductReadOptions = {}): Promise<OpenADEProject[]> {
+        if (!this.runtimeProductStore || !this.shouldUseRuntimeProductAPI()) return []
+        try {
+            const projects = await this.runtimeProductStore.listProjects(options)
+            runInAction(() => {
+                this.replaceRuntimeProductProjects(projects)
+                if (this.runtimeProductStoreStatus !== "loading") this.runtimeProductStoreStatus = "ready"
+                this.runtimeProductStoreError = null
+            })
+            return projects
+        } catch (err) {
+            const message = this.runtimeProductErrorMessage(err)
+            runInAction(() => {
+                this.runtimeProductStoreStatus = "error"
+                this.runtimeProductStoreError = message
+            })
+            this.trackRuntimeProductStoreError("project_list", err)
+            throw err
+        }
+    }
+
     private runtimeProductTaskPreview(repoId: string, taskId: string): OpenADETaskPreview | undefined {
-        return this.runtimeProductSnapshot?.repos.find((repo) => repo.id === repoId)?.tasks.find((task) => task.id === taskId)
+        return this.getRuntimeProductProject(repoId)?.tasks.find((task) => task.id === taskId)
     }
 
     private cacheRuntimeProductTask(task: OpenADETask): Task {
@@ -811,12 +869,47 @@ export class CodeStore {
     }
 
     private pruneRuntimeProductTasks(snapshot: OpenADESnapshot): void {
-        const taskIds = new Set(snapshot.repos.flatMap((repo) => repo.tasks.map((task) => task.id)))
+        this.pruneRuntimeProductTasksForProjects(snapshot.repos)
+    }
+
+    private pruneRuntimeProductTasksForProjects(projects: OpenADEProject[] | null): void {
+        const taskIds = new Set((projects ?? []).flatMap((repo) => repo.tasks.map((task) => task.id)))
         for (const taskId of this.runtimeProductTasks.keys()) {
             if (!taskIds.has(taskId)) {
                 this.runtimeProductTasks.delete(taskId)
                 this.runtimeProductTaskReadLoadedAt.delete(taskId)
             }
+        }
+    }
+
+    private runtimeProductTaskIdsForRepo(repoId: string): Set<string> {
+        const taskIds = new Set<string>()
+        for (const [taskId, task] of this.runtimeProductTasks) {
+            if (task.repoId === repoId) taskIds.add(taskId)
+        }
+        const project = this.runtimeProductSnapshot?.repos.find((repo) => repo.id === repoId) ?? this.runtimeProductProjects.get(repoId)
+        for (const task of project?.tasks ?? []) taskIds.add(task.id)
+        return taskIds
+    }
+
+    private clearRuntimeProductRepoState(repoId: string, taskIds = this.runtimeProductTaskIdsForRepo(repoId)): void {
+        runInAction(() => {
+            this.runtimeProductProjects.delete(repoId)
+            for (const taskId of taskIds) {
+                this.runtimeProductTasks.delete(taskId)
+                this.runtimeProductTaskReadLoadedAt.delete(taskId)
+            }
+            if (this.runtimeProductSnapshot) {
+                this.runtimeProductSnapshot = {
+                    ...this.runtimeProductSnapshot,
+                    repos: this.runtimeProductSnapshot.repos.filter((repo) => repo.id !== repoId),
+                    workingTaskIds: this.runtimeProductSnapshot.workingTaskIds.filter((taskId) => !taskIds.has(taskId)),
+                }
+            }
+        })
+        for (const taskId of taskIds) {
+            this.tasks.invalidateTaskModel(taskId)
+            this.runtimes.removeTask(taskId)
         }
     }
 
@@ -870,11 +963,11 @@ export class CodeStore {
         options: OpenADETaskReadOptions = LIGHTWEIGHT_RUNTIME_TASK_READ_OPTIONS,
         readOptions: OpenADEProductReadOptions = { bypassCache: true }
     ): Promise<OpenADETask | null> {
-        if (!this.runtimeProductStore || !this.shouldUseRuntimeProductReads()) return null
+        if (!this.runtimeProductStore || !this.shouldUseRuntimeProductAPI()) return null
 
         let repoId = this.runtimeProductTasks.get(taskId)?.repoId ?? this.findRuntimeProductRepoIdForTask(taskId)
         if (!repoId) {
-            await this.refreshRuntimeProductSnapshot({ bypassCache: true })
+            await this.refreshRuntimeProductProjection({ bypassCache: true })
             repoId = this.findRuntimeProductRepoIdForTask(taskId)
         }
         if (!repoId) return null
@@ -888,33 +981,84 @@ export class CodeStore {
         await this.refreshRuntimeProductTaskForTaskId(taskId)
     }
 
-    getCachedRuntimeProductTask(taskId: string): Task | null {
+    private getCachedRuntimeProductTask(taskId: string): Task | null {
         return this.runtimeProductTasks.get(taskId) ?? null
     }
 
-    getCachedRuntimeProductOpenADETask(taskId: string): OpenADETask | null {
+    getCachedProductTask(taskId: string): Task | null {
+        const runtimeTask = this.getCachedRuntimeProductTask(taskId)
+        if (runtimeTask) return runtimeTask
+        if (this.shouldUseRuntimeProductAPI()) return null
+
+        const taskStore = this.getCachedTaskStore(taskId)
+        return taskStore ? taskFromStore(taskStore) : null
+    }
+
+    private getCachedRuntimeProductOpenADETask(taskId: string): OpenADETask | null {
         const repoId = this.runtimeProductTasks.get(taskId)?.repoId ?? this.findRuntimeProductRepoIdForTask(taskId)
         if (!repoId) return null
         return this.runtimeProductStore?.getCachedTask(repoId, taskId) ?? null
     }
 
-    findRuntimeProductRepoIdForTask(taskId: string): string | null {
+    private findRuntimeProductRepoIdForTask(taskId: string): string | null {
         for (const repo of this.runtimeProductSnapshot?.repos ?? []) {
+            if (repo.tasks.some((task) => task.id === taskId)) return repo.id
+        }
+        for (const repo of this.runtimeProductProjects.values()) {
             if (repo.tasks.some((task) => task.id === taskId)) return repo.id
         }
         return null
     }
 
-    hasRuntimeProductTaskReference(taskId: string): boolean {
-        return this.runtimeProductSnapshot !== null && this.findRuntimeProductRepoIdForTask(taskId) !== null
+    private hasRuntimeProductTaskReference(taskId: string): boolean {
+        return this.findRuntimeProductRepoIdForTask(taskId) !== null
     }
 
-    shouldUseRuntimeProductReads(): boolean {
+    hasProductTaskModelSource(taskId: string): boolean {
+        return this.getCachedProductTask(taskId) !== null || this.hasRuntimeProductTaskReference(taskId)
+    }
+
+    findProductRepoIdForTask(taskId: string): string | null {
+        const task = this.getCachedProductTask(taskId)
+        if (task?.repoId) return task.repoId
+
+        const runtimeRepoId = this.findRuntimeProductRepoIdForTask(taskId)
+        if (runtimeRepoId) return runtimeRepoId
+        if (this.shouldUseRuntimeProductAPI()) return null
+
+        for (const repo of this.repoStore?.repos.all() ?? []) {
+            if (repo.tasks.some((taskPreview) => taskPreview.id === taskId)) return repo.id
+        }
+        return null
+    }
+
+    private hasRuntimeProductSnapshotProjection(): boolean {
         return this.runtimeProductSnapshot !== null
     }
 
+    shouldUseRuntimeProductAPI(): boolean {
+        return this.runtimeProductStore !== null && (this.hasRuntimeProductSnapshotProjection() || this.usesCleanManagedCoreRuntime())
+    }
+
+    shouldUseRuntimeProductProjectListProjection(): boolean {
+        return this.shouldUseRuntimeProductAPI() && this.shouldRefreshRuntimeProductProjectsWithoutSnapshot()
+    }
+
+    getRuntimeProductProjectProjection(): OpenADEProject[] | null {
+        if (this.hasRuntimeProductSnapshotProjection() && this.runtimeProductSnapshot) return this.runtimeProductSnapshot.repos
+        if (this.shouldUseRuntimeProductAPI() && this.usesCleanManagedCoreRuntime()) return Array.from(this.runtimeProductProjects.values())
+        return null
+    }
+
+    trackRepoListFallbackIfNeeded(): void {
+        if (this.getRuntimeProductProjectProjection() !== null) return
+        if (this.repoStore?.repos.all().length) {
+            this.trackRuntimeProductFallback("repo_list", this.hasRuntimeProductSnapshotProjection() ? "runtime_repo_missing" : "snapshot_unavailable")
+        }
+    }
+
     getRuntimeProductProject(repoId: string): OpenADEProject | null {
-        return this.runtimeProductSnapshot?.repos.find((repo) => repo.id === repoId) ?? null
+        return this.runtimeProductSnapshot?.repos.find((repo) => repo.id === repoId) ?? this.runtimeProductProjects.get(repoId) ?? null
     }
 
     getRuntimeProductTaskPreviewDto(repoId: string, taskId: string): OpenADETaskPreview | null {
@@ -930,6 +1074,8 @@ export class CodeStore {
         const runtimePreviews = this.getRuntimeProductTaskPreviews(repoId)
         if (runtimePreviews) return runtimePreviews
 
+        if (this.shouldUseRuntimeProductAPI()) return []
+
         const legacyPreviews = this.repoStore?.repos.get(repoId)?.tasks ?? []
         if (legacyPreviews.length > 0) {
             this.trackRuntimeProductFallback("task_previews", this.runtimeProductSnapshot ? "runtime_repo_missing" : "snapshot_unavailable")
@@ -938,23 +1084,39 @@ export class CodeStore {
     }
 
     getTaskPreviewReposForStats(): Array<{ id: string; name: string; tasks: OpenADETaskPreview[] }> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductSnapshot) {
+        if (this.hasRuntimeProductSnapshotProjection() && this.runtimeProductSnapshot) {
             return this.runtimeProductSnapshot.repos.map((repo) => ({
                 id: repo.id,
                 name: repo.name,
                 tasks: repo.tasks,
             }))
         }
+        if (this.shouldUseRuntimeProductAPI() && this.usesCleanManagedCoreRuntime()) {
+            return Array.from(this.runtimeProductProjects.values()).map((repo) => ({ id: repo.id, name: repo.name, tasks: repo.tasks }))
+        }
         return this.repoStore?.repos.all().map((repo) => ({ id: repo.id, name: repo.name, tasks: repo.tasks })) ?? []
     }
 
-    private syncRuntimeProductStoreCache(taskId?: string): void {
+    private replaceRuntimeProductProjects(projects: OpenADEProject[] | null): void {
+        this.runtimeProductProjects.clear()
+        for (const project of projects ?? []) {
+            this.runtimeProductProjects.set(project.id, project)
+        }
+    }
+
+    private syncRuntimeProductStoreCache(taskId?: string, repoIdHint?: string): void {
         const productStore = this.runtimeProductStore
         runInAction(() => {
             this.runtimeProductSnapshot = productStore?.snapshot ?? null
-            if (this.runtimeProductSnapshot) this.pruneRuntimeProductTasks(this.runtimeProductSnapshot)
+            const projects = productStore?.getCachedProjects() ?? this.runtimeProductSnapshot?.repos ?? null
+            this.replaceRuntimeProductProjects(projects)
+            if (this.runtimeProductSnapshot) {
+                this.pruneRuntimeProductTasks(this.runtimeProductSnapshot)
+            } else if (projects) {
+                this.pruneRuntimeProductTasksForProjects(projects)
+            }
             if (productStore && taskId) {
-                const repoId = this.findRuntimeProductRepoIdForTask(taskId)
+                const repoId = repoIdHint ?? this.runtimeProductTasks.get(taskId)?.repoId ?? this.findRuntimeProductRepoIdForTask(taskId)
                 const task = repoId ? productStore.getCachedTask(repoId, taskId) : null
                 if (task) this.cacheRuntimeProductTask(task)
             }
@@ -970,7 +1132,13 @@ export class CodeStore {
             const handled = await this.runtimeProductStore.handleNotification(notification)
             runInAction(() => {
                 this.runtimeProductSnapshot = this.runtimeProductStore?.snapshot ?? null
-                if (this.runtimeProductSnapshot) this.pruneRuntimeProductTasks(this.runtimeProductSnapshot)
+                const projects = this.runtimeProductStore?.getCachedProjects() ?? this.runtimeProductSnapshot?.repos ?? null
+                this.replaceRuntimeProductProjects(projects)
+                if (this.runtimeProductSnapshot) {
+                    this.pruneRuntimeProductTasks(this.runtimeProductSnapshot)
+                } else if (projects) {
+                    this.pruneRuntimeProductTasksForProjects(projects)
+                }
                 const params = notificationRecord(notification)
                 const repoId = typeof params.repoId === "string" ? params.repoId : null
                 const taskId = typeof params.taskId === "string" ? params.taskId : null
@@ -1011,8 +1179,8 @@ export class CodeStore {
     }
 
     private async refreshProductSnapshotAfterRuntimeNotification(): Promise<void> {
-        if (this.shouldUseRuntimeProductReads()) {
-            await this.refreshRuntimeProductSnapshot({ bypassCache: true })
+        if (this.shouldUseRuntimeProductAPI()) {
+            await this.refreshRuntimeProductProjection({ bypassCache: true })
             return
         }
 
@@ -1020,12 +1188,11 @@ export class CodeStore {
     }
 
     private shouldRefreshRuntimeProductTaskDetail(taskId: string): boolean {
-        if (!this.shouldUseRuntimeProductReads()) return true
         return this.runtimeProductTasks.has(taskId) || this.getCachedRuntimeProductOpenADETask(taskId) !== null
     }
 
     private async refreshProductTaskAfterRuntimeNotification(taskId: string): Promise<boolean> {
-        if (this.shouldUseRuntimeProductReads()) {
+        if (this.shouldUseRuntimeProductAPI()) {
             if (!this.shouldRefreshRuntimeProductTaskDetail(taskId)) return false
             await this.refreshRuntimeProductTaskForTaskId(taskId, { hydrateSessionEvents: false })
             return true
@@ -1131,6 +1298,9 @@ export class CodeStore {
         if (this.shouldEnableRuntimeProductStore()) {
             this.trackRuntimeProductFallback("task_store", this.runtimeProductSnapshot ? "direct_task_store_read" : "snapshot_unavailable")
         }
+        if (this.shouldUseRuntimeProductAPI()) {
+            throw new Error("Legacy task stores are disabled while the runtime product API is active")
+        }
 
         const cached = this.taskStoreConnections.get(taskId)
         if (cached) {
@@ -1169,7 +1339,7 @@ export class CodeStore {
     async backfillTaskUsagePreviews(tasks: Array<{ repoId: string; taskId: string }>): Promise<void> {
         if (tasks.length === 0) return
 
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore && this.usesCleanManagedCoreRuntime()) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore && this.usesCleanManagedCoreRuntime()) {
             const taskIdsByRepo = new Map<string, string[]>()
             for (const task of tasks) {
                 const preview = this.runtimeProductTaskPreview(task.repoId, task.taskId)
@@ -1190,7 +1360,7 @@ export class CodeStore {
     }
 
     async backfillTaskUsagePreview(repoId: string, taskId: string): Promise<void> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             const preview = this.runtimeProductTaskPreview(repoId, taskId)
             if (!preview || !needsTaskUsageBackfill(preview.usage)) return
 
@@ -1203,7 +1373,6 @@ export class CodeStore {
             const task = await this.loadRuntimeProductTask(repoId, taskId)
             const usage = task ? computeTaskUsage(task.events) : normalizeTaskPreviewUsage(preview.usage)
             await this.updateProductTaskMetadata({ taskId, usage })
-            await this.refreshProductStateAfterTaskMutation(taskId)
             return
         }
 
@@ -1255,19 +1424,30 @@ export class CodeStore {
     }
 
     async syncRepoStore(): Promise<void> {
+        if (this.shouldUseRuntimeProductAPI()) {
+            return
+        }
+
         if (this.repoStoreConnection) {
             await this.repoStoreConnection.sync()
         }
     }
 
     async refreshRepoStoreFromStorage(): Promise<void> {
-        await this.repoStoreConnection?.refresh()
-        if (this.shouldUseRuntimeProductReads()) {
-            await this.refreshRuntimeProductSnapshot({ bypassCache: true })
+        if (this.shouldUseRuntimeProductAPI()) {
+            await this.refreshRuntimeProductProjection({ bypassCache: true })
+            return
         }
+
+        await this.repoStoreConnection?.refresh()
     }
 
     async refreshTaskStoreFromStorage(taskId: string): Promise<void> {
+        if (this.shouldUseRuntimeProductAPI()) {
+            await this.refreshRuntimeProductTaskById(taskId)
+            return
+        }
+
         const connection = this.taskStoreConnections.get(taskId)
         if (connection) {
             const refreshed = await connection.refresh()
@@ -1283,8 +1463,8 @@ export class CodeStore {
     }
 
     async refreshProductStateAfterTaskMutation(taskId: string): Promise<void> {
-        if (this.shouldUseRuntimeProductReads()) {
-            await Promise.all([this.refreshRuntimeProductSnapshot({ bypassCache: true }), this.refreshRuntimeProductTaskForTaskId(taskId)])
+        if (this.shouldUseRuntimeProductAPI()) {
+            await Promise.all([this.refreshRuntimeProductProjection({ bypassCache: true }), this.refreshRuntimeProductTaskForTaskId(taskId)])
             return
         }
 
@@ -1293,8 +1473,8 @@ export class CodeStore {
     }
 
     async refreshProductStateAfterTaskCreation(repoId: string, taskId: string): Promise<void> {
-        if (this.shouldUseRuntimeProductReads()) {
-            await this.refreshRuntimeProductSnapshot({ bypassCache: true })
+        if (this.shouldUseRuntimeProductAPI()) {
+            await this.refreshRuntimeProductProjection({ bypassCache: true })
             await this.getRuntimeProductTask(repoId, taskId, LIGHTWEIGHT_RUNTIME_TASK_READ_OPTIONS, { bypassCache: true })
             return
         }
@@ -1306,12 +1486,18 @@ export class CodeStore {
     async refreshProductStateAfterTaskDeletion(taskId: string): Promise<void> {
         this.disconnectTaskStore(taskId)
 
-        if (this.shouldUseRuntimeProductReads()) {
+        if (this.shouldUseRuntimeProductAPI()) {
             runInAction(() => {
                 this.runtimeProductTasks.delete(taskId)
                 this.runtimeProductTaskReadLoadedAt.delete(taskId)
                 this.runtimeProductSnapshot = this.runtimeProductStore?.snapshot ?? this.runtimeProductSnapshot
-                if (this.runtimeProductSnapshot) this.pruneRuntimeProductTasks(this.runtimeProductSnapshot)
+                const projects = this.runtimeProductStore?.getCachedProjects() ?? this.runtimeProductSnapshot?.repos ?? null
+                this.replaceRuntimeProductProjects(projects)
+                if (this.runtimeProductSnapshot) {
+                    this.pruneRuntimeProductTasks(this.runtimeProductSnapshot)
+                } else if (projects) {
+                    this.pruneRuntimeProductTasksForProjects(projects)
+                }
             })
             return
         }
@@ -1320,7 +1506,11 @@ export class CodeStore {
     }
 
     async refreshProductStateAfterRepoMutation(): Promise<void> {
-        if (this.shouldUseRuntimeProductReads()) {
+        if (this.shouldUseRuntimeProductAPI()) {
+            if (this.usesCleanManagedCoreRuntime() && !this.hasRuntimeProductSnapshotProjection()) {
+                await this.loadRuntimeProductProjects({ bypassCache: true })
+                return
+            }
             await this.refreshRuntimeProductSnapshot({ bypassCache: true })
             return
         }
@@ -1329,52 +1519,54 @@ export class CodeStore {
     }
 
     async createProductRepo(params: OpenADERepoCreateRequest): Promise<OpenADERepoCreateResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             const result = await this.runtimeProductStore.createRepo(params)
             this.syncRuntimeProductStoreCache()
             return result
         }
 
-        return localOpenADEClient.createRepo(params)
+        return this.legacyProductClient("openade/repo/create").createRepo(params)
     }
 
     async updateProductRepo(params: OpenADERepoUpdateRequest): Promise<void> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             await this.runtimeProductStore.updateRepo(params)
             this.syncRuntimeProductStoreCache()
             return
         }
 
-        await localOpenADEClient.updateRepo(params)
+        await this.legacyProductClient("openade/repo/update").updateRepo(params)
     }
 
     async deleteProductRepo(params: OpenADERepoDeleteRequest): Promise<void> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
+            const taskIds = this.runtimeProductTaskIdsForRepo(params.repoId)
             await this.runtimeProductStore.deleteRepo(params)
             this.syncRuntimeProductStoreCache()
+            this.clearRuntimeProductRepoState(params.repoId, taskIds)
             return
         }
 
-        await localOpenADEClient.deleteRepo(params)
+        await this.legacyProductClient("openade/repo/delete").deleteRepo(params)
     }
 
     async startProductTurn(params: OpenADETurnStartRequest): Promise<OpenADETurnStartResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             const result = await this.runtimeProductStore.startTurn(params)
-            this.syncRuntimeProductStoreCache(result.taskId || params.inTaskId || undefined)
+            this.syncRuntimeProductStoreCache(result.taskId || params.inTaskId || undefined, params.repoId)
             return result
         }
 
-        return localOpenADEClient.startTurn(params)
+        return this.legacyProductClient("openade/turn/start").startTurn(params)
     }
 
     async persistProductTaskImage(payload: ImagePersistencePayload): Promise<void> {
-        if (this.shouldUseRuntimeProductReads()) {
+        if (this.shouldUseRuntimeProductAPI()) {
             const request = imagePersistencePayloadToWriteRequest(payload)
             if (this.runtimeProductStore) {
                 await this.runtimeProductStore.writeTaskImage(request)
             } else {
-                await localOpenADEClient.writeTaskImage(request)
+                await this.legacyProductClient("openade/task/image/write").writeTaskImage(request)
             }
             return
         }
@@ -1383,15 +1575,15 @@ export class CodeStore {
     }
 
     async readProductTaskImage(params: OpenADETaskImageReadRequest): Promise<OpenADETaskImageReadResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readTaskImage(params)
         }
 
-        return localOpenADEClient.readTaskImage(params)
+        return this.legacyProductClient("openade/task/image/read").readTaskImage(params)
     }
 
     async readProductStagedTaskImage(params: OpenADETaskImageStagedReadRequest): Promise<OpenADETaskImageStagedReadResult | null> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readStagedTaskImage(params)
         }
 
@@ -1399,11 +1591,11 @@ export class CodeStore {
     }
 
     async importProductLegacyResources(params: OpenADELegacyResourcesImportRequest): Promise<OpenADELegacyResourcesImportResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.importLegacyResources(params)
         }
 
-        return localOpenADEClient.importLegacyResources(params)
+        return this.legacyProductClient("openade/import/legacyResources").importLegacyResources(params)
     }
 
     async importProductLegacyYjsData(): Promise<OpenADEProductLegacyYjsImportReport> {
@@ -1451,409 +1643,430 @@ export class CodeStore {
         await markCoreLegacyYjsMigrationAccepted(report, resources)
     }
 
-    async startProductReview(params: OpenADEReviewStartRequest): Promise<{ taskId: string }> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+    async startProductReview(params: OpenADEReviewStartRequest): Promise<OpenADEReviewStartResult> {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             const result = await this.runtimeProductStore.startReview(params)
             this.syncRuntimeProductStoreCache(result.taskId)
             return result
         }
 
-        return localOpenADEClient.startReview(params)
+        return this.legacyProductClient("openade/review/start").startReview(params)
     }
 
     async interruptProductTurn(taskId: string): Promise<void> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             await this.runtimeProductStore.interruptTurn(taskId)
             return
         }
 
-        await localOpenADEClient.interruptTurn(taskId)
+        await this.legacyProductClient("openade/turn/interrupt").interruptTurn(taskId)
     }
 
     async cancelProductQueuedTurn(params: OpenADEQueuedTurnCancelRequest): Promise<OpenADEQueuedTurnCancelResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             const result = await this.runtimeProductStore.cancelQueuedTurn(params)
             this.syncRuntimeProductStoreCache(params.taskId)
             return result
         }
 
-        return localOpenADEClient.cancelQueuedTurn(params)
+        return this.legacyProductClient("openade/queued-turn/cancel").cancelQueuedTurn(params)
     }
 
     async updateProductTaskMetadata(params: OpenADETaskMetadataUpdateRequest): Promise<void> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             await this.runtimeProductStore.updateTaskMetadata(params)
             this.syncRuntimeProductStoreCache(params.taskId)
             return
         }
 
-        await localOpenADEClient.updateTaskMetadata(params)
+        await this.legacyProductClient("openade/task/metadata/update").updateTaskMetadata(params)
+    }
+
+    patchRuntimeProductTaskMetadata(params: OpenADETaskMetadataUpdateRequest): boolean {
+        if (!this.shouldUseRuntimeProductAPI() || !this.runtimeProductStore) return false
+        this.runtimeProductStore.patchTaskMetadata(params)
+        this.syncRuntimeProductStoreCache(params.taskId)
+        return true
     }
 
     async generateProductTaskTitle(params: OpenADETaskTitleGenerateRequest): Promise<OpenADETaskTitleGenerateResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             const result = await this.runtimeProductStore.generateTaskTitle(params)
             this.syncRuntimeProductStoreCache(params.taskId)
             return result
         }
 
-        return localOpenADEClient.generateTaskTitle(params)
+        return this.legacyProductClient("openade/task/title/generate").generateTaskTitle(params)
     }
 
     async setupProductTaskEnvironment(params: OpenADETaskEnvironmentSetupRequest): Promise<void> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             await this.runtimeProductStore.setupTaskEnvironment(params)
             this.syncRuntimeProductStoreCache(params.taskId)
             return
         }
 
-        await localOpenADEClient.setupTaskEnvironment(params)
+        await this.legacyProductClient("openade/task/environment/setup").setupTaskEnvironment(params)
     }
 
     async prepareProductTaskEnvironment(params: OpenADETaskEnvironmentPrepareRequest): Promise<OpenADETaskEnvironmentPrepareResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
-            return this.runtimeProductStore.prepareTaskEnvironment(params)
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
+            const result = await this.runtimeProductStore.prepareTaskEnvironment(params)
+            this.syncRuntimeProductStoreCache(params.taskId)
+            return result
         }
 
-        return localOpenADEClient.prepareTaskEnvironment(params)
+        return this.legacyProductClient("openade/task/environment/prepare").prepareTaskEnvironment(params)
     }
 
     async createProductComment(params: OpenADECommentCreateRequest): Promise<OpenADECommentCreateResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             const result = await this.runtimeProductStore.createComment(params)
             this.syncRuntimeProductStoreCache(params.taskId)
             return result
         }
 
-        return localOpenADEClient.createComment(params)
+        return this.legacyProductClient("openade/comment/create").createComment(params)
     }
 
     async editProductComment(params: OpenADECommentEditRequest): Promise<void> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             await this.runtimeProductStore.editComment(params)
             this.syncRuntimeProductStoreCache(params.taskId)
             return
         }
 
-        await localOpenADEClient.editComment(params)
+        await this.legacyProductClient("openade/comment/edit").editComment(params)
     }
 
     async deleteProductComment(params: OpenADECommentDeleteRequest): Promise<void> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             await this.runtimeProductStore.deleteComment(params)
             this.syncRuntimeProductStoreCache(params.taskId)
             return
         }
 
-        await localOpenADEClient.deleteComment(params)
+        await this.legacyProductClient("openade/comment/delete").deleteComment(params)
     }
 
     async deleteProductTask(params: OpenADETaskDeleteRequest): Promise<OpenADETaskDeleteResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             const result = await this.runtimeProductStore.deleteTask(params)
             this.syncRuntimeProductStoreCache()
+            runInAction(() => {
+                this.runtimeProductTasks.delete(params.taskId)
+                this.runtimeProductTaskReadLoadedAt.delete(params.taskId)
+            })
             return result
         }
 
-        return localOpenADEClient.deleteTask(params)
+        return this.legacyProductClient("openade/task/delete").deleteTask(params)
     }
 
     async readProductTaskChanges(params: OpenADETaskChangesReadRequest): Promise<OpenADETaskChangesReadResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readTaskChanges(params)
         }
 
-        return localOpenADEClient.readTaskChanges(params)
+        return this.legacyProductClient("openade/task/changes/read").readTaskChanges(params)
     }
 
     async readProductTaskGitSummary(params: OpenADETaskGitSummaryRequest, options: OpenADEProductReadOptions = {}): Promise<OpenADETaskGitSummaryResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readTaskGitSummary(params, options)
         }
 
-        return localOpenADEClient.readTaskGitSummary(params)
+        return this.legacyProductClient("openade/task/git/summary/read").readTaskGitSummary(params)
     }
 
     async readProductTaskGitScopes(params: OpenADETaskGitScopesReadRequest): Promise<OpenADETaskGitScopesReadResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readTaskGitScopes(params)
         }
 
-        return localOpenADEClient.readTaskGitScopes(params)
+        return this.legacyProductClient("openade/task/git/scopes/read").readTaskGitScopes(params)
     }
 
     async readProductTaskResourceInventory(params: OpenADETaskResourceInventoryReadRequest): Promise<OpenADETaskResourceInventoryReadResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readTaskResourceInventory(params)
         }
 
-        return localOpenADEClient.readTaskResourceInventory(params)
+        return this.legacyProductClient("openade/task/resourceInventory/read").readTaskResourceInventory(params)
     }
 
     async readProductMcpServers(): Promise<OpenADEMCPServersReadResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readMcpServers()
         }
 
-        return localOpenADEClient.readMcpServers()
+        return this.legacyProductClient("openade/settings/mcpServers/read").readMcpServers()
     }
 
     async replaceProductMcpServers(params: OpenADEMCPServersReplaceRequest): Promise<OpenADEMCPServersReplaceResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.replaceMcpServers(params)
         }
 
-        return localOpenADEClient.replaceMcpServers(params)
+        return this.legacyProductClient("openade/settings/mcpServers/replace").replaceMcpServers(params)
     }
 
     async upsertProductMcpServer(params: OpenADEMCPServerUpsertRequest): Promise<OpenADEMCPServerUpsertResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.upsertMcpServer(params)
         }
 
-        return localOpenADEClient.upsertMcpServer(params)
+        return this.legacyProductClient("openade/settings/mcpServers/upsert").upsertMcpServer(params)
     }
 
     async deleteProductMcpServer(params: OpenADEMCPServerDeleteRequest): Promise<OpenADEMCPServerDeleteResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.deleteMcpServer(params)
         }
 
-        return localOpenADEClient.deleteMcpServer(params)
+        return this.legacyProductClient("openade/settings/mcpServers/delete").deleteMcpServer(params)
     }
 
     async readProductTaskDiff(params: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readTaskDiff(params)
         }
 
-        return localOpenADEClient.readTaskDiff(params)
+        return this.legacyProductClient("openade/task/diff/read").readTaskDiff(params)
     }
 
     async readProductTaskFilePair(params: OpenADETaskFilePairReadRequest): Promise<OpenADETaskFilePairReadResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readTaskFilePair(params)
         }
 
-        return localOpenADEClient.readTaskFilePair(params)
+        return this.legacyProductClient("openade/task/filePair/read").readTaskFilePair(params)
     }
 
     async listProductProjectFiles(params: OpenADEProjectFilesTreeRequest): Promise<OpenADEProjectFilesTreeResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.listProjectFiles(params)
         }
 
-        return localOpenADEClient.listProjectFiles(params)
+        return this.legacyProductClient("openade/project/files/tree").listProjectFiles(params)
     }
 
     async readProductProjectFile(params: OpenADEProjectFileReadRequest): Promise<OpenADEProjectFileReadResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readProjectFile(params)
         }
 
-        return localOpenADEClient.readProjectFile(params)
+        return this.legacyProductClient("openade/project/file/read").readProjectFile(params)
     }
 
     async fuzzySearchProductProjectFiles(params: OpenADEProjectFilesFuzzySearchRequest): Promise<OpenADEProjectFilesFuzzySearchResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.fuzzySearchProjectFiles(params)
         }
 
-        return localOpenADEClient.fuzzySearchProjectFiles(params)
+        return this.legacyProductClient("openade/project/files/fuzzySearch").fuzzySearchProjectFiles(params)
     }
 
     async writeProductProjectFile(params: OpenADEProjectFileWriteRequest): Promise<OpenADEProjectFileWriteResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.writeProjectFile(params)
         }
 
-        return localOpenADEClient.writeProjectFile(params)
+        return this.legacyProductClient("openade/project/file/write").writeProjectFile(params)
     }
 
     async searchProductProject(params: OpenADEProjectSearchRequest): Promise<OpenADEProjectSearchResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.searchProject(params)
         }
 
-        return localOpenADEClient.searchProject(params)
+        return this.legacyProductClient("openade/project/search").searchProject(params)
     }
 
     async readProductProjectGitInfo(params: OpenADEProjectGitInfoRequest): Promise<OpenADEProjectGitInfoResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readProjectGitInfo(params)
         }
 
-        return localOpenADEClient.readProjectGitInfo(params)
+        return this.legacyProductClient("openade/project/git/info/read").readProjectGitInfo(params)
     }
 
     async readProductProjectGitBranches(params: OpenADEProjectGitBranchesReadRequest): Promise<OpenADEProjectGitBranchesReadResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readProjectGitBranches(params)
         }
 
-        return localOpenADEClient.readProjectGitBranches(params)
+        return this.legacyProductClient("openade/project/git/branches/read").readProjectGitBranches(params)
     }
 
     async readProductProjectGitSummary(
         params: OpenADEProjectGitSummaryReadRequest,
         options: OpenADEProductReadOptions = {}
     ): Promise<OpenADEProjectGitSummaryReadResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readProjectGitSummary(params, options)
         }
 
-        return localOpenADEClient.readProjectGitSummary(params)
+        return this.legacyProductClient("openade/project/git/summary/read").readProjectGitSummary(params)
     }
 
     async listProductProjectProcesses(params: OpenADEProjectProcessListRequest): Promise<OpenADEProjectProcessListResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.listProjectProcesses(params)
         }
 
-        return localOpenADEClient.listProjectProcesses(params)
+        return this.legacyProductClient("openade/project/process/list").listProjectProcesses(params)
+    }
+
+    async readProductCronDefinitions(params: OpenADECronDefinitionsReadRequest): Promise<OpenADECronDefinitionsReadResult> {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
+            return this.runtimeProductStore.readCronDefinitions(params)
+        }
+
+        return this.legacyProductClient("openade/cron/definitions/read").readCronDefinitions(params)
     }
 
     async startProductProjectProcess(params: OpenADEProjectProcessStartRequest): Promise<OpenADEProjectProcessStartResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.startProjectProcess(params)
         }
 
-        return localOpenADEClient.startProjectProcess(params)
+        return this.legacyProductClient("openade/project/process/start").startProjectProcess(params)
     }
 
     async reconnectProductProjectProcess(params: OpenADEProjectProcessReconnectRequest): Promise<OpenADEProjectProcessReconnectResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.reconnectProjectProcess(params)
         }
 
-        return localOpenADEClient.reconnectProjectProcess(params)
+        return this.legacyProductClient("openade/project/process/reconnect").reconnectProjectProcess(params)
     }
 
     async stopProductProjectProcess(params: OpenADEProjectProcessStopRequest): Promise<OpenADEProjectProcessStopResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.stopProjectProcess(params)
         }
 
-        return localOpenADEClient.stopProjectProcess(params)
+        return this.legacyProductClient("openade/project/process/stop").stopProjectProcess(params)
     }
 
     async readProductCronInstallState(params: OpenADECronInstallStateReadRequest): Promise<OpenADECronInstallStateReadResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readCronInstallState(params)
         }
 
-        return localOpenADEClient.readCronInstallState(params)
+        return this.legacyProductClient("openade/cron/installState/read").readCronInstallState(params)
     }
 
     async replaceProductCronInstallState(params: OpenADECronInstallStateReplaceRequest): Promise<OpenADECronInstallStateReplaceResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.replaceCronInstallState(params)
         }
 
-        return localOpenADEClient.replaceCronInstallState(params)
+        return this.legacyProductClient("openade/cron/installState/replace").replaceCronInstallState(params)
     }
 
     async readProductTaskGitLog(params: OpenADETaskGitLogRequest): Promise<OpenADETaskGitLogResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readTaskGitLog(params)
         }
 
-        return localOpenADEClient.readTaskGitLog(params)
+        return this.legacyProductClient("openade/task/git/log").readTaskGitLog(params)
     }
 
     async readProductTaskGitCommitFiles(params: OpenADETaskGitCommitFilesRequest): Promise<OpenADETaskGitCommitFilesResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readTaskGitCommitFiles(params)
         }
 
-        return localOpenADEClient.readTaskGitCommitFiles(params)
+        return this.legacyProductClient("openade/task/git/commit/files/read").readTaskGitCommitFiles(params)
     }
 
     async readProductTaskGitFileAtTreeish(params: OpenADETaskGitFileAtTreeishRequest): Promise<OpenADETaskGitFileAtTreeishResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readTaskGitFileAtTreeish(params)
         }
 
-        return localOpenADEClient.readTaskGitFileAtTreeish(params)
+        return this.legacyProductClient("openade/task/git/fileAtTreeish/read").readTaskGitFileAtTreeish(params)
     }
 
     async readProductTaskGitCommitFilePatch(params: OpenADETaskGitCommitFilePatchRequest): Promise<OpenADETaskGitCommitFilePatchResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readTaskGitCommitFilePatch(params)
         }
 
-        return localOpenADEClient.readTaskGitCommitFilePatch(params)
+        return this.legacyProductClient("openade/task/git/commit/filePatch/read").readTaskGitCommitFilePatch(params)
     }
 
     async startProductTaskTerminal(params: OpenADETaskTerminalStartRequest): Promise<OpenADETaskTerminalStartResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.startTaskTerminal(params)
         }
 
-        return localOpenADEClient.startTaskTerminal(params)
+        return this.legacyProductClient("openade/task/terminal/start").startTaskTerminal(params)
     }
 
     async reconnectProductTaskTerminal(params: OpenADETaskTerminalReconnectRequest): Promise<OpenADETaskTerminalReconnectResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.reconnectTaskTerminal(params)
         }
 
-        return localOpenADEClient.reconnectTaskTerminal(params)
+        return this.legacyProductClient("openade/task/terminal/reconnect").reconnectTaskTerminal(params)
     }
 
     async writeProductTaskTerminal(params: OpenADETaskTerminalWriteRequest): Promise<OpenADETaskTerminalMutationResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.writeTaskTerminal(params)
         }
 
-        return localOpenADEClient.writeTaskTerminal(params)
+        return this.legacyProductClient("openade/task/terminal/write").writeTaskTerminal(params)
     }
 
     async resizeProductTaskTerminal(params: OpenADETaskTerminalResizeRequest): Promise<OpenADETaskTerminalMutationResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.resizeTaskTerminal(params)
         }
 
-        return localOpenADEClient.resizeTaskTerminal(params)
+        return this.legacyProductClient("openade/task/terminal/resize").resizeTaskTerminal(params)
     }
 
     async stopProductTaskTerminal(params: OpenADETaskTerminalStopRequest): Promise<OpenADETaskTerminalMutationResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.stopTaskTerminal(params)
         }
 
-        return localOpenADEClient.stopTaskTerminal(params)
+        return this.legacyProductClient("openade/task/terminal/stop").stopTaskTerminal(params)
     }
 
     async readProductTaskSnapshotPatch(params: OpenADETaskSnapshotPatchReadRequest): Promise<OpenADETaskSnapshotPatchReadResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readTaskSnapshotPatch(params)
         }
 
-        return localOpenADEClient.readTaskSnapshotPatch(params)
+        return this.legacyProductClient("openade/task/snapshot/patch/read").readTaskSnapshotPatch(params)
     }
 
     async readProductTaskSnapshotIndex(params: OpenADETaskSnapshotIndexReadRequest): Promise<OpenADETaskSnapshotIndexReadResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readTaskSnapshotIndex(params)
         }
 
-        return localOpenADEClient.readTaskSnapshotIndex(params)
+        return this.legacyProductClient("openade/task/snapshot/index/read").readTaskSnapshotIndex(params)
     }
 
     async readProductTaskSnapshotPatchSlice(params: OpenADETaskSnapshotPatchSliceReadRequest): Promise<OpenADETaskSnapshotPatchSliceReadResult> {
-        if (this.shouldUseRuntimeProductReads() && this.runtimeProductStore) {
+        if (this.shouldUseRuntimeProductAPI() && this.runtimeProductStore) {
             return this.runtimeProductStore.readTaskSnapshotPatchSlice(params)
         }
 
-        return localOpenADEClient.readTaskSnapshotPatchSlice(params)
+        return this.legacyProductClient("openade/task/snapshot/patch/readSlice").readTaskSnapshotPatchSlice(params)
     }
 
     async loadProductTaskForRead(repoId: string, taskId: string): Promise<Task | null> {
         const cached = this.tasks.getTask(taskId)
         if (cached) return cached
 
-        if (this.shouldUseRuntimeProductReads()) {
+        if (this.shouldUseRuntimeProductAPI()) {
             return this.loadRuntimeProductTask(repoId, taskId)
         }
 
@@ -1862,12 +2075,17 @@ export class CodeStore {
     }
 
     async reloadRepoStoreFromStorage(): Promise<void> {
+        if (this.shouldUseRuntimeProductAPI()) {
+            await this.refreshRuntimeProductProjection({ bypassCache: true })
+            return
+        }
+
         if (this.repoStoreConnection) {
             await this.repoStoreConnection.sync()
             this.repoStoreConnection.disconnect()
         }
 
-        const repoConnection = await connectRepoStore()
+        const repoConnection = await this.connectRepoStore()
         await repoConnection.sync()
 
         runInAction(() => {
@@ -1912,12 +2130,14 @@ export class CodeStore {
         this.runtimeProductStore?.destroy()
         this.runtimeProductStore = null
         this.runtimeProductSnapshot = null
+        this.runtimeProductProjects.clear()
         this.runtimeProductTasks.clear()
         this.runtimeProductTaskReadInFlight.clear()
         this.runtimeProductTaskReadLoadedAt.clear()
         this.trackedRuntimeProductFallbackKeys.clear()
         this.runtimeProductStoreStatus = "disabled"
         this.runtimeProductStoreError = null
+        this.tasks.disposeDeferredViewedWrites()
 
         if (this.envVarsReactionDisposer) {
             this.envVarsReactionDisposer()

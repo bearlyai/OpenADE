@@ -118,8 +118,8 @@ export class FileBrowserManager {
         return this.productAccess?.getContext(this.workingDir) ?? null
     }
 
-    private get hasProductContext(): boolean {
-        return this.productAccess !== null && this.productContext !== null
+    private get shouldUseLegacyFilesApi(): boolean {
+        return this.productAccess === null
     }
 
     private relativePathForProduct(absolutePath: string): string | null {
@@ -250,12 +250,12 @@ export class FileBrowserManager {
             // The showHidden toggle controls whether user sees dotfiles like .env
             const result =
                 (await this.listDirectoryViaProduct(dirPath)) ??
-                (this.hasProductContext
-                    ? null
-                    : await filesApi.describePath({
+                (this.shouldUseLegacyFilesApi
+                    ? await filesApi.describePath({
                           path: dirPath,
                           showHidden: true,
-                      }))
+                      })
+                    : null)
             if (!result) {
                 runInAction(() => {
                     this.loadingPaths.delete(dirPath)
@@ -360,14 +360,14 @@ export class FileBrowserManager {
                         matchDirs: false,
                         limit: 50,
                     })) ??
-                    (this.hasProductContext
-                        ? null
-                        : await filesApi.fuzzySearch({
+                    (this.shouldUseLegacyFilesApi
+                        ? await filesApi.fuzzySearch({
                               dir: this.workingDir,
                               query,
                               matchDirs: false,
                               limit: 50,
-                          }))
+                          })
+                        : null)
                 if (!result) {
                     runInAction(() => {
                         this.searchResults = []
@@ -437,14 +437,14 @@ export class FileBrowserManager {
                     matchDirs,
                     limit: FILE_REFERENCE_SEARCH_LIMIT,
                 })) ??
-                (this.hasProductContext
-                    ? null
-                    : await filesApi.fuzzySearch({
+                (this.shouldUseLegacyFilesApi
+                    ? await filesApi.fuzzySearch({
                           dir: this.workingDir,
                           query,
                           matchDirs,
                           limit: FILE_REFERENCE_SEARCH_LIMIT,
-                      }))
+                      })
+                    : null)
             if (!result) return null
             const match = chooseBestFuzzyReferenceMatch(result.results, query)
             return match ? joinPath(this.workingDir, match) : null
@@ -454,13 +454,13 @@ export class FileBrowserManager {
     }
 
     private async describePath(path: string): Promise<DescribePathResponse | null> {
-        const hasProductContext = this.productAccess !== null && this.productContext !== null && this.relativePathForProduct(path) !== null
+        const hasProductAccess = this.productAccess !== null
         const productFile = await this.readFileViaProduct(path).catch(() => null)
         if (productFile) return productFile
 
         const productDirectory = await this.listDirectoryViaProduct(path).catch(() => null)
         if (productDirectory) return productDirectory
-        if (hasProductContext) return null
+        if (hasProductAccess) return null
 
         try {
             return await filesApi.describePath({ path })
@@ -542,13 +542,13 @@ export class FileBrowserManager {
         try {
             const result =
                 (await this.readFileViaProduct(absolutePath)) ??
-                (this.hasProductContext
-                    ? null
-                    : await filesApi.describePath({
+                (this.shouldUseLegacyFilesApi
+                    ? await filesApi.describePath({
                           path: absolutePath,
                           readContents: true,
                           maxReadSize: MAX_FILE_READ_SIZE,
-                      }))
+                      })
+                    : null)
             if (!result) {
                 runInAction(() => {
                     if (this.activeFile !== absolutePath) return

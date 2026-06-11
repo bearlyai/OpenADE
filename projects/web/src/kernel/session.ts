@@ -1,5 +1,6 @@
 import { OpenADEClient, type OpenADEClientOptions } from "../../../openade-client/src"
 import { RuntimeClient, type RuntimeClientOptions, type RuntimeClientStatus } from "../../../runtime-client/src"
+import type { RuntimeCapabilities } from "../../../runtime-protocol/src"
 
 export interface PairingTarget {
     baseUrl: string
@@ -19,7 +20,10 @@ export interface KernelSessionConfig {
 }
 
 export type KernelRealtimeConnectionStatus = RuntimeClientStatus | "lagged"
-export type KernelRuntimeClientLike = OpenADEClientOptions["runtime"]
+export type KernelRuntimeClientLike = OpenADEClientOptions["runtime"] & {
+    readonly capabilities?: RuntimeCapabilities | null
+    hasMethod?: (method: string) => boolean
+}
 
 export interface KernelSessionConstructors<TRuntime extends KernelRuntimeClientLike, TOpenADE> {
     RuntimeClient: new (options: RuntimeClientOptions) => TRuntime
@@ -39,6 +43,10 @@ export interface KernelSessionEntry<TRuntime extends KernelRuntimeClientLike, TO
     status?: KernelRealtimeConnectionStatus
     url: string
     token: string
+}
+
+export function kernelSessionHasMethod(entry: Pick<KernelSessionEntry<KernelRuntimeClientLike, unknown>, "runtime">, method: string): boolean {
+    return entry.runtime.hasMethod?.(method) ?? entry.runtime.capabilities?.methods.includes(method) === true
 }
 
 export interface KernelLocalSession {

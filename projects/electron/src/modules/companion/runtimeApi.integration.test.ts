@@ -439,8 +439,10 @@ describe("companion runtime API integration", () => {
                         "openade/project/git/summary/read",
                         "openade/project/process/list",
                         "openade/project/process/reconnect",
+                        "openade/cron/definitions/read",
                         "openade/task/changes/read",
                         "openade/task/diff/read",
+                        "openade/task/create",
                         "openade/task/filePair/read",
                         "openade/task/git/summary/read",
                         "openade/task/git/log",
@@ -453,12 +455,11 @@ describe("companion runtime API integration", () => {
                         "openade/task/snapshot/patch/read",
                         "openade/task/snapshot/index/read",
                         "openade/task/snapshot/patch/readSlice",
-                        "openade/repo/create",
-                        "openade/repo/update",
-                        "openade/repo/delete",
                         "openade/turn/start",
                         "openade/review/start",
                         "openade/turn/interrupt",
+                        "openade/queued-turn/enqueue",
+                        "openade/queued-turn/reorder",
                         "openade/queued-turn/cancel",
                         "openade/comment/create",
                         "openade/comment/edit",
@@ -480,6 +481,16 @@ describe("companion runtime API integration", () => {
                 "process/list",
                 "process/reconnect",
                 "process/kill",
+                "agent/provider/list",
+                "agent/provider/status",
+                "agent/provider/connect",
+                "agent/serverProtocol/list",
+                "agent/approval/list",
+                "agent/approval/respond",
+                "agent/approval/reject",
+                "openade/repo/create",
+                "openade/repo/update",
+                "openade/repo/delete",
                 "openade/project/process/start",
                 "openade/project/process/stop",
                 "openade/task/terminal/start",
@@ -504,7 +515,7 @@ describe("companion runtime API integration", () => {
                 "pty/spawn",
             ])
         )
-        expect(capabilities.notifications).not.toEqual(expect.arrayContaining(["runtime/updated", "process/output", "host/mcp/oauthComplete"]))
+        expect(capabilities.notifications).not.toEqual(expect.arrayContaining(["runtime/updated", "process/output", "agent/approval/requested", "host/mcp/oauthComplete"]))
 
         socket.send(JSON.stringify({ id: 24, method: "server/status/read" }))
         const status = await nextResponse(socket, 24)
@@ -523,6 +534,9 @@ describe("companion runtime API integration", () => {
                 "runtime/list",
                 "runtime/read",
                 "process/list",
+                "agent/provider/list",
+                "agent/provider/status",
+                "agent/serverProtocol/list",
                 "host/platform/info",
                 "data/yjs/read",
                 "remote/device/list",
@@ -538,11 +552,20 @@ describe("companion runtime API integration", () => {
             [5, "process/list"],
             [6, "agent/execution/start", { executionId: "blocked" }],
             [7, "agent/provider/connect", { providerId: "codex-server" }],
+            [52, "agent/provider/list"],
+            [53, "agent/provider/status", { providerId: "codex-server" }],
+            [54, "agent/serverProtocol/list"],
+            [55, "agent/approval/list", { providerId: "codex-server" }],
+            [56, "agent/approval/respond", { providerId: "codex-server", requestId: "approval-1", response: { decision: "accept" } }],
+            [57, "agent/approval/reject", { providerId: "codex-server", requestId: "approval-2", message: "blocked" }],
             [8, "openade/action/create", { taskId: "task-1" }],
             [9, "openade/action/reconcileRuntime", { taskId: "task-1", eventId: "event-1", status: "failed" }],
             [10, "openade/task/environment/setup", { taskId: "task-1" }],
             [36, "openade/task/environment/prepare", { repoId: "repo-1", taskId: "task-1" }],
             [11, "openade/snapshot/create", { taskId: "task-1" }],
+            [45, "openade/repo/create", { repoId: "blocked-repo", name: "Blocked Repo", path: os.tmpdir() }],
+            [46, "openade/repo/update", { repoId: "blocked-repo", name: "Blocked Repo" }],
+            [47, "openade/repo/delete", { repoId: "blocked-repo" }],
             [12, "data/file/save", { folder: "images", id: "blocked", ext: "txt", data: "blocked" }],
             [35, "data/file/load", { folder: "images", id: "phone-image", ext: "png" }],
             [13, "fs/path/describe", { path: os.tmpdir(), readContents: false }],
@@ -592,7 +615,19 @@ describe("companion runtime API integration", () => {
         fs.writeFileSync(path.join(repoPath, "README.md"), "hello from scoped project search\n")
         fs.writeFileSync(
             path.join(repoPath, "openade.toml"),
-            '[[process]]\nname = "Phone Echo"\ncommand = "printf \'paired scoped process ok\\n\'"\ntype = "task"\n'
+            [
+                "[[process]]",
+                'name = "Phone Echo"',
+                'command = "printf \'paired scoped process ok\\n\'"',
+                'type = "task"',
+                "",
+                "[[cron]]",
+                'name = "Nightly Phone"',
+                'schedule = "0 9 * * 1"',
+                'type = "ask"',
+                'prompt = "Summarize paired-device progress"',
+                "",
+            ].join("\n")
         )
         initializeGitRepo(repoPath)
         await seedOpenADEFixture(repoPath)
@@ -661,6 +696,48 @@ describe("companion runtime API integration", () => {
             )
         ).toMatchObject({
             processes: [expect.objectContaining({ id: "openade.toml::Phone Echo", name: "Phone Echo", cwd: fs.realpathSync(repoPath) })],
+        })
+        expect(
+            runtimeResult<{ configs: Array<{ relativePath: string; crons: Array<{ id: string; name: string; prompt: string }> }> }>(
+                await runtimeRequest(socket, 321, "openade/cron/definitions/read", { repoId: "repo-1" }),
+                321
+            )
+        ).toMatchObject({
+            configs: [
+                expect.objectContaining({
+                    relativePath: "openade.toml",
+                    crons: [expect.objectContaining({ id: "openade.toml::Nightly Phone", name: "Nightly Phone", prompt: "Summarize paired-device progress" })],
+                }),
+            ],
+        })
+        const createdTask = runtimeResult<{ taskId: string; slug: string; title: string }>(
+            await runtimeRequest(socket, 322, "openade/task/create", {
+                repoId: "repo-1",
+                taskId: "task-phone-created",
+                slug: "phone-created",
+                title: "Phone created task",
+                input: "Created by a paired device without starting execution",
+                createdBy: { id: "phone", email: "phone@example.com" },
+                deviceId: "phone-device",
+                isolationStrategy: { type: "head" },
+                clientRequestId: "paired-task-create",
+            }),
+            322
+        )
+        expect(createdTask).toMatchObject({
+            taskId: "task-phone-created",
+            slug: "phone-created",
+            title: "Phone created task",
+        })
+        expect(
+            runtimeResult<{ id: string; title: string; description: string }>(
+                await runtimeRequest(socket, 323, "openade/task/read", { repoId: "repo-1", taskId: "task-phone-created" }),
+                323
+            )
+        ).toMatchObject({
+            id: "task-phone-created",
+            title: "Phone created task",
+            description: "Created by a paired device without starting execution",
         })
         expect(
             await runtimeRequest(socket, 33, "openade/project/process/start", {
@@ -893,19 +970,23 @@ describe("companion runtime API integration", () => {
             id: 27,
             error: { code: "permission_denied" },
         })
-        expect(await runtimeRequest(socket, 2, "openade/repo/create", {
-            repoId: "repo-phone",
-            name: "Phone Created Repo",
-            path: path.join(checkpointDir, "phone-repo"),
-            createdBy: { id: "phone", email: "phone@example.com" },
-            createdAt: "2026-05-31T00:10:00.000Z",
-        })).toMatchObject({ id: 2, result: { repoId: "repo-phone", createdAt: "2026-05-31T00:10:00.000Z" } })
-        expect(await runtimeRequest(socket, 3, "openade/repo/update", {
-            repoId: "repo-phone",
-            name: "Phone Updated Repo",
-            archived: true,
-            updatedAt: "2026-05-31T00:11:00.000Z",
-        })).toMatchObject({ id: 3, result: null })
+        expect(
+            await runtimeRequest(socket, 2, "openade/repo/create", {
+                repoId: "repo-phone",
+                name: "Phone Created Repo",
+                path: path.join(checkpointDir, "phone-repo"),
+                createdBy: { id: "phone", email: "phone@example.com" },
+                createdAt: "2026-05-31T00:10:00.000Z",
+            })
+        ).toMatchObject({ id: 2, error: { code: "permission_denied" } })
+        expect(
+            await runtimeRequest(socket, 3, "openade/repo/update", {
+                repoId: "repo-phone",
+                name: "Phone Updated Repo",
+                archived: true,
+                updatedAt: "2026-05-31T00:11:00.000Z",
+            })
+        ).toMatchObject({ id: 3, error: { code: "permission_denied" } })
         expect(await runtimeRequest(socket, 4, "openade/comment/create", {
             taskId: "task-1",
             commentId: "comment-phone",
@@ -938,23 +1019,80 @@ describe("companion runtime API integration", () => {
             comments: [expect.objectContaining({ id: "comment-phone", content: "Updated from the paired device." })],
         })
 
+        const queuedFirst = runtimeResult<{ taskId: string; queuedTurnId: string; queued: boolean; turn: { id: string; input: string; status: string } }>(
+            await runtimeRequest(socket, 101, "openade/queued-turn/enqueue", {
+                repoId: "repo-1",
+                taskId: "task-1",
+                type: "ask",
+                input: "Queued from paired device",
+                clientRequestId: "paired-queued-first",
+            }),
+            101
+        )
+        expect(queuedFirst).toMatchObject({
+            taskId: "task-1",
+            queued: true,
+            turn: expect.objectContaining({ input: "Queued from paired device", status: "queued" }),
+        })
+        const queuedSecond = runtimeResult<{ queuedTurnId: string; turn: { id: string; input: string; status: string } }>(
+            await runtimeRequest(socket, 102, "openade/queued-turn/enqueue", {
+                repoId: "repo-1",
+                taskId: "task-1",
+                type: "do",
+                input: "Second paired queued turn",
+                clientRequestId: "paired-queued-second",
+            }),
+            102
+        )
+        expect(
+            runtimeResult<{ reordered: boolean; turns: Array<{ id: string; input: string; status: string }> }>(
+                await runtimeRequest(socket, 103, "openade/queued-turn/reorder", {
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    queuedTurnIds: [queuedSecond.queuedTurnId, queuedFirst.queuedTurnId],
+                    clientRequestId: "paired-queue-reorder",
+                }),
+                103
+            )
+        ).toMatchObject({
+            reordered: true,
+            turns: [
+                expect.objectContaining({ id: queuedSecond.queuedTurnId, input: "Second paired queued turn", status: "queued" }),
+                expect.objectContaining({ id: queuedFirst.queuedTurnId, input: "Queued from paired device", status: "queued" }),
+            ],
+        })
+        const queuedTask = runtimeResult<{ queuedTurns: Array<{ id: string }> }>(
+            await runtimeRequest(socket, 104, "openade/task/read", { repoId: "repo-1", taskId: "task-1" }),
+            104
+        )
+        expect(queuedTask.queuedTurns.map((turn) => turn.id).slice(0, 2)).toEqual([queuedSecond.queuedTurnId, queuedFirst.queuedTurnId])
+
         expect(await runtimeRequest(socket, 8, "openade/comment/delete", {
             taskId: "task-1",
             commentId: "comment-phone",
             updatedAt: "2026-05-31T00:15:00.000Z",
         })).toMatchObject({ id: 8, result: null })
+        expect(
+            await runtimeRequest(socket, 105, "openade/task/delete", {
+                repoId: "repo-1",
+                taskId: "task-phone-created",
+                options: { deleteSnapshots: false, deleteImages: false, deleteSessions: false, deleteWorktrees: false },
+            })
+        ).toMatchObject({ id: 105, result: { repoId: "repo-1", taskId: "task-phone-created", deleted: true } })
         expect(await runtimeRequest(socket, 9, "openade/task/delete", {
             repoId: "repo-1",
             taskId: "task-1",
             options: { deleteSnapshots: false, deleteImages: false, deleteSessions: false, deleteWorktrees: false },
         })).toMatchObject({ id: 9, result: { repoId: "repo-1", taskId: "task-1", deleted: true } })
-        expect(await runtimeRequest(socket, 10, "openade/repo/delete", { repoId: "repo-phone" })).toMatchObject({ id: 10, result: null })
+        expect(await runtimeRequest(socket, 10, "openade/repo/delete", { repoId: "repo-phone" })).toMatchObject({
+            id: 10,
+            error: { code: "permission_denied" },
+        })
 
         const snapshot = runtimeResult<{ repos: Array<{ id: string; tasks: Array<{ id: string }> }> }>(
             await runtimeRequest(socket, 11, "openade/snapshot/read"),
             11
         )
-        expect(snapshot.repos.map((repo) => repo.id)).not.toContain("repo-phone")
         expect(snapshot.repos.find((repo) => repo.id === "repo-1")?.tasks.map((taskItem) => taskItem.id)).not.toContain("task-1")
 
         await expectDenied(socket, 12, "data/yjs/read", { id: "code:repos" })
@@ -983,6 +1121,10 @@ describe("companion runtime API integration", () => {
         socket.send(JSON.stringify({ id: 2, method: "subscription/update", params: { methods: ["*"] } }))
         expect(await nextResponse(socket, 2)).toMatchObject({ id: 2, result: { ok: true } })
 
+        const runtime = getRuntimeServer()
+        runtime.registerNotification("remote/debug")
+        runtime.registerNotification("connection/recovered")
+
         getRuntimeServer().notify("runtime/updated", {
             runtimeId: "runtime-secret",
             kind: "process",
@@ -992,9 +1134,20 @@ describe("companion runtime API integration", () => {
             updatedAt: "2026-05-27T00:00:00.000Z",
             lastActivityAt: "2026-05-27T00:00:00.000Z",
         })
-        getRuntimeServer().notify("process/output", { processId: "secret-process", output: "hidden" })
-        getRuntimeServer().notify("openade/task/updated", { repoId: "repo-1", taskId: "task-1" })
+        runtime.notify("process/output", { processId: "secret-process", output: "hidden" })
+        runtime.notify("remote/debug", { secret: "hidden" })
+        runtime.notify("remote/device/changed", { type: "devices_changed", at: "2026-05-27T00:00:01.000Z" })
+        runtime.notify("connection/recovered", { ok: true })
+        runtime.notify("openade/task/updated", { repoId: "repo-1", taskId: "task-1" })
 
+        expect(await nextMessage(socket)).toMatchObject({
+            method: "remote/device/changed",
+            params: { type: "devices_changed" },
+        })
+        expect(await nextMessage(socket)).toMatchObject({
+            method: "connection/recovered",
+            params: { ok: true },
+        })
         expect(await nextMessage(socket)).toMatchObject({
             method: "openade/task/updated",
             params: { repoId: "repo-1", taskId: "task-1" },

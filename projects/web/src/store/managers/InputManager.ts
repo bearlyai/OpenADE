@@ -103,6 +103,10 @@ export class InputManager {
         return this.taskModel?.hasWorkingChanges ?? false
     }
 
+    private get hasUnknownRuntimeGitState(): boolean {
+        return this.store.shouldUseRuntimeProductAPI() && this.taskModel?.hasGitStateLoaded === false
+    }
+
     private get hasUnpushedCommits(): boolean {
         return (this.taskModel?.aheadCount ?? 0) > 0
     }
@@ -154,7 +158,7 @@ export class InputManager {
         if (task?.isolationStrategy?.type === "worktree") {
             const repoId = taskModel?.repoId
             const productAccess =
-                this.store.shouldUseRuntimeProductReads() && repoId
+                this.store.shouldUseRuntimeProductAPI() && repoId
                     ? {
                           startProjectProcess: (args: { definitionId: string }) =>
                               this.store.startProductProjectProcess({ repoId, taskId: this.taskId, definitionId: args.definitionId }),
@@ -213,8 +217,8 @@ export class InputManager {
         const taskModel = this.taskModel
         if (!taskModel?.repoId) return
 
-        const useRuntimeProductReads = this.store.shouldUseRuntimeProductReads()
-        if (!useRuntimeProductReads) {
+        const useRuntimeProductAPI = this.store.shouldUseRuntimeProductAPI()
+        if (!useRuntimeProductAPI) {
             await this.store.getTaskStore(taskModel.repoId, this.taskId)
         }
         const result = await this.store.startProductTurn({
@@ -233,7 +237,7 @@ export class InputManager {
         lifecycle.onAccepted?.()
         this.rememberQueuedTurn(type, result, input, taskModel, options)
         try {
-            if (!useRuntimeProductReads) {
+            if (!useRuntimeProductAPI) {
                 await this.store.refreshTaskStoreFromStorage(this.taskId)
             }
         } finally {
@@ -442,18 +446,24 @@ export class InputManager {
             commitAndPush: {
                 icon: ArrowUpFromLine,
                 action: async () => {
+                    const taskModel = this.taskModel
+                    if (this.store.shouldUseRuntimeProductAPI()) {
+                        await taskModel?.refreshGitState({ force: true })
+                        if (!taskModel?.hasWorkingChanges && (taskModel?.aheadCount ?? 0) <= 0) return
+                    }
+
                     const input = this.captureAndClear()
 
-                    const repoId = this.taskModel?.repoId
-                    let hasGhCli = this.taskModel?.hasGhCli ?? false
+                    const repoId = taskModel?.repoId
+                    let hasGhCli = taskModel?.hasGhCli ?? false
                     if (repoId && !hasGhCli) {
                         hasGhCli = await this.store.repos.refreshGhCliStatus(repoId)
                         if (hasGhCli) {
-                            this.taskModel?.invalidateEnvironmentCache()
+                            taskModel?.invalidateEnvironmentCache()
                         }
                     }
 
-                    const branch = this.taskModel?.gitStatus?.branch ?? "HEAD"
+                    const branch = taskModel?.gitStatus?.branch ?? "HEAD"
                     await this.executeRuntimeTurn(
                         "do",
                         { userInput: ACTION_PROMPTS.commitAndPush(input.userInput, hasGhCli, branch), images: input.images },
@@ -496,6 +506,7 @@ export class InputManager {
             retryable: this.canRetry,
             actionHistory: this.hasAnyActionHistory,
             gitWorkingChanges: this.hasGitWorkingChanges,
+            gitStateUnknown: this.hasUnknownRuntimeGitState,
             unpushedCommits: this.hasUnpushedCommits,
             commitAndPushInProgress: this.isCommitAndPushInProgress,
             forceAllCommands: this.store.personalSettingsStore?.settings.current.devForceAllCommands ?? false,

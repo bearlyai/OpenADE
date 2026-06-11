@@ -183,9 +183,20 @@ func (service *Service) createActionEvent(ctx context.Context, raw json.RawMessa
 		return nil, taskEventWriteRuntimeError(err)
 	}
 	if created {
-		service.runtime.Notify("openade/task/updated", map[string]string{"repoId": task.RepoID, "taskId": task.ID})
+		service.runtime.Notify("openade/task/updated", actionEventTaskUpdatedNotification(task.RepoID, task.ID, event.ID, "in_progress"))
 	}
 	return actionEventCreateResultDTO{EventID: event.ID, CreatedAt: formatTime(event.CreatedAt)}, nil
+}
+
+func actionEventTaskUpdatedNotification(repoID string, taskID string, eventID string, eventStatus string) map[string]string {
+	notification := map[string]string{"repoId": repoID, "taskId": taskID}
+	if strings.TrimSpace(eventID) != "" {
+		notification["eventId"] = eventID
+	}
+	if strings.TrimSpace(eventStatus) != "" {
+		notification["eventStatus"] = eventStatus
+	}
+	return notification
 }
 
 type actionPayloadCreateInput struct {
@@ -306,7 +317,7 @@ func (service *Service) appendActionStreamEventValue(ctx context.Context, taskID
 	}); err != nil {
 		return taskEventWriteRuntimeError(err)
 	}
-	service.runtime.Notify("openade/task/updated", map[string]string{"repoId": task.RepoID, "taskId": task.ID})
+	service.runtime.Notify("openade/task/updated", actionEventTaskUpdatedNotification(task.RepoID, task.ID, event.ID, "in_progress"))
 	return nil
 }
 
@@ -416,6 +427,10 @@ func (service *Service) updateActionTerminalState(ctx context.Context, update ac
 		return taskEventWriteRuntimeError(err)
 	}
 	notification := map[string]string{"repoId": task.RepoID, "taskId": task.ID}
+	if update.EventID != "" {
+		notification["eventId"] = update.EventID
+	}
+	notification["eventStatus"] = nextStatus
 	service.runtime.Notify("openade/task/updated", notification)
 	service.runtime.Notify("openade/task/previewChanged", notification)
 	return nil
@@ -537,7 +552,7 @@ func (service *Service) updateActionExecutionState(ctx context.Context, taskID s
 	}); err != nil {
 		return taskEventWriteRuntimeError(err)
 	}
-	service.runtime.Notify("openade/task/updated", map[string]string{"repoId": task.RepoID, "taskId": task.ID})
+	service.runtime.Notify("openade/task/updated", actionEventTaskUpdatedNotification(task.RepoID, task.ID, event.ID, "in_progress"))
 	return nil
 }
 

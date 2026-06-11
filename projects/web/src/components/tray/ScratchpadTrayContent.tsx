@@ -12,73 +12,87 @@ import { ScrollArea } from "../ui/ScrollArea"
 interface ScratchpadTrayContentProps {
     workspaceId: string
     repoPath: string | null
+    resolveRepoPath?: () => Promise<string | null>
 }
 
-const PadEditor = observer(({ workspaceId, padId, repoPath }: { workspaceId: string; padId: string; repoPath: string | null }) => {
-    const codeStore = useCodeStore()
-    const editorRef = useRef<SmartEditorRef>(null)
-    const sdkCapabilities = useMemo(() => new SdkCapabilitiesManager(), [])
-    const [contentLoading, setContentLoading] = useState(true)
+const PadEditor = observer(
+    ({
+        workspaceId,
+        padId,
+        repoPath,
+        resolveRepoPath,
+    }: {
+        workspaceId: string
+        padId: string
+        repoPath: string | null
+        resolveRepoPath?: () => Promise<string | null>
+    }) => {
+        const codeStore = useCodeStore()
+        const editorRef = useRef<SmartEditorRef>(null)
+        const sdkCapabilities = useMemo(() => new SdkCapabilitiesManager(), [])
+        const [contentLoading, setContentLoading] = useState(true)
 
-    useEffect(() => {
-        setContentLoading(true)
-        codeStore.scratchpads.loadContent(padId).then(() => setContentLoading(false))
-    }, [padId, codeStore.scratchpads])
+        useEffect(() => {
+            setContentLoading(true)
+            codeStore.scratchpads.loadContent(padId).then(() => setContentLoading(false))
+        }, [padId, codeStore.scratchpads])
 
-    const contentStore = codeStore.scratchpads.getContentStore(padId)
+        const contentStore = codeStore.scratchpads.getContentStore(padId)
 
-    const editorManager = useMemo(() => {
-        const mgr = codeStore.smartEditors.getManager(`scratchpad-${padId}`, workspaceId)
-        if (contentStore && !mgr.editorContent) {
-            const data = contentStore.data.get()
-            if (data.content) {
-                mgr.setEditorContent(data.content)
-                mgr.setValue(data.plainText)
+        const editorManager = useMemo(() => {
+            const mgr = codeStore.smartEditors.getManager(`scratchpad-${padId}`, workspaceId)
+            if (contentStore && !mgr.editorContent) {
+                const data = contentStore.data.get()
+                if (data.content) {
+                    mgr.setEditorContent(data.content)
+                    mgr.setValue(data.plainText)
+                }
             }
+            return mgr
+        }, [padId, workspaceId, contentStore, codeStore.smartEditors])
+
+        useEffect(() => {
+            if (!contentStore) return
+            const disposer = reaction(
+                () => ({ value: editorManager.value, content: editorManager.editorContent }),
+                ({ content, value }) => {
+                    codeStore.scratchpads.updateContent(workspaceId, padId, content, value)
+                },
+                { delay: 500 }
+            )
+            return disposer
+        }, [padId, workspaceId, editorManager, contentStore, codeStore.scratchpads])
+
+        useEffect(() => {
+            if (contentLoading) return
+            const timer = setTimeout(() => editorRef.current?.focus(), 100)
+            return () => clearTimeout(timer)
+        }, [contentLoading, padId])
+
+        if (contentLoading) {
+            return (
+                <div className="flex-1 flex items-center justify-center text-muted">
+                    <Loader2 size={16} className="animate-spin" />
+                </div>
+            )
         }
-        return mgr
-    }, [padId, workspaceId, contentStore, codeStore.smartEditors])
 
-    useEffect(() => {
-        if (!contentStore) return
-        const disposer = reaction(
-            () => ({ value: editorManager.value, content: editorManager.editorContent }),
-            ({ content, value }) => {
-                codeStore.scratchpads.updateContent(workspaceId, padId, content, value)
-            },
-            { delay: 500 }
-        )
-        return disposer
-    }, [padId, workspaceId, editorManager, contentStore, codeStore.scratchpads])
-
-    useEffect(() => {
-        if (contentLoading) return
-        const timer = setTimeout(() => editorRef.current?.focus(), 100)
-        return () => clearTimeout(timer)
-    }, [contentLoading, padId])
-
-    if (contentLoading) {
         return (
-            <div className="flex-1 flex items-center justify-center text-muted">
-                <Loader2 size={16} className="animate-spin" />
-            </div>
+            <SmartEditor
+                key={padId}
+                ref={editorRef}
+                manager={editorManager}
+                fileMentionsDir={repoPath}
+                slashCommandsDir={null}
+                resolveWorkingDir={resolveRepoPath}
+                sdkCapabilities={sdkCapabilities}
+                placeholder="Write your thoughts... Use @ to reference files"
+                className="h-full text-sm border-0 bg-transparent [&>div]:h-full [&>div]:border-0"
+                editorClassName="h-full"
+            />
         )
     }
-
-    return (
-        <SmartEditor
-            key={padId}
-            ref={editorRef}
-            manager={editorManager}
-            fileMentionsDir={repoPath}
-            slashCommandsDir={null}
-            sdkCapabilities={sdkCapabilities}
-            placeholder="Write your thoughts... Use @ to reference files"
-            className="h-full text-sm border-0 bg-transparent [&>div]:h-full [&>div]:border-0"
-            editorClassName="h-full"
-        />
-    )
-})
+)
 
 function NoteItem({ pad, isActive, onSelect, onDelete }: { pad: ScratchpadMeta; isActive: boolean; onSelect: () => void; onDelete: () => void }) {
     return (
@@ -115,7 +129,7 @@ function NoteItem({ pad, isActive, onSelect, onDelete }: { pad: ScratchpadMeta; 
 
 const lastActivePadKey = (workspaceId: string) => `scratchpad:last-active:${workspaceId}`
 
-export const ScratchpadTrayContent = observer(({ workspaceId, repoPath }: ScratchpadTrayContentProps) => {
+export const ScratchpadTrayContent = observer(({ workspaceId, repoPath, resolveRepoPath }: ScratchpadTrayContentProps) => {
     const codeStore = useCodeStore()
     const [indexLoading, setIndexLoading] = useState(true)
     const [activePadId, setActivePadIdState] = useState<string | null>(null)
@@ -206,7 +220,7 @@ export const ScratchpadTrayContent = observer(({ workspaceId, repoPath }: Scratc
             <div className="flex-1 flex flex-col min-w-0 h-full">
                 {activeMeta && activePadId ? (
                     <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
-                        <PadEditor workspaceId={workspaceId} padId={activePadId} repoPath={repoPath} />
+                        <PadEditor workspaceId={workspaceId} padId={activePadId} repoPath={repoPath} resolveRepoPath={resolveRepoPath} />
                     </div>
                 ) : (
                     <div className="flex items-center justify-center h-full text-muted text-sm">No notes yet</div>

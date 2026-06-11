@@ -251,6 +251,24 @@ describe("SmartEditorManager.validateFiles", () => {
         expect(paths).toContain("src/exists.ts")
         expect(paths).not.toContain("src/deleted.ts")
     })
+
+    it("does not validate tracked files through raw files API when product context is unresolved", async () => {
+        seedStats({
+            "src/existing.ts": { count: 5, lastUsed: Date.now() },
+        })
+        const productAccess: SmartEditorProductFileAccess = {
+            getContext: vi.fn(() => null),
+            fuzzySearchProjectFiles: vi.fn(),
+        }
+        vi.mocked(filesApi.describePath).mockRejectedValue(new Error("legacy describe should not be used"))
+
+        const manager = new SmartEditorManager("task-task-1", WORKSPACE, productAccess)
+        await manager.validateFiles("/wrong-repo")
+
+        expect(productAccess.fuzzySearchProjectFiles).not.toHaveBeenCalled()
+        expect(filesApi.describePath).not.toHaveBeenCalled()
+        expect(manager.favorites.map((file) => file.path)).toEqual(["src/existing.ts"])
+    })
 })
 
 describe("SmartEditorManager.searchFileMentions", () => {
@@ -302,15 +320,19 @@ describe("SmartEditorManager.searchFileMentions", () => {
         expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
     })
 
-    it("does not warm runtime file mentions with an empty fuzzy search on mount", async () => {
+    it("does not run product or legacy fuzzy search for empty mention queries", async () => {
         const productAccess: SmartEditorProductFileAccess = {
             getContext: vi.fn(() => ({ repoId: "repo-1", taskId: "task-1" })),
             fuzzySearchProjectFiles: vi.fn(),
         }
+        seedStats({
+            "src/favorite.ts": { count: 10, lastUsed: Date.now() },
+        })
 
         const manager = new SmartEditorManager("task-task-1", WORKSPACE, productAccess)
-        await manager.warmFileMentionSearch("/repo")
+        const result = await manager.searchFileMentions("/repo", "", 20)
 
+        expect(result).toEqual({ results: ["src/favorite.ts"], treeMatch: null })
         expect(productAccess.fuzzySearchProjectFiles).not.toHaveBeenCalled()
         expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
     })
@@ -343,11 +365,22 @@ describe("SmartEditorManager.searchFileMentions", () => {
         expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
     })
 
-    it("keeps legacy file search as the unscoped fallback", async () => {
+    it("does not run legacy fuzzy search when product context is unresolved", async () => {
         const productAccess: SmartEditorProductFileAccess = {
             getContext: vi.fn(() => null),
             fuzzySearchProjectFiles: vi.fn(),
         }
+        vi.mocked(filesApi.fuzzySearch).mockRejectedValue(new Error("legacy fuzzy search should not be used"))
+
+        const manager = new SmartEditorManager("task-task-1", WORKSPACE, productAccess)
+        const result = await manager.searchFileMentions("/wrong-repo", "src", 10)
+
+        expect(result).toEqual({ results: [], treeMatch: null })
+        expect(productAccess.fuzzySearchProjectFiles).not.toHaveBeenCalled()
+        expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
+    })
+
+    it("keeps legacy file search when no product access is configured", async () => {
         vi.mocked(filesApi.fuzzySearch).mockResolvedValue({
             results: ["src/fallback.ts"],
             truncated: false,
@@ -358,12 +391,11 @@ describe("SmartEditorManager.searchFileMentions", () => {
             },
         })
 
-        const manager = new SmartEditorManager("scratchpad-pad-1", WORKSPACE, productAccess)
+        const manager = new SmartEditorManager("scratchpad-pad-1", WORKSPACE)
         const result = await manager.searchFileMentions("/repo", "src", 10)
 
         expect(result.results).toEqual(["src/fallback.ts"])
         expect(result.treeMatch?.children).toEqual([{ name: "fallback.ts", isDir: false, fullPath: "src/fallback.ts" }])
-        expect(productAccess.fuzzySearchProjectFiles).not.toHaveBeenCalled()
         expect(filesApi.fuzzySearch).toHaveBeenCalledWith({
             dir: "/repo",
             query: "src",

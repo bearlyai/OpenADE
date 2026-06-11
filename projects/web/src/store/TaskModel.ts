@@ -20,13 +20,14 @@ import type { GitSummaryResponse } from "../electronAPI/git"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { computeTaskUsage, normalizeTaskPreviewUsage } from "../persistence/taskStatsUtils"
 import { type TaskThreadFormat, type TaskThreadJson, buildTaskThreadJson, buildTaskThreadXml } from "../prompts/taskThreadSerializer"
-import type { ActionEvent, CodeEvent, IsolationStrategy, QueuedTurn, SetupEnvironmentEvent, SnapshotEvent, Task, TaskDeviceEnvironment } from "../types"
+import type { ActionEvent, CodeEvent, IsolationStrategy, QueuedTurn, Repo, SetupEnvironmentEvent, SnapshotEvent, Task, TaskDeviceEnvironment } from "../types"
 import { getDeviceId } from "../utils/deviceId"
 import { ActionEventModel, type EventModel, SetupEnvironmentEventModel, SnapshotEventModel } from "./EventModel"
 import { TaskEnvironment } from "./TaskEnvironment"
 import { ChangesManager } from "./managers/ChangesManager"
 import { ContentSearchManager } from "./managers/ContentSearchManager"
 import { FileBrowserManager } from "./managers/FileBrowserManager"
+import type { GitInfo } from "./managers/RepoManager"
 import { InputManager } from "./managers/InputManager"
 import { SdkCapabilitiesManager } from "./managers/SdkCapabilitiesManager"
 import { TrayManager } from "./managers/TrayManager"
@@ -69,6 +70,12 @@ function normalizedDirectoryPath(path: string): string {
     return path.replace(/\\/g, "/").replace(/\/+$/, "")
 }
 
+function projectPathFromGitInfo(gitInfo: GitInfo): string {
+    const repoRoot = gitInfo.repoRoot.replace(/[\\/]+$/, "")
+    const relativePath = gitInfo.relativePath.replace(/^[\\/]+/, "").replace(/[\\/]+$/, "")
+    return relativePath ? `${repoRoot}/${relativePath}` : repoRoot
+}
+
 export class TaskModel {
     gitStatus: GitSummaryResponse | null = null
     model: string = DEFAULT_MODEL
@@ -101,6 +108,7 @@ export class TaskModel {
         // Subscribe to execution events to refresh git state after any event completes
         this.disposers.push(
             this.store.execution.onAfterEvent((eventTaskId) => {
+                if (this.usesRuntimeProductAPI) return
                 if (eventTaskId === this.taskId) {
                     this.refreshGitState()
                 }
@@ -145,13 +153,7 @@ export class TaskModel {
     get fileBrowser(): FileBrowserManager {
         if (!this._fileBrowser) {
             this._fileBrowser = new FileBrowserManager({
-                getContext: (workingDir) => {
-                    if (!this.usesRuntimeProductReads || !this.repoId) return null
-                    const repo = this.store.repos.getRepo(this.repoId)
-                    const dir = this.environment?.taskWorkingDir ?? repo?.path
-                    if (!dir || normalizedDirectoryPath(dir) !== normalizedDirectoryPath(workingDir)) return null
-                    return { repoId: this.repoId, taskId: this.taskId }
-                },
+                getContext: (workingDir) => this.getProductFileContext(workingDir),
                 listProjectFiles: (args) => this.store.listProductProjectFiles(args),
                 readProjectFile: (args) => this.store.readProductProjectFile(args),
                 fuzzySearchProjectFiles: (args) => this.store.fuzzySearchProductProjectFiles(args),
@@ -167,13 +169,7 @@ export class TaskModel {
     get contentSearch(): ContentSearchManager {
         if (!this._contentSearch) {
             this._contentSearch = new ContentSearchManager({
-                getContext: (workingDir) => {
-                    if (!this.usesRuntimeProductReads || !this.repoId) return null
-                    const repo = this.store.repos.getRepo(this.repoId)
-                    const dir = this.environment?.taskWorkingDir ?? repo?.path
-                    if (!dir || normalizedDirectoryPath(dir) !== normalizedDirectoryPath(workingDir)) return null
-                    return { repoId: this.repoId, taskId: this.taskId }
-                },
+                getContext: (workingDir) => this.getProductFileContext(workingDir),
                 searchProject: (args) => this.store.searchProductProject(args),
                 readProjectFile: (args) => this.store.readProductProjectFile(args),
             })
@@ -298,8 +294,8 @@ export class TaskModel {
         return this.repoId
     }
 
-    get usesRuntimeProductReads(): boolean {
-        return this.store.shouldUseRuntimeProductReads()
+    get usesRuntimeProductAPI(): boolean {
+        return this.store.shouldUseRuntimeProductAPI()
     }
 
     get createdAt(): string {
@@ -329,7 +325,7 @@ export class TaskModel {
             taskId: this.taskId,
             queuedTurnId,
         })
-        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(this.taskId)
+        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(this.taskId)
     }
 
     readProductTaskChanges(params: Omit<OpenADETaskChangesReadRequest, "repoId" | "taskId">): Promise<OpenADETaskChangesReadResult> {
@@ -439,6 +435,29 @@ export class TaskModel {
         return null
     }
 
+    get taskWorkingDirHint(): string | null {
+        const environment = this.environment
+        if (environment?.taskWorkingDir) return environment.taskWorkingDir
+        if (!this.usesRuntimeProductAPI || !this.repoId) return null
+        return this.store.repos.getRepo(this.repoId)?.path ?? null
+    }
+
+    private getProductFileContext(workingDir: string): { repoId: string; taskId: string } | null {
+        if (!this.usesRuntimeProductAPI || !this.repoId || !workingDir) return null
+        const dir = this.environment?.taskWorkingDir ?? this.taskWorkingDirHint
+        if (dir && normalizedDirectoryPath(dir) !== normalizedDirectoryPath(workingDir)) return null
+        return { repoId: this.repoId, taskId: this.taskId }
+    }
+
+    async ensureTaskWorkingDirHint(): Promise<string | null> {
+        const current = this.taskWorkingDirHint
+        if (current) return current
+        if (!this.usesRuntimeProductAPI || !this.repoId) return null
+
+        const env = await this.loadEnvironment()
+        return env?.taskWorkingDir ?? null
+    }
+
     /**
      * Load and cache the task environment.
      * Fetches git info asynchronously and creates the environment.
@@ -461,8 +480,8 @@ export class TaskModel {
             return null
         }
 
-        const repo = this.store.repos.getRepo(this.repoId)
-        if (!repo) {
+        const projectedRepo = this.store.repos.getRepo(this.repoId) ?? null
+        if (!projectedRepo && !this.usesRuntimeProductAPI) {
             return null
         }
 
@@ -474,6 +493,8 @@ export class TaskModel {
         const loadPromise = (async () => {
             // Fetch git info asynchronously
             const gitInfo = await this.store.repos.getGitInfo(this.repoId)
+            const repo = projectedRepo ?? this.createRuntimeRepoFromContext(task, deviceEnv, gitInfo)
+            if (!repo) return null
 
             const env = new TaskEnvironment(task, repo, gitInfo, deviceEnv)
 
@@ -495,6 +516,19 @@ export class TaskModel {
         }
     }
 
+    private createRuntimeRepoFromContext(task: Task, deviceEnv: TaskDeviceEnvironment, gitInfo: GitInfo | null): Repo | null {
+        const path = gitInfo ? projectPathFromGitInfo(gitInfo) : task.isolationStrategy.type === "worktree" ? (deviceEnv.worktreeDir ?? null) : null
+        if (!path) return null
+        return {
+            id: task.repoId,
+            name: task.repoId,
+            path,
+            createdBy: task.createdBy,
+            createdAt: task.createdAt,
+            updatedAt: task.updatedAt,
+        }
+    }
+
     invalidateEnvironmentCache(): void {
         this._environmentCache = null
         this._environmentDeviceId = null
@@ -503,6 +537,10 @@ export class TaskModel {
 
     get hasWorkingChanges(): boolean {
         return this.gitStatus?.hasChanges ?? false
+    }
+
+    get hasGitStateLoaded(): boolean {
+        return this.gitStateLoadedAt > 0
     }
 
     get aheadCount(): number {
@@ -595,7 +633,7 @@ export class TaskModel {
     }
 
     get stats(): { totalCostUsd: number; durationMs: number; inputTokens: number; outputTokens: number } {
-        const previewUsage = this.usesRuntimeProductReads ? this.store.getRuntimeProductTaskPreviewDto(this.repoId, this.taskId)?.usage : undefined
+        const previewUsage = this.usesRuntimeProductAPI ? this.store.getRuntimeProductTaskPreviewDto(this.repoId, this.taskId)?.usage : undefined
         if (previewUsage) {
             const usage = normalizeTaskPreviewUsage(previewUsage)
             return {
@@ -623,7 +661,7 @@ export class TaskModel {
         if (!options.force && this.gitStateLoadedAt > 0 && Date.now() - this.gitStateLoadedAt < GIT_STATE_FRESH_MS) return
         this.gitStateLoading = true
 
-        if (this.usesRuntimeProductReads && this.repoId) {
+        if (this.usesRuntimeProductAPI && this.repoId) {
             try {
                 const result = await this.readProductTaskGitSummary({ bypassCache: options.force === true })
                 runInAction(() => {

@@ -58,9 +58,10 @@ export function loadRuntimeIpc(): void {
         return { ok: true }
     })
     ipcMain.handle("runtime:request", async (event: IpcMainInvokeEvent, request: unknown) => {
+        const queuedAtMs = Date.now()
         if (!isRuntimeRequest(request)) throw new Error("Invalid runtime request")
         const { connection } = connectionFor(event.sender)
-        const response = await getRuntimeServer().handleRequest(request, connection, { requireInitialized: true })
+        const response = await getRuntimeServer().handleRequest(request, connection, { requireInitialized: true, queuedAtMs })
         try {
             return cloneRuntimeMessageForIpc(response)
         } catch (error) {

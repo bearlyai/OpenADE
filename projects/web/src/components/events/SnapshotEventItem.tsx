@@ -16,7 +16,6 @@ interface SnapshotEventItemProps extends BaseEventItemProps {
 
 export const SnapshotEventItem = observer(({ event, expanded, onToggle, taskId }: SnapshotEventItemProps) => {
     const store = useCodeStore()
-    const task = store.tasks.getTask(taskId)
     const taskModel = store.tasks.getTaskModel(taskId)
     const eventModel = taskModel?.events.find((e) => e.id === event.id) as SnapshotEventModel | undefined
 
@@ -44,12 +43,13 @@ export const SnapshotEventItem = observer(({ event, expanded, onToggle, taskId }
             return eventModel.fullPatch
         }
 
-        const runtimeRepoId = task?.repoId ?? store.findRuntimeProductRepoIdForTask(taskId)
-        if (store.shouldUseRuntimeProductReads() && runtimeRepoId) {
+        if (store.shouldUseRuntimeProductAPI()) {
+            const productRepoId = store.findProductRepoIdForTask(taskId)
+            if (!productRepoId) return ""
             return (
                 (
                     await store.readProductTaskSnapshotPatch({
-                        repoId: runtimeRepoId,
+                        repoId: productRepoId,
                         taskId,
                         eventId: event.id,
                     })

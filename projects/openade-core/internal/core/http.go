@@ -67,6 +67,11 @@ type runtimeCloseMessage struct {
 
 func (message runtimeCloseMessage) outboundRuntimeMessage() {}
 
+type inboundRuntimeRequest struct {
+	Data     []byte
+	QueuedAt time.Time
+}
+
 func NewHTTPServer(cfg Config, logger *slog.Logger) *HTTPServer {
 	if logger == nil {
 		logger = slog.Default()
@@ -174,9 +179,11 @@ func (server *HTTPServer) serveRuntime(response http.ResponseWriter, request *ht
 	})
 
 	ctx := request.Context()
-	errs := make(chan error, 2)
+	errs := make(chan error, 3)
+	requests := make(chan inboundRuntimeRequest, 64)
 	go server.writeLoop(ctx, conn, writeMessages, errs)
-	go server.readLoop(ctx, conn, runtimeConn, writeMessages, errs)
+	go server.readLoop(ctx, conn, requests, errs)
+	go server.handleRuntimeRequests(ctx, runtimeConn, requests, writeMessages, errs)
 
 	<-errs
 }
@@ -218,9 +225,9 @@ func (server *HTTPServer) servePair(response http.ResponseWriter, request *http.
 	server.writeJSON(response, http.StatusOK, result)
 }
 
-func (server *HTTPServer) readLoop(ctx context.Context, socket *websocket.Conn, runtimeConn *Connection, writeMessages chan<- outboundRuntimeMessage, errs chan<- error) {
+func (server *HTTPServer) readLoop(ctx context.Context, socket *websocket.Conn, requests chan<- inboundRuntimeRequest, errs chan<- error) {
+	defer close(requests)
 	for {
-		queuedAt := time.Now()
 		messageType, data, err := socket.Read(ctx)
 		if err != nil {
 			errs <- err
@@ -230,12 +237,46 @@ func (server *HTTPServer) readLoop(ctx context.Context, socket *websocket.Conn, 
 			continue
 		}
 
-		request, runtimeErr := DecodeRuntimeRequest(data)
+		message := inboundRuntimeRequest{
+			Data:     append([]byte(nil), data...),
+			QueuedAt: time.Now(),
+		}
+		select {
+		case <-ctx.Done():
+			errs <- ctx.Err()
+			return
+		case requests <- message:
+		}
+	}
+}
+
+func (server *HTTPServer) handleRuntimeRequests(
+	ctx context.Context,
+	runtimeConn *Connection,
+	requests <-chan inboundRuntimeRequest,
+	writeMessages chan<- outboundRuntimeMessage,
+	errs chan<- error,
+) {
+	for {
+		var message inboundRuntimeRequest
+		var ok bool
+		select {
+		case <-ctx.Done():
+			errs <- ctx.Err()
+			return
+		case message, ok = <-requests:
+			if !ok {
+				return
+			}
+		}
+
+		started := time.Now()
+		request, runtimeErr := DecodeRuntimeRequest(message.Data)
 		var response runtimeResponse
 		if runtimeErr != nil {
-			response = runtimeResponse{ID: request.ID, Error: runtimeErr}
+			response = server.Runtime.HandleProtocolError(runtimeConn, request, message.QueuedAt, started, runtimeErr)
 		} else {
-			response = server.Runtime.HandleRequest(ctx, runtimeConn, request, queuedAt)
+			response = server.Runtime.HandleRequest(ctx, runtimeConn, request, message.QueuedAt)
 		}
 		if err := enqueueRuntimeMessage(ctx, writeMessages, response); err != nil {
 			errs <- err

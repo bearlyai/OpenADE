@@ -147,6 +147,7 @@ export const InputBar = observer(function InputBar({
     pullRequest,
     fileMentionsDir,
     slashCommandsDir,
+    resolveWorkingDir,
     sdkCapabilities,
     unsubmittedComments = [],
     selectedModel,
@@ -173,6 +174,8 @@ export const InputBar = observer(function InputBar({
     fileMentionsDir: string | null
     /** Directory for /slash command autocomplete, null to disable */
     slashCommandsDir: string | null
+    /** Lazy directory resolver for runtime/Core task editors. */
+    resolveWorkingDir?: () => Promise<string | null>
     /** SDK capabilities manager for slash command discovery */
     sdkCapabilities?: SdkCapabilitiesManager
     unsubmittedComments?: Comment[]
@@ -398,6 +401,7 @@ export const InputBar = observer(function InputBar({
                         manager={editorManager}
                         fileMentionsDir={fileMentionsDir}
                         slashCommandsDir={slashCommandsDir}
+                        resolveWorkingDir={resolveWorkingDir}
                         sdkCapabilities={sdkCapabilities}
                         persistImage={persistImage}
                         onKeyDown={handleEditorKeyDown}

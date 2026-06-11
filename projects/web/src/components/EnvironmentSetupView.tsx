@@ -27,15 +27,14 @@ export const EnvironmentSetupView = observer(function EnvironmentSetupView({ tas
     const repo = task ? codeStore.repos.getRepo(task.repoId) : null
 
     const runSetup = useCallback(async () => {
-        if (!task || !repo || !task.isolationStrategy) {
+        if (!task || !task.isolationStrategy) {
             console.error("[EnvironmentSetupView] Setup precondition failed:", {
                 taskId: taskModel.taskId,
                 hasTask: !!task,
-                hasRepo: !!repo,
                 hasIsolationStrategy: !!task?.isolationStrategy,
                 taskRepoId: task?.repoId,
             })
-            setError("Task or repository not found")
+            setError("Task not found")
             return
         }
 
@@ -46,16 +45,25 @@ export const EnvironmentSetupView = observer(function EnvironmentSetupView({ tas
         abortControllerRef.current = new AbortController()
 
         try {
-            if (codeStore.shouldUseRuntimeProductReads()) {
+            if (codeStore.shouldUseRuntimeProductAPI()) {
                 setPhase("workspace")
                 await codeStore.prepareProductTaskEnvironment({ repoId: task.repoId, taskId: task.id })
                 setPhase("completing")
-                await codeStore.refreshProductStateAfterTaskMutation(task.id)
                 runInAction(() => {
                     codeStore.tasks.invalidateTaskModel(task.id)
                 })
                 setPhase("complete")
                 onComplete()
+                return
+            }
+
+            if (!repo) {
+                console.error("[EnvironmentSetupView] Setup precondition failed:", {
+                    taskId: taskModel.taskId,
+                    hasRepo: false,
+                    taskRepoId: task.repoId,
+                })
+                setError("Repository not found")
                 return
             }
 

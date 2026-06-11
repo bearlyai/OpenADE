@@ -32,6 +32,8 @@ type NotificationBurstEvent struct {
 	Window  time.Duration
 }
 
+const protocolDecodeMethod = "protocol/decode"
+
 type notificationBurstEntry struct {
 	startedAt       time.Time
 	count           int
@@ -180,6 +182,15 @@ func (rt *Runtime) ConnectionCount() int {
 func (rt *Runtime) HandleRequest(ctx context.Context, conn *Connection, request RuntimeRequest, queueStarted time.Time) runtimeResponse {
 	started := time.Now()
 	response := rt.handleRequest(ctx, conn, request)
+	rt.recordSlowRequest(request, conn, queueStarted, started, response)
+	return response
+}
+
+func (rt *Runtime) HandleProtocolError(conn *Connection, request RuntimeRequest, queueStarted time.Time, started time.Time, runtimeErr *RuntimeError) runtimeResponse {
+	if request.Method == "" {
+		request.Method = protocolDecodeMethod
+	}
+	response := runtimeResponse{ID: request.ID, Error: runtimeErr}
 	rt.recordSlowRequest(request, conn, queueStarted, started, response)
 	return response
 }
@@ -550,6 +561,13 @@ func (conn *Connection) DeviceID() string {
 	conn.mu.RLock()
 	defer conn.mu.RUnlock()
 	return conn.deviceID
+}
+
+func (conn *Connection) CanInvoke(method string) bool {
+	if conn == nil || conn.runtime == nil {
+		return true
+	}
+	return conn.runtime.canInvoke(method, conn)
 }
 
 func (conn *Connection) setSubscriptions(methods []string) {

@@ -89,10 +89,6 @@ export const COMPANION_RUNTIME_PERMISSIONS = [
     "server/status/read",
     "subscription/update",
     "remote/device/selfRevoke",
-    "agent/provider/list",
-    "agent/provider/status",
-    "agent/serverProtocol/list",
-    "agent/approval/*",
     "openade/snapshot/read",
     "openade/project/list",
     "openade/project/files/tree",
@@ -104,8 +100,10 @@ export const COMPANION_RUNTIME_PERMISSIONS = [
     "openade/project/git/summary/read",
     "openade/project/process/list",
     "openade/project/process/reconnect",
+    "openade/cron/definitions/read",
     "openade/task/list",
     "openade/task/read",
+    "openade/task/create",
     "openade/task/changes/read",
     "openade/task/diff/read",
     "openade/task/filePair/read",
@@ -120,12 +118,11 @@ export const COMPANION_RUNTIME_PERMISSIONS = [
     "openade/task/snapshot/patch/read",
     "openade/task/snapshot/index/read",
     "openade/task/snapshot/patch/readSlice",
-    "openade/repo/create",
-    "openade/repo/update",
-    "openade/repo/delete",
     "openade/turn/start",
     "openade/review/start",
     "openade/turn/interrupt",
+    "openade/queued-turn/enqueue",
+    "openade/queued-turn/reorder",
     "openade/queued-turn/cancel",
     "openade/comment/create",
     "openade/comment/edit",
@@ -133,7 +130,7 @@ export const COMPANION_RUNTIME_PERMISSIONS = [
     "openade/task/metadata/update",
     "openade/task/delete",
 ]
-export const COMPANION_RUNTIME_NOTIFICATION_PERMISSIONS = ["connection/lagged", "remote/*", "openade/*", "agent/approval/*"]
+export const COMPANION_RUNTIME_NOTIFICATION_PERMISSIONS = ["connection/*", "remote/device/changed", "openade/*"]
 
 function closeSockets(sockets: Iterable<WebSocket>) {
     for (const socket of sockets) {

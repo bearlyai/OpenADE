@@ -55,6 +55,10 @@ export class ContentSearchManager {
         return this.productAccess?.getContext(this.workingDir) ?? null
     }
 
+    private get shouldUseLegacyFilesApi(): boolean {
+        return this.productAccess === null
+    }
+
     private async searchContent(query: string): Promise<{ matches: OpenADEProjectSearchMatch[]; truncated: boolean }> {
         const productAccess = this.productAccess
         const productContext = this.productContext
@@ -67,6 +71,10 @@ export class ContentSearchManager {
                 caseSensitive: false,
             })
             return { matches: result.matches, truncated: result.truncated }
+        }
+
+        if (!this.shouldUseLegacyFilesApi) {
+            return { matches: [], truncated: false }
         }
 
         const result = await filesApi.contentSearch({
@@ -100,6 +108,10 @@ export class ContentSearchManager {
                 maxBytes: MAX_FILE_READ_SIZE,
             })
             return productFileReadToDescribePath(absolutePath, result)
+        }
+
+        if (!this.shouldUseLegacyFilesApi) {
+            return { type: "not_found", path: absolutePath }
         }
 
         return filesApi.describePath({

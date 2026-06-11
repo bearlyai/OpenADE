@@ -1,7 +1,6 @@
 import { makeAutoObservable, runInAction } from "mobx"
 import type { OpenADETaskResourceInventory } from "../../../../openade-module/src"
 import { gitApi } from "../../electronAPI/git"
-import { taskFromStore } from "../../persistence"
 import { fallbackTitle, generateTitle } from "../../prompts/titleExtractor"
 import type { Task, TaskDeviceEnvironment } from "../../types"
 import { TaskModel } from "../TaskModel"
@@ -9,6 +8,7 @@ import type { CodeStore } from "../store"
 import { TaskUIStateManager } from "./TaskUIStateManager"
 
 const TASK_VIEWED_WRITE_MIN_INTERVAL_MS = 60_000
+const RUNTIME_TASK_VIEWED_WRITE_DEFER_MS = 5_000
 
 // ============================================================================
 // Deep Delete Types
@@ -31,22 +31,22 @@ export class TaskManager {
     private taskUIStates: Map<string, TaskUIStateManager> = new Map()
     private markViewedInFlight: Map<string, Promise<void>> = new Map()
     private lastViewedWriteAt: Map<string, number> = new Map()
+    private deferredViewedTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
 
     constructor(private store: CodeStore) {
-        makeAutoObservable(this, {
+        makeAutoObservable<TaskManager, "deferredViewedTimers">(this, {
             loadedRepoIds: true,
+            deferredViewedTimers: false,
         })
     }
 
-    getTask(taskId: string): Task | null {
-        const runtimeTask = this.store.getCachedRuntimeProductTask(taskId)
-        if (runtimeTask) return runtimeTask
+    disposeDeferredViewedWrites(): void {
+        for (const timer of this.deferredViewedTimers.values()) clearTimeout(timer)
+        this.deferredViewedTimers.clear()
+    }
 
-        const taskStore = this.store.getCachedTaskStore(taskId)
-        if (taskStore) {
-            return taskFromStore(taskStore)
-        }
-        return null
+    getTask(taskId: string): Task | null {
+        return this.store.getCachedProductTask(taskId)
     }
 
     getTasksForRepo(repoId: string): Task[] {
@@ -78,7 +78,7 @@ export class TaskManager {
     }
 
     getTaskModel(taskId: string): TaskModel | null {
-        if (!this.store.getCachedTaskStore(taskId) && !this.store.hasRuntimeProductTaskReference(taskId)) return null
+        if (!this.store.hasProductTaskModelSource(taskId)) return null
 
         const cached = this.taskModels.get(taskId)
         if (cached) {
@@ -127,20 +127,7 @@ export class TaskManager {
     // ==================== Deep Delete ====================
 
     private resolveRepoId(taskId: string): string | null {
-        const task = this.getTask(taskId)
-        if (task?.repoId) return task.repoId
-
-        const runtimeRepoId = this.store.findRuntimeProductRepoIdForTask(taskId)
-        if (runtimeRepoId) return runtimeRepoId
-
-        if (this.store.repoStore) {
-            for (const repo of this.store.repoStore.repos.all()) {
-                if (repo.tasks.find((t) => t.id === taskId)) {
-                    return repo.id
-                }
-            }
-        }
-        return null
+        return this.store.findProductRepoIdForTask(taskId)
     }
 
     async getResourceInventory(ids: string[]): Promise<TaskResourceInventory[]> {
@@ -150,7 +137,7 @@ export class TaskManager {
             const repoId = this.resolveRepoId(id)
             if (!repoId) continue
 
-            if (this.store.shouldUseRuntimeProductReads()) {
+            if (this.store.shouldUseRuntimeProductAPI()) {
                 results.push(await this.store.readProductTaskResourceInventory({ repoId, taskId: id }))
                 continue
             }
@@ -263,16 +250,16 @@ export class TaskManager {
 
     async setSessionId({ taskId, key, sessionId }: { taskId: string; key: string; sessionId: string }): Promise<void> {
         await this.store.updateProductTaskMetadata({ taskId, sessionIds: { [key]: sessionId } })
-        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
+        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     async addDeviceEnvironment(taskId: string, deviceEnv: TaskDeviceEnvironment): Promise<void> {
         await this.store.setupProductTaskEnvironment({ taskId, deviceEnvironment: deviceEnv })
-        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
+        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(taskId)
         this.invalidateTaskModel(taskId)
     }
 
-    async markTaskViewed(taskId: string): Promise<void> {
+    async markTaskViewed(taskId: string, options: { defer?: boolean } = {}): Promise<void> {
         const task = this.getTask(taskId)
         if (!task) return
 
@@ -287,11 +274,36 @@ export class TaskManager {
         if (existing) return existing
 
         const viewedAt = new Date(nowMs).toISOString()
-        this.lastViewedWriteAt.set(taskId, nowMs)
+        if (options.defer && this.store.shouldUseRuntimeProductAPI()) {
+            this.lastViewedWriteAt.set(taskId, nowMs)
+            this.store.patchRuntimeProductTaskMetadata({ taskId, lastViewedAt: viewedAt })
+
+            const existingTimer = this.deferredViewedTimers.get(taskId)
+            if (existingTimer) clearTimeout(existingTimer)
+            const timer = setTimeout(() => {
+                this.deferredViewedTimers.delete(taskId)
+                void this.writeTaskViewed(taskId, viewedAt, nowMs).catch((error) => {
+                    console.error("[TaskManager] Failed to persist deferred viewed state:", error)
+                })
+            }, RUNTIME_TASK_VIEWED_WRITE_DEFER_MS)
+            this.deferredViewedTimers.set(taskId, timer)
+            return
+        }
+
+        const deferredTimer = this.deferredViewedTimers.get(taskId)
+        if (deferredTimer) {
+            clearTimeout(deferredTimer)
+            this.deferredViewedTimers.delete(taskId)
+        }
+        return this.writeTaskViewed(taskId, viewedAt, nowMs)
+    }
+
+    private async writeTaskViewed(taskId: string, viewedAt: string, viewedAtMs: number): Promise<void> {
+        this.lastViewedWriteAt.set(taskId, viewedAtMs)
         const promise = (async () => {
             try {
                 await this.store.updateProductTaskMetadata({ taskId, lastViewedAt: viewedAt })
-                if (this.store.shouldUseRuntimeProductReads()) return
+                if (this.store.shouldUseRuntimeProductAPI()) return
                 await this.store.refreshProductStateAfterTaskMutation(taskId)
             } catch (error) {
                 this.lastViewedWriteAt.delete(taskId)
@@ -311,13 +323,13 @@ export class TaskManager {
         }
 
         await this.store.updateProductTaskMetadata({ taskId, closed })
-        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
+        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     setEnabledMcpServerIds(taskId: string, serverIds: string[]): void {
         void (async () => {
             await this.store.updateProductTaskMetadata({ taskId, enabledMcpServerIds: serverIds })
-            if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
+            if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(taskId)
         })().catch((error) => {
             console.error("[TaskManager] Failed to update MCP server selection:", error)
         })
@@ -329,7 +341,7 @@ export class TaskManager {
 
         void (async () => {
             await this.store.updateProductTaskMetadata({ taskId, title: trimmed })
-            if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
+            if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(taskId)
         })().catch((error) => {
             console.error("[TaskManager] Failed to update task title:", error)
         })
@@ -361,7 +373,7 @@ export class TaskManager {
 
         runInAction(() => this.regeneratingTitleTaskIds.add(taskId))
         try {
-            if (this.store.shouldUseRuntimeProductReads()) {
+            if (this.store.shouldUseRuntimeProductAPI()) {
                 const repoId = task.repoId || this.resolveRepoId(taskId)
                 if (!repoId) return
                 await this.store.generateProductTaskTitle({ repoId, taskId, harnessId })

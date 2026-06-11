@@ -41,9 +41,39 @@ function adapters(startTurn: OpenADEModuleAdapters["startTurn"]): OpenADEModuleA
         createRepo: async () => ({ repoId: "repo-1", createdAt: "2026-05-26T00:00:00.000Z" }),
         updateRepo: async () => ({ ok: true }),
         deleteRepo: async () => ({ ok: true }),
+        createTask: async (params) => ({
+            taskId: params.taskId ?? "task-created",
+            slug: params.slug ?? "task-created",
+            title: params.title ?? "Created task",
+            createdAt: params.createdAt ?? "2026-05-26T00:00:00.000Z",
+        }),
         startTurn,
         startReview: async () => ({ taskId: "task-1" }),
         interruptTurn: async () => ({ ok: true }),
+        enqueueQueuedTurn: async (params) => {
+            const turn = {
+                id: params.queuedTurnId ?? "queued-1",
+                clientRequestId: params.clientRequestId,
+                type: params.type,
+                input: params.input,
+                status: "queued" as const,
+                createdAt: "2026-05-26T00:00:00.000Z",
+                updatedAt: "2026-05-26T00:00:00.000Z",
+            }
+            return { taskId: params.taskId, queuedTurnId: turn.id, queued: true, turn }
+        },
+        reorderQueuedTurns: async (params) => ({
+            taskId: params.taskId,
+            reordered: true,
+            turns: params.queuedTurnIds.map((id) => ({
+                id,
+                type: "ask" as const,
+                input: id,
+                status: "queued" as const,
+                createdAt: "2026-05-26T00:00:00.000Z",
+                updatedAt: "2026-05-26T00:00:00.000Z",
+            })),
+        }),
         cancelQueuedTurn: async (params) => ({ taskId: params.taskId, queuedTurnId: params.queuedTurnId, cancelled: true }),
         deleteTask: async (_params) => ({ repoId: "repo-1", taskId: "task-1", deleted: true }),
         setupTaskEnvironment: async () => ({ ok: true }),
@@ -78,8 +108,57 @@ describe("OpenADE runtime module", () => {
             .filter((method) => method.split("/").some((segment) => productModes.has(segment)))
 
         expect(leakedMethods).toEqual([])
-        expect(runtime.capabilities().methods).toEqual(expect.arrayContaining(["openade/turn/start", "openade/review/start", "openade/queued-turn/cancel"]))
+        expect(runtime.capabilities().methods).toEqual(
+            expect.arrayContaining([
+                "openade/task/create",
+                "openade/turn/start",
+                "openade/review/start",
+                "openade/queued-turn/enqueue",
+                "openade/queued-turn/reorder",
+                "openade/queued-turn/cancel",
+            ])
+        )
         expect(runtime.capabilities().notifications).toEqual(expect.arrayContaining(["openade/queuedTurn/updated"]))
+    })
+
+    it("creates tasks through the OpenADE runtime method", async () => {
+        const runtime = new RuntimeServer({ serverName: "test-runtime" })
+        const createTask = vi.fn(async (params: Parameters<OpenADEModuleAdapters["createTask"]>[0]) => ({
+            taskId: params.taskId ?? "task-created",
+            slug: params.slug ?? "task-created",
+            title: params.title ?? "Created task",
+            createdAt: params.createdAt ?? "2026-05-26T00:00:00.000Z",
+        }))
+        runtime.registerModule(createOpenADEModule({ ...adapters(async () => ({ taskId: "task-1" })), createTask }))
+
+        const response = await runtime.handleRequest(
+            {
+                id: 1,
+                method: "openade/task/create",
+                params: {
+                    repoId: "repo-1",
+                    taskId: "task-created",
+                    slug: "created-task",
+                    title: "Created task",
+                    input: "Create without starting execution",
+                    createdBy: { id: "user-1", email: "user@example.com" },
+                    deviceId: "device-1",
+                    isolationStrategy: { type: "head" },
+                    clientRequestId: "task-create-request",
+                },
+            },
+            connection()
+        )
+
+        expect(response).toMatchObject({
+            id: 1,
+            result: {
+                taskId: "task-created",
+                slug: "created-task",
+                title: "Created task",
+            },
+        })
+        expect(createTask).toHaveBeenCalledTimes(1)
     })
 
     it("retains completed clientRequestId results so retrying does not duplicate turns", async () => {

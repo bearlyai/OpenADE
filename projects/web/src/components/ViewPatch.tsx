@@ -264,8 +264,8 @@ export const ViewPatch = observer(function ViewPatch({
     const showSidebar = allFiles.length > 5
     const largeDiffKey = selectedFile ? `${selectedFile.id}:${selectedFile.changedLines}:${selectedFile.hunkCount}` : null
     const deferLargeDiff = patchFileId !== undefined && isHeavyFile(selectedFile) && renderLargeDiffKey !== largeDiffKey
-    const repoId = codeStore.tasks.getTask(taskId)?.repoId ?? codeStore.findRuntimeProductRepoIdForTask(taskId)
-    const useRuntimeSnapshotReads = repoId !== null && codeStore.shouldUseRuntimeProductReads()
+    const useProductSnapshotReads = codeStore.shouldUseRuntimeProductAPI()
+    const productRepoId = useProductSnapshotReads ? codeStore.findProductRepoIdForTask(taskId) : null
 
     useEffect(() => {
         setRenderLargeDiffKey(null)
@@ -313,11 +313,18 @@ export const ViewPatch = observer(function ViewPatch({
         setSelectedPatchLoading(true)
         setSelectedPatchError(false)
 
+        if (useProductSnapshotReads && !productRepoId) {
+            setSelectedPatch("")
+            setSelectedPatchLoading(false)
+            setSelectedPatchError(true)
+            return
+        }
+
         const patchSlicePromise =
-            useRuntimeSnapshotReads && repoId
+            useProductSnapshotReads && productRepoId
                 ? codeStore
                       .readProductTaskSnapshotPatchSlice({
-                          repoId,
+                          repoId: productRepoId,
                           taskId,
                           eventId: snapshotEventId,
                           start: selectedPatchStart,
@@ -349,13 +356,13 @@ export const ViewPatch = observer(function ViewPatch({
         codeStore,
         deferLargeDiff,
         patchFileId,
-        repoId,
+        productRepoId,
         selectedPatchCacheId,
         selectedPatchEnd,
         selectedPatchStart,
         snapshotEventId,
         taskId,
-        useRuntimeSnapshotReads,
+        useProductSnapshotReads,
     ])
 
     const selectedFileDiff = useMemo(() => {

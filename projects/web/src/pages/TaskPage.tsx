@@ -52,6 +52,7 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
     const { input, tray } = taskModel
     const rawTask = codeStore.tasks.getTask(taskId)
     const events = rawTask?.events ?? []
+    const useRuntimeProductAPI = codeStore.shouldUseRuntimeProductAPI()
     const { viewportRef: scrollViewportRef } = useTaskThreadScroll({
         changeKey: `${taskId}:${events.length}`,
         resetKey: taskId,
@@ -110,17 +111,19 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
 
     // Mark task as viewed when navigating to it
     useEffect(() => {
-        codeStore.tasks.markTaskViewed(taskId)
-    }, [taskId])
+        codeStore.tasks.markTaskViewed(taskId, { defer: useRuntimeProductAPI })
+    }, [taskId, useRuntimeProductAPI])
 
-    // Keep task open responsive; Changes tray open/refresh still loads immediately.
+    // Legacy path keeps the existing eager status refresh; runtime/Core sessions keep task open on task DTOs only.
     useEffect(() => {
+        if (useRuntimeProductAPI) return
         return scheduleTaskGitRefresh(() => {
             void taskModel.refreshGitState()
         })
-    }, [taskModel])
+    }, [taskModel, useRuntimeProductAPI])
 
     useEffect(() => {
+        if (useRuntimeProductAPI) return
         if (taskModel.needsEnvironmentSetup) return
 
         let cancelled = false
@@ -138,10 +141,11 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
         return () => {
             cancelled = true
         }
-    }, [taskModel, taskModel.needsEnvironmentSetup])
+    }, [taskModel, taskModel.needsEnvironmentSetup, useRuntimeProductAPI])
 
-    // Refresh git state on window focus
+    // Legacy path refreshes git on focus. Runtime/Core sessions refresh from explicit tray/user actions.
     useEffect(() => {
+        if (useRuntimeProductAPI) return
         let cancelScheduledRefresh: (() => void) | null = null
         const handleFocus = () => {
             cancelScheduledRefresh?.()
@@ -155,10 +159,11 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
             window.removeEventListener("focus", handleFocus)
             cancelScheduledRefresh?.()
         }
-    }, [taskModel])
+    }, [taskModel, useRuntimeProductAPI])
 
     // Poll git status every 20s while task is working
     useEffect(() => {
+        if (useRuntimeProductAPI) return
         if (!taskModel.isWorking) return
 
         const interval = setInterval(() => {
@@ -166,11 +171,13 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
         }, 20_000)
 
         return () => clearInterval(interval)
-    }, [taskModel, taskModel.isWorking])
+    }, [taskModel, taskModel.isWorking, useRuntimeProductAPI])
 
     // Update file browser and content search when the task's working directory becomes available
     // (may load late for worktree tasks during environment setup)
     const taskWorkingDir = taskModel.environment?.taskWorkingDir
+    const taskWorkingDirHint = taskModel.taskWorkingDirHint
+    const resolveTaskWorkingDir = useCallback(() => taskModel.ensureTaskWorkingDirHint(), [taskModel])
     useEffect(() => {
         if (taskWorkingDir) {
             taskModel.fileBrowser.setWorkingDir(taskWorkingDir)
@@ -183,7 +190,7 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
     }, [taskModel])
 
     const handleRequestFullHistory = useCallback(() => {
-        if (!codeStore.shouldUseRuntimeProductReads()) return
+        if (!codeStore.shouldUseRuntimeProductAPI()) return
         void codeStore.loadRuntimeProductTask(workspaceId, taskId, { hydrateSessionEvents: true }).catch((err) => {
             console.warn("[TaskPage] Failed to hydrate task history:", err)
         })
@@ -219,8 +226,9 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
                 tray={tray}
                 gitStatus={taskModel.gitStatus}
                 pullRequest={taskModel.pullRequest}
-                fileMentionsDir={taskWorkingDir ?? null}
-                slashCommandsDir={taskWorkingDir ?? null}
+                fileMentionsDir={taskWorkingDirHint}
+                slashCommandsDir={taskWorkingDirHint}
+                resolveWorkingDir={resolveTaskWorkingDir}
                 sdkCapabilities={taskModel.sdkCapabilities}
                 unsubmittedComments={codeStore.comments.getUnsubmittedComments(taskId)}
                 selectedModel={taskModel.model}

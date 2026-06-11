@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createOpenADEModule, type OpenADEModuleAdapters } from "../../openade-module/src/module"
 import type {
     OpenADECronInstallState,
+    OpenADEMCPServer,
+    OpenADEPersonalSettings,
     OpenADEProject,
     OpenADESnapshot,
     OpenADETask,
@@ -13,9 +15,16 @@ import type {
     OpenADETaskPreview,
     OpenADETurnStartRequest,
 } from "../../openade-module/src/types"
-import { type RuntimeMessage, validateRuntimeRequest } from "../../runtime-protocol/src"
+import { type RuntimeMessage, type RuntimeRecord, validateRuntimeRequest } from "../../runtime-protocol/src"
 import { type RuntimeConnection, RuntimeServer } from "../../runtime/src"
-import { CodeBaseRoute, CodeWorkspaceRoute, CodeWorkspaceTaskRoute } from "./Routes"
+import {
+    CodeBaseRoute,
+    CodeWorkspaceRoute,
+    CodeWorkspaceSettingsRoute,
+    CodeWorkspaceTaskCreateRoute,
+    CodeWorkspaceTaskCreatingRoute,
+    CodeWorkspaceTaskRoute,
+} from "./Routes"
 import { analytics } from "./analytics"
 import { getDefaultModelForHarness } from "./constants"
 import { resetCodeModuleCapabilitiesForTests } from "./electronAPI/capabilities"
@@ -61,7 +70,12 @@ const routeTask: OpenADETask = {
         {
             id: "comment-1",
             content: "Runtime pending comment",
-            source: { type: "llm_output", eventId: "event-1", lineStart: 1, lineEnd: 1 },
+            source: {
+                type: "llm_output",
+                eventId: "event-1",
+                lineStart: 1,
+                lineEnd: 1,
+            },
             selectedText: { text: "runtime", linesBefore: "", linesAfter: "" },
             author: { id: "user-1", email: "user@example.com" },
             createdAt: now,
@@ -81,7 +95,13 @@ function routeTaskPreview(value: OpenADETask): OpenADETaskPreview {
         closed: value.closed,
         createdAt: value.createdAt ?? now,
         lastEventAt: "2026-05-31T00:01:00.000Z",
-        lastEvent: { type: "action", status: "completed", sourceType: "do", sourceLabel: "Do", at: "2026-05-31T00:01:00.000Z" },
+        lastEvent: {
+            type: "action",
+            status: "completed",
+            sourceType: "do",
+            sourceLabel: "Do",
+            at: "2026-05-31T00:01:00.000Z",
+        },
     }
 }
 
@@ -115,6 +135,18 @@ function runtimeSnapshot(task: OpenADETask = routeTask): OpenADESnapshot {
     }
 }
 
+function routeRuntimeRecord(status: RuntimeRecord["status"], updatedAt: string, runtimeId = "runtime-route-task-1"): RuntimeRecord {
+    return {
+        runtimeId,
+        kind: "agent",
+        status,
+        scope: { ownerType: "openade-task", ownerId: "task-1" },
+        startedAt: now,
+        updatedAt,
+        lastActivityAt: updatedAt,
+    }
+}
+
 function unsupportedMutation(method: string): () => Promise<never> {
     return async () => {
         throw new Error(`${method} is not available in the route runtime test`)
@@ -122,25 +154,51 @@ function unsupportedMutation(method: string): () => Promise<never> {
 }
 
 interface RouteRuntimeServerHooks {
+    onReadSnapshot?: () => void
+    onReadProjects?: () => void
+    snapshotError?: Error
     onStartTurn?: (params: OpenADETurnStartRequest) => void
     onUpdateTaskMetadata?: (params: OpenADETaskMetadataUpdateRequest) => void
-    onReadTask?: (params: { repoId: string; taskId: string; options?: OpenADETaskReadOptions }) => void
+    onReadTask?: (params: {
+        repoId: string
+        taskId: string
+        options?: OpenADETaskReadOptions
+    }) => void
     onReadTaskGitSummary?: () => void
     onReadTaskChanges?: () => void
     onReadProjectGitInfo?: () => void
     onFuzzySearchProjectFiles?: () => void
+    onReadSdkCapabilities?: () => void
 }
 
 function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeServer {
-    const server = new RuntimeServer({ serverName: "desktop-route-runtime", protocolVersion: 1 })
+    const server = new RuntimeServer({
+        serverName: "desktop-route-runtime",
+        protocolVersion: 1,
+    })
     const task = cloneTask(routeTask)
     const project = routeProject(task)
     let cronInstallStates: Record<string, OpenADECronInstallState> = {}
+    let mcpServers: OpenADEMCPServer[] = []
+    let personalSettings: OpenADEPersonalSettings = {
+        envVars: {},
+        theme: "system",
+        renderMarkdownMessages: true,
+        newTaskHarnessId: "codex",
+        newTaskModelId: routeModelId,
+    }
     let projectProcessId: string | null = null
     const adapters: OpenADEModuleAdapters = {
         version: () => "route-smoke-test",
-        readSnapshot: async () => runtimeSnapshot(task),
-        readProjects: async () => [project],
+        readSnapshot: async () => {
+            hooks.onReadSnapshot?.()
+            if (hooks.snapshotError) throw hooks.snapshotError
+            return runtimeSnapshot(task)
+        },
+        readProjects: async () => {
+            hooks.onReadProjects?.()
+            return [project]
+        },
         readTaskList: async () => project.tasks,
         readTask: async (repoId, taskId, options) => {
             hooks.onReadTask?.({ repoId, taskId, options })
@@ -154,6 +212,7 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
         createRepo: unsupportedMutation("createRepo"),
         updateRepo: unsupportedMutation("updateRepo"),
         deleteRepo: unsupportedMutation("deleteRepo"),
+        createTask: unsupportedMutation("createTask"),
         startTurn: async (params, context) => {
             if (params.repoId !== project.id) throw new Error(`Repo ${params.repoId} not found`)
             hooks.onStartTurn?.(structuredClone(params))
@@ -182,6 +241,11 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
             task.updatedAt = completedAt
             task.lastEventAt = completedAt
             project.tasks = [routeTaskPreview(task)]
+            server.notify("openade/task/updated", {
+                repoId: project.id,
+                taskId: task.id,
+                at: completedAt,
+            })
             if (context?.runtimeId) {
                 const completedRuntime = server.supervisor.update(context.runtimeId, {
                     status: "completed",
@@ -191,7 +255,14 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
                 })
                 if (completedRuntime) server.notify("runtime/completed", completedRuntime)
             }
-            return { taskId: task.id, eventId }
+            return {
+                taskId: task.id,
+                eventId,
+                executionId: "exec-shared-shell",
+                createdAt: "2026-05-31T00:01:30.000Z",
+                task: cloneTask(task),
+                preview: routeTaskPreview(task),
+            }
         },
         startReview: async (params, context) => {
             if (params.repoId !== project.id) throw new Error(`Repo ${params.repoId} not found`)
@@ -226,6 +297,11 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
             task.updatedAt = completedAt
             task.lastEventAt = completedAt
             project.tasks = [routeTaskPreview(task)]
+            server.notify("openade/task/updated", {
+                repoId: project.id,
+                taskId: task.id,
+                at: completedAt,
+            })
             if (context?.runtimeId) {
                 const completedRuntime = server.supervisor.update(context.runtimeId, {
                     status: "completed",
@@ -235,9 +311,16 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
                 })
                 if (completedRuntime) server.notify("runtime/completed", completedRuntime)
             }
-            return { taskId: task.id, eventId }
+            return {
+                taskId: task.id,
+                eventId,
+                executionId: "exec-shared-review",
+                createdAt: "2026-05-31T00:02:05.000Z",
+            }
         },
         interruptTurn: unsupportedMutation("interruptTurn"),
+        enqueueQueuedTurn: unsupportedMutation("enqueueQueuedTurn"),
+        reorderQueuedTurns: unsupportedMutation("reorderQueuedTurns"),
         cancelQueuedTurn: unsupportedMutation("cancelQueuedTurn"),
         deleteTask: unsupportedMutation("deleteTask"),
         setupTaskEnvironment: unsupportedMutation("setupTaskEnvironment"),
@@ -246,7 +329,10 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
         completeActionEvent: unsupportedMutation("completeActionEvent"),
         errorActionEvent: unsupportedMutation("errorActionEvent"),
         stoppedActionEvent: unsupportedMutation("stoppedActionEvent"),
-        reconcileActionEventRuntime: async (params) => ({ taskId: params.taskId, changed: false }),
+        reconcileActionEventRuntime: async (params) => ({
+            taskId: params.taskId,
+            changed: false,
+        }),
         updateActionExecution: unsupportedMutation("updateActionExecution"),
         addHyperPlanSubExecution: unsupportedMutation("addHyperPlanSubExecution"),
         appendHyperPlanSubExecutionStreamEvent: unsupportedMutation("appendHyperPlanSubExecutionStreamEvent"),
@@ -277,7 +363,11 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
             task.comments = task.comments.map((comment) => {
                 if (typeof comment !== "object" || comment === null || Array.isArray(comment)) return comment
                 if (!("id" in comment) || comment.id !== params.commentId) return comment
-                return { ...comment, content: params.content, updatedAt: params.updatedAt ?? "2026-05-31T00:01:50.000Z" }
+                return {
+                    ...comment,
+                    content: params.content,
+                    updatedAt: params.updatedAt ?? "2026-05-31T00:01:50.000Z",
+                }
             })
         },
         deleteComment: async (params) => {
@@ -289,12 +379,45 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
         },
         readCronInstallState: async (params) => {
             if (params.repoId !== project.id) throw new Error(`Repo ${params.repoId} not found`)
-            return { repoId: params.repoId, installations: structuredClone(cronInstallStates) }
+            return {
+                repoId: params.repoId,
+                installations: structuredClone(cronInstallStates),
+            }
         },
         replaceCronInstallState: async (params) => {
             if (params.repoId !== project.id) throw new Error(`Repo ${params.repoId} not found`)
             cronInstallStates = structuredClone(params.installations)
-            return { repoId: params.repoId, installations: structuredClone(cronInstallStates), replacedInstallations: Object.keys(cronInstallStates).length }
+            return {
+                repoId: params.repoId,
+                installations: structuredClone(cronInstallStates),
+                replacedInstallations: Object.keys(cronInstallStates).length,
+            }
+        },
+        readMcpServers: async () => ({ servers: structuredClone(mcpServers) }),
+        replaceMcpServers: async (params) => {
+            mcpServers = structuredClone(params.servers)
+            return {
+                servers: structuredClone(mcpServers),
+                replacedServers: mcpServers.length,
+            }
+        },
+        upsertMcpServer: async (params) => {
+            const created = !mcpServers.some((server) => server.id === params.server.id)
+            const nextServer = structuredClone(params.server)
+            mcpServers = [...mcpServers.filter((server) => server.id !== nextServer.id), nextServer]
+            return { server: structuredClone(nextServer), created }
+        },
+        deleteMcpServer: async (params) => {
+            const hadServer = mcpServers.some((server) => server.id === params.serverId)
+            mcpServers = mcpServers.filter((server) => server.id !== params.serverId)
+            return { serverId: params.serverId, deleted: hadServer }
+        },
+        readPersonalSettings: async () => ({
+            settings: structuredClone(personalSettings),
+        }),
+        replacePersonalSettings: async (params) => {
+            personalSettings = structuredClone(params.settings)
+            return { settings: structuredClone(personalSettings) }
         },
         updateTaskMetadata: async (params) => {
             if (params.taskId !== task.id) throw new Error(`Task ${params.taskId} not found`)
@@ -333,7 +456,15 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
             searchProject: async (params) => ({
                 repoId: params.repoId,
                 matches: params.query.toLowerCase().includes("readme")
-                    ? [{ path: "README.md", line: 1, content: "Runtime route readme", matchStart: 14, matchEnd: 20 }]
+                    ? [
+                          {
+                              path: "README.md",
+                              line: 1,
+                              content: "Runtime route readme",
+                              matchStart: 14,
+                              matchEnd: 20,
+                          },
+                      ]
                     : [],
                 truncated: false,
             }),
@@ -359,8 +490,14 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
                 headCommit: "abc123",
                 ahead: 0,
                 hasChanges: false,
-                staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
-                unstaged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
+                staged: {
+                    files: [],
+                    stats: { filesChanged: 0, insertions: 0, deletions: 0 },
+                },
+                unstaged: {
+                    files: [],
+                    stats: { filesChanged: 0, insertions: 0, deletions: 0 },
+                },
                 untracked: [],
             }),
             listProjectProcesses: async (params) => ({
@@ -395,7 +532,11 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
             }),
             startProjectProcess: async (params) => {
                 projectProcessId = "process-1"
-                return { repoId: params.repoId, definitionId: params.definitionId, processId: projectProcessId }
+                return {
+                    repoId: params.repoId,
+                    definitionId: params.definitionId,
+                    processId: projectProcessId,
+                }
             },
             reconnectProjectProcess: async (params) => ({
                 repoId: params.repoId,
@@ -413,7 +554,13 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
             writeTaskTerminal: unsupportedMutation("writeTaskTerminal"),
             resizeTaskTerminal: unsupportedMutation("resizeTaskTerminal"),
             stopTaskTerminal: unsupportedMutation("stopTaskTerminal"),
-            readTaskImage: async (params) => ({ repoId: params.repoId, taskId: params.taskId, imageId: params.imageId, ext: params.ext, data: null }),
+            readTaskImage: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                imageId: params.imageId,
+                ext: params.ext,
+                data: null,
+            }),
             readTaskGitSummary: async (params) => {
                 hooks.onReadTaskGitSummary?.()
                 return {
@@ -423,8 +570,14 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
                     headCommit: "abc123",
                     ahead: 0,
                     hasChanges: true,
-                    staged: { files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } },
-                    unstaged: { files: [{ path: "README.md", status: "modified" }], stats: { filesChanged: 1, insertions: 1, deletions: 0 } },
+                    staged: {
+                        files: [],
+                        stats: { filesChanged: 0, insertions: 0, deletions: 0 },
+                    },
+                    unstaged: {
+                        files: [{ path: "README.md", status: "modified" }],
+                        stats: { filesChanged: 1, insertions: 1, deletions: 0 },
+                    },
                     untracked: [],
                 }
             },
@@ -433,8 +586,22 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
                 taskId: params.taskId,
                 defaultBranch: "main",
                 scopes: [
-                    { id: "branch:HEAD", type: "branch", name: "HEAD", ref: "HEAD", isDefault: false, isRemote: false },
-                    { id: "branch:main", type: "branch", name: "main", ref: "main", isDefault: true, isRemote: false },
+                    {
+                        id: "branch:HEAD",
+                        type: "branch",
+                        name: "HEAD",
+                        ref: "HEAD",
+                        isDefault: false,
+                        isRemote: false,
+                    },
+                    {
+                        id: "branch:main",
+                        type: "branch",
+                        name: "main",
+                        ref: "main",
+                        isDefault: true,
+                        isRemote: false,
+                    },
                 ],
             }),
             readTaskResourceInventory: async (params) => ({
@@ -497,7 +664,12 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
                 before: "",
                 after: "",
             }),
-            readTaskGitLog: async (params) => ({ repoId: params.repoId, taskId: params.taskId, commits: [], hasMore: false }),
+            readTaskGitLog: async (params) => ({
+                repoId: params.repoId,
+                taskId: params.taskId,
+                commits: [],
+                hasMore: false,
+            }),
             readTaskGitCommitFiles: unsupportedMutation("readTaskGitCommitFiles"),
             readTaskGitFileAtTreeish: unsupportedMutation("readTaskGitFileAtTreeish"),
             readTaskGitCommitFilePatch: unsupportedMutation("readTaskGitCommitFilePatch"),
@@ -508,7 +680,10 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
         },
     }
     server.registerModule(createOpenADEModule(adapters))
-    server.register("host/capabilities/read", () => ({ enabled: true, version: "route-test" }))
+    server.register("host/capabilities/read", () => ({
+        enabled: true,
+        version: "route-test",
+    }))
     server.register("host/platform/info", () => ({
         platform: "darwin",
         pathSeparator: "/",
@@ -517,12 +692,18 @@ function createRouteRuntimeServer(hooks: RouteRuntimeServerHooks = {}): RuntimeS
         isMac: true,
         isLinux: false,
     }))
-    server.register("git/directory/read", () => ({ isGitDirectory: false, error: "not a git repo in route smoke test" }))
-    server.register("agent/sdkCapabilities/read", () => null)
+    server.register("git/directory/read", () => ({
+        isGitDirectory: false,
+        error: "not a git repo in route smoke test",
+    }))
+    server.register("agent/sdkCapabilities/read", () => {
+        hooks.onReadSdkCapabilities?.()
+        return null
+    })
     return server
 }
 
-function installOpenADEApiRuntimeBridge(server: RuntimeServer): () => void {
+function installOpenADEApiRuntimeBridge(server: RuntimeServer, options: { cleanManagedCore?: boolean } = {}): () => void {
     const previous = window.openadeAPI
     const listeners = new Set<(message: unknown) => void>()
     let disposeConnection: (() => void) | null = null
@@ -579,6 +760,21 @@ function installOpenADEApiRuntimeBridge(server: RuntimeServer): () => void {
             setKeepAwakeMode: async () => null,
             startPairing: async () => null,
         },
+        ...(options.cleanManagedCore
+            ? {
+                  core: {
+                      ...previous?.core,
+                      rolloutState: {
+                          status: "connected",
+                          source: "managed",
+                          reason: "managed-core",
+                          automatic: true,
+                          legacyYjsDocumentsPresent: false,
+                          legacyYjsMigrationAccepted: false,
+                      },
+                  },
+              }
+            : {}),
         runtime: {
             connect: async () => {
                 disposeConnection?.()
@@ -593,7 +789,9 @@ function installOpenADEApiRuntimeBridge(server: RuntimeServer): () => void {
             request: async (rawRequest: unknown) => {
                 const request = validateRuntimeRequest(rawRequest)
                 if (!request.ok) throw new Error(request.error.message)
-                return server.handleRequest(request.value, connection, { requireInitialized: true })
+                return server.handleRequest(request.value, connection, {
+                    requireInitialized: true,
+                })
             },
             onMessage: (cb: (message: unknown) => void) => {
                 listeners.add(cb)
@@ -662,7 +860,7 @@ function findButtonByTitlePrefix(container: HTMLElement, titlePrefix: string): H
     return button
 }
 
-describe("Code routes with runtime product reads", () => {
+describe("Code routes with runtime product API", () => {
     let container: HTMLDivElement
     let root: Root
     let cleanupOpenADEApi: (() => void) | null = null
@@ -707,14 +905,79 @@ describe("Code routes with runtime product reads", () => {
                 createElement(
                     Routes,
                     null,
-                    createElement(Route, { path: "/dashboard/code", element: createElement(CodeBaseRoute) }),
-                    createElement(Route, { path: "/dashboard/code/workspace/:workspaceId/task/:taskId", element: createElement("div") })
+                    createElement(Route, {
+                        path: "/dashboard/code",
+                        element: createElement(CodeBaseRoute),
+                    }),
+                    createElement(Route, {
+                        path: "/dashboard/code/workspace/:workspaceId/task/:taskId",
+                        element: createElement("div"),
+                    })
                 )
             )
             root.render(createElement(CodeStoreProvider, { store: codeStore }, router))
 
             await waitForPath(paths, "/dashboard/code/workspace/repo-1/task/task-1")
         } finally {
+            codeStore.disconnectAllStores()
+        }
+    })
+
+    it("redirects the clean managed Core base route from direct project list when snapshot projection is unavailable", async () => {
+        const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
+        const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+        let projectReadCount = 0
+        cleanupOpenADEApi = installOpenADEApiRuntimeBridge(
+            createRouteRuntimeServer({
+                snapshotError: new Error("snapshot unavailable"),
+                onReadProjects: () => {
+                    projectReadCount += 1
+                },
+            }),
+            { cleanManagedCore: true }
+        )
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+        })
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.repos.repos).toEqual([])
+            const paths: string[] = []
+
+            const router = createElement(
+                MemoryRouter,
+                { initialEntries: ["/dashboard/code"] },
+                createElement(LocationProbe, { onPath: (path) => paths.push(path) }),
+                createElement(
+                    Routes,
+                    null,
+                    createElement(Route, {
+                        path: "/dashboard/code",
+                        element: createElement(CodeBaseRoute),
+                    }),
+                    createElement(Route, {
+                        path: "/dashboard/code/workspace/create",
+                        element: createElement("div"),
+                    }),
+                    createElement(Route, {
+                        path: "/dashboard/code/workspace/:workspaceId/task/:taskId",
+                        element: createElement("div"),
+                    })
+                )
+            )
+            root.render(createElement(CodeStoreProvider, { store: codeStore }, router))
+
+            await waitForPath(paths, "/dashboard/code/workspace/repo-1/task/task-1")
+            expect(projectReadCount).toBe(1)
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.repos.getRepo("repo-1")).toEqual(expect.objectContaining({ id: "repo-1", name: "Runtime Route Repo" }))
+            expect(paths).not.toContain("/dashboard/code/workspace/create")
+            expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
+        } finally {
+            consoleWarnSpy.mockRestore()
+            trackSpy.mockRestore()
             codeStore.disconnectAllStores()
         }
     })
@@ -739,8 +1002,14 @@ describe("Code routes with runtime product reads", () => {
                 createElement(
                     Routes,
                     null,
-                    createElement(Route, { path: "/dashboard/code/workspace/:workspaceId", element: createElement(CodeWorkspaceRoute) }),
-                    createElement(Route, { path: "/dashboard/code/workspace/:workspaceId/task/:taskId", element: createElement("div") })
+                    createElement(Route, {
+                        path: "/dashboard/code/workspace/:workspaceId",
+                        element: createElement(CodeWorkspaceRoute),
+                    }),
+                    createElement(Route, {
+                        path: "/dashboard/code/workspace/:workspaceId/task/:taskId",
+                        element: createElement("div"),
+                    })
                 )
             )
             root.render(createElement(CodeStoreProvider, { store: codeStore }, router))
@@ -754,36 +1023,298 @@ describe("Code routes with runtime product reads", () => {
         }
     })
 
+    it("redirects the clean managed Core workspace route from direct project list when snapshot projection is unavailable", async () => {
+        const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
+        const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+        let projectReadCount = 0
+        cleanupOpenADEApi = installOpenADEApiRuntimeBridge(
+            createRouteRuntimeServer({
+                snapshotError: new Error("snapshot unavailable"),
+                onReadProjects: () => {
+                    projectReadCount += 1
+                },
+            }),
+            { cleanManagedCore: true }
+        )
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+        })
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            codeStore.storeInitialized = true
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.repos.getRepo("repo-1")).toBeUndefined()
+            const paths: string[] = []
+
+            const router = createElement(
+                MemoryRouter,
+                { initialEntries: ["/dashboard/code/workspace/repo-1"] },
+                createElement(LocationProbe, { onPath: (path) => paths.push(path) }),
+                createElement(
+                    Routes,
+                    null,
+                    createElement(Route, {
+                        path: "/dashboard/code/workspace/:workspaceId",
+                        element: createElement(CodeWorkspaceRoute),
+                    }),
+                    createElement(Route, {
+                        path: "/dashboard/code/workspace/:workspaceId/task/:taskId",
+                        element: createElement("div"),
+                    }),
+                    createElement(Route, {
+                        path: "/dashboard/code/workspace/:workspaceId/task/create",
+                        element: createElement("div"),
+                    })
+                )
+            )
+            root.render(createElement(CodeStoreProvider, { store: codeStore }, router))
+
+            await waitForPath(paths, "/dashboard/code/workspace/repo-1/task/task-1")
+            expect(projectReadCount).toBe(1)
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.repos.getRepo("repo-1")).toEqual(expect.objectContaining({ id: "repo-1", name: "Runtime Route Repo" }))
+            expect(paths).not.toContain("/dashboard/code/workspace/repo-1/task/create")
+            expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
+        } finally {
+            consoleWarnSpy.mockRestore()
+            trackSpy.mockRestore()
+            codeStore.disconnectAllStores()
+        }
+    })
+
+    it("renders the classic task-create route for clean managed Core without a snapshot-backed repo projection", async () => {
+        const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
+        const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+        const startedTurns: OpenADETurnStartRequest[] = []
+        cleanupOpenADEApi = installOpenADEApiRuntimeBridge(
+            createRouteRuntimeServer({
+                snapshotError: new Error("snapshot unavailable"),
+                onStartTurn: (params) => startedTurns.push(params),
+            }),
+            { cleanManagedCore: true }
+        )
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+        })
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            codeStore.storeInitialized = true
+            codeStore.setDefaultHarnessId("codex")
+            codeStore.setDefaultModel(routeModelId)
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.repos.getRepo("repo-1")).toBeUndefined()
+
+            const router = createElement(
+                MemoryRouter,
+                { initialEntries: ["/dashboard/code/workspace/repo-1/task/create"] },
+                createElement(
+                    Routes,
+                    null,
+                    createElement(Route, {
+                        path: "/dashboard/code/workspace/:workspaceId/task/create",
+                        element: createElement(CodeWorkspaceTaskCreateRoute),
+                    }),
+                    createElement(Route, {
+                        path: "/dashboard/code/workspace/:workspaceId/task/create/:creationId",
+                        element: createElement(CodeWorkspaceTaskCreatingRoute),
+                    })
+                )
+            )
+            root.render(createElement(CodeStoreProvider, { store: codeStore }, router))
+
+            await vi.waitFor(() => expect(findButtonByTitlePrefix(container, "Do")).toBeInstanceOf(HTMLButtonElement), { timeout: 1000, interval: 10 })
+            expect(container.textContent).not.toContain("Workspace not found")
+            expect(container.querySelector('[data-openade-surface="desktop-classic-task-create"]')).toBeInstanceOf(HTMLElement)
+            expect(container.querySelector('[data-openade-surface="shared-new-task"]')).toBeNull()
+
+            const editorManager = codeStore.smartEditors.getManager("task-create", "repo-1")
+            editorManager.setValue("Create through the clean Core route")
+            const doButton = findButtonByTitlePrefix(container, "Do")
+            await vi.waitFor(() => expect(doButton.disabled).toBe(false), {
+                timeout: 1000,
+                interval: 10,
+            })
+            clickElement(doButton)
+
+            await vi.waitFor(() => expect(startedTurns).toHaveLength(1), {
+                timeout: 1000,
+                interval: 10,
+            })
+            expect(startedTurns[0]).toMatchObject({
+                repoId: "repo-1",
+                type: "do",
+                input: "Create through the clean Core route",
+                isolationStrategy: { type: "head" },
+                harnessId: "codex",
+                modelId: routeModelId,
+                thinking: "max",
+                fastMode: false,
+            })
+            expect(codeStore.repos.getRepo("repo-1")).toBeUndefined()
+            expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
+        } finally {
+            consoleWarnSpy.mockRestore()
+            trackSpy.mockRestore()
+            codeStore.disconnectAllStores()
+        }
+    })
+
+    it("renders workspace settings for clean managed Core from the direct project list when snapshot projection is unavailable", async () => {
+        const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
+        const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+        let projectReadCount = 0
+        cleanupOpenADEApi = installOpenADEApiRuntimeBridge(
+            createRouteRuntimeServer({
+                snapshotError: new Error("snapshot unavailable"),
+                onReadProjects: () => {
+                    projectReadCount += 1
+                },
+            }),
+            { cleanManagedCore: true }
+        )
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+        })
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            codeStore.storeInitialized = true
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.repos.getRepo("repo-1")).toBeUndefined()
+
+            const router = createElement(
+                MemoryRouter,
+                { initialEntries: ["/dashboard/code/workspace/repo-1/settings"] },
+                createElement(
+                    Routes,
+                    null,
+                    createElement(Route, {
+                        path: "/dashboard/code/workspace/:workspaceId/settings",
+                        element: createElement(CodeWorkspaceSettingsRoute),
+                    })
+                )
+            )
+            root.render(createElement(CodeStoreProvider, { store: codeStore }, router))
+
+            await waitForText(container, "Workspace Settings")
+            await waitForText(container, "Runtime Route Repo")
+
+            expect(projectReadCount).toBe(1)
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.repos.getRepo("repo-1")).toEqual(expect.objectContaining({ id: "repo-1", name: "Runtime Route Repo" }))
+            expect(container.textContent).not.toContain("Workspace not found")
+            expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
+        } finally {
+            consoleWarnSpy.mockRestore()
+            trackSpy.mockRestore()
+            codeStore.disconnectAllStores()
+        }
+    })
+
+    it("loads the classic task route for clean managed Core without a snapshot-backed repo projection", async () => {
+        const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
+        const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+        const taskReads: Array<{
+            repoId: string
+            taskId: string
+            options?: OpenADETaskReadOptions
+        }> = []
+        cleanupOpenADEApi = installOpenADEApiRuntimeBridge(
+            createRouteRuntimeServer({
+                snapshotError: new Error("snapshot unavailable"),
+                onReadTask: (params) => taskReads.push(params),
+            }),
+            { cleanManagedCore: true }
+        )
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+        })
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            codeStore.storeInitialized = true
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.repos.getRepo("repo-1")).toBeUndefined()
+
+            const router = createElement(
+                MemoryRouter,
+                { initialEntries: ["/dashboard/code/workspace/repo-1/task/task-1"] },
+                createElement(
+                    Routes,
+                    null,
+                    createElement(Route, {
+                        path: "/dashboard/code/workspace/:workspaceId/task/:taskId",
+                        element: createElement(CodeWorkspaceTaskRoute),
+                    })
+                )
+            )
+            root.render(createElement(CodeStoreProvider, { store: codeStore }, router))
+
+            await waitForText(container, "Runtime route task")
+            await waitForText(container, "Do the runtime-backed work")
+
+            expect(container.textContent).not.toContain("Workspace not found")
+            expect(container.querySelector('[data-openade-surface="desktop-classic-task"]')).toBeInstanceOf(HTMLElement)
+            expect(codeStore.repos.getRepo("repo-1")).toBeUndefined()
+            expect(codeStore.tasks.getTask("task-1")).toEqual(expect.objectContaining({ id: "task-1", repoId: "repo-1" }))
+            expect(taskReads[0]).toEqual({
+                repoId: "repo-1",
+                taskId: "task-1",
+                options: { hydrateSessionEvents: false },
+            })
+            expect(taskReads.every((read) => read.options?.hydrateSessionEvents === false)).toBe(true)
+            expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
+        } finally {
+            consoleWarnSpy.mockRestore()
+            trackSpy.mockRestore()
+            codeStore.disconnectAllStores()
+        }
+    })
+
     it("renders the classic desktop task route by default after loading task detail through the real local runtime product store", async () => {
         const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
         const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined)
-        const setTimeoutSpy = vi.spyOn(window, "setTimeout")
+        const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout")
+        const setIntervalSpy = vi.spyOn(globalThis, "setInterval")
         const startedTurns: OpenADETurnStartRequest[] = []
         const metadataUpdates: OpenADETaskMetadataUpdateRequest[] = []
-        const taskReads: Array<{ repoId: string; taskId: string; options?: OpenADETaskReadOptions }> = []
+        const taskReads: Array<{
+            repoId: string
+            taskId: string
+            options?: OpenADETaskReadOptions
+        }> = []
+        let snapshotReadCount = 0
         let taskGitSummaryReadCount = 0
         let taskChangesReadCount = 0
         let projectGitInfoReadCount = 0
         let fuzzyProjectFileSearchCount = 0
-        cleanupOpenADEApi = installOpenADEApiRuntimeBridge(
-            createRouteRuntimeServer({
-                onStartTurn: (params) => startedTurns.push(params),
-                onUpdateTaskMetadata: (params) => metadataUpdates.push(params),
-                onReadTask: (params) => taskReads.push(params),
-                onReadTaskGitSummary: () => {
-                    taskGitSummaryReadCount += 1
-                },
-                onReadTaskChanges: () => {
-                    taskChangesReadCount += 1
-                },
-                onReadProjectGitInfo: () => {
-                    projectGitInfoReadCount += 1
-                },
-                onFuzzySearchProjectFiles: () => {
-                    fuzzyProjectFileSearchCount += 1
-                },
-            })
-        )
+        let sdkCapabilitiesReadCount = 0
+        const routeServer = createRouteRuntimeServer({
+            onReadSnapshot: () => {
+                snapshotReadCount += 1
+            },
+            onStartTurn: (params) => startedTurns.push(params),
+            onUpdateTaskMetadata: (params) => metadataUpdates.push(params),
+            onReadTask: (params) => taskReads.push(params),
+            onReadTaskGitSummary: () => {
+                taskGitSummaryReadCount += 1
+            },
+            onReadTaskChanges: () => {
+                taskChangesReadCount += 1
+            },
+            onReadProjectGitInfo: () => {
+                projectGitInfoReadCount += 1
+            },
+            onFuzzySearchProjectFiles: () => {
+                fuzzyProjectFileSearchCount += 1
+            },
+            onReadSdkCapabilities: () => {
+                sdkCapabilitiesReadCount += 1
+            },
+        })
+        cleanupOpenADEApi = installOpenADEApiRuntimeBridge(routeServer)
         const codeStore = new CodeStore({
             getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
             navigateToTask: () => undefined,
@@ -799,30 +1330,64 @@ describe("Code routes with runtime product reads", () => {
                 createElement(
                     Routes,
                     null,
-                    createElement(Route, { path: "/dashboard/code/workspace/:workspaceId/task/:taskId", element: createElement(CodeWorkspaceTaskRoute) })
+                    createElement(Route, {
+                        path: "/dashboard/code/workspace/:workspaceId/task/:taskId",
+                        element: createElement(CodeWorkspaceTaskRoute),
+                    })
                 )
             )
             root.render(createElement(CodeStoreProvider, { store: codeStore }, router))
-            await vi.waitFor(() => expect(taskGitSummaryReadCount).toBeGreaterThan(0), { timeout: 1000, interval: 10 })
-            await vi.waitFor(() => expect(codeStore.tasks.getTaskModel("task-1")?.environment?.taskWorkingDir).toBe("/tmp/runtime-route-repo"), {
-                timeout: 1000,
-                interval: 10,
-            })
-            const editorManager = codeStore.smartEditors.getManager("task-task-1", "repo-1")
-            await expect(editorManager.searchFileMentions("/tmp/runtime-route-repo", "readme")).resolves.toMatchObject({ results: ["README.md"] })
-            expect(projectGitInfoReadCount).toBeGreaterThan(0)
-            expect(fuzzyProjectFileSearchCount).toBeGreaterThan(0)
+            await waitForText(container, "Runtime route task")
+            await waitForText(container, "Do the runtime-backed work")
 
             expect(container.querySelector('[data-openade-surface="desktop-classic-task"]')).toBeInstanceOf(HTMLElement)
             expect(container.querySelector('[data-openade-surface="desktop-shared-task"]')).toBeNull()
+            expect(taskGitSummaryReadCount).toBe(0)
             expect(taskChangesReadCount).toBe(0)
-            expect(taskReads[0]).toEqual({ repoId: "repo-1", taskId: "task-1", options: { hydrateSessionEvents: false } })
-            await vi.waitFor(() => expect(metadataUpdates.some((update) => update.lastViewedAt)).toBe(true), { timeout: 1000, interval: 10 })
+            expect(projectGitInfoReadCount).toBe(0)
+            expect(fuzzyProjectFileSearchCount).toBe(0)
+            expect(sdkCapabilitiesReadCount).toBe(0)
+            expect(codeStore.tasks.getTaskModel("task-1")?.environment).toBeNull()
+
+            const editorManager = codeStore.smartEditors.getManager("task-task-1", "repo-1")
+            await expect(editorManager.searchFileMentions("/tmp/runtime-route-repo", "readme")).resolves.toMatchObject({ results: ["README.md"] })
+            expect(fuzzyProjectFileSearchCount).toBe(1)
+            expect(projectGitInfoReadCount).toBe(0)
+            expect(sdkCapabilitiesReadCount).toBe(0)
+
+            expect(taskReads[0]).toEqual({
+                repoId: "repo-1",
+                taskId: "task-1",
+                options: { hydrateSessionEvents: false },
+            })
+            expect(metadataUpdates.some((update) => update.lastViewedAt)).toBe(false)
+            expect(codeStore.getTaskPreviewsForRepo("repo-1")[0]?.lastViewedAt).toBeDefined()
             expect(taskReads.every((read) => read.options?.hydrateSessionEvents === false)).toBe(true)
+            const taskReadCountAfterOpen = taskReads.length
+            const snapshotReadCountAfterOpen = snapshotReadCount
+            const deferredViewedTimerIndex = setTimeoutSpy.mock.calls.findIndex(
+                ([callback, delay]) => delay === 5_000 && typeof callback === "function" && callback.toString().includes("writeTaskViewed")
+            )
+            expect(deferredViewedTimerIndex).toBeGreaterThanOrEqual(0)
+            const deferredViewedCallback = setTimeoutSpy.mock.calls[deferredViewedTimerIndex]?.[0]
+            const deferredViewedTimer = setTimeoutSpy.mock.results[deferredViewedTimerIndex]?.value
+            if (typeof deferredViewedCallback !== "function") throw new Error("Deferred viewed timer was not scheduled with a callback")
+            globalThis.clearTimeout(deferredViewedTimer as ReturnType<typeof globalThis.setTimeout>)
+            deferredViewedCallback()
+            await vi.waitFor(() => expect(metadataUpdates.some((update) => update.lastViewedAt !== undefined)).toBe(true), {
+                timeout: 1000,
+                interval: 10,
+            })
+            await new Promise((resolve) => window.setTimeout(resolve, 250))
+            expect(taskReads).toHaveLength(taskReadCountAfterOpen)
+            expect(snapshotReadCount).toBe(snapshotReadCountAfterOpen)
+            expect(taskGitSummaryReadCount).toBe(0)
+            expect(taskChangesReadCount).toBe(0)
+            expect(projectGitInfoReadCount).toBe(0)
+            expect(fuzzyProjectFileSearchCount).toBe(1)
+            expect(sdkCapabilitiesReadCount).toBe(0)
             expect(consoleErrorSpy.mock.calls.some((call) => String(call[0]).includes("[CronManager] Failed to load product install states"))).toBe(false)
             expect(setTimeoutSpy).not.toHaveBeenCalledWith(expect.any(Function), 2500)
-            await waitForText(container, "Runtime route task")
-            await waitForText(container, "Do the runtime-backed work")
             await waitForText(container, "1 comment")
             clickElement(findButtonByText(container, "1 comment"))
             await waitForText(container, "Runtime pending comment")
@@ -830,10 +1395,16 @@ describe("Code routes with runtime product reads", () => {
 
             editorManager.setValue("Classic desktop runtime turn")
             const doButton = findButtonByTitlePrefix(container, "Do")
-            await vi.waitFor(() => expect(doButton.disabled).toBe(false), { timeout: 1000, interval: 10 })
+            await vi.waitFor(() => expect(doButton.disabled).toBe(false), {
+                timeout: 1000,
+                interval: 10,
+            })
             clickElement(doButton)
 
-            await vi.waitFor(() => expect(startedTurns).toHaveLength(1), { timeout: 1000, interval: 10 })
+            await vi.waitFor(() => expect(startedTurns).toHaveLength(1), {
+                timeout: 1000,
+                interval: 10,
+            })
             expect(startedTurns[0]).toMatchObject({
                 repoId: "repo-1",
                 inTaskId: "task-1",
@@ -853,9 +1424,17 @@ describe("Code routes with runtime product reads", () => {
             expect(metadataUpdates).toEqual(expect.arrayContaining([expect.objectContaining({ taskId: "task-1", closed: true })]))
             expect(metadataUpdates).toEqual(expect.arrayContaining([expect.objectContaining({ taskId: "task-1", closed: false })]))
             expect(taskReads.every((read) => read.options?.hydrateSessionEvents === false)).toBe(true)
+            const intervalCallsBeforeRunningNotification = setIntervalSpy.mock.calls.length
+            routeServer.notify("runtime/updated", routeRuntimeRecord("running", "2026-05-31T00:03:00.000Z"))
+            await vi.waitFor(() => expect(codeStore.tasks.getTaskModel("task-1")?.isWorking).toBe(true), { timeout: 1000, interval: 10 })
+            await new Promise((resolve) => window.setTimeout(resolve, 50))
+            const intervalCallsAfterRunningNotification = setIntervalSpy.mock.calls.slice(intervalCallsBeforeRunningNotification)
+            expect(intervalCallsAfterRunningNotification.some(([, delay]) => delay === 20_000)).toBe(false)
+            expect(taskGitSummaryReadCount).toBe(0)
             expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
         } finally {
             consoleErrorSpy.mockRestore()
+            setIntervalSpy.mockRestore()
             setTimeoutSpy.mockRestore()
             trackSpy.mockRestore()
             codeStore.disconnectAllStores()
@@ -865,7 +1444,9 @@ describe("Code routes with runtime product reads", () => {
     it("runs the classic desktop workflow through runtime commands and reloads the runtime-backed state", async () => {
         const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
         const startedTurns: OpenADETurnStartRequest[] = []
-        const server = createRouteRuntimeServer({ onStartTurn: (params) => startedTurns.push(params) })
+        const server = createRouteRuntimeServer({
+            onStartTurn: (params) => startedTurns.push(params),
+        })
         cleanupOpenADEApi = installOpenADEApiRuntimeBridge(server)
         const stores: CodeStore[] = []
 
@@ -889,7 +1470,10 @@ describe("Code routes with runtime product reads", () => {
                 createElement(
                     Routes,
                     null,
-                    createElement(Route, { path: "/dashboard/code/workspace/:workspaceId/task/:taskId", element: createElement(CodeWorkspaceTaskRoute) })
+                    createElement(Route, {
+                        path: "/dashboard/code/workspace/:workspaceId/task/:taskId",
+                        element: createElement(CodeWorkspaceTaskRoute),
+                    })
                 )
             )
             root.render(createElement(CodeStoreProvider, { store: codeStore }, router))

@@ -134,13 +134,13 @@ describe("OpenADEClient", () => {
         }
     })
 
-    it("logs sanitized OpenADE runtime request bursts", async () => {
+    it("logs sanitized OpenADE runtime request bursts for distinct outbound reads", async () => {
         const runtime = fakeRuntime()
         const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
         const client = new OpenADEClient({ runtime, clientName: "burst-client", clientPlatform: "web" })
 
         try {
-            await Promise.all(Array.from({ length: 12 }, () => client.getTask("repo-1", "task-1", { hydrateSessionEvents: false })))
+            await Promise.all(Array.from({ length: 12 }, (_, index) => client.getTask("repo-1", `task-${index}`, { hydrateSessionEvents: false })))
             expect(warnSpy).toHaveBeenCalledWith("[OpenADEClient] Runtime request burst", {
                 method: "openade/task/read",
                 count: 12,

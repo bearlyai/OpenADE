@@ -9,6 +9,7 @@ import type { LucideIcon } from "lucide-react"
 import { FolderOpen, GitCommitHorizontal, GitCompare, NotebookPen, Play, Search, TerminalSquare } from "lucide-react"
 import type { ReactNode } from "react"
 import type { RunContext } from "../../electronAPI/procs"
+import type { GitInfo } from "../../store/managers/RepoManager"
 import type { TrayManager, TrayType } from "../../store/managers/TrayManager"
 import { ChangesViewer } from "../ChangesViewer"
 import { GitLogTray } from "../GitLogTray"
@@ -40,12 +41,34 @@ function NoEnvironment() {
     return <div className="flex items-center justify-center h-full text-muted text-sm">Environment not available</div>
 }
 
+function projectPathFromGitInfo(gitInfo: GitInfo): string {
+    const repoRoot = gitInfo.repoRoot.replace(/[\\/]+$/, "")
+    const relativePath = gitInfo.relativePath.replace(/^[\\/]+/, "").replace(/[\\/]+$/, "")
+    return relativePath ? `${repoRoot}/${relativePath}` : repoRoot
+}
+
+function getTaskWorkingDirHint(tray: TrayManager): string | null {
+    return tray.taskModel.taskWorkingDirHint
+}
+
+function getWorkspaceRepoPath(tray: TrayManager): string | null {
+    return tray.store.repos.getRepo(tray.workspaceId)?.path ?? null
+}
+
+async function resolveWorkspaceRepoPath(tray: TrayManager): Promise<string | null> {
+    const repoPath = getWorkspaceRepoPath(tray)
+    if (repoPath) return repoPath
+    if (!tray.store.shouldUseRuntimeProductAPI()) return null
+    const gitInfo = await tray.store.repos.getGitInfo(tray.workspaceId)
+    return gitInfo ? projectPathFromGitInfo(gitInfo) : null
+}
+
 function getProcessContext(tray: TrayManager): RunContext | null {
-    const env = tray.taskModel.environment
-    if (!env?.taskWorkingDir) return null
+    const taskWorkingDir = getTaskWorkingDirHint(tray)
+    if (!taskWorkingDir) return null
     const task = tray.store.tasks.getTask(tray.taskId)
     const isWorktree = task?.isolationStrategy?.type === "worktree"
-    return isWorktree ? { type: "worktree", root: env.taskWorkingDir } : { type: "repo", root: env.taskWorkingDir }
+    return isWorktree ? { type: "worktree", root: taskWorkingDir } : { type: "repo", root: taskWorkingDir }
 }
 
 function isGitBackedTrayVisible(tray: TrayManager): boolean {
@@ -55,7 +78,7 @@ function isGitBackedTrayVisible(tray: TrayManager): boolean {
 }
 
 function getTaskTerminalProductAccess(tray: TrayManager): TaskTerminalProductAccess | null {
-    if (!tray.taskModel.usesRuntimeProductReads || !tray.taskModel.repoId) return null
+    if (!tray.taskModel.usesRuntimeProductAPI || !tray.taskModel.repoId) return null
     const repoId = tray.taskModel.repoId
     const taskId = tray.taskId
     return {
@@ -70,8 +93,40 @@ function getTaskTerminalProductAccess(tray: TrayManager): TaskTerminalProductAcc
 }
 
 function getProjectProcessProductScope(tray: TrayManager): { repoId: string; taskId: string } | null {
-    if (!tray.taskModel.usesRuntimeProductReads || !tray.taskModel.repoId) return null
+    if (!tray.taskModel.usesRuntimeProductAPI || !tray.taskModel.repoId) return null
     return { repoId: tray.taskModel.repoId, taskId: tray.taskId }
+}
+
+function withTaskWorkingDir(tray: TrayManager, onResolved: (taskWorkingDir: string) => void): void {
+    const taskWorkingDir = getTaskWorkingDirHint(tray)
+    if (taskWorkingDir) {
+        onResolved(taskWorkingDir)
+        return
+    }
+    void tray.taskModel.ensureTaskWorkingDirHint().then((resolvedDir) => {
+        if (resolvedDir) onResolved(resolvedDir)
+    })
+}
+
+function ensureTaskWorkingDir(tray: TrayManager): void {
+    withTaskWorkingDir(tray, () => undefined)
+}
+
+function openFileBrowser(tray: TrayManager): void {
+    withTaskWorkingDir(tray, (taskWorkingDir) => openFileBrowserAtDir(tray, taskWorkingDir))
+}
+
+function openFileBrowserAtDir(tray: TrayManager, taskWorkingDir: string): void {
+    const fileBrowser = tray.taskModel.fileBrowser
+    if (fileBrowser.workingDir === taskWorkingDir) {
+        fileBrowser.refreshTree()
+    } else {
+        fileBrowser.setWorkingDir(taskWorkingDir)
+    }
+}
+
+function openContentSearch(tray: TrayManager): void {
+    withTaskWorkingDir(tray, (taskWorkingDir) => tray.taskModel.contentSearch.setWorkingDir(taskWorkingDir))
 }
 
 export const TRAY_CONFIGS: TrayConfig[] = [
@@ -93,7 +148,7 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         },
         renderContent: (tray) => {
             const env = tray.taskModel.environment
-            if (!env?.taskWorkingDir) {
+            if (!env?.taskWorkingDir && !tray.taskModel.usesRuntimeProductAPI) {
                 return <NoEnvironment />
             }
             const task = tray.store.tasks.getTask(tray.taskId)
@@ -106,7 +161,7 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         label: "Files",
         icon: FolderOpen,
         shortcut: { key: "mod+p", display: "⌘P" },
-        onOpen: (tray) => tray.taskModel.fileBrowser.refreshTree(),
+        onOpen: openFileBrowser,
         renderContent: (tray) => <FilesTrayContent fileBrowser={tray.taskModel.fileBrowser} taskId={tray.taskId} onClose={() => tray.close()} />,
     },
     {
@@ -115,12 +170,13 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         icon: GitCommitHorizontal,
         shortcut: { key: "mod+shift+l", display: "⌘⇧L" },
         isVisible: isGitBackedTrayVisible,
+        onOpen: ensureTaskWorkingDir,
         renderContent: (tray) => {
-            const env = tray.taskModel.environment
-            if (!env?.taskWorkingDir) {
+            const taskWorkingDir = getTaskWorkingDirHint(tray)
+            if (!taskWorkingDir) {
                 return <NoEnvironment />
             }
-            return <GitLogTray taskId={tray.taskId} workDir={env.taskWorkingDir} currentBranch={tray.taskModel.gitStatus?.branch ?? null} className="h-full" />
+            return <GitLogTray taskId={tray.taskId} workDir={taskWorkingDir} currentBranch={tray.taskModel.gitStatus?.branch ?? null} className="h-full" />
         },
     },
     {
@@ -128,6 +184,7 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         label: "Search",
         icon: Search,
         shortcut: { key: "mod+shift+f", display: "⌘⇧F" },
+        onOpen: openContentSearch,
         renderContent: (tray) => <SearchTray contentSearch={tray.taskModel.contentSearch} taskId={tray.taskId} onEscapeClose={() => tray.close()} />,
     },
     {
@@ -135,16 +192,17 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         label: "Terminal",
         icon: TerminalSquare,
         shortcut: { key: "mod+t", display: "⌘T" },
+        onOpen: ensureTaskWorkingDir,
         onClose: (tray) => tray.taskModel.refreshGitState({ force: true }),
         renderContent: (tray) => {
-            const env = tray.taskModel.environment
-            if (!env?.taskWorkingDir) {
+            const taskWorkingDir = getTaskWorkingDirHint(tray)
+            if (!taskWorkingDir) {
                 return <NoEnvironment />
             }
             return (
                 <Terminal
                     ptyId={tray.taskId}
-                    cwd={env.taskWorkingDir}
+                    cwd={taskWorkingDir}
                     productAccess={getTaskTerminalProductAccess(tray)}
                     className="h-full"
                     onClose={() => tray.close()}
@@ -158,8 +216,13 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         icon: NotebookPen,
         shortcut: { key: "mod+shift+s", display: "⌘⇧S" },
         renderContent: (tray) => {
-            const repo = tray.store.repos.getRepo(tray.workspaceId)
-            return <ScratchpadTrayContent workspaceId={tray.workspaceId} repoPath={repo?.path ?? null} />
+            return (
+                <ScratchpadTrayContent
+                    workspaceId={tray.workspaceId}
+                    repoPath={getWorkspaceRepoPath(tray)}
+                    resolveRepoPath={() => resolveWorkspaceRepoPath(tray)}
+                />
+            )
         },
     },
     {
@@ -167,6 +230,7 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         label: "Processes",
         icon: Play,
         shortcut: { key: "mod+shift+p", display: "⌘⇧P" },
+        onOpen: ensureTaskWorkingDir,
         renderBadge: (tray) => {
             const context = getProcessContext(tray)
             if (!context) return null

@@ -195,7 +195,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
         setBackfillProgress({ loaded: 0, total: tasksToBackfill.length })
 
         try {
-            if (store.shouldUseRuntimeProductReads() && store.usesCleanManagedCoreRuntime()) {
+            if (store.shouldUseRuntimeProductAPI() && store.usesCleanManagedCoreRuntime()) {
                 await store.backfillTaskUsagePreviews(tasksToBackfill)
                 setBackfillProgress({ loaded: tasksToBackfill.length, total: tasksToBackfill.length })
                 return
@@ -215,7 +215,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
             }
 
             try {
-                if (!store.shouldUseRuntimeProductReads()) await store.syncRepoStore()
+                if (!store.shouldUseRuntimeProductAPI()) await store.syncRepoStore()
             } catch (err) {
                 console.warn("[StatsTab] Failed to sync stats backfill:", err)
             }

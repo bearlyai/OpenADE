@@ -282,6 +282,7 @@ async function handleSave(id: string, data: Uint8Array, options: YjsDocumentOper
                     }
                 }
                 if (identical) {
+                    cacheLoadedDocument(id, new Uint8Array(existingData))
                     logger.debug(`[YjsStorage] Skipped save (unchanged): ${id} (${data.length} bytes)`)
                     return
                 }

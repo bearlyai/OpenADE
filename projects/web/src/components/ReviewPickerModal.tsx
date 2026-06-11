@@ -89,9 +89,10 @@ export const ReviewPickerModal = NiceModal.create(
                     reviewType,
                     harnessId,
                     modelId,
+                    thinking: taskModel.thinking,
+                    fastMode: taskModel.fastMode,
                     customInstructions: notes.trim() || undefined,
                 })
-                .then(() => codeStore.refreshProductStateAfterTaskMutation(taskId))
                 .catch((error) => {
                     console.error("[ReviewPickerModal] Failed to start server-owned review:", error)
                 })

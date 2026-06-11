@@ -154,7 +154,7 @@ describe("RuntimeServer handler context runner", () => {
 
 describe("RuntimeServer runtime records", () => {
     it("filters runtime/list by runtime status", async () => {
-        const server = new RuntimeServer({})
+        const server = new RuntimeServer({ serverName: "test-runtime" })
         server.supervisor.register(runtimeRecord("runtime-running", "running", "task-1"))
         server.supervisor.register(runtimeRecord("runtime-completed", "completed", "task-1"))
         server.supervisor.register(runtimeRecord("runtime-other", "running", "task-2"))

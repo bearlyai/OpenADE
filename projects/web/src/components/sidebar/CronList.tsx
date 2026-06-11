@@ -98,7 +98,7 @@ export const CronsSidebarContent = observer(({ workspaceId }: CronsSidebarConten
     const codeStore = useCodeStore()
     const crons = codeStore.crons.getCronsForRepo(workspaceId)
     const repoPath = codeStore.repos.getRepo(workspaceId)?.path ?? "."
-    const productScope: ProductProjectScope | null = codeStore.shouldUseRuntimeProductReads() ? { repoId: workspaceId } : null
+    const productScope: ProductProjectScope | null = codeStore.shouldUseRuntimeProductAPI() ? { repoId: workspaceId } : null
     const productAccess = productScope ? createProductProjectProcessAccess(codeStore, productScope) : null
 
     useEffect(() => {

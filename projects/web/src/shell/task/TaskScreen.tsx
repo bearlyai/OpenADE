@@ -2,17 +2,28 @@ import { ArrowDown, Loader2, MessageSquarePlus } from "lucide-react"
 import cx from "classnames"
 import { type ReactNode, useMemo } from "react"
 import type {
+    OpenADESnapshotPatchFile,
     OpenADETask,
     OpenADETaskChangesReadResult,
     OpenADETaskDiffReadResult,
+    OpenADETaskFilePairReadResult,
     OpenADETaskGitChangedFile,
+    OpenADETaskGitCommitFilePatchResult,
+    OpenADETaskGitCommitFilesResult,
+    OpenADETaskGitFileAtTreeishResult,
     OpenADETaskGitLogResult,
+    OpenADETaskGitLogEntry,
+    OpenADETaskGitScopesReadResult,
+    OpenADETaskGitSummaryResult,
     OpenADETaskPreview,
+    OpenADETaskResourceInventory,
 } from "../../../../openade-module/src"
 import { TaskComposer, type TaskComposerAgentControls } from "./TaskComposer"
-import { TaskEventThread, type TaskImageLoader } from "./TaskEventThread"
-import { TaskProductPanel, openADETaskComments, type OpenADETaskCommentView, type TaskReviewType } from "./TaskProductPanel"
-import { taskEventBlocks, type TaskEventBlock } from "./taskEventPresentation"
+import { TaskEventThread, type TaskImageLoader, type TaskSnapshotPatchView } from "./TaskEventThread"
+import { TaskProductPanel, openADETaskComments, type OpenADETaskCommentView, type TaskProductCapabilities, type TaskReviewType } from "./TaskProductPanel"
+import type { TaskTerminalProductAccess } from "../../components/terminalSession"
+import type { TaskGitCapabilities } from "./TaskGitPanel"
+import { taskEventBlocks, type TaskEventBlock, type TaskSnapshotBlock } from "./taskEventPresentation"
 import type { TaskCommandType } from "./taskCommands"
 import { useTaskThreadScroll } from "./useTaskThreadScroll"
 
@@ -29,9 +40,29 @@ export function TaskScreen({
     reviewInstructions,
     taskChanges,
     taskGitLog,
+    taskGitSummary,
+    taskGitScopes,
     taskChangesLoading,
     taskDiff,
     taskDiffActionPath,
+    taskFilePair,
+    taskFilePairActionPath,
+    taskCommitFiles,
+    taskCommitFilesActionSha,
+    taskCommitPatch,
+    taskCommitPatchActionKey,
+    taskTreeishFile,
+    taskTreeishFileActionKey,
+    taskResources,
+    taskResourcesLoading,
+    taskTerminalProductAccess,
+    taskGitCapabilities,
+    taskProductCapabilities,
+    taskCanReadResources,
+    taskCanDelete,
+    taskCanStartTurn,
+    taskCanEnqueueQueuedTurn,
+    taskCanInterrupt,
     isLoading,
     isSubmitting,
     isOnline,
@@ -39,10 +70,14 @@ export function TaskScreen({
     composer,
     messageViewportClassName,
     loadImage,
+    snapshotPatches,
+    snapshotPatchActionId,
     onInputChange,
     onCommandTypeChange,
     onTitleChange,
     onSaveTitle,
+    onGenerateTitle,
+    onPrepareEnvironment,
     onToggleClosed,
     onDeleteTask,
     onCommentDraftChange,
@@ -53,12 +88,21 @@ export function TaskScreen({
     onCancelEditComment,
     onDeleteComment,
     onCancelQueuedTurn,
+    onReorderQueuedTurns,
     onReviewInstructionsChange,
     onStartReview,
     onRefreshTaskGit,
     onReadTaskDiff,
+    onReadTaskFilePair,
+    onReadTaskCommitFiles,
+    onReadTaskCommitFilePatch,
+    onReadTaskCommitFileAtTreeish,
+    onCommitTaskGit,
+    onRefreshTaskResources,
     onSend,
     onAbort,
+    onLoadSnapshotPatch,
+    onLoadSnapshotPatchSlice,
 }: {
     task: OpenADETask | null
     preview: OpenADETaskPreview | null
@@ -72,9 +116,29 @@ export function TaskScreen({
     reviewInstructions: string
     taskChanges: OpenADETaskChangesReadResult | null
     taskGitLog: OpenADETaskGitLogResult | null
+    taskGitSummary: OpenADETaskGitSummaryResult | null
+    taskGitScopes: OpenADETaskGitScopesReadResult | null
     taskChangesLoading: boolean
     taskDiff: OpenADETaskDiffReadResult | null
     taskDiffActionPath: string | null
+    taskFilePair: OpenADETaskFilePairReadResult | null
+    taskFilePairActionPath: string | null
+    taskCommitFiles: OpenADETaskGitCommitFilesResult | null
+    taskCommitFilesActionSha: string | null
+    taskCommitPatch: OpenADETaskGitCommitFilePatchResult | null
+    taskCommitPatchActionKey: string | null
+    taskTreeishFile: OpenADETaskGitFileAtTreeishResult | null
+    taskTreeishFileActionKey: string | null
+    taskResources: OpenADETaskResourceInventory | null
+    taskResourcesLoading: boolean
+    taskTerminalProductAccess: TaskTerminalProductAccess | null
+    taskGitCapabilities: TaskGitCapabilities
+    taskProductCapabilities: TaskProductCapabilities
+    taskCanReadResources: boolean
+    taskCanDelete: boolean
+    taskCanStartTurn: boolean
+    taskCanEnqueueQueuedTurn: boolean
+    taskCanInterrupt: boolean
     isLoading: boolean
     isSubmitting: boolean
     isOnline: boolean
@@ -82,10 +146,14 @@ export function TaskScreen({
     composer?: ReactNode
     messageViewportClassName?: string
     loadImage?: TaskImageLoader
+    snapshotPatches?: Record<string, TaskSnapshotPatchView>
+    snapshotPatchActionId?: string | null
     onInputChange: (value: string) => void
     onCommandTypeChange: (value: TaskCommandType) => void
     onTitleChange: (value: string) => void
     onSaveTitle: () => void
+    onGenerateTitle: () => void
+    onPrepareEnvironment: () => void
     onToggleClosed: () => void
     onDeleteTask: () => void
     onCommentDraftChange: (value: string) => void
@@ -96,12 +164,21 @@ export function TaskScreen({
     onCancelEditComment: () => void
     onDeleteComment: (commentId: string) => void
     onCancelQueuedTurn: (queuedTurnId: string) => void
+    onReorderQueuedTurns: (queuedTurnIds: string[]) => void
     onReviewInstructionsChange: (value: string) => void
     onStartReview: (reviewType: TaskReviewType) => void
     onRefreshTaskGit: () => void
     onReadTaskDiff: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskFilePair: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskCommitFiles: (commit: OpenADETaskGitLogEntry) => void
+    onReadTaskCommitFilePatch: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskCommitFileAtTreeish: (file: OpenADETaskGitChangedFile) => void
+    onCommitTaskGit: (message: string) => void
+    onRefreshTaskResources: () => void
     onSend: () => void
     onAbort: () => void
+    onLoadSnapshotPatch?: (block: TaskSnapshotBlock) => void
+    onLoadSnapshotPatchSlice?: (block: TaskSnapshotBlock, file: OpenADESnapshotPatchFile) => void
 }) {
     const blocks = useMemo(() => taskEventBlocks(task), [task])
     const comments = useMemo(() => openADETaskComments(task), [task])
@@ -120,14 +197,35 @@ export function TaskScreen({
                 reviewInstructions={reviewInstructions}
                 taskChanges={taskChanges}
                 taskGitLog={taskGitLog}
+                taskGitSummary={taskGitSummary}
+                taskGitScopes={taskGitScopes}
                 taskChangesLoading={taskChangesLoading}
                 taskDiff={taskDiff}
                 taskDiffActionPath={taskDiffActionPath}
+                taskFilePair={taskFilePair}
+                taskFilePairActionPath={taskFilePairActionPath}
+                taskCommitFiles={taskCommitFiles}
+                taskCommitFilesActionSha={taskCommitFilesActionSha}
+                taskCommitPatch={taskCommitPatch}
+                taskCommitPatchActionKey={taskCommitPatchActionKey}
+                taskTreeishFile={taskTreeishFile}
+                taskTreeishFileActionKey={taskTreeishFileActionKey}
+                taskResources={taskResources}
+                taskResourcesLoading={taskResourcesLoading}
+                taskTerminalProductAccess={taskTerminalProductAccess}
+                taskGitCapabilities={taskGitCapabilities}
+                taskProductCapabilities={taskProductCapabilities}
+                taskCanReadResources={taskCanReadResources}
+                taskCanDelete={taskCanDelete}
                 isSubmitting={isSubmitting}
                 messageViewportClassName={messageViewportClassName}
                 loadImage={loadImage}
+                snapshotPatches={snapshotPatches}
+                snapshotPatchActionId={snapshotPatchActionId}
                 onTitleChange={onTitleChange}
                 onSaveTitle={onSaveTitle}
+                onGenerateTitle={onGenerateTitle}
+                onPrepareEnvironment={onPrepareEnvironment}
                 onToggleClosed={onToggleClosed}
                 onDeleteTask={onDeleteTask}
                 onCommentDraftChange={onCommentDraftChange}
@@ -138,10 +236,19 @@ export function TaskScreen({
                 onCancelEditComment={onCancelEditComment}
                 onDeleteComment={onDeleteComment}
                 onCancelQueuedTurn={onCancelQueuedTurn}
+                onReorderQueuedTurns={onReorderQueuedTurns}
                 onReviewInstructionsChange={onReviewInstructionsChange}
                 onStartReview={onStartReview}
                 onRefreshTaskGit={onRefreshTaskGit}
                 onReadTaskDiff={onReadTaskDiff}
+                onReadTaskFilePair={onReadTaskFilePair}
+                onReadTaskCommitFiles={onReadTaskCommitFiles}
+                onReadTaskCommitFilePatch={onReadTaskCommitFilePatch}
+                onReadTaskCommitFileAtTreeish={onReadTaskCommitFileAtTreeish}
+                onCommitTaskGit={onCommitTaskGit}
+                onRefreshTaskResources={onRefreshTaskResources}
+                onLoadSnapshotPatch={onLoadSnapshotPatch}
+                onLoadSnapshotPatchSlice={onLoadSnapshotPatchSlice}
             />
             {composer ?? (
                 <TaskComposer
@@ -151,6 +258,8 @@ export function TaskScreen({
                     isSubmitting={isSubmitting}
                     isOnline={isOnline}
                     isRunning={isRunning}
+                    canSend={isRunning ? taskCanEnqueueQueuedTurn : taskCanStartTurn}
+                    canAbort={taskCanInterrupt}
                     agentControls={agentControls}
                     onInputChange={onInputChange}
                     onCommandTypeChange={onCommandTypeChange}
@@ -175,14 +284,35 @@ function TaskMessages({
     reviewInstructions,
     taskChanges,
     taskGitLog,
+    taskGitSummary,
+    taskGitScopes,
     taskChangesLoading,
     taskDiff,
     taskDiffActionPath,
+    taskFilePair,
+    taskFilePairActionPath,
+    taskCommitFiles,
+    taskCommitFilesActionSha,
+    taskCommitPatch,
+    taskCommitPatchActionKey,
+    taskTreeishFile,
+    taskTreeishFileActionKey,
+    taskResources,
+    taskResourcesLoading,
+    taskTerminalProductAccess,
+    taskGitCapabilities,
+    taskProductCapabilities,
+    taskCanReadResources,
+    taskCanDelete,
     isSubmitting,
     messageViewportClassName,
     loadImage,
+    snapshotPatches,
+    snapshotPatchActionId,
     onTitleChange,
     onSaveTitle,
+    onGenerateTitle,
+    onPrepareEnvironment,
     onToggleClosed,
     onDeleteTask,
     onCommentDraftChange,
@@ -193,10 +323,19 @@ function TaskMessages({
     onCancelEditComment,
     onDeleteComment,
     onCancelQueuedTurn,
+    onReorderQueuedTurns,
     onReviewInstructionsChange,
     onStartReview,
     onRefreshTaskGit,
     onReadTaskDiff,
+    onReadTaskFilePair,
+    onReadTaskCommitFiles,
+    onReadTaskCommitFilePatch,
+    onReadTaskCommitFileAtTreeish,
+    onCommitTaskGit,
+    onRefreshTaskResources,
+    onLoadSnapshotPatch,
+    onLoadSnapshotPatchSlice,
 }: {
     task: OpenADETask | null
     preview: OpenADETaskPreview | null
@@ -210,14 +349,35 @@ function TaskMessages({
     reviewInstructions: string
     taskChanges: OpenADETaskChangesReadResult | null
     taskGitLog: OpenADETaskGitLogResult | null
+    taskGitSummary: OpenADETaskGitSummaryResult | null
+    taskGitScopes: OpenADETaskGitScopesReadResult | null
     taskChangesLoading: boolean
     taskDiff: OpenADETaskDiffReadResult | null
     taskDiffActionPath: string | null
+    taskFilePair: OpenADETaskFilePairReadResult | null
+    taskFilePairActionPath: string | null
+    taskCommitFiles: OpenADETaskGitCommitFilesResult | null
+    taskCommitFilesActionSha: string | null
+    taskCommitPatch: OpenADETaskGitCommitFilePatchResult | null
+    taskCommitPatchActionKey: string | null
+    taskTreeishFile: OpenADETaskGitFileAtTreeishResult | null
+    taskTreeishFileActionKey: string | null
+    taskResources: OpenADETaskResourceInventory | null
+    taskResourcesLoading: boolean
+    taskTerminalProductAccess: TaskTerminalProductAccess | null
+    taskGitCapabilities: TaskGitCapabilities
+    taskProductCapabilities: TaskProductCapabilities
+    taskCanReadResources: boolean
+    taskCanDelete: boolean
     isSubmitting: boolean
     messageViewportClassName?: string
     loadImage?: TaskImageLoader
+    snapshotPatches?: Record<string, TaskSnapshotPatchView>
+    snapshotPatchActionId?: string | null
     onTitleChange: (value: string) => void
     onSaveTitle: () => void
+    onGenerateTitle: () => void
+    onPrepareEnvironment: () => void
     onToggleClosed: () => void
     onDeleteTask: () => void
     onCommentDraftChange: (value: string) => void
@@ -228,10 +388,19 @@ function TaskMessages({
     onCancelEditComment: () => void
     onDeleteComment: (commentId: string) => void
     onCancelQueuedTurn: (queuedTurnId: string) => void
+    onReorderQueuedTurns: (queuedTurnIds: string[]) => void
     onReviewInstructionsChange: (value: string) => void
     onStartReview: (reviewType: TaskReviewType) => void
     onRefreshTaskGit: () => void
     onReadTaskDiff: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskFilePair: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskCommitFiles: (commit: OpenADETaskGitLogEntry) => void
+    onReadTaskCommitFilePatch: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskCommitFileAtTreeish: (file: OpenADETaskGitChangedFile) => void
+    onCommitTaskGit: (message: string) => void
+    onRefreshTaskResources: () => void
+    onLoadSnapshotPatch?: (block: TaskSnapshotBlock) => void
+    onLoadSnapshotPatchSlice?: (block: TaskSnapshotBlock, file: OpenADESnapshotPatchFile) => void
 }) {
     const { viewportRef, showJump, handleScroll, scrollToBottom } = useTaskThreadScroll({
         changeKey: `${blocks.length}:${isRunning ? "running" : "idle"}`,
@@ -274,12 +443,31 @@ function TaskMessages({
                         reviewInstructions={reviewInstructions}
                         taskChanges={taskChanges}
                         taskGitLog={taskGitLog}
+                        taskGitSummary={taskGitSummary}
+                        taskGitScopes={taskGitScopes}
                         taskChangesLoading={taskChangesLoading}
                         taskDiff={taskDiff}
                         taskDiffActionPath={taskDiffActionPath}
+                        taskFilePair={taskFilePair}
+                        taskFilePairActionPath={taskFilePairActionPath}
+                        taskCommitFiles={taskCommitFiles}
+                        taskCommitFilesActionSha={taskCommitFilesActionSha}
+                        taskCommitPatch={taskCommitPatch}
+                        taskCommitPatchActionKey={taskCommitPatchActionKey}
+                        taskTreeishFile={taskTreeishFile}
+                        taskTreeishFileActionKey={taskTreeishFileActionKey}
+                        taskResources={taskResources}
+                        taskResourcesLoading={taskResourcesLoading}
+                        taskTerminalProductAccess={taskTerminalProductAccess}
+                        taskGitCapabilities={taskGitCapabilities}
+                        taskProductCapabilities={taskProductCapabilities}
+                        canReadTaskResources={taskCanReadResources}
+                        canDeleteTask={taskCanDelete}
                         isSubmitting={isSubmitting}
                         onTitleChange={onTitleChange}
                         onSaveTitle={onSaveTitle}
+                        onGenerateTitle={onGenerateTitle}
+                        onPrepareEnvironment={onPrepareEnvironment}
                         onToggleClosed={onToggleClosed}
                         onDeleteTask={onDeleteTask}
                         onCommentDraftChange={onCommentDraftChange}
@@ -290,10 +478,17 @@ function TaskMessages({
                         onCancelEditComment={onCancelEditComment}
                         onDeleteComment={onDeleteComment}
                         onCancelQueuedTurn={onCancelQueuedTurn}
+                        onReorderQueuedTurns={onReorderQueuedTurns}
                         onReviewInstructionsChange={onReviewInstructionsChange}
                         onStartReview={onStartReview}
                         onRefreshTaskGit={onRefreshTaskGit}
                         onReadTaskDiff={onReadTaskDiff}
+                        onReadTaskFilePair={onReadTaskFilePair}
+                        onReadTaskCommitFiles={onReadTaskCommitFiles}
+                        onReadTaskCommitFilePatch={onReadTaskCommitFilePatch}
+                        onReadTaskCommitFileAtTreeish={onReadTaskCommitFileAtTreeish}
+                        onCommitTaskGit={onCommitTaskGit}
+                        onRefreshTaskResources={onRefreshTaskResources}
                     />
                 )}
                 {!task && <div className="text-sm text-muted">Loading task...</div>}
@@ -305,7 +500,15 @@ function TaskMessages({
                         {preview?.title ?? "Task"} has no messages yet.
                     </div>
                 )}
-                <TaskEventThread blocks={blocks} isRunning={isRunning} loadImage={loadImage} />
+                <TaskEventThread
+                    blocks={blocks}
+                    isRunning={isRunning}
+                    loadImage={loadImage}
+                    snapshotPatches={snapshotPatches}
+                    snapshotPatchActionId={snapshotPatchActionId}
+                    onLoadSnapshotPatch={onLoadSnapshotPatch}
+                    onLoadSnapshotPatchSlice={onLoadSnapshotPatchSlice}
+                />
             </div>
             {showJump && (
                 <button

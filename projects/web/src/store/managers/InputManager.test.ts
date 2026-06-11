@@ -35,15 +35,23 @@ function createManager({
     queuedTurns = [],
     isTaskRunning = () => true,
     refreshTaskStoreFromStorage = vi.fn(async () => undefined),
+    runtimeProductAPI = false,
     isolationStrategy = { type: "head" as const },
     environment = null,
+    hasGitStateLoaded = true,
+    hasWorkingChanges = false,
+    aheadCount = 0,
     stopAllForContext = vi.fn(async () => undefined),
 }: {
     queuedTurns?: QueuedTurn[]
     isTaskRunning?: (taskId: string) => boolean
     refreshTaskStoreFromStorage?: (taskId: string) => Promise<void>
+    runtimeProductAPI?: boolean
     isolationStrategy?: { type: "head" } | { type: "worktree"; sourceBranch: string }
     environment?: { taskWorkingDir: string } | null
+    hasGitStateLoaded?: boolean
+    hasWorkingChanges?: boolean
+    aheadCount?: number
     stopAllForContext?: (
         context: { type: "worktree"; root: string },
         access?: { stopProjectProcess(args: { processId: string }): Promise<unknown> }
@@ -56,22 +64,37 @@ function createManager({
         repoId: "repo-1",
         closed: false,
         isolationStrategy,
-        events: [],
+        events: [
+            {
+                id: "event-1",
+                type: "action",
+                status: "completed",
+                createdAt: "2026-06-01T00:00:00.000Z",
+                source: { type: "do", userLabel: "Do" },
+                execution: { events: [] },
+            },
+        ],
         queuedTurns,
     }
+    const refreshGitState = vi.fn(async () => undefined)
     const taskModel = {
         repoId: "repo-1",
         hasActivePlan: false,
-        hasWorkingChanges: false,
-        aheadCount: 0,
+        hasWorkingChanges,
+        hasGitStateLoaded,
+        aheadCount,
         enabledMcpServerIds: ["mcp-1"],
         harnessId: "codex",
         model: "gpt-5-codex",
         thinking: "med",
         fastMode: true,
+        gitStatus: { branch: "openade/task-1" },
+        hasGhCli: true,
         environment,
         queuedTurns,
         cancelQueuedTurn,
+        refreshGitState,
+        invalidateEnvironmentCache: vi.fn(),
     }
     const interruptTask = vi.fn(async (taskId: string) => {
         await mocks.interruptTurn(taskId)
@@ -80,7 +103,7 @@ function createManager({
     const queuedTurnManager = new QueuedTurnManager()
     const store = {
         isTaskRunning: vi.fn((taskId: string) => taskId === "task-1" && isTaskRunning(taskId)),
-        shouldUseRuntimeProductReads: vi.fn(() => false),
+        shouldUseRuntimeProductAPI: vi.fn(() => runtimeProductAPI),
         startProductTurn: mocks.startTurn,
         refreshRuntimeProductSnapshot: vi.fn(async () => null),
         refreshRuntimeProductTaskForTaskId: vi.fn(async () => null),
@@ -139,6 +162,7 @@ function createManager({
         interruptTask,
         queuedTurnManager,
         setTaskClosed,
+        taskModel,
     }
 }
 
@@ -211,9 +235,8 @@ describe("InputManager queueable desktop commands", () => {
         ])
     })
 
-    it("uses runtime product mutation cache instead of opening a direct task store when runtime product reads are active", async () => {
-        const { manager, store } = createManager()
-        store.shouldUseRuntimeProductReads.mockReturnValue(true)
+    it("uses runtime product mutation cache instead of opening a direct task store when clean Core has no snapshot", async () => {
+        const { manager, store } = createManager({ runtimeProductAPI: true })
 
         await manager.runCommand("do")
 
@@ -221,6 +244,46 @@ describe("InputManager queueable desktop commands", () => {
         expect(store.refreshTaskStoreFromStorage).not.toHaveBeenCalled()
         expect(store.refreshRuntimeProductSnapshot).not.toHaveBeenCalled()
         expect(store.refreshRuntimeProductTaskForTaskId).not.toHaveBeenCalled()
+    })
+
+    it("keeps Commit & Push reachable in runtime mode without route-open git polling, then refreshes git on click", async () => {
+        mocks.startTurn.mockResolvedValueOnce({ taskId: "task-1", eventId: "event-2" })
+        const { manager, taskModel } = createManager({
+            runtimeProductAPI: true,
+            isTaskRunning: () => false,
+            hasGitStateLoaded: false,
+            hasWorkingChanges: true,
+        })
+
+        expect(manager.commands.map((command) => command.id)).toContain("commitAndPush")
+
+        await manager.runCommand("commitAndPush")
+
+        expect(taskModel.refreshGitState).toHaveBeenCalledWith({ force: true })
+        expect(mocks.startTurn).toHaveBeenCalledWith(
+            expect.objectContaining({
+                repoId: "repo-1",
+                type: "do",
+                label: "Commit & Push",
+                includeComments: false,
+            })
+        )
+    })
+
+    it("does not clear the commit instructions or start a runtime turn when refreshed git has nothing to commit or push", async () => {
+        const { manager, editor, taskModel } = createManager({
+            runtimeProductAPI: true,
+            isTaskRunning: () => false,
+            hasGitStateLoaded: false,
+            hasWorkingChanges: false,
+            aheadCount: 0,
+        })
+
+        await manager.runCommand("commitAndPush")
+
+        expect(taskModel.refreshGitState).toHaveBeenCalledWith({ force: true })
+        expect(editor.clear).not.toHaveBeenCalled()
+        expect(mocks.startTurn).not.toHaveBeenCalled()
     })
 
     it("hides the accepted queued row once storage knows that queued turn is no longer queued", async () => {
@@ -363,8 +426,8 @@ describe("InputManager queueable desktop commands", () => {
             isolationStrategy: { type: "worktree", sourceBranch: "main" },
             environment: { taskWorkingDir: "/tmp/runtime-worktree" },
             stopAllForContext,
+            runtimeProductAPI: true,
         })
-        store.shouldUseRuntimeProductReads.mockReturnValue(true)
 
         await manager.runCommand("close")
 

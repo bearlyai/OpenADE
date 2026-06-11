@@ -5,6 +5,7 @@ import {
     buildPairingTarget,
     defaultKernelSessionConstructors,
     KernelSessionManager,
+    kernelSessionHasMethod,
     type KernelRealtimeConnectionStatus,
     type KernelRuntimeClientLike,
     type KernelSessionConfig,
@@ -121,6 +122,11 @@ export function getRemoteProductStore(config: RemoteConfig): OpenADEProductStore
     const store = new OpenADEProductStore(entry.openade)
     remoteProductStores.set(config.id, { openade: entry.openade, store })
     return store
+}
+
+export function remoteHasRuntimeMethods(config: RemoteConfig, methods: string[]): boolean {
+    const { entry } = runtimeEntry(config)
+    return methods.every((method) => kernelSessionHasMethod(entry, method))
 }
 
 export async function pairRemote(baseUrl: string, token: string): Promise<RemoteConfig> {

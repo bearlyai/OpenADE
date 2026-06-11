@@ -172,7 +172,7 @@ export class TaskCreationManager {
         if (!creation) return
 
         const repo = this.store.repos.getRepo(creation.repoId)
-        if (!repo) {
+        if (!repo && !this.store.shouldUseRuntimeProductAPI()) {
             runInAction(() => {
                 creation.error = "Repository not found"
             })
@@ -209,7 +209,7 @@ export class TaskCreationManager {
             }
 
             if (await cleanupIfCancelled()) throw new Error("Task creation cancelled")
-            if (!this.store.shouldUseRuntimeProductReads()) {
+            if (!this.store.shouldUseRuntimeProductAPI()) {
                 await this.store.refreshProductStateAfterTaskCreation(creation.repoId, result.taskId)
             }
 
@@ -232,7 +232,7 @@ export class TaskCreationManager {
                 taskId: result.taskId,
                 description: creation.description,
                 harnessId: creation.harnessId,
-                cwd: repo.path,
+                cwd: repo?.path ?? null,
             })
         } catch (err) {
             if (err instanceof Error && err.message === "Task creation cancelled") {
@@ -283,13 +283,15 @@ export class TaskCreationManager {
         taskId: string
         description: string
         harnessId?: HarnessId
-        cwd: string
+        cwd: string | null
     }): Promise<void> {
         try {
-            if (this.store.shouldUseRuntimeProductReads()) {
+            if (this.store.shouldUseRuntimeProductAPI()) {
                 await this.store.generateProductTaskTitle({ repoId, taskId, harnessId })
                 return
             }
+
+            if (!cwd) return
 
             const abortController = new AbortController()
             const generatedTitle = await generateTitle(description, abortController, { harnessId, cwd })

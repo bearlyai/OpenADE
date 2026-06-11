@@ -53,7 +53,7 @@ import { getTaskCreationPhaseLabel } from "./taskCreationPhaseLabel"
 
 interface TaskCreatePageProps {
     workspaceId: string
-    repo: Repo
+    repo: Repo | null
 }
 
 type CreateMode = "plan" | "do" | "ask" | "hyperplan"
@@ -574,7 +574,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
     }
 
     return (
-        <div className="flex flex-col h-full overflow-hidden relative" {...dragHandlers}>
+        <div className="flex flex-col h-full overflow-hidden relative" data-openade-surface="desktop-classic-task-create" {...dragHandlers}>
             {isDragOver && <ImageDropOverlay />}
             {/* Editor area - takes remaining space with scroll */}
             {/* biome-ignore lint/a11y/useKeyWithClickEvents: clicking anywhere focuses editor */}

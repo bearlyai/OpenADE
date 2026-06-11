@@ -10,18 +10,27 @@ import { CodeLayout, type CodeLayoutProps } from "./CodeLayout"
 
 const CodeLayoutForTest = CodeLayout as ComponentType<Omit<CodeLayoutProps, "children">>
 
-function createInitializedStore(loadedRepoIds: Set<string> = new Set(["repo-1"])): {
+function createInitializedStore(
+    loadedRepoIds: Set<string> = new Set(["repo-1"]),
+    runtimeProduct: { api?: boolean } = {}
+): {
     store: CodeStore
     loadRepos: ReturnType<typeof vi.fn>
     ensureTasksLoaded: ReturnType<typeof vi.fn>
+    getTaskStore: ReturnType<typeof vi.fn>
+    loadRuntimeProductTask: ReturnType<typeof vi.fn>
 } {
     const loadRepos = vi.fn(async () => undefined)
     const ensureTasksLoaded = vi.fn()
+    const getTaskStore = vi.fn(async () => undefined)
+    const loadRuntimeProductTask = vi.fn(async () => undefined)
     const store = {
         storeInitialized: true,
         isWorking: false,
-        shouldUseRuntimeProductReads: vi.fn(() => false),
-        getTaskStore: vi.fn(async () => undefined),
+        runtimeProductStoreStatus: "idle",
+        shouldUseRuntimeProductAPI: vi.fn(() => runtimeProduct.api ?? false),
+        getTaskStore,
+        loadRuntimeProductTask,
         repos: {
             repos: [],
             reposLoading: false,
@@ -32,7 +41,7 @@ function createInitializedStore(loadedRepoIds: Set<string> = new Set(["repo-1"])
             ensureTasksLoaded,
         },
     } as unknown as CodeStore
-    return { store, loadRepos, ensureTasksLoaded }
+    return { store, loadRepos, ensureTasksLoaded, getTaskStore, loadRuntimeProductTask }
 }
 
 describe("CodeLayout", () => {
@@ -119,5 +128,38 @@ describe("CodeLayout", () => {
         expect(container.textContent).not.toContain("Loading")
         expect(loadRepos).not.toHaveBeenCalled()
         expect(ensureTasksLoaded).toHaveBeenCalledWith("repo-1")
+    })
+
+    it("loads a task through the runtime product API even when the snapshot projection is unavailable", async () => {
+        const { store, getTaskStore, loadRuntimeProductTask } = createInitializedStore(new Set(["repo-1"]), {
+            api: true,
+        })
+
+        flushSync(() => {
+            root.render(
+                createElement(
+                    MemoryRouter,
+                    null,
+                    createElement(
+                        CodeStoreProvider,
+                        { store },
+                        createElement(
+                            CodeLayoutForTest,
+                            {
+                                isCodeModuleAvailable: true,
+                                workspaceId: "repo-1",
+                                taskId: "task-1",
+                                title: "Task",
+                                icon: createElement(Code, { size: "1rem" }),
+                            },
+                            createElement("div", null, "Ready task route")
+                        )
+                    )
+                )
+            )
+        })
+
+        await vi.waitFor(() => expect(loadRuntimeProductTask).toHaveBeenCalledWith("repo-1", "task-1", { hydrateSessionEvents: false }))
+        expect(getTaskStore).not.toHaveBeenCalled()
     })
 })

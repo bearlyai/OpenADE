@@ -81,6 +81,7 @@ export function OpenADESettingsScreen({
     snapshot,
     status,
     themeSetting,
+    canSelfRevoke,
     onRefresh,
     onForget,
     onSelfRevoke,
@@ -92,6 +93,7 @@ export function OpenADESettingsScreen({
     snapshot: OpenADESnapshot | null
     status: OpenADEChromeStatus
     themeSetting: OpenADEThemeSetting
+    canSelfRevoke: boolean
     onRefresh: () => void
     onForget: () => void
     onSelfRevoke: () => void
@@ -121,9 +123,11 @@ export function OpenADESettingsScreen({
                             Forget
                         </button>
                     </div>
-                    <button type="button" onClick={onSelfRevoke} className="btn mt-2 h-10 w-full bg-error/10 px-3 text-sm text-error">
-                        Revoke This Device
-                    </button>
+                    {canSelfRevoke && (
+                        <button type="button" onClick={onSelfRevoke} className="btn mt-2 h-10 w-full bg-error/10 px-3 text-sm text-error">
+                            Revoke This Device
+                        </button>
+                    )}
                 </div>
                 <div className="border border-border bg-base-200/40 p-3">
                     <div className="mb-2 flex min-w-0 items-center justify-between gap-2">

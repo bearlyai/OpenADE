@@ -20,6 +20,10 @@ function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
     return button
 }
 
+function queryButtonByText(container: HTMLElement, text: string): HTMLButtonElement | null {
+    return Array.from(container.querySelectorAll("button")).find((item): item is HTMLButtonElement => item.textContent?.includes(text) === true) ?? null
+}
+
 function buttonByTitle(container: HTMLElement, title: string): HTMLButtonElement {
     const button = Array.from(container.querySelectorAll("button")).find((item): item is HTMLButtonElement => item.title === title)
     if (!button) throw new Error(`Missing button title: ${title}`)
@@ -81,6 +85,7 @@ describe("OpenADESessionScreens", () => {
                 snapshot,
                 status: { label: "Connected", tone: "ok" },
                 themeSetting: "desktop",
+                canSelfRevoke: true,
                 onRefresh: () => actions.push("refresh"),
                 onForget: () => actions.push("forget"),
                 onSelfRevoke: () => actions.push("self-revoke"),
@@ -108,6 +113,35 @@ describe("OpenADESessionScreens", () => {
         })
 
         expect(actions).toEqual(["refresh", "forget", "self-revoke", "sessions", "add", "theme:code-theme-light"])
+    })
+
+    it("hides self-revoke when the runtime session does not grant it", () => {
+        const actions: string[] = []
+        render(
+            createElement(OpenADESettingsScreen, {
+                config: { id: "local", host: "Local Desktop", baseUrl: "http://127.0.0.1:1977" },
+                snapshot,
+                status: { label: "Connected", tone: "ok" },
+                themeSetting: "desktop",
+                canSelfRevoke: false,
+                onRefresh: () => actions.push("refresh"),
+                onForget: () => actions.push("forget"),
+                onSelfRevoke: () => {
+                    throw new Error("self-revoke should be unavailable")
+                },
+                onSessions: () => actions.push("sessions"),
+                onAdd: () => actions.push("add"),
+                onThemeChange: (value) => actions.push(`theme:${value}`),
+            })
+        )
+
+        expect(container.textContent).toContain("Local Desktop")
+        expect(queryButtonByText(container, "Revoke This Device")).toBeNull()
+
+        act(() => buttonByText(container, "Test").click())
+        act(() => buttonByText(container, "Forget").click())
+
+        expect(actions).toEqual(["refresh", "forget"])
     })
 
     it("accepts only supported shell theme settings", () => {

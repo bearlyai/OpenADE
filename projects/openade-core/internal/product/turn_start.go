@@ -12,8 +12,12 @@ import (
 )
 
 type turnStartResultDTO struct {
-	TaskID  string `json:"taskId"`
-	EventID string `json:"eventId,omitempty"`
+	TaskID      string          `json:"taskId"`
+	EventID     string          `json:"eventId,omitempty"`
+	ExecutionID string          `json:"executionId,omitempty"`
+	CreatedAt   string          `json:"createdAt,omitempty"`
+	Task        *taskDTO        `json:"task,omitempty"`
+	Preview     *taskPreviewDTO `json:"preview,omitempty"`
 }
 
 type turnStartActionSourceDTO struct {
@@ -75,7 +79,7 @@ func (service *Service) startTurn(ctx context.Context, raw json.RawMessage) (cor
 	}
 
 	now := time.Now().UTC()
-	task, runtimeErr := service.turnStartTask(ctx, repo, taskID, turnStartTaskCreateInput{
+	task, createdTask, runtimeErr := service.turnStartTask(ctx, repo, taskID, turnStartTaskCreateInput{
 		Raw:                 raw,
 		Input:               params.Input,
 		Title:               params.Title,
@@ -127,7 +131,9 @@ func (service *Service) startTurn(ctx context.Context, raw json.RawMessage) (cor
 			CreatedAt:   now,
 			PayloadJSON: sql.NullString{String: string(payload), Valid: true},
 		},
-		UpdatedAt: now,
+		UpdatedAt:       now,
+		UpdateLastEvent: true,
+		UpdatePreview:   true,
 	})
 	if err != nil {
 		return nil, taskEventWriteRuntimeError(err)
@@ -152,7 +158,7 @@ func (service *Service) startTurn(ctx context.Context, raw json.RawMessage) (cor
 		return nil, handlerError(err)
 	}
 	service.runtime.Notify("runtime/created", runtimeDTO)
-	notification := map[string]string{"repoId": task.RepoID, "taskId": task.ID}
+	notification := actionEventTaskUpdatedNotification(task.RepoID, task.ID, event.ID, "in_progress")
 	service.runtime.Notify("openade/task/updated", notification)
 	service.notifyWorkingTasks(ctx, now)
 	includeComments := params.IncludeComments != nil && *params.IncludeComments
@@ -185,7 +191,16 @@ func (service *Service) startTurn(ctx context.Context, raw json.RawMessage) (cor
 		Images:              promptImages,
 	})
 
-	return turnStartResultDTO{TaskID: task.ID, EventID: event.ID}, nil
+	result := turnStartResultDTO{TaskID: task.ID, EventID: event.ID, ExecutionID: executionID, CreatedAt: formatTime(now)}
+	if createdTask {
+		acceptedTask, preview, runtimeErr := service.acceptedTurnStartDTOs(ctx, task)
+		if runtimeErr != nil {
+			return nil, runtimeErr
+		}
+		result.Task = acceptedTask
+		result.Preview = preview
+	}
+	return result, nil
 }
 
 type turnStartTaskCreateInput struct {
@@ -224,13 +239,13 @@ func (service *Service) notifyWorkingTasks(ctx context.Context, at time.Time) {
 	})
 }
 
-func (service *Service) turnStartTask(ctx context.Context, repo storage.Repo, taskID string, input turnStartTaskCreateInput) (storage.Task, *core.RuntimeError) {
+func (service *Service) turnStartTask(ctx context.Context, repo storage.Repo, taskID string, input turnStartTaskCreateInput) (storage.Task, bool, *core.RuntimeError) {
 	if taskID != "" {
 		_, task, runtimeErr := service.taskRepo(ctx, repo.ID, taskID)
 		if runtimeErr != nil {
-			return storage.Task{}, runtimeErr
+			return storage.Task{}, false, runtimeErr
 		}
-		return task, nil
+		return task, false, nil
 	}
 	clientRequestID := clientRequestIDFromRaw(input.Raw)
 	taskID = openADETaskIDForClientRequest(repo.ID, clientRequestID)
@@ -243,11 +258,11 @@ func (service *Service) turnStartTask(ctx context.Context, repo storage.Repo, ta
 	}
 	isolationJSON, runtimeErr := taskCreateIsolationJSON(input.IsolationStrategy)
 	if runtimeErr != nil {
-		return storage.Task{}, runtimeErr
+		return storage.Task{}, false, runtimeErr
 	}
 	metadataJSON, runtimeErr := taskCreateMetadataJSON(userDTO{ID: headlessRuntimeDeviceID, Email: "headless@openade.local"}, input.EnabledMCPServerIDs)
 	if runtimeErr != nil {
-		return storage.Task{}, runtimeErr
+		return storage.Task{}, false, runtimeErr
 	}
 	setup, runtimeErr := service.taskEnvironmentSetupFromDTO(taskID, deviceEnvironmentDTO{
 		ID:            headlessRuntimeDeviceID,
@@ -257,7 +272,7 @@ func (service *Service) turnStartTask(ctx context.Context, repo storage.Repo, ta
 		LastUsedAt:    formatTime(input.CreatedAt),
 	}, nil, input.CreatedAt)
 	if runtimeErr != nil {
-		return storage.Task{}, runtimeErr
+		return storage.Task{}, false, runtimeErr
 	}
 	task, created, err := service.store.CreateTask(ctx, storage.TaskCreate{
 		Task: storage.Task{
@@ -275,10 +290,10 @@ func (service *Service) turnStartTask(ctx context.Context, repo storage.Repo, ta
 		SetupEvent:        setup.SetupEvent,
 	})
 	if err != nil {
-		return storage.Task{}, handlerError(err)
+		return storage.Task{}, false, handlerError(err)
 	}
 	if task.RepoID != repo.ID {
-		return storage.Task{}, &core.RuntimeError{Code: "conflict", Message: "Task id already belongs to another repository"}
+		return storage.Task{}, false, &core.RuntimeError{Code: "conflict", Message: "Task id already belongs to another repository"}
 	}
 	if created {
 		notification := map[string]string{"repoId": task.RepoID, "taskId": task.ID}
@@ -286,7 +301,39 @@ func (service *Service) turnStartTask(ctx context.Context, repo storage.Repo, ta
 		service.runtime.Notify("openade/task/previewChanged", notification)
 		service.runtime.Notify("openade/snapshotChanged", notification)
 	}
-	return task, nil
+	return task, created, nil
+}
+
+func (service *Service) acceptedTurnStartDTOs(ctx context.Context, task storage.Task) (*taskDTO, *taskPreviewDTO, *core.RuntimeError) {
+	events, err := service.store.ListTaskEvents(ctx, task.ID, false)
+	if err != nil {
+		return nil, nil, handlerError(err)
+	}
+	comments, err := service.store.ListComments(ctx, task.ID)
+	if err != nil {
+		return nil, nil, handlerError(err)
+	}
+	deviceEnvironments, err := service.store.ListTaskDeviceEnvironments(ctx, task.ID)
+	if err != nil {
+		return nil, nil, handlerError(err)
+	}
+	queuedTurns, err := service.store.ListQueuedTurns(ctx, task.ID)
+	if err != nil {
+		return nil, nil, handlerError(err)
+	}
+	previews, err := service.store.ListTaskPreviews(ctx, task.RepoID)
+	if err != nil {
+		return nil, nil, handlerError(err)
+	}
+
+	taskDTOValue := taskToDTO(task, events, comments, deviceEnvironments, queuedTurns)
+	for _, preview := range taskPreviewsDTO(previews) {
+		if preview.ID == task.ID {
+			previewValue := preview
+			return &taskDTOValue, &previewValue, nil
+		}
+	}
+	return &taskDTOValue, nil, nil
 }
 
 type turnStartSource struct {

@@ -357,11 +357,7 @@ export class SmartEditorManager {
     // === File search ===
 
     canSearchFileMentions(dir: string): boolean {
-        return this.productContextFor(dir) !== null || filesApi.isAvailable()
-    }
-
-    async warmFileMentionSearch(dir: string): Promise<void> {
-        await this.searchFileMentions(dir, "", 20)
+        return this.productContextFor(dir) !== null || (this.shouldUseLegacyFilesApi && filesApi.isAvailable())
     }
 
     async searchFileMentions(dir: string, query: string, limit = 20): Promise<SmartEditorFileSearchResult> {
@@ -388,6 +384,10 @@ export class SmartEditorManager {
                 results: result.results,
                 treeMatch: toFileSearchTreeMatch(result.treeMatch),
             }
+        }
+
+        if (!this.shouldUseLegacyFilesApi) {
+            return { results: [], treeMatch: null }
         }
 
         if (!filesApi.isAvailable()) {
@@ -439,6 +439,10 @@ export class SmartEditorManager {
                         return { relPath, exists: await this.productFileExists(productContext, relPath) }
                     }
 
+                    if (!this.shouldUseLegacyFilesApi) {
+                        return { relPath, exists: true }
+                    }
+
                     const fullPath = `${dir}/${relPath}`
                     const desc = await filesApi.describePath({ path: fullPath })
                     return { relPath, exists: desc.type !== "not_found" }
@@ -465,6 +469,10 @@ export class SmartEditorManager {
 
     private productContextFor(dir: string): SmartEditorProductFileContext | null {
         return this.productAccess?.getContext(this.id, this.workspaceId, dir) ?? null
+    }
+
+    private get shouldUseLegacyFilesApi(): boolean {
+        return this.productAccess === null
     }
 
     private async productFileExists(context: SmartEditorProductFileContext, relPath: string): Promise<boolean> {

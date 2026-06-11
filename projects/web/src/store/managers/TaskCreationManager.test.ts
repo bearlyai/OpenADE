@@ -109,7 +109,7 @@ describe("TaskCreationManager creation plumbing", () => {
             },
             startProductTurn,
             refreshProductStateAfterTaskCreation: vi.fn(async () => undefined),
-            shouldUseRuntimeProductReads: vi.fn(() => false),
+            shouldUseRuntimeProductAPI: vi.fn(() => false),
             getActiveHyperPlanStrategy: vi.fn(),
         } as unknown as CodeStore
 
@@ -162,6 +162,61 @@ describe("TaskCreationManager creation plumbing", () => {
         expect(manager.getCreation("creation-1")?.completedTaskId).toBe("task-1")
     })
 
+    it("starts a runtime task without requiring a projected repo path", async () => {
+        const startProductTurn = vi.fn(async (args) => {
+            expect(JSON.parse(JSON.stringify(args))).toEqual(args)
+            return { taskId: "task-1" }
+        })
+        const generateProductTaskTitle = vi.fn(async () => undefined)
+
+        const store = {
+            repos: {
+                getRepo: vi.fn(() => undefined),
+            },
+            startProductTurn,
+            refreshProductStateAfterTaskCreation: vi.fn(async () => undefined),
+            shouldUseRuntimeProductAPI: vi.fn(() => true),
+            generateProductTaskTitle,
+            tasks: {
+                setTaskTitle: vi.fn(),
+            },
+            getActiveHyperPlanStrategy: vi.fn(),
+        } as unknown as CodeStore
+
+        const manager = new TaskCreationManager(store)
+        manager.creationsById.set("creation-1", {
+            id: "creation-1",
+            repoId: "repo-1",
+            description: "describe runtime task",
+            mode: "do",
+            isolationStrategy: { type: "head" },
+            images: [],
+            harnessId: "codex",
+            phase: "pending",
+            error: null,
+            abortController: new AbortController(),
+            createdAt: "2026-01-01T00:00:00.000Z",
+            completedTaskId: null,
+        })
+
+        await (manager as unknown as { runCreation: (id: string) => Promise<void> }).runCreation("creation-1")
+
+        expect(startProductTurn).toHaveBeenCalledWith(
+            expect.objectContaining({
+                repoId: "repo-1",
+                type: "do",
+                input: "describe runtime task",
+                isolationStrategy: { type: "head" },
+                harnessId: "codex",
+            })
+        )
+        expect(store.refreshProductStateAfterTaskCreation).not.toHaveBeenCalled()
+        expect(manager.getCreation("creation-1")).toEqual(expect.objectContaining({ completedTaskId: "task-1", error: null }))
+        await vi.waitFor(() => {
+            expect(generateProductTaskTitle).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1", harnessId: "codex" })
+        })
+    })
+
     it("cleans up a server-accepted task through product APIs when creation is cancelled", async () => {
         const managerRef: { current: TaskCreationManager | null } = { current: null }
         const startProductTurn = vi.fn(async () => {
@@ -187,7 +242,7 @@ describe("TaskCreationManager creation plumbing", () => {
             interruptProductTurn,
             deleteProductTask,
             refreshProductStateAfterTaskDeletion,
-            shouldUseRuntimeProductReads: vi.fn(() => true),
+            shouldUseRuntimeProductAPI: vi.fn(() => true),
             getActiveHyperPlanStrategy: vi.fn(),
         } as unknown as CodeStore
 

@@ -72,7 +72,7 @@ export const CodeLayout = observer(({ children, isCodeModuleAvailable, workspace
 
         const loadTask = async () => {
             try {
-                if (codeStore.shouldUseRuntimeProductReads()) {
+                if (codeStore.shouldUseRuntimeProductAPI()) {
                     await codeStore.loadRuntimeProductTask(workspaceId, taskId, { hydrateSessionEvents: false })
                     return
                 }

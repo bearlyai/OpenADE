@@ -1,4 +1,6 @@
 import {
+    type RuntimeCapabilities,
+    type RuntimeInitializeResult,
     type RuntimeMessage,
     type RuntimeNotification,
     type RuntimeRequest,
@@ -59,10 +61,19 @@ export class RuntimeClient {
     private connecting: Promise<void> | null = null
     private lastStatus: RuntimeClientStatus | null = null
     private lastCursor: string | null = null
+    private initializeResult: RuntimeInitializeResult | null = null
     private readonly pending = new Map<RuntimeRequestId, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
     private readonly listeners = new Set<NotificationListener>()
 
     constructor(private readonly options: RuntimeClientOptions) {}
+
+    get capabilities(): RuntimeCapabilities | null {
+        return this.initializeResult?.capabilities ?? null
+    }
+
+    hasMethod(method: string): boolean {
+        return this.capabilities?.methods.includes(method) === true
+    }
 
     async request<T>(method: string, params?: unknown): Promise<T> {
         await this.connect()
@@ -103,6 +114,7 @@ export class RuntimeClient {
         this.stopped = true
         this.socket?.close()
         this.socket = null
+        this.initializeResult = null
         for (const pending of this.pending.values()) {
             pending.reject(new Error("Runtime socket closed"))
         }
@@ -189,6 +201,7 @@ export class RuntimeClient {
             }
             socket.onclose = () => {
                 if (this.socket === socket) this.socket = null
+                if (this.socket === null) this.initializeResult = null
                 for (const pending of this.pending.values()) {
                     pending.reject(new Error("Runtime socket disconnected"))
                 }
@@ -205,7 +218,7 @@ export class RuntimeClient {
     }
 
     private async initializeSocket(socket: WebSocket): Promise<void> {
-        await this.sendRequest(socket, "initialize", {
+        this.initializeResult = await this.sendRequest<RuntimeInitializeResult>(socket, "initialize", {
             clientName: this.options.clientName ?? "Runtime Client",
             clientPlatform: this.options.clientPlatform ?? "unknown",
             ...(this.options.clientVersion ? { clientVersion: this.options.clientVersion } : {}),
@@ -258,12 +271,21 @@ export class RuntimeLocalClient {
     private connected = false
     private connecting: Promise<void> | null = null
     private disposeMessageListener: (() => void) | null = null
+    private initializeResult: RuntimeInitializeResult | null = null
     private readonly listeners = new Set<NotificationListener>()
 
     constructor(
         private readonly transport: RuntimeLocalTransport,
         private readonly options: RuntimeLocalClientOptions = {}
     ) {}
+
+    get capabilities(): RuntimeCapabilities | null {
+        return this.initializeResult?.capabilities ?? null
+    }
+
+    hasMethod(method: string): boolean {
+        return this.capabilities?.methods.includes(method) === true
+    }
 
     async request<T>(method: string, params?: unknown): Promise<T> {
         await this.connect()
@@ -295,7 +317,7 @@ export class RuntimeLocalClient {
             if (!isRuntimeNotification(message)) return
             for (const listener of this.listeners) listener(message)
         })
-        await this.requestRaw("initialize", {
+        this.initializeResult = await this.requestRaw<RuntimeInitializeResult>("initialize", {
             clientName: this.options.clientName ?? "Runtime Local Client",
             clientPlatform: this.options.clientPlatform ?? "desktop",
             ...(this.options.clientVersion ? { clientVersion: this.options.clientVersion } : {}),
@@ -317,6 +339,7 @@ export class RuntimeLocalClient {
         this.disposeMessageListener = null
         this.connected = false
         this.connecting = null
+        this.initializeResult = null
         this.listeners.clear()
         await this.transport.disconnect()
     }

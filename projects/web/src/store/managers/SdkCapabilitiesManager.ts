@@ -21,9 +21,15 @@ export class SdkCapabilitiesManager {
     plugins: { name: string; path: string }[] = []
     loading = false
     loaded = false
+    loadedForCwd: string | null = null
+    private loadingForCwd: string | null = null
+    private loadRequestId = 0
 
     constructor() {
-        makeAutoObservable(this)
+        makeAutoObservable<SdkCapabilitiesManager, "loadingForCwd" | "loadRequestId">(this, {
+            loadingForCwd: false,
+            loadRequestId: false,
+        })
     }
 
     /**
@@ -31,23 +37,31 @@ export class SdkCapabilitiesManager {
      * Returns cached data instantly if available, or runs a probe (~1.4s).
      */
     async loadCapabilities(cwd: string): Promise<void> {
-        if (this.loading) return
+        if (this.loadedForCwd === cwd) return
+        if (this.loading && this.loadingForCwd === cwd) return
 
+        const requestId = this.loadRequestId + 1
         runInAction(() => {
+            this.loadRequestId = requestId
             this.loading = true
+            this.loadingForCwd = cwd
         })
 
         try {
             const result = await getSdkCapabilities(cwd)
-            if (result) {
-                this.applyCapabilities(result)
-            }
+            runInAction(() => {
+                if (this.loadRequestId !== requestId) return
+                if (result) this.applyCapabilities(result)
+                this.loadedForCwd = cwd
+            })
         } catch (err) {
             console.error("[SdkCapabilitiesManager] Failed to load capabilities:", err)
         } finally {
             runInAction(() => {
+                if (this.loadRequestId !== requestId) return
                 this.loading = false
                 this.loaded = true
+                this.loadingForCwd = null
             })
         }
     }

@@ -63,7 +63,7 @@ function createManager(initialStatus: GitSummaryResponse): {
 
 function createRuntimeManager(
     initialStatus: GitSummaryResponse,
-    options: { mergeBaseCommit?: string } = {}
+    options: { mergeBaseCommit?: string; repoId?: string; workingDir?: string } = {}
 ): {
     manager: ChangesManager
     readProductTaskChanges: ReturnType<typeof vi.fn>
@@ -100,13 +100,18 @@ function createRuntimeManager(
         after: "after\n",
     }))
     const taskModel = {
-        repoId: "repo-1",
-        usesRuntimeProductReads: true,
+        repoId: options.repoId ?? "repo-1",
+        usesRuntimeProductAPI: true,
         get gitStatus() {
             return initialStatus
         },
         get environment() {
-            return options.mergeBaseCommit ? { mergeBaseCommit: options.mergeBaseCommit } : null
+            return options.mergeBaseCommit || options.workingDir
+                ? {
+                      mergeBaseCommit: options.mergeBaseCommit,
+                      taskWorkingDir: options.workingDir,
+                  }
+                : null
         },
         readProductTaskChanges,
         readProductTaskDiff,
@@ -218,6 +223,41 @@ describe("ChangesManager runtime scoped git reads", () => {
                 contextLines: 10,
             })
         } finally {
+            legacyChangedFiles.mockRestore()
+            manager.dispose()
+        }
+    })
+
+    it("fails closed instead of using raw git when runtime task git scope is unavailable", async () => {
+        const { manager, readProductTaskChanges, readProductTaskDiff, readProductTaskFilePair } = createRuntimeManager(gitSummary(["README.md"]), {
+            repoId: "",
+            mergeBaseCommit: "base-sha",
+            workingDir: "/tmp/runtime-repo",
+        })
+        const legacyFilePair = vi.spyOn(gitApi, "getFilePair").mockRejectedValue(new Error("legacy file pair should not be used"))
+        const legacyFilePatch = vi.spyOn(gitApi, "getWorktreeFilePatch").mockRejectedValue(new Error("legacy file patch should not be used"))
+        const legacyChangedFiles = vi.spyOn(gitApi, "getChangedFiles").mockRejectedValue(new Error("legacy changed-files read should not be used"))
+
+        try {
+            manager.initializeForTray()
+            manager.ensureSelectedFileLoaded("current")
+            manager.ensureSelectedFileLoaded("unified", 3)
+            manager.setDiffSource("from-base")
+
+            await new Promise((resolve) => setTimeout(resolve, 0))
+
+            expect(readProductTaskFilePair).not.toHaveBeenCalled()
+            expect(readProductTaskDiff).not.toHaveBeenCalled()
+            expect(readProductTaskChanges).not.toHaveBeenCalled()
+            expect(legacyFilePair).not.toHaveBeenCalled()
+            expect(legacyFilePatch).not.toHaveBeenCalled()
+            expect(legacyChangedFiles).not.toHaveBeenCalled()
+            expect(manager.filePair).toBeNull()
+            expect(manager.filePatch).toBeNull()
+            expect(manager.fromBaseFiles).toBeNull()
+        } finally {
+            legacyFilePair.mockRestore()
+            legacyFilePatch.mockRestore()
             legacyChangedFiles.mockRestore()
             manager.dispose()
         }

@@ -11,6 +11,8 @@ import { useShortcutHintsVisible } from "../../hooks/useShortcutHintsVisible"
 import { useCodeNavigate } from "../../routing"
 import { useCodeStore } from "../../store/context"
 import type { TaskCreation } from "../../store/managers/TaskCreationManager"
+import { projectPathFromGitInfo } from "../../store/managers/RepoManager"
+import type { CodeStore } from "../../store/store"
 import type { CodeEvent } from "../../types"
 import {
     type KeyboardShortcutLike,
@@ -31,6 +33,35 @@ type OpenADETaskPreviewLastEvent = NonNullable<OpenADETaskPreview["lastEvent"]>
 const NEW_TASK_SHORTCUT = "mod+n"
 const PREVIOUS_TASK_SHORTCUT_LABEL = "↑"
 const NEXT_TASK_SHORTCUT_LABEL = "↓"
+
+export async function resolveTaskListCopyPath({
+    codeStore,
+    workspaceId,
+    selectedTaskId,
+}: {
+    codeStore: CodeStore
+    workspaceId: string
+    selectedTaskId: string
+}): Promise<string | null> {
+    const repo = codeStore.repos.getRepo(workspaceId)
+    let repoPath = repo?.path ?? null
+    if (!repoPath && codeStore.shouldUseRuntimeProductAPI()) {
+        const gitInfo = await codeStore.repos.getGitInfo(workspaceId)
+        repoPath = gitInfo ? projectPathFromGitInfo(gitInfo) : null
+    }
+    if (!repoPath) return null
+
+    const task = await codeStore.loadProductTaskForRead(workspaceId, selectedTaskId)
+    const taskModel = codeStore.tasks.getTaskModel(selectedTaskId)
+    const environment =
+        task?.isolationStrategy?.type === "worktree" ? (taskModel?.environment ?? (await taskModel?.loadEnvironment())) : (taskModel?.environment ?? null)
+    return resolveTaskCopyPath({
+        repoPath,
+        isolationStrategy: task?.isolationStrategy,
+        environmentPath: environment?.taskWorkingDir ?? null,
+        events: task?.events ?? [],
+    })
+}
 
 function isPlanType(lastEvent: OpenADETaskPreviewLastEvent): boolean {
     return lastEvent.sourceType === "plan" || lastEvent.sourceType === "revise"
@@ -530,20 +561,8 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     }
 
     const handleCopyTaskPath = async (selectedTaskId: string) => {
-        const repo = codeStore.repos.getRepo(workspaceId)
-        if (!repo) return
-
         try {
-            const task = await codeStore.loadProductTaskForRead(workspaceId, selectedTaskId)
-            const taskModel = codeStore.tasks.getTaskModel(selectedTaskId)
-            const environment = taskModel?.environment ?? (await taskModel?.loadEnvironment())
-            const copyPath = resolveTaskCopyPath({
-                repoPath: repo.path,
-                isolationStrategy: task?.isolationStrategy,
-                environmentPath: environment?.taskWorkingDir ?? null,
-                events: task?.events ?? [],
-            })
-
+            const copyPath = await resolveTaskListCopyPath({ codeStore, workspaceId, selectedTaskId })
             if (!copyPath) return
             await navigator.clipboard.writeText(copyPath)
         } catch (err) {

@@ -24,11 +24,16 @@ export interface TaskComposerAgentControls {
 export function TaskComposer({
     input,
     commandType,
+    commands = TASK_COMPOSER_COMMANDS,
     isLoading,
     isSubmitting,
     isOnline,
     isRunning,
+    canSend = true,
+    canAbort = true,
     agentControls,
+    placeholder,
+    sendLabel,
     onInputChange,
     onCommandTypeChange,
     onSend,
@@ -36,11 +41,16 @@ export function TaskComposer({
 }: {
     input: string
     commandType: TaskCommandType
+    commands?: readonly TaskCommandType[]
     isLoading: boolean
     isSubmitting: boolean
     isOnline: boolean
     isRunning: boolean
+    canSend?: boolean
+    canAbort?: boolean
     agentControls?: TaskComposerAgentControls
+    placeholder?: string
+    sendLabel?: string
     onInputChange: (value: string) => void
     onCommandTypeChange: (value: TaskCommandType) => void
     onSend: () => void
@@ -80,7 +90,7 @@ export function TaskComposer({
                 </div>
             )}
             <div className="mb-2 flex max-w-full gap-1 overflow-x-auto overscroll-x-contain">
-                {TASK_COMPOSER_COMMANDS.map((type) => (
+                {commands.map((type) => (
                     <button
                         key={type}
                         type="button"
@@ -91,7 +101,7 @@ export function TaskComposer({
                         {taskCommandLabel(type)}
                     </button>
                 ))}
-                {isRunning && (
+                {isRunning && canAbort && (
                     <button
                         type="button"
                         onClick={onAbort}
@@ -114,7 +124,7 @@ export function TaskComposer({
                             : !isOnline
                               ? "Offline"
                               : canQueueCurrentMode
-                                ? "Send to OpenADE"
+                                ? (placeholder ?? "Send to OpenADE")
                                 : "Only Do and Ask can be queued while running"
                     }
                     className="input min-h-12 max-h-28 min-w-0 flex-1 resize-none border border-border bg-base-200 p-2 text-sm"
@@ -122,9 +132,9 @@ export function TaskComposer({
                 <button
                     type="button"
                     onClick={onSend}
-                    disabled={!input.trim() || isLoading || isSubmitting || !isOnline || !canQueueCurrentMode}
+                    disabled={!input.trim() || isLoading || isSubmitting || !isOnline || !canQueueCurrentMode || !canSend}
                     className={`btn flex shrink-0 items-center justify-center gap-1 bg-primary px-2 text-primary-content disabled:opacity-50 ${
-                        isSubmitting ? "w-24 text-xs" : "w-12"
+                        isSubmitting || sendLabel ? "min-w-24 text-xs" : "w-12"
                     }`}
                 >
                     {isSubmitting ? (
@@ -133,7 +143,10 @@ export function TaskComposer({
                             Sending
                         </>
                     ) : (
-                        <Send size={16} />
+                        <>
+                            <Send size={16} />
+                            {sendLabel && <span>{sendLabel}</span>}
+                        </>
                     )}
                 </button>
             </div>

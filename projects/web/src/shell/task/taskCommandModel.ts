@@ -48,6 +48,7 @@ export interface TaskShellCommandContext {
     retryable: boolean
     actionHistory: boolean
     gitWorkingChanges: boolean
+    gitStateUnknown: boolean
     unpushedCommits: boolean
     commitAndPushInProgress: boolean
     forceAllCommands?: boolean
@@ -204,7 +205,7 @@ export function buildTaskShellCommandDescriptors(context: TaskShellCommandContex
             order: 100,
             group: "secondary",
             style: { variant: "neutral" },
-            show: (context.gitWorkingChanges || context.unpushedCommits) && !context.working,
+            show: (context.gitWorkingChanges || context.unpushedCommits || context.gitStateUnknown) && !context.working,
             enabled: true,
         },
         {

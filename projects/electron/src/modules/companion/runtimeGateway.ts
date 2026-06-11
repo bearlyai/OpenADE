@@ -78,6 +78,10 @@ import {
     type OpenADEProjectProcessStopRequest,
     type OpenADEProjectProcessStopResult,
     type OpenADEQueuedTurn,
+    type OpenADEQueuedTurnEnqueueRequest,
+    type OpenADEQueuedTurnEnqueueResult,
+    type OpenADEQueuedTurnReorderRequest,
+    type OpenADEQueuedTurnReorderResult,
     type OpenADECronInstallState,
     type OpenADECronInstallStateReadRequest,
     type OpenADECronInstallStateReadResult,
@@ -1508,6 +1512,7 @@ async function listScopedProjectProcesses(
         repoRoot: procs.repoRoot,
         isWorktree: procs.isWorktree,
         worktreeRoot: procs.worktreeRoot,
+        configs: procs.configs,
         processes: definitions.processes,
         errors: [...procs.errors, ...definitions.errors],
         instances,
@@ -1767,6 +1772,87 @@ async function enqueueDoTurn(params: {
         changedTurn: queuedTurn,
     })
     return { taskId: params.task.id, queued: true, queuedTurnId: queuedTurn.id }
+}
+
+async function enqueueQueuedTurn(params: {
+    writer: ReturnType<typeof createOpenADEYjsWriter>
+    projection: ReturnType<typeof createOpenADEYjsProjection>
+    server: RuntimeServer
+    request: OpenADEQueuedTurnEnqueueRequest
+}): Promise<OpenADEQueuedTurnEnqueueResult> {
+    const task = await params.projection.readTask(params.request.repoId, params.request.taskId)
+    const now = new Date().toISOString()
+    const createdAt = params.request.createdAt ?? now
+    const queuedTurnId = params.request.queuedTurnId ?? queuedTurnIdForClientRequest(params.request.taskId, params.request.clientRequestId)
+    const existing = task.queuedTurns?.find((turn) => turn.id === queuedTurnId || (params.request.clientRequestId && turn.clientRequestId === params.request.clientRequestId))
+    if (existing) {
+        publishQueuedTurnUpdated(params.server, params.request.repoId, params.request.taskId, existing)
+        return { taskId: params.request.taskId, queuedTurnId: existing.id, queued: existing.status === "queued", turn: existing }
+    }
+
+    const turn: OpenADEQueuedTurn = {
+        id: queuedTurnId,
+        clientRequestId: params.request.clientRequestId,
+        type: params.request.type,
+        input: params.request.input,
+        status: "queued",
+        createdAt,
+        updatedAt: createdAt,
+        eventId: params.request.eventId,
+        appendSystemPrompt: params.request.appendSystemPrompt,
+        enabledMcpServerIds: params.request.enabledMcpServerIds,
+        harnessId: params.request.harnessId,
+        modelId: params.request.modelId,
+        label: params.request.label,
+        includeComments: params.request.includeComments,
+        images: params.request.images,
+        thinking: params.request.thinking,
+        fastMode: params.request.fastMode,
+    }
+    await saveQueuedTurns({
+        writer: params.writer,
+        server: params.server,
+        repoId: params.request.repoId,
+        taskId: params.request.taskId,
+        queuedTurns: [...(task.queuedTurns ?? []), turn],
+        changedTurn: turn,
+    })
+    return { taskId: params.request.taskId, queuedTurnId: turn.id, queued: true, turn }
+}
+
+async function reorderQueuedTurns(params: {
+    writer: ReturnType<typeof createOpenADEYjsWriter>
+    projection: ReturnType<typeof createOpenADEYjsProjection>
+    server: RuntimeServer
+    request: OpenADEQueuedTurnReorderRequest
+}): Promise<OpenADEQueuedTurnReorderResult> {
+    const task = await params.projection.readTask(params.request.repoId, params.request.taskId)
+    const turnsById = new Map((task.queuedTurns ?? []).map((turn) => [turn.id, turn]))
+    const updatedAt = params.request.updatedAt ?? new Date().toISOString()
+    const requestedTurns = params.request.queuedTurnIds.map((queuedTurnId) => {
+        const turn = turnsById.get(queuedTurnId)
+        if (!turn) throw new RuntimeHandlerError("not_found", "Queued turn not found")
+        if (turn.status !== "queued") throw new RuntimeHandlerError("invalid_params", "queued turn is not queued")
+        return { ...turn, updatedAt }
+    })
+    const requestedIds = new Set(params.request.queuedTurnIds)
+    const nextTurns = [...requestedTurns, ...(task.queuedTurns ?? []).filter((turn) => !requestedIds.has(turn.id))]
+    const previousOrder = (task.queuedTurns ?? []).map((turn) => turn.id).join("\0")
+    const nextOrder = nextTurns.map((turn) => turn.id).join("\0")
+    const reordered = previousOrder !== nextOrder
+    if (reordered) {
+        await saveQueuedTurns({
+            writer: params.writer,
+            server: params.server,
+            repoId: params.request.repoId,
+            taskId: params.request.taskId,
+            queuedTurns: nextTurns,
+        })
+        for (const turn of requestedTurns) {
+            publishQueuedTurnUpdated(params.server, params.request.repoId, params.request.taskId, turn)
+        }
+    }
+    return { taskId: params.request.taskId, reordered, turns: requestedTurns }
 }
 
 async function cancelQueuedTurn(params: {
@@ -2526,6 +2612,12 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                 await writer.deleteRepo(params)
                 publishOpenADECompanionEvent(server, { type: "repo_deleted", repoId: params.repoId, at })
             },
+            createTask: async (params) => {
+                const result = await writer.createTask(params)
+                publishTaskChanged(server, params.repoId, result.taskId)
+                server.notify("openade/snapshotChanged", { repoId: params.repoId, taskId: result.taskId })
+                return result
+            },
             startTurn: async (params, context) => {
                 if (!canCreateTaskInRuntime(params)) {
                     if (!params.inTaskId) throw new Error("Task id is required for existing task execution")
@@ -2620,6 +2712,20 @@ function registerOpenADEProductModule(server: RuntimeServer): void {
                 if (reconciled.killed > 0 || reconciled.settled > 0) return { ok: true }
                 return { ok: false, error: "No server-owned turn is running for this task" }
             },
+            enqueueQueuedTurn: async (params) =>
+                enqueueQueuedTurn({
+                    writer,
+                    projection,
+                    server,
+                    request: params,
+                }),
+            reorderQueuedTurns: async (params) =>
+                reorderQueuedTurns({
+                    writer,
+                    projection,
+                    server,
+                    request: params,
+                }),
             cancelQueuedTurn: async (params) =>
                 cancelQueuedTurn({
                     writer,

@@ -18,6 +18,7 @@ import {
     Zap,
 } from "lucide-react"
 import { Suspense, lazy, type ReactNode, useEffect, useState } from "react"
+import type { OpenADESnapshotPatchFile, OpenADESnapshotPatchIndex } from "../../../../openade-module/src"
 import type {
     BashGroup,
     EditGroup,
@@ -47,9 +48,44 @@ interface TaskEventThreadProps {
     blocks: TaskEventBlock[]
     isRunning: boolean
     loadImage?: TaskImageLoader
+    snapshotPatches?: Record<string, TaskSnapshotPatchView>
+    snapshotPatchActionId?: string | null
+    onLoadSnapshotPatch?: (block: TaskSnapshotBlock) => void
+    onLoadSnapshotPatchSlice?: (block: TaskSnapshotBlock, file: OpenADESnapshotPatchFile) => void
 }
 
 export type TaskImageLoader = (image: TaskImageAttachment) => Promise<string | null>
+
+export interface TaskSnapshotPatchView {
+    eventId: string
+    patchFileId?: string
+    patch?: string | null
+    index?: OpenADESnapshotPatchIndex | null
+    slices?: Record<string, TaskSnapshotPatchSliceView>
+}
+
+export interface TaskSnapshotPatchSliceView {
+    filePath: string
+    patch: string | null
+}
+
+export function taskSnapshotPatchFileKey(file: Pick<OpenADESnapshotPatchFile, "path" | "oldPath" | "patchStart" | "patchEnd">): string {
+    return `${file.path}:${file.oldPath ?? ""}:${file.patchStart}:${file.patchEnd}`
+}
+
+function taskSnapshotPatchFileLabel(file: Pick<OpenADESnapshotPatchFile, "path" | "oldPath">): string {
+    return file.oldPath && file.oldPath !== file.path ? `${file.oldPath} -> ${file.path}` : file.path
+}
+
+function formatBytes(value: number): string {
+    if (value < 1024) return `${value} B`
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`
+}
+
+export function taskSnapshotPatchActionId(eventId: string, file: Pick<OpenADESnapshotPatchFile, "patchStart" | "patchEnd">): string {
+    return `${eventId}:${file.patchStart}:${file.patchEnd}`
+}
 
 function statusTone(status: string | undefined): PresentedTone {
     if (status === "error" || status === "failed") return "bad"
@@ -419,8 +455,22 @@ function SetupBlockView({ block }: { block: TaskSetupBlock }) {
     )
 }
 
-function SnapshotBlockView({ block }: { block: TaskSnapshotBlock }) {
+function SnapshotBlockView({
+    block,
+    patch,
+    actionId,
+    onLoadPatch,
+    onLoadPatchSlice,
+}: {
+    block: TaskSnapshotBlock
+    patch?: TaskSnapshotPatchView
+    actionId?: string | null
+    onLoadPatch?: (block: TaskSnapshotBlock) => void
+    onLoadPatchSlice?: (block: TaskSnapshotBlock, file: OpenADESnapshotPatchFile) => void
+}) {
     const tone = statusTone(block.status)
+    const busy = actionId === block.id
+    const indexFiles = patch?.index?.files ?? []
     return (
         <BlockShell title={block.title} status={block.status} createdAt={block.createdAt} tone={tone} icon={blockIcon(block, tone)}>
             <div className="grid grid-cols-3 border-b border-border text-center text-xs">
@@ -437,7 +487,68 @@ function SnapshotBlockView({ block }: { block: TaskSnapshotBlock }) {
                     <div className="text-muted">removed</div>
                 </div>
             </div>
-            {block.referenceBranch && <div className="truncate px-3 py-2 text-xs text-muted">{block.referenceBranch}</div>}
+            <div className="flex min-w-0 items-center justify-between gap-2 px-3 py-2">
+                <div className="min-w-0 truncate text-xs text-muted">{block.referenceBranch ?? "Snapshot patch"}</div>
+                {onLoadPatch && (
+                    <button
+                        type="button"
+                        onClick={() => onLoadPatch(block)}
+                        disabled={busy}
+                        className="btn flex h-7 shrink-0 items-center gap-1 bg-base-300 px-2 text-[11px] disabled:opacity-50"
+                    >
+                        {busy && <Loader2 size={11} className="animate-spin text-primary" />}
+                        {patch ? "Refresh Patch" : "Patch"}
+                    </button>
+                )}
+            </div>
+            {patch && (
+                <div className="border-t border-border bg-base-100/50">
+                    <div className="border-b border-border px-3 py-1.5 text-[11px] uppercase text-muted">{patch.patchFileId ?? patch.eventId}</div>
+                    {patch.index ? (
+                        <div className="flex flex-col gap-2 p-3">
+                            <div className="text-xs text-muted">
+                                {indexFiles.length === 0 ? "No indexed patch files." : `${indexFiles.length} files, ${formatBytes(patch.index.patchSize)}`}
+                            </div>
+                            {indexFiles.map((file) => {
+                                const key = taskSnapshotPatchFileKey(file)
+                                const slice = patch.slices?.[key]
+                                const sliceBusy = actionId === taskSnapshotPatchActionId(block.id, file)
+                                return (
+                                    <div key={key} className="overflow-hidden border border-border bg-base-200/25">
+                                        <div className="flex min-w-0 items-center gap-2 border-b border-border px-2 py-2">
+                                            <div className="min-w-0 flex-1">
+                                                <div className="truncate text-xs font-medium text-base-content">{taskSnapshotPatchFileLabel(file)}</div>
+                                                <div className="text-[11px] text-muted">
+                                                    +{file.insertions} -{file.deletions}
+                                                    {file.binary ? " binary" : ""}
+                                                </div>
+                                            </div>
+                                            {onLoadPatchSlice && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => onLoadPatchSlice(block, file)}
+                                                    disabled={sliceBusy}
+                                                    className="btn flex h-7 shrink-0 items-center gap-1 bg-base-300 px-2 text-[11px] disabled:opacity-50"
+                                                >
+                                                    {sliceBusy && <Loader2 size={11} className="animate-spin text-primary" />}
+                                                    {slice ? "Refresh" : "Load"}
+                                                </button>
+                                            )}
+                                        </div>
+                                        {slice && <CodeBlock label={slice.filePath} code={slice.patch ?? "No patch content."} />}
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    ) : patch.patch ? (
+                        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[11px] leading-relaxed text-base-content [overflow-wrap:anywhere]">
+                            {patch.patch}
+                        </pre>
+                    ) : (
+                        <div className="p-3 text-xs text-muted">No patch content.</div>
+                    )}
+                </div>
+            )}
         </BlockShell>
     )
 }
@@ -464,14 +575,38 @@ function UnknownBlockView({ block }: { block: TaskUnknownBlock }) {
     )
 }
 
-function EventBlockView({ block, isRunning, loadImage }: { block: TaskEventBlock; isRunning: boolean; loadImage?: TaskImageLoader }) {
+function EventBlockView({
+    block,
+    isRunning,
+    loadImage,
+    snapshotPatches,
+    snapshotPatchActionId,
+    onLoadSnapshotPatch,
+    onLoadSnapshotPatchSlice,
+}: {
+    block: TaskEventBlock
+    isRunning: boolean
+    loadImage?: TaskImageLoader
+    snapshotPatches?: Record<string, TaskSnapshotPatchView>
+    snapshotPatchActionId?: string | null
+    onLoadSnapshotPatch?: (block: TaskSnapshotBlock) => void
+    onLoadSnapshotPatchSlice?: (block: TaskSnapshotBlock, file: OpenADESnapshotPatchFile) => void
+}) {
     switch (block.kind) {
         case "action":
             return <ActionBlockView block={block} isRunning={isRunning} loadImage={loadImage} />
         case "setup":
             return <SetupBlockView block={block} />
         case "snapshot":
-            return <SnapshotBlockView block={block} />
+            return (
+                <SnapshotBlockView
+                    block={block}
+                    patch={snapshotPatches?.[block.id]}
+                    actionId={snapshotPatchActionId}
+                    onLoadPatch={onLoadSnapshotPatch}
+                    onLoadPatchSlice={onLoadSnapshotPatchSlice}
+                />
+            )
         case "queued":
             return <QueuedBlockView block={block} />
         case "unknown":
@@ -479,11 +614,28 @@ function EventBlockView({ block, isRunning, loadImage }: { block: TaskEventBlock
     }
 }
 
-export function TaskEventThread({ blocks, isRunning, loadImage }: TaskEventThreadProps) {
+export function TaskEventThread({
+    blocks,
+    isRunning,
+    loadImage,
+    snapshotPatches,
+    snapshotPatchActionId,
+    onLoadSnapshotPatch,
+    onLoadSnapshotPatchSlice,
+}: TaskEventThreadProps) {
     return (
         <div className="flex w-full max-w-full flex-col gap-3 overflow-hidden">
             {blocks.map((block) => (
-                <EventBlockView key={block.id} block={block} isRunning={isRunning} loadImage={loadImage} />
+                <EventBlockView
+                    key={block.id}
+                    block={block}
+                    isRunning={isRunning}
+                    loadImage={loadImage}
+                    snapshotPatches={snapshotPatches}
+                    snapshotPatchActionId={snapshotPatchActionId}
+                    onLoadSnapshotPatch={onLoadSnapshotPatch}
+                    onLoadSnapshotPatchSlice={onLoadSnapshotPatchSlice}
+                />
             ))}
             {isRunning && (
                 <div className="flex items-center gap-2 self-start border border-border bg-base-200/45 px-2 py-1 text-xs text-muted">

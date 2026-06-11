@@ -12,6 +12,8 @@ import type {
     OpenADECommentCreateResult,
     OpenADECommentDeleteRequest,
     OpenADECommentEditRequest,
+    OpenADECronDefinitionsReadRequest,
+    OpenADECronDefinitionsReadResult,
     OpenADECronInstallStateReadRequest,
     OpenADECronInstallStateReadResult,
     OpenADECronInstallStateReplaceRequest,
@@ -46,6 +48,7 @@ import type {
     OpenADEProjectGitInfoResult,
     OpenADEProjectGitSummaryReadRequest,
     OpenADEProjectGitSummaryReadResult,
+    OpenADEProject,
     OpenADEProjectProcessListRequest,
     OpenADEProjectProcessListResult,
     OpenADEProjectProcessReconnectRequest,
@@ -72,6 +75,7 @@ import type {
     OpenADESnapshotEventCreateRequest,
     OpenADESnapshotEventCreateResult,
     OpenADETask,
+    OpenADETaskPreview,
     OpenADETaskChangesReadRequest,
     OpenADETaskChangesReadResult,
     OpenADETaskCreateRequest,
@@ -140,6 +144,7 @@ import type {
     OpenADETaskUsageRecalculateRequest,
     OpenADETaskUsageRecalculateResult,
     OpenADEReviewStartRequest,
+    OpenADEReviewStartResult,
     OpenADETurnStartRequest,
     OpenADETurnStartResult,
 } from "../../openade-module/src/types"
@@ -155,6 +160,12 @@ import {
 export type OpenADEClientConnectionStatus = RuntimeClientStatus
 
 export interface RuntimeClientLike {
+    request<Method extends OpenADEMethod>(
+        method: Method,
+        ...[params]: undefined extends OpenADERequestForMethod<Method>
+            ? [params?: OpenADERequestForMethod<Method>]
+            : [params: OpenADERequestForMethod<Method>]
+    ): Promise<OpenADEResponseForMethod<Method>>
     request<T>(method: string, params?: unknown): Promise<T>
     subscribe(listener: (notification: RuntimeNotification) => void): () => void
     close(): void | Promise<void>
@@ -200,6 +211,7 @@ interface ClientRequestBurstEntry {
     startedAt: number
     count: number
     lastWarnedCount: number
+    lastRequestId: string
 }
 
 const clientRequestBursts = new Map<string, ClientRequestBurstEntry>()
@@ -229,13 +241,30 @@ function coalescedReadRequestKey(method: OpenADEMethod, params: unknown): string
     return `${method}:${JSON.stringify(stableRequestValue(params))}`
 }
 
+function openADERequestArgs<Method extends OpenADEMethod>(
+    params: OpenADERequestForMethod<Method> | undefined
+): undefined extends OpenADERequestForMethod<Method> ? [params?: OpenADERequestForMethod<Method>] : [params: OpenADERequestForMethod<Method>] {
+    return (params === undefined ? [] : [params]) as undefined extends OpenADERequestForMethod<Method>
+        ? [params?: OpenADERequestForMethod<Method>]
+        : [params: OpenADERequestForMethod<Method>]
+}
+
 export class OpenADEClient {
     private readonly readRequestsInFlight = new Map<string, Promise<unknown>>()
+    private nextTelemetryRequestId = 1
 
     constructor(private readonly options: OpenADEClientOptions) {}
 
     async getSnapshot(): Promise<OpenADESnapshot> {
         return this.request("openade/snapshot/read")
+    }
+
+    async listProjects(): Promise<OpenADEProject[]> {
+        return this.request("openade/project/list")
+    }
+
+    async listTasks(repoId: string): Promise<OpenADETaskPreview[]> {
+        return this.request("openade/task/list", { repoId })
     }
 
     async listRuntimes(args: RuntimeListParams = {}): Promise<RuntimeRecord[]> {
@@ -280,6 +309,10 @@ export class OpenADEClient {
 
     async listProjectProcesses(args: OpenADEProjectProcessListRequest): Promise<OpenADEProjectProcessListResult> {
         return this.request("openade/project/process/list", args)
+    }
+
+    async readCronDefinitions(args: OpenADECronDefinitionsReadRequest): Promise<OpenADECronDefinitionsReadResult> {
+        return this.request("openade/cron/definitions/read", args)
     }
 
     async startProjectProcess(
@@ -498,7 +531,7 @@ export class OpenADEClient {
         return this.request("openade/turn/start", withClientRequestId(args, options))
     }
 
-    async startReview(args: OpenADEReviewStartRequest, options: OpenADETurnStartOptions = {}): Promise<{ taskId: string }> {
+    async startReview(args: OpenADEReviewStartRequest, options: OpenADETurnStartOptions = {}): Promise<OpenADEReviewStartResult> {
         return this.request("openade/review/start", withClientRequestId(args, options))
     }
 
@@ -638,19 +671,18 @@ export class OpenADEClient {
         let failed = false
         const coalescedKey = coalescedReadRequestKey(method, params)
         const inFlight = coalescedKey ? this.readRequestsInFlight.get(coalescedKey) : undefined
-        // The key includes the typed OpenADE method name and params; callers of request<T>()
-        // control T through the public method for that same runtime method.
         if (inFlight) return inFlight as Promise<OpenADEResponseForMethod<Method>>
 
-        this.recordRequestBurst(method)
+        const requestId = this.createTelemetryRequestId()
+        this.recordRequestBurst(method, requestId)
         const promise = this.options.runtime
-            .request<OpenADEResponseForMethod<Method>>(method, params)
+            .request(method, ...openADERequestArgs<Method>(params))
             .catch((error: unknown) => {
                 failed = true
                 throw error
             })
             .finally(() => {
-                this.recordSlowRequest(method, startedAt, failed)
+                this.recordSlowRequest(method, requestId, startedAt, failed)
                 if (coalescedKey && this.readRequestsInFlight.get(coalescedKey) === promise) {
                     this.readRequestsInFlight.delete(coalescedKey)
                 }
@@ -660,11 +692,18 @@ export class OpenADEClient {
         return promise
     }
 
-    private recordSlowRequest(method: OpenADEMethod, startedAt: number, failed: boolean): void {
+    private createTelemetryRequestId(): string {
+        const id = `openade-client:${this.nextTelemetryRequestId}`
+        this.nextTelemetryRequestId += 1
+        return id
+    }
+
+    private recordSlowRequest(method: OpenADEMethod, requestId: string, startedAt: number, failed: boolean): void {
         const durationMs = Date.now() - startedAt
         if (durationMs < SLOW_OPENADE_CLIENT_REQUEST_MS) return
         warnSlowOpenADERequest({
             method,
+            requestId,
             durationMs,
             failed,
             clientName: this.options.clientName,
@@ -672,18 +711,20 @@ export class OpenADEClient {
         })
     }
 
-    private recordRequestBurst(method: OpenADEMethod): void {
+    private recordRequestBurst(method: OpenADEMethod, requestId: string): void {
         const now = Date.now()
         const existing = clientRequestBursts.get(method)
         const burst = existing && now - existing.startedAt <= OPENADE_CLIENT_REQUEST_BURST_WINDOW_MS
             ? existing
-            : { startedAt: now, count: 0, lastWarnedCount: 0 }
+            : { startedAt: now, count: 0, lastWarnedCount: 0, lastRequestId: requestId }
         burst.count += 1
+        burst.lastRequestId = requestId
 
         if (burst.count >= OPENADE_CLIENT_REQUEST_BURST_COUNT && burst.count - burst.lastWarnedCount >= OPENADE_CLIENT_REQUEST_BURST_COUNT) {
             burst.lastWarnedCount = burst.count
             warnOpenADERequestBurst({
                 method,
+                lastRequestId: burst.lastRequestId,
                 count: burst.count,
                 windowMs: now - burst.startedAt,
                 clientName: this.options.clientName,

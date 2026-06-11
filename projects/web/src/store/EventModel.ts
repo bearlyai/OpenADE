@@ -214,9 +214,9 @@ export class SnapshotEventModel extends EventModel {
     }
 
     private runtimeSnapshotRequest(): { repoId: string; taskId: string; eventId: string } | null {
-        if (!this.store.shouldUseRuntimeProductReads()) return null
+        if (!this.store.shouldUseRuntimeProductAPI()) return null
 
-        const repoId = this.store.tasks.getTask(this.taskId)?.repoId ?? this.store.findRuntimeProductRepoIdForTask(this.taskId)
+        const repoId = this.store.findProductRepoIdForTask(this.taskId)
         if (!repoId) return null
 
         return { repoId, taskId: this.taskId, eventId: this.eventId }
@@ -296,6 +296,10 @@ export class SnapshotEventModel extends EventModel {
         if (!fileId) return
 
         const runtimeRequest = this.runtimeSnapshotRequest()
+        if (!runtimeRequest && this.store.shouldUseRuntimeProductAPI()) {
+            console.warn("[SnapshotEventModel] Runtime snapshot context unavailable, cannot load patch index")
+            return
+        }
         const legacySnapshotsAvailable = !runtimeRequest && snapshotsApi.isAvailable()
         if (!runtimeRequest && !legacySnapshotsAvailable) {
             console.warn("[SnapshotEventModel] Snapshots API not available, cannot load patch index")
@@ -337,6 +341,10 @@ export class SnapshotEventModel extends EventModel {
         if (this.snapshotEvent?.fullPatch) return
 
         const runtimeRequest = this.runtimeSnapshotRequest()
+        if (!runtimeRequest && this.store.shouldUseRuntimeProductAPI()) {
+            console.warn("[SnapshotEventModel] Runtime snapshot context unavailable, cannot load patch")
+            return
+        }
         const legacySnapshotsAvailable = !runtimeRequest && snapshotsApi.isAvailable()
         if (!runtimeRequest && !legacySnapshotsAvailable) {
             console.warn("[SnapshotEventModel] Snapshots API not available, cannot load patch")

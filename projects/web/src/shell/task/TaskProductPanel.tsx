@@ -1,15 +1,38 @@
-import { CheckCircle2, Star, Trash2 } from "lucide-react"
+import { Archive, ArrowDown, ArrowUp, CheckCircle2, Loader2, Star, TerminalSquare, Trash2, Wand2 } from "lucide-react"
+import { useEffect, useState } from "react"
 import type {
     OpenADETask,
     OpenADETaskChangesReadResult,
     OpenADETaskDiffReadResult,
+    OpenADETaskFilePairReadResult,
     OpenADETaskGitChangedFile,
+    OpenADETaskGitCommitFilePatchResult,
+    OpenADETaskGitCommitFilesResult,
+    OpenADETaskGitFileAtTreeishResult,
     OpenADETaskGitLogResult,
+    OpenADETaskGitLogEntry,
+    OpenADETaskGitScopesReadResult,
+    OpenADETaskGitSummaryResult,
+    OpenADETaskResourceInventory,
 } from "../../../../openade-module/src"
-import { TaskGitPanel } from "./TaskGitPanel"
+import { Terminal } from "../../components/Terminal"
+import type { TaskTerminalProductAccess } from "../../components/terminalSession"
+import { type TaskGitCapabilities, TaskGitPanel } from "./TaskGitPanel"
 import { taskCommandLabel } from "./taskCommands"
 
 export type TaskReviewType = "plan" | "work"
+
+export interface TaskProductCapabilities {
+    canUpdateMetadata: boolean
+    canGenerateTitle: boolean
+    canPrepareEnvironment: boolean
+    canStartReview: boolean
+    canCreateComment: boolean
+    canEditComment: boolean
+    canDeleteComment: boolean
+    canCancelQueuedTurn: boolean
+    canReorderQueuedTurns: boolean
+}
 
 export interface OpenADETaskCommentView {
     id: string
@@ -41,6 +64,16 @@ export function openADETaskComments(task: Pick<OpenADETask, "comments"> | null |
     return (task?.comments ?? []).map(openADETaskCommentView).filter((comment): comment is OpenADETaskCommentView => comment !== null)
 }
 
+function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+    return `${count} ${count === 1 ? singular : plural}`
+}
+
+function branchMergedLabel(value: boolean | null): string {
+    if (value === true) return "Merged"
+    if (value === false) return "Unmerged"
+    return "Unknown"
+}
+
 export function TaskProductPanel({
     task,
     titleDraft,
@@ -51,12 +84,31 @@ export function TaskProductPanel({
     reviewInstructions,
     taskChanges,
     taskGitLog,
+    taskGitSummary,
+    taskGitScopes,
     taskChangesLoading,
     taskDiff,
     taskDiffActionPath,
+    taskFilePair,
+    taskFilePairActionPath,
+    taskCommitFiles,
+    taskCommitFilesActionSha,
+    taskCommitPatch,
+    taskCommitPatchActionKey,
+    taskTreeishFile,
+    taskTreeishFileActionKey,
+    taskResources,
+    taskResourcesLoading,
+    taskTerminalProductAccess,
+    taskGitCapabilities,
+    taskProductCapabilities,
+    canReadTaskResources,
+    canDeleteTask,
     isSubmitting,
     onTitleChange,
     onSaveTitle,
+    onGenerateTitle,
+    onPrepareEnvironment,
     onToggleClosed,
     onDeleteTask,
     onCommentDraftChange,
@@ -67,10 +119,17 @@ export function TaskProductPanel({
     onCancelEditComment,
     onDeleteComment,
     onCancelQueuedTurn,
+    onReorderQueuedTurns,
     onReviewInstructionsChange,
     onStartReview,
     onRefreshTaskGit,
     onReadTaskDiff,
+    onReadTaskFilePair,
+    onReadTaskCommitFiles,
+    onReadTaskCommitFilePatch,
+    onReadTaskCommitFileAtTreeish,
+    onCommitTaskGit,
+    onRefreshTaskResources,
 }: {
     task: OpenADETask
     titleDraft: string
@@ -81,12 +140,31 @@ export function TaskProductPanel({
     reviewInstructions: string
     taskChanges: OpenADETaskChangesReadResult | null
     taskGitLog: OpenADETaskGitLogResult | null
+    taskGitSummary: OpenADETaskGitSummaryResult | null
+    taskGitScopes: OpenADETaskGitScopesReadResult | null
     taskChangesLoading: boolean
     taskDiff: OpenADETaskDiffReadResult | null
     taskDiffActionPath: string | null
+    taskFilePair: OpenADETaskFilePairReadResult | null
+    taskFilePairActionPath: string | null
+    taskCommitFiles: OpenADETaskGitCommitFilesResult | null
+    taskCommitFilesActionSha: string | null
+    taskCommitPatch: OpenADETaskGitCommitFilePatchResult | null
+    taskCommitPatchActionKey: string | null
+    taskTreeishFile: OpenADETaskGitFileAtTreeishResult | null
+    taskTreeishFileActionKey: string | null
+    taskResources: OpenADETaskResourceInventory | null
+    taskResourcesLoading: boolean
+    taskTerminalProductAccess: TaskTerminalProductAccess | null
+    taskGitCapabilities: TaskGitCapabilities
+    taskProductCapabilities: TaskProductCapabilities
+    canReadTaskResources: boolean
+    canDeleteTask: boolean
     isSubmitting: boolean
     onTitleChange: (value: string) => void
     onSaveTitle: () => void
+    onGenerateTitle: () => void
+    onPrepareEnvironment: () => void
     onToggleClosed: () => void
     onDeleteTask: () => void
     onCommentDraftChange: (value: string) => void
@@ -97,14 +175,43 @@ export function TaskProductPanel({
     onCancelEditComment: () => void
     onDeleteComment: (commentId: string) => void
     onCancelQueuedTurn: (queuedTurnId: string) => void
+    onReorderQueuedTurns: (queuedTurnIds: string[]) => void
     onReviewInstructionsChange: (value: string) => void
     onStartReview: (reviewType: TaskReviewType) => void
     onRefreshTaskGit: () => void
     onReadTaskDiff: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskFilePair: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskCommitFiles: (commit: OpenADETaskGitLogEntry) => void
+    onReadTaskCommitFilePatch: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskCommitFileAtTreeish: (file: OpenADETaskGitChangedFile) => void
+    onCommitTaskGit: (message: string) => void
+    onRefreshTaskResources: () => void
 }) {
     const queuedTurns = task.queuedTurns ?? []
     const hasQueuedTurns = queuedTurns.length > 0
+    const activeQueuedTurnIds = queuedTurns.filter((turn) => turn.status === "queued").map((turn) => turn.id)
     const titleChanged = titleDraft.trim().length > 0 && titleDraft.trim() !== task.title
+    const [terminalOpen, setTerminalOpen] = useState(false)
+    const showTaskActions = taskProductCapabilities.canUpdateMetadata || canDeleteTask
+    const taskActionColumnCount = taskProductCapabilities.canUpdateMetadata && canDeleteTask ? "grid-cols-2" : "grid-cols-1"
+    const hasTaskDeviceEnvironments = task.deviceEnvironments.length > 0
+    const showResourcesSection = canReadTaskResources || taskProductCapabilities.canPrepareEnvironment || hasTaskDeviceEnvironments
+
+    useEffect(() => {
+        setTerminalOpen(false)
+    }, [task.id])
+
+    const moveQueuedTurn = (queuedTurnId: string, direction: -1 | 1) => {
+        const index = activeQueuedTurnIds.indexOf(queuedTurnId)
+        const nextIndex = index + direction
+        if (index < 0 || nextIndex < 0 || nextIndex >= activeQueuedTurnIds.length) return
+        const nextIds = [...activeQueuedTurnIds]
+        const turnId = nextIds[index]
+        if (!turnId) return
+        nextIds.splice(index, 1)
+        nextIds.splice(nextIndex, 0, turnId)
+        onReorderQueuedTurns(nextIds)
+    }
 
     return (
         <section className="mb-3 flex flex-col gap-3 border border-border bg-base-200/20 p-3">
@@ -115,73 +222,217 @@ export function TaskProductPanel({
                         value={titleDraft}
                         aria-label="Task title"
                         onChange={(event) => onTitleChange(event.target.value)}
+                        disabled={!taskProductCapabilities.canUpdateMetadata}
                         className="input h-10 min-w-0 flex-1 border border-border bg-base-100 px-2 text-sm"
                     />
-                    <button
-                        type="button"
-                        onClick={onSaveTitle}
-                        disabled={!titleChanged}
-                        className="btn h-10 shrink-0 bg-base-300 px-3 text-xs disabled:opacity-50"
-                    >
-                        Save
-                    </button>
+                    {taskProductCapabilities.canUpdateMetadata && (
+                        <button
+                            type="button"
+                            onClick={onSaveTitle}
+                            disabled={!titleChanged || isSubmitting}
+                            className="btn h-10 shrink-0 bg-base-300 px-3 text-xs disabled:opacity-50"
+                        >
+                            Save
+                        </button>
+                    )}
+                    {taskProductCapabilities.canGenerateTitle && (
+                        <button
+                            type="button"
+                            onClick={onGenerateTitle}
+                            disabled={isSubmitting}
+                            className="btn flex h-10 shrink-0 items-center gap-1.5 bg-base-300 px-3 text-xs disabled:opacity-50"
+                        >
+                            <Wand2 size={14} />
+                            Generate
+                        </button>
+                    )}
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                    <button type="button" onClick={onToggleClosed} className="btn flex h-10 items-center justify-center gap-2 bg-base-300 px-3 text-xs">
-                        <CheckCircle2 size={14} />
-                        {task.closed ? "Reopen" : "Close"}
-                    </button>
-                    <button
-                        type="button"
-                        onClick={onDeleteTask}
-                        className="btn flex h-10 items-center justify-center gap-2 bg-error/10 px-3 text-xs text-error"
-                    >
-                        <Trash2 size={14} />
-                        Delete
-                    </button>
-                </div>
+                {showTaskActions && (
+                    <div className={`grid gap-2 ${taskActionColumnCount}`}>
+                        {taskProductCapabilities.canUpdateMetadata && (
+                            <button
+                                type="button"
+                                onClick={onToggleClosed}
+                                disabled={isSubmitting}
+                                className="btn flex h-10 items-center justify-center gap-2 bg-base-300 px-3 text-xs disabled:opacity-50"
+                            >
+                                <CheckCircle2 size={14} />
+                                {task.closed ? "Reopen" : "Close"}
+                            </button>
+                        )}
+                        {canDeleteTask && (
+                            <button
+                                type="button"
+                                onClick={onDeleteTask}
+                                aria-label="Delete task"
+                                className="btn flex h-10 items-center justify-center gap-2 bg-error/10 px-3 text-xs text-error"
+                            >
+                                <Trash2 size={14} />
+                                Delete
+                            </button>
+                        )}
+                    </div>
+                )}
             </div>
 
-            <div className="flex flex-col gap-2">
-                <div className="text-xs font-medium uppercase tracking-wide text-muted">Review</div>
-                <textarea
-                    value={reviewInstructions}
-                    aria-label="Review instructions"
-                    onChange={(event) => onReviewInstructionsChange(event.target.value)}
-                    placeholder="Optional review notes"
-                    className="input min-h-16 w-full resize-none border border-border bg-base-100 p-2 text-sm"
-                />
-                <div className="grid grid-cols-2 gap-2">
-                    <button
-                        type="button"
-                        onClick={() => onStartReview("plan")}
-                        disabled={isSubmitting}
-                        className="btn flex h-10 items-center justify-center gap-2 bg-base-300 px-3 text-xs disabled:opacity-50"
-                    >
-                        <Star size={14} />
-                        Review Plan
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => onStartReview("work")}
-                        disabled={isSubmitting}
-                        className="btn flex h-10 items-center justify-center gap-2 bg-base-300 px-3 text-xs disabled:opacity-50"
-                    >
-                        <Star size={14} />
-                        Review Work
-                    </button>
+            {taskProductCapabilities.canStartReview && (
+                <div className="flex flex-col gap-2">
+                    <div className="text-xs font-medium uppercase tracking-wide text-muted">Review</div>
+                    <textarea
+                        value={reviewInstructions}
+                        aria-label="Review instructions"
+                        onChange={(event) => onReviewInstructionsChange(event.target.value)}
+                        placeholder="Optional review notes"
+                        className="input min-h-16 w-full resize-none border border-border bg-base-100 p-2 text-sm"
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                        <button
+                            type="button"
+                            onClick={() => onStartReview("plan")}
+                            disabled={isSubmitting}
+                            className="btn flex h-10 items-center justify-center gap-2 bg-base-300 px-3 text-xs disabled:opacity-50"
+                        >
+                            <Star size={14} />
+                            Review Plan
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => onStartReview("work")}
+                            disabled={isSubmitting}
+                            className="btn flex h-10 items-center justify-center gap-2 bg-base-300 px-3 text-xs disabled:opacity-50"
+                        >
+                            <Star size={14} />
+                            Review Work
+                        </button>
+                    </div>
                 </div>
-            </div>
+            )}
 
             <TaskGitPanel
                 changes={taskChanges}
                 gitLog={taskGitLog}
+                gitSummary={taskGitSummary}
+                gitScopes={taskGitScopes}
                 loading={taskChangesLoading}
                 diff={taskDiff}
                 actionPath={taskDiffActionPath}
+                filePair={taskFilePair}
+                filePairActionPath={taskFilePairActionPath}
+                commitFiles={taskCommitFiles}
+                commitFilesActionSha={taskCommitFilesActionSha}
+                commitPatch={taskCommitPatch}
+                commitPatchActionKey={taskCommitPatchActionKey}
+                treeishFile={taskTreeishFile}
+                treeishFileActionKey={taskTreeishFileActionKey}
+                capabilities={taskGitCapabilities}
                 onRefresh={onRefreshTaskGit}
                 onReadDiff={onReadTaskDiff}
+                onReadFilePair={onReadTaskFilePair}
+                onReadCommitFiles={onReadTaskCommitFiles}
+                onReadCommitFilePatch={onReadTaskCommitFilePatch}
+                onReadCommitFileAtTreeish={onReadTaskCommitFileAtTreeish}
+                onCommit={onCommitTaskGit}
             />
+
+            {showResourcesSection && (
+                <div className="flex flex-col gap-2">
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                        <div className="text-xs font-medium uppercase tracking-wide text-muted">Resources</div>
+                        <div className="flex shrink-0 gap-2">
+                            {taskProductCapabilities.canPrepareEnvironment && (
+                                <button
+                                    type="button"
+                                    onClick={onPrepareEnvironment}
+                                    disabled={isSubmitting}
+                                    className="btn flex h-8 shrink-0 items-center justify-center gap-2 bg-base-300 px-2 text-xs disabled:opacity-50"
+                                >
+                                    <TerminalSquare size={13} />
+                                    Prepare Environment
+                                </button>
+                            )}
+                            {canReadTaskResources && (
+                                <button
+                                    type="button"
+                                    title={taskResources ? "Refresh task resources" : "Load task resources"}
+                                    aria-label={taskResources ? "Refresh task resources" : "Load task resources"}
+                                    onClick={onRefreshTaskResources}
+                                    disabled={taskResourcesLoading}
+                                    className="btn flex h-8 shrink-0 items-center justify-center gap-2 bg-base-300 px-2 text-xs disabled:opacity-50"
+                                >
+                                    {taskResourcesLoading ? <Loader2 size={13} className="animate-spin" /> : <Archive size={13} />}
+                                    {taskResources ? "Refresh" : "Load"}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                    {(taskResources || hasTaskDeviceEnvironments) && (
+                        <div className="grid grid-cols-2 gap-2">
+                            {hasTaskDeviceEnvironments && (
+                                <div className="border border-border bg-base-100/60 p-2">
+                                    <div className="text-[11px] uppercase text-muted">Environments</div>
+                                    <div className="mt-1 text-sm font-medium">{countLabel(task.deviceEnvironments.length, "environment")}</div>
+                                </div>
+                            )}
+                            {taskResources && (
+                                <>
+                                    <div className="border border-border bg-base-100/60 p-2">
+                                        <div className="text-[11px] uppercase text-muted">Snapshots</div>
+                                        <div className="mt-1 text-sm font-medium">{countLabel(taskResources.snapshotIds.length, "patch", "patches")}</div>
+                                    </div>
+                                    <div className="border border-border bg-base-100/60 p-2">
+                                        <div className="text-[11px] uppercase text-muted">Images</div>
+                                        <div className="mt-1 text-sm font-medium">{countLabel(taskResources.images.length, "image")}</div>
+                                    </div>
+                                    <div className="border border-border bg-base-100/60 p-2">
+                                        <div className="text-[11px] uppercase text-muted">Sessions</div>
+                                        <div className="mt-1 text-sm font-medium">{countLabel(taskResources.sessions.length, "session")}</div>
+                                    </div>
+                                    <div className="border border-border bg-base-100/60 p-2">
+                                        <div className="text-[11px] uppercase text-muted">Runtime</div>
+                                        <div className="mt-1 text-sm font-medium">{taskResources.isRunning ? "Running" : "Idle"}</div>
+                                    </div>
+                                    {taskResources.worktree && (
+                                        <div className="col-span-2 min-w-0 border border-border bg-base-100/60 p-2">
+                                            <div className="text-[11px] uppercase text-muted">Worktree</div>
+                                            <div className="mt-1 min-w-0 truncate text-sm font-medium">{taskResources.worktree.branchName}</div>
+                                            <div className="mt-1 min-w-0 truncate text-xs text-muted">
+                                                {taskResources.worktree.sourceBranch} - {branchMergedLabel(taskResources.worktree.branchMerged)}
+                                            </div>
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {taskTerminalProductAccess && (
+                <div className="flex flex-col gap-2">
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                        <div className="text-xs font-medium uppercase tracking-wide text-muted">Terminal</div>
+                        <button
+                            type="button"
+                            onClick={() => setTerminalOpen((value) => !value)}
+                            className="btn flex h-8 shrink-0 items-center justify-center gap-2 bg-base-300 px-2 text-xs"
+                        >
+                            <TerminalSquare size={13} />
+                            {terminalOpen ? "Hide Terminal" : "Open Terminal"}
+                        </button>
+                    </div>
+                    {terminalOpen && (
+                        <div className="h-80 min-h-0 overflow-hidden border border-border bg-base-100">
+                            <Terminal
+                                ptyId={task.id}
+                                cwd=""
+                                productAccess={taskTerminalProductAccess}
+                                className="h-full"
+                                onClose={() => setTerminalOpen(false)}
+                            />
+                        </div>
+                    )}
+                </div>
+            )}
 
             {hasQueuedTurns && (
                 <div className="flex flex-col gap-2">
@@ -196,14 +447,42 @@ export function TaskProductPanel({
                                     </div>
                                     <div className="mt-1 line-clamp-2 text-xs text-muted">{turn.input}</div>
                                 </div>
-                                {turn.status === "queued" && (
-                                    <button
-                                        type="button"
-                                        onClick={() => onCancelQueuedTurn(turn.id)}
-                                        className="btn h-8 shrink-0 bg-error/10 px-2 text-xs text-error"
-                                    >
-                                        Cancel
-                                    </button>
+                                {turn.status === "queued" && (taskProductCapabilities.canReorderQueuedTurns || taskProductCapabilities.canCancelQueuedTurn) && (
+                                    <div className="flex shrink-0 gap-1">
+                                        {taskProductCapabilities.canReorderQueuedTurns && (
+                                            <>
+                                                <button
+                                                    type="button"
+                                                    title="Move queued turn up"
+                                                    aria-label="Move queued turn up"
+                                                    onClick={() => moveQueuedTurn(turn.id, -1)}
+                                                    disabled={activeQueuedTurnIds.indexOf(turn.id) <= 0}
+                                                    className="btn flex h-8 w-8 items-center justify-center bg-base-300 p-0 text-xs disabled:opacity-40"
+                                                >
+                                                    <ArrowUp size={13} />
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    title="Move queued turn down"
+                                                    aria-label="Move queued turn down"
+                                                    onClick={() => moveQueuedTurn(turn.id, 1)}
+                                                    disabled={activeQueuedTurnIds.indexOf(turn.id) === activeQueuedTurnIds.length - 1}
+                                                    className="btn flex h-8 w-8 items-center justify-center bg-base-300 p-0 text-xs disabled:opacity-40"
+                                                >
+                                                    <ArrowDown size={13} />
+                                                </button>
+                                            </>
+                                        )}
+                                        {taskProductCapabilities.canCancelQueuedTurn && (
+                                            <button
+                                                type="button"
+                                                onClick={() => onCancelQueuedTurn(turn.id)}
+                                                className="btn h-8 bg-error/10 px-2 text-xs text-error"
+                                            >
+                                                Cancel
+                                            </button>
+                                        )}
+                                    </div>
                                 )}
                             </div>
                         ))}
@@ -213,28 +492,30 @@ export function TaskProductPanel({
 
             <div className="flex flex-col gap-2">
                 <div className="text-xs font-medium uppercase tracking-wide text-muted">Comments</div>
-                <div className="flex min-w-0 gap-2">
-                    <input
-                        value={commentDraft}
-                        aria-label="New comment"
-                        onChange={(event) => onCommentDraftChange(event.target.value)}
-                        placeholder="Add a comment"
-                        className="input h-10 min-w-0 flex-1 border border-border bg-base-100 px-2 text-sm"
-                    />
-                    <button
-                        type="button"
-                        onClick={onCreateComment}
-                        disabled={!commentDraft.trim()}
-                        className="btn h-10 shrink-0 bg-primary px-3 text-xs text-primary-content disabled:opacity-50"
-                    >
-                        Add
-                    </button>
-                </div>
+                {taskProductCapabilities.canCreateComment && (
+                    <div className="flex min-w-0 gap-2">
+                        <input
+                            value={commentDraft}
+                            aria-label="New comment"
+                            onChange={(event) => onCommentDraftChange(event.target.value)}
+                            placeholder="Add a comment"
+                            className="input h-10 min-w-0 flex-1 border border-border bg-base-100 px-2 text-sm"
+                        />
+                        <button
+                            type="button"
+                            onClick={onCreateComment}
+                            disabled={!commentDraft.trim() || isSubmitting}
+                            className="btn h-10 shrink-0 bg-primary px-3 text-xs text-primary-content disabled:opacity-50"
+                        >
+                            Add
+                        </button>
+                    </div>
+                )}
                 <div className="flex flex-col gap-2">
                     {comments.length === 0 && <div className="border border-border bg-base-100/50 p-2 text-xs text-muted">No comments.</div>}
                     {comments.map((comment) => (
                         <div key={comment.id} className="border border-border bg-base-100/60 p-2">
-                            {editingCommentId === comment.id ? (
+                            {editingCommentId === comment.id && taskProductCapabilities.canEditComment ? (
                                 <div className="flex flex-col gap-2">
                                     <textarea
                                         value={editingCommentDraft}
@@ -263,18 +544,28 @@ export function TaskProductPanel({
                                         <div className="min-w-0 truncate text-[11px] text-muted">
                                             {comment.authorLabel ?? comment.updatedAt ?? comment.createdAt ?? "Comment"}
                                         </div>
-                                        <div className="flex shrink-0 gap-1">
-                                            <button type="button" onClick={() => onStartEditComment(comment)} className="btn h-7 bg-base-300 px-2 text-[11px]">
-                                                Edit
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => onDeleteComment(comment.id)}
-                                                className="btn h-7 bg-error/10 px-2 text-[11px] text-error"
-                                            >
-                                                Delete
-                                            </button>
-                                        </div>
+                                        {(taskProductCapabilities.canEditComment || taskProductCapabilities.canDeleteComment) && (
+                                            <div className="flex shrink-0 gap-1">
+                                                {taskProductCapabilities.canEditComment && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => onStartEditComment(comment)}
+                                                        className="btn h-7 bg-base-300 px-2 text-[11px]"
+                                                    >
+                                                        Edit
+                                                    </button>
+                                                )}
+                                                {taskProductCapabilities.canDeleteComment && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => onDeleteComment(comment.id)}
+                                                        className="btn h-7 bg-error/10 px-2 text-[11px] text-error"
+                                                    >
+                                                        Delete
+                                                    </button>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             )}

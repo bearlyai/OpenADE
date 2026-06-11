@@ -12,18 +12,18 @@ export class CommentManager {
             selectedText,
             author: this.store.currentUser,
         })
-        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
+        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(taskId)
         return result.commentId
     }
 
     async removeComment(taskId: string, commentId: string): Promise<void> {
         await this.store.deleteProductComment({ taskId, commentId })
-        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
+        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     async editComment(taskId: string, commentId: string, newContent: string): Promise<void> {
         await this.store.editProductComment({ taskId, commentId, content: newContent })
-        if (!this.store.shouldUseRuntimeProductReads()) await this.store.refreshProductStateAfterTaskMutation(taskId)
+        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     /**
