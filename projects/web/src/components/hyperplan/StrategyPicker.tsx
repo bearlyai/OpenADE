@@ -11,7 +11,7 @@
 import cx from "classnames"
 import { AlertTriangle, Check, FileText, Play, Star, X, Zap } from "lucide-react"
 import { observer } from "mobx-react"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { MODEL_REGISTRY } from "../../constants"
 import type { HarnessId } from "../../electronAPI/harnessEventTypes"
 import { type HarnessInstallStatus, type HarnessStatusMap, getHarnessStatuses } from "../../electronAPI/harnessStatus"
@@ -136,6 +136,14 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
     const store = useCodeStore()
     const settings = store.personalSettingsStore?.settings.get()
     const showKeyboardHints = useShortcutHintsVisible()
+    const registryEntries = useMemo(() => {
+        const entries = Object.entries(MODEL_REGISTRY) as Array<[HarnessId, (typeof MODEL_REGISTRY)[HarnessId]]>
+        return entries.sort(([a], [b]) => {
+            if (a === store.defaultHarnessId) return -1
+            if (b === store.defaultHarnessId) return 1
+            return 0
+        })
+    }, [store.defaultHarnessId])
 
     // Local state
     const [selectedStrategyId, setSelectedStrategyId] = useState(settings?.hyperplanStrategyId ?? "ensemble")
@@ -145,8 +153,8 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
         }
         // Default: one default model per harness
         const defaults: AgentCouplet[] = []
-        for (const [harnessId, config] of Object.entries(MODEL_REGISTRY)) {
-            defaults.push({ harnessId: harnessId as HarnessId, modelId: config.defaultModel })
+        for (const [harnessId, config] of registryEntries) {
+            defaults.push({ harnessId, modelId: config.defaultModel })
         }
         return defaults.length > 0 ? defaults : [{ harnessId: store.defaultHarnessId, modelId: store.defaultModel }]
     })
@@ -173,7 +181,7 @@ export const StrategyPicker = observer(function StrategyPicker({ onClose, onRun 
 
     // Build couplet list
     const allCouplets: Array<AgentCouplet & { label: string; harnessLabel: string; available: boolean }> = []
-    for (const [harnessId, config] of Object.entries(MODEL_REGISTRY)) {
+    for (const [harnessId, config] of registryEntries) {
         const status = harnessStatuses[harnessId] as HarnessInstallStatus | undefined
         const isAvailable = !!status?.installed && !!status?.authenticated
         const harnessLabel = getHarnessDisplayName(harnessId)

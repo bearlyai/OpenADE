@@ -2,7 +2,7 @@
 // Identifiers
 // ============================================================================
 
-export type HarnessId = "claude-code" | "codex"
+export type HarnessId = "claude-code" | "codex" | "opencode"
 
 // ============================================================================
 // Prompt Content

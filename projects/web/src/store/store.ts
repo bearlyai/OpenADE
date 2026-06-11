@@ -63,7 +63,7 @@ interface NewTaskAgentDefaults {
 }
 
 function isHarnessId(value: string | undefined): value is HarnessId {
-    return value === "claude-code" || value === "codex"
+    return !!value && Object.prototype.hasOwnProperty.call(MODEL_REGISTRY, value)
 }
 
 function isModelForHarness(harnessId: HarnessId, modelId: string | undefined): modelId is string {
@@ -110,6 +110,7 @@ export class CodeStore {
     defaultThinking: ThinkingLevel = "max"
     defaultFastMode = false
     defaultHarnessId: HarnessId = DEFAULT_HARNESS_ID
+    workingTaskIds: Set<string> = new Set()
 
     repoStore: RepoStore | null = null
     mcpServerStore: McpServerStore | null = null
@@ -122,6 +123,7 @@ export class CodeStore {
     private runtimeNotificationDisposer: (() => void) | null = null
     private runtimeRefreshQueue: Promise<void> = Promise.resolve()
     private telemetryReactionDisposer: (() => void) | null = null
+    private defaultHarnessReactionDisposer: (() => void) | null = null
     private pingIntervalId: ReturnType<typeof setInterval> | null = null
     private focusHandler: (() => void) | null = null
     private blurHandler: (() => void) | null = null
@@ -219,6 +221,7 @@ export class CodeStore {
             await Promise.all([repoConnection.sync(), mcpConnection.sync(), personalSettingsConnection.sync()])
 
             const newTaskDefaults = getNewTaskAgentDefaults(personalSettingsConnection.store.settings.get())
+            const storedDefaultHarnessId = personalSettingsConnection.store.settings.get()?.defaultHarnessId
 
             runInAction(() => {
                 this.repoStoreConnection = repoConnection
@@ -227,8 +230,12 @@ export class CodeStore {
                 this.mcpServerStore = mcpConnection.store
                 this.personalSettingsStoreConnection = personalSettingsConnection
                 this.personalSettingsStore = personalSettingsConnection.store
-                this.defaultHarnessId = newTaskDefaults.harnessId
-                this.defaultModel = newTaskDefaults.modelId
+                if (storedDefaultHarnessId) {
+                    this.applyDefaultHarnessId(storedDefaultHarnessId)
+                } else {
+                    this.defaultHarnessId = newTaskDefaults.harnessId
+                    this.defaultModel = newTaskDefaults.modelId
+                }
                 this.storeInitialized = true
                 this.storeInitializing = false
             })
@@ -259,6 +266,13 @@ export class CodeStore {
                             console.error("[CodeStore] Failed to push env vars:", err)
                         })
                     }
+                }
+            )
+
+            this.defaultHarnessReactionDisposer = reaction(
+                () => this.personalSettingsStore?.settings.get()?.defaultHarnessId,
+                (harnessId) => {
+                    this.applyDefaultHarnessId(harnessId)
                 }
             )
 
@@ -581,6 +595,11 @@ export class CodeStore {
             this.telemetryReactionDisposer = null
         }
 
+        if (this.defaultHarnessReactionDisposer) {
+            this.defaultHarnessReactionDisposer()
+            this.defaultHarnessReactionDisposer = null
+        }
+
         if (this.pingIntervalId) {
             clearInterval(this.pingIntervalId)
             this.pingIntervalId = null
@@ -633,10 +652,15 @@ export class CodeStore {
     }
 
     setDefaultHarnessId(harnessId: HarnessId): void {
-        this.defaultHarnessId = harnessId
-        // Reset default model to match the new harness
-        this.defaultModel = getDefaultModelForHarness(harnessId)
+        this.applyDefaultHarnessId(harnessId)
+        this.personalSettingsStore?.settings.set({ defaultHarnessId: harnessId })
         this.persistNewTaskAgentDefaults()
+    }
+
+    private applyDefaultHarnessId(harnessId: string | undefined): void {
+        const resolvedHarnessId = isHarnessId(harnessId) ? harnessId : DEFAULT_HARNESS_ID
+        this.defaultHarnessId = resolvedHarnessId
+        this.defaultModel = getDefaultModelForHarness(resolvedHarnessId)
     }
 
     // === HyperPlan Strategy Resolution ===

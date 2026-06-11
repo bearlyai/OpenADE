@@ -20,6 +20,7 @@ import type {
     McpHttpServerConfig,
     ClaudeEvent,
     CodexEvent,
+    OpencodeEvent,
 } from "@openade/harness/browser"
 
 export type { HarnessId, HarnessMcpServerConfig as McpServerConfig, McpStdioServerConfig, McpHttpServerConfig }
@@ -73,6 +74,7 @@ export interface HarnessQueryOptions {
 export type HarnessRawMessageEvent =
     | { id: string; type: "raw_message"; executionId: string; harnessId: "claude-code"; message: ClaudeEvent }
     | { id: string; type: "raw_message"; executionId: string; harnessId: "codex"; message: CodexEvent }
+    | { id: string; type: "raw_message"; executionId: string; harnessId: "opencode"; message: OpencodeEvent }
 
 // ============================================================================
 // Execution Events (Electron → Dashboard)
@@ -170,6 +172,8 @@ export function hasOnlyInitMessage(events: HarnessStreamEvent[]): boolean {
             return event.message.type === "system" && event.message.subtype === "init"
         case "codex":
             return event.message.type === "thread.started"
+        case "opencode":
+            return event.message.type === "step_start"
         default:
             return false
     }
