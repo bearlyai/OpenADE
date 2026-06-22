@@ -126,7 +126,7 @@ type projectProcessOutputFiles struct {
 }
 
 func (service *Service) handleProjectProcessStart(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/project/process/start", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodProjectProcessStart, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			RepoID       string `json:"repoId"`
 			TaskID       string `json:"taskId"`
@@ -179,7 +179,7 @@ func (service *Service) handleProjectProcessReconnect(_ context.Context, _ *core
 }
 
 func (service *Service) handleProjectProcessStop(_ context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/project/process/stop", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodProjectProcessStop, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			RepoID    string `json:"repoId"`
 			TaskID    string `json:"taskId"`

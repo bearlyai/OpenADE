@@ -3,7 +3,7 @@ import { Tooltip } from "@base-ui-components/react/tooltip"
 import cx from "classnames"
 import { ExternalLink, GitBranch, ImagePlus, Plug, X } from "lucide-react"
 import { observer } from "mobx-react"
-import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef } from "react"
+import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from "react"
 import { Z_INDEX } from "../constants"
 import { onFocusInputShortcut } from "../electronAPI/app"
 import type { GitSummaryResponse } from "../electronAPI/git"
@@ -149,6 +149,7 @@ export const InputBar = observer(function InputBar({
     slashCommandsDir,
     resolveWorkingDir,
     sdkCapabilities,
+    resolveSdkCapabilities,
     unsubmittedComments = [],
     selectedModel,
     onModelChange,
@@ -178,6 +179,8 @@ export const InputBar = observer(function InputBar({
     resolveWorkingDir?: () => Promise<string | null>
     /** SDK capabilities manager for slash command discovery */
     sdkCapabilities?: SdkCapabilitiesManager
+    /** Lazy SDK capabilities resolver for task routes that should not touch capability reads on first paint. */
+    resolveSdkCapabilities?: () => SdkCapabilitiesManager | undefined
     unsubmittedComments?: Comment[]
     selectedModel?: string
     onModelChange?: (model: string) => void
@@ -197,6 +200,7 @@ export const InputBar = observer(function InputBar({
     const portalContainer = usePortalContainer()
     const editorRef = useRef<SmartEditorRef>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
+    const [mcpSelectorOpen, setMcpSelectorOpen] = useState(false)
     const showCommandShortcuts = useShortcutHintsVisible()
 
     // Get commands from InputManager
@@ -204,6 +208,8 @@ export const InputBar = observer(function InputBar({
     const hasComments = unsubmittedComments.length > 0
     const hasPendingImages = editorManager.pendingImages.length > 0
     const queuedTurns = input.queuedTurns
+    const canCancelQueuedTurn = input.canCancelQueuedTurn
+    const canAttachImages = input.canAttachImages
     const executeCommand = useCallback(
         async (id: string) => {
             tray.close()
@@ -281,11 +287,12 @@ export const InputBar = observer(function InputBar({
         return onKeyboardNavigationSettled(focusEditorAtEnd)
     }, [focusEditorAtEnd])
 
-    // Strip "openade/" worktree prefix from branch display
+    // Strip OpenADE worktree prefix from branch display.
     const displayBranch = gitStatus?.branch?.replace(/^openade\//, "")
 
     // Get tray content from config
-    const trayConfig = tray.openTray ? getTrayConfig(tray.openTray) : null
+    const visibleOpenTray = tray.visibleOpenTray
+    const trayConfig = visibleOpenTray ? getTrayConfig(visibleOpenTray) : null
     const trayContent = trayConfig?.renderContent(tray) ?? null
     const showHarnessPicker = !!(allowHarnessSwitch && harnessId && onHarnessChange)
 
@@ -341,7 +348,7 @@ export const InputBar = observer(function InputBar({
                             </div>
                         )}
                         {enabledMcpServerIds && onMcpServerIdsChange && (
-                            <Popover.Root>
+                            <Popover.Root open={mcpSelectorOpen} onOpenChange={setMcpSelectorOpen}>
                                 <Popover.Trigger
                                     className={cx(
                                         "btn h-7 px-2 flex items-center gap-1.5 text-xs font-mono border-0 bg-transparent hover:bg-base-200 shrink-0",
@@ -356,7 +363,13 @@ export const InputBar = observer(function InputBar({
                                 <Popover.Portal container={portalContainer}>
                                     <Popover.Positioner sideOffset={8} side="top" align="end">
                                         <Popover.Popup className="z-50 bg-base-100 border border-border shadow-lg p-3 outline-none">
-                                            <TaskMcpSelector selectedServerIds={enabledMcpServerIds} onSelectionChange={onMcpServerIdsChange} vertical />
+                                            {mcpSelectorOpen && (
+                                                <TaskMcpSelector
+                                                    selectedServerIds={enabledMcpServerIds}
+                                                    onSelectionChange={onMcpServerIdsChange}
+                                                    vertical
+                                                />
+                                            )}
                                         </Popover.Popup>
                                     </Popover.Positioner>
                                 </Popover.Portal>
@@ -378,15 +391,17 @@ export const InputBar = observer(function InputBar({
                                     <span className="min-w-0 flex-1 truncate text-base-content" title={turn.input}>
                                         {turn.input || "No message"}
                                     </span>
-                                    <button
-                                        type="button"
-                                        className="btn shrink-0 cursor-pointer p-1 text-muted hover:bg-base-300 hover:text-base-content"
-                                        onClick={() => void input.cancelQueuedTurn(turn.id)}
-                                        aria-label={`Cancel queued ${turn.type}`}
-                                        title="Cancel queued message"
-                                    >
-                                        <X size={12} />
-                                    </button>
+                                    {canCancelQueuedTurn && (
+                                        <button
+                                            type="button"
+                                            className="btn shrink-0 cursor-pointer p-1 text-muted hover:bg-base-300 hover:text-base-content"
+                                            onClick={() => void input.cancelQueuedTurn(turn.id)}
+                                            aria-label={`Cancel queued ${turn.type}`}
+                                            title="Cancel queued message"
+                                        >
+                                            <X size={12} />
+                                        </button>
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -403,7 +418,9 @@ export const InputBar = observer(function InputBar({
                         slashCommandsDir={slashCommandsDir}
                         resolveWorkingDir={resolveWorkingDir}
                         sdkCapabilities={sdkCapabilities}
-                        persistImage={persistImage}
+                        resolveSdkCapabilities={resolveSdkCapabilities}
+                        persistImage={canAttachImages ? persistImage : undefined}
+                        enableImagePasteDrop={canAttachImages}
                         onKeyDown={handleEditorKeyDown}
                         allowGlobalShortcutsWhenEmpty
                         placeholder={input.isDisabled ? "Task is closed. Click Reopen to continue." : "What would you like to do?"}
@@ -414,34 +431,38 @@ export const InputBar = observer(function InputBar({
                         editorClassName="px-2.5 py-[9px]"
                     />
                     {/* Image attach button - bottom right of textarea */}
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        aria-label="Attach image"
-                        accept="image/jpeg,image/png,image/gif,image/webp"
-                        className="hidden"
-                        onChange={(e) => {
-                            const file = e.target.files?.[0]
-                            if (file) {
-                                processImageBlob(file, { persistImage })
-                                    .then(({ attachment, dataUrl }) => editorManager.addImage(attachment, dataUrl))
-                                    .catch((err) => console.error("[InputBar] Failed to process image:", err))
-                                e.target.value = ""
-                            }
-                        }}
-                    />
-                    <button
-                        type="button"
-                        className={cx(
-                            "btn absolute bottom-1.5 right-1.5 p-1.5 text-muted hover:text-base-content hover:bg-base-300/50 transition-colors",
-                            input.isDisabled && "opacity-50 pointer-events-none"
-                        )}
-                        onClick={() => fileInputRef.current?.click()}
-                        aria-label="Attach image"
-                        title="Attach image"
-                    >
-                        <ImagePlus size={14} />
-                    </button>
+                    {canAttachImages && (
+                        <>
+                            <input
+                                ref={fileInputRef}
+                                type="file"
+                                aria-label="Attach image"
+                                accept="image/jpeg,image/png,image/gif,image/webp"
+                                className="hidden"
+                                onChange={(e) => {
+                                    const file = e.target.files?.[0]
+                                    if (file) {
+                                        processImageBlob(file, { persistImage })
+                                            .then(({ attachment, dataUrl }) => editorManager.addImage(attachment, dataUrl))
+                                            .catch((err) => console.error("[InputBar] Failed to process image:", err))
+                                        e.target.value = ""
+                                    }
+                                }}
+                            />
+                            <button
+                                type="button"
+                                className={cx(
+                                    "btn absolute bottom-1.5 right-1.5 p-1.5 text-muted hover:text-base-content hover:bg-base-300/50 transition-colors",
+                                    input.isDisabled && "opacity-50 pointer-events-none"
+                                )}
+                                onClick={() => fileInputRef.current?.click()}
+                                aria-label="Attach image"
+                                title="Attach image"
+                            >
+                                <ImagePlus size={14} />
+                            </button>
+                        </>
+                    )}
                     <ShortcutBadge label="L" visible={showCommandShortcuts} variant="corner" />
                 </div>
 

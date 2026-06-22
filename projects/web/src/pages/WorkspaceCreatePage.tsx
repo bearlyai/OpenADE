@@ -1,20 +1,23 @@
 import { AlertTriangle, FlaskConical, FolderOpen, FolderPlus, GitBranch, Loader2 } from "lucide-react"
 import { observer } from "mobx-react"
 import { useEffect, useRef, useState } from "react"
+import { OPENADE_METHOD, type OpenADEMethod } from "../../../openade-client/src"
 import { ScrollArea } from "../components/ui"
 import { getFileName, slugify } from "../components/utils/paths"
 import { type IsGitDirectoryResponse, type ResolvePathResponse, initGit, isGitApiAvailable, isGitDirectory, resolvePath } from "../electronAPI/git"
 import { getPathSeparator } from "../electronAPI/platform"
-import { createDirectory, selectDirectory } from "../electronAPI/shell"
+import { createDirectory, isDirectorySelectionAvailable, selectDirectory } from "../electronAPI/shell"
 import { useCodeNavigate } from "../routing"
 import { useCodeStore } from "../store/context"
 
 type WorkspaceMode = "existing" | "new" | "prototype"
+const CORE_REPO_CREATE_METHODS = [OPENADE_METHOD.repoCreate, OPENADE_METHOD.repoPathInspect] as const
 
 export const WorkspaceCreatePage = observer(() => {
     const codeStore = useCodeStore()
     const navigate = useCodeNavigate()
     const inputRef = useRef<HTMLInputElement>(null)
+    const [, bumpCoreRepoCapabilityRevision] = useState(0)
 
     // Mode state
     const [mode, setMode] = useState<WorkspaceMode>("existing")
@@ -39,6 +42,33 @@ export const WorkspaceCreatePage = observer(() => {
     // Submit state
     const [isSubmitting, setIsSubmitting] = useState(false)
     const [submitError, setSubmitError] = useState<string | null>(null)
+
+    const useRuntimeProductAPI = codeStore.shouldUseRuntimeProductAPI()
+    const coreOwnsRepoHostCreation = codeStore.usesCoreOwnedProductRuntime()
+    const canCreateRepo = codeStore.canUseProductMethod(OPENADE_METHOD.repoCreate)
+    const canInspectRepoPath = codeStore.canUseProductMethod(OPENADE_METHOD.repoPathInspect)
+
+    const canUseRepoMethodAfterConnect = async (method: OpenADEMethod): Promise<boolean> => {
+        if (coreOwnsRepoHostCreation) return codeStore.canUseProductMethodAfterConnect(method)
+        return codeStore.canUseProductMethod(method)
+    }
+
+    useEffect(() => {
+        if (!coreOwnsRepoHostCreation || useRuntimeProductAPI) return
+        let cancelled = false
+        void codeStore
+            .ensureCoreOwnedProductMethodsAvailable(CORE_REPO_CREATE_METHODS)
+            .catch((err: unknown) => {
+                console.warn("[WorkspaceCreatePage] Failed to load Core repo creation capabilities:", err)
+            })
+            .finally(() => {
+                if (!cancelled) bumpCoreRepoCapabilityRevision((revision) => revision + 1)
+            })
+
+        return () => {
+            cancelled = true
+        }
+    }, [codeStore, coreOwnsRepoHostCreation, useRuntimeProductAPI])
 
     // Auto-focus input on mount and mode change
     useEffect(() => {
@@ -67,62 +97,133 @@ export const WorkspaceCreatePage = observer(() => {
         if (mode !== "existing" || !inputValue.trim()) {
             setPathInfo(null)
             setGitInfo(null)
+            setIsValidating(false)
             return
         }
 
+        let cancelled = false
+        const candidatePath = inputValue.trim()
         const timer = setTimeout(async () => {
-            if (!isGitApiAvailable()) return
-
             setIsValidating(true)
             setInitGitError(null)
 
             try {
-                const resolved = await resolvePath({ path: inputValue.trim() })
+                if (coreOwnsRepoHostCreation) {
+                    const canInspect = await codeStore.canUseProductMethodAfterConnect(OPENADE_METHOD.repoPathInspect)
+                    if (cancelled) return
+                    if (!canInspect) {
+                        setPathInfo(null)
+                        setGitInfo(null)
+                        return
+                    }
+                    const inspected = await codeStore.inspectProductRepoPath({ path: candidatePath })
+                    if (cancelled) return
+                    setPathInfo({
+                        resolvedPath: inspected.resolvedPath,
+                        exists: inspected.exists,
+                        isDirectory: inspected.isDirectory,
+                    })
+                    setGitInfo(
+                        inspected.isGitRepo
+                            ? {
+                                  isGitDirectory: true,
+                                  repoRoot: inspected.repoRoot ?? inspected.resolvedPath,
+                                  relativePath: inspected.relativePath ?? "",
+                                  mainBranch: inspected.mainBranch ?? "main",
+                                  hasGhCli: inspected.hasGhCli ?? false,
+                              }
+                            : {
+                                  isGitDirectory: false,
+                                  error: inspected.error,
+                              }
+                    )
+                    return
+                }
+
+                if (!isGitApiAvailable()) {
+                    setPathInfo(null)
+                    setGitInfo(null)
+                    return
+                }
+                const resolved = await resolvePath({ path: candidatePath })
+                if (cancelled) return
                 setPathInfo(resolved)
 
                 if (resolved.exists && resolved.isDirectory) {
                     const git = await isGitDirectory({ directory: resolved.resolvedPath })
+                    if (cancelled) return
                     setGitInfo(git)
                 } else {
                     setGitInfo(null)
                 }
             } catch (error) {
+                if (cancelled) return
                 console.error("[WorkspaceCreatePage] Error validating path:", error)
                 setPathInfo(null)
                 setGitInfo(null)
             } finally {
-                setIsValidating(false)
+                if (!cancelled) setIsValidating(false)
             }
         }, 300)
 
-        return () => clearTimeout(timer)
-    }, [inputValue, mode])
+        return () => {
+            cancelled = true
+            clearTimeout(timer)
+        }
+    }, [codeStore, coreOwnsRepoHostCreation, inputValue, mode])
 
     // Debounced path validation for new directory parent
     useEffect(() => {
         if (mode !== "new" || !newDirParent.trim()) {
             setParentPathInfo(null)
+            setIsValidatingParent(false)
             return
         }
 
+        let cancelled = false
+        const candidatePath = newDirParent.trim()
         const timer = setTimeout(async () => {
-            if (!isGitApiAvailable()) return
-
             setIsValidatingParent(true)
 
             try {
-                const resolved = await resolvePath({ path: newDirParent.trim() })
+                if (coreOwnsRepoHostCreation) {
+                    const canInspect = await codeStore.canUseProductMethodAfterConnect(OPENADE_METHOD.repoPathInspect)
+                    if (cancelled) return
+                    if (!canInspect) {
+                        setParentPathInfo(null)
+                        return
+                    }
+                    const inspected = await codeStore.inspectProductRepoPath({ path: candidatePath })
+                    if (cancelled) return
+                    setParentPathInfo({
+                        resolvedPath: inspected.resolvedPath,
+                        exists: inspected.exists,
+                        isDirectory: inspected.isDirectory,
+                    })
+                    return
+                }
+
+                if (!isGitApiAvailable()) {
+                    setParentPathInfo(null)
+                    return
+                }
+                const resolved = await resolvePath({ path: candidatePath })
+                if (cancelled) return
                 setParentPathInfo(resolved)
             } catch (error) {
+                if (cancelled) return
                 console.error("[WorkspaceCreatePage] Error validating parent path:", error)
                 setParentPathInfo(null)
             } finally {
-                setIsValidatingParent(false)
+                if (!cancelled) setIsValidatingParent(false)
             }
         }, 300)
 
-        return () => clearTimeout(timer)
-    }, [newDirParent, mode])
+        return () => {
+            cancelled = true
+            clearTimeout(timer)
+        }
+    }, [codeStore, coreOwnsRepoHostCreation, newDirParent, mode])
 
     const handleBrowse = async () => {
         const selected = await selectDirectory()
@@ -137,6 +238,7 @@ export const WorkspaceCreatePage = observer(() => {
 
     const handleInitGit = async () => {
         if (!pathInfo?.resolvedPath) return
+        if (coreOwnsRepoHostCreation) return
 
         setIsInitializingGit(true)
         setInitGitError(null)
@@ -161,8 +263,11 @@ export const WorkspaceCreatePage = observer(() => {
     const protoDate = new Date().toISOString().slice(0, 10)
     const protoDirName = protoSlug ? `${protoDate}-${protoSlug}` : ""
     const protoFullPath = protoDirName ? `~/.openade/prototypes/${protoDirName}` : ""
-
     const handleSubmit = async () => {
+        if (!(await canUseRepoMethodAfterConnect(OPENADE_METHOD.repoCreate))) return
+        const canInspectPath = await canUseRepoMethodAfterConnect(OPENADE_METHOD.repoPathInspect)
+        if (coreOwnsRepoHostCreation && !canInspectPath) return
+
         setIsSubmitting(true)
         setSubmitError(null)
 
@@ -172,7 +277,11 @@ export const WorkspaceCreatePage = observer(() => {
                 if (!pathToUse) return
 
                 const name = getFileName(pathToUse) || "Workspace"
-                const repo = await codeStore.repos.addRepo({ name, path: pathToUse })
+                const repo = await codeStore.repos.addRepo({
+                    name,
+                    path: pathToUse,
+                    initializeGit: coreOwnsRepoHostCreation && Boolean(showGitWarning),
+                })
                 if (repo) {
                     navigate.go("CodeWorkspace", { workspaceId: repo.id })
                 }
@@ -181,47 +290,63 @@ export const WorkspaceCreatePage = observer(() => {
                 const folderName = newDirName.trim()
                 if (!parentPath || !folderName) return
 
-                // Use resolvePath to normalize separators (handles Windows backslashes)
-                const resolved = await resolvePath({ path: `${parentPath}/${folderName}` })
-                const fullPath = resolved.resolvedPath
+                const requestedPath = `${parentPath}/${folderName}`
+                const fullPath =
+                    coreOwnsRepoHostCreation && canInspectPath
+                        ? (await codeStore.inspectProductRepoPath({ path: requestedPath })).resolvedPath
+                        : (await resolvePath({ path: requestedPath })).resolvedPath
 
-                const createResult = await createDirectory(fullPath)
-                if (!createResult.success) {
-                    setSubmitError(createResult.error || "Failed to create directory")
-                    return
+                if (!coreOwnsRepoHostCreation) {
+                    const createResult = await createDirectory(fullPath)
+                    if (!createResult.success) {
+                        setSubmitError(createResult.error || "Failed to create directory")
+                        return
+                    }
+
+                    const gitResult = await initGit({ directory: fullPath })
+                    if (!gitResult.success) {
+                        setSubmitError(gitResult.error || "Failed to initialize git repository")
+                        return
+                    }
                 }
 
-                const gitResult = await initGit({ directory: fullPath })
-                if (!gitResult.success) {
-                    setSubmitError(gitResult.error || "Failed to initialize git repository")
-                    return
-                }
-
-                const repo = await codeStore.repos.addRepo({ name: folderName, path: fullPath })
+                const repo = await codeStore.repos.addRepo({
+                    name: folderName,
+                    path: fullPath,
+                    createDirectory: coreOwnsRepoHostCreation,
+                    initializeGit: coreOwnsRepoHostCreation,
+                })
                 if (repo) {
                     navigate.go("CodeWorkspace", { workspaceId: repo.id })
                 }
             } else if (mode === "prototype") {
                 if (!protoSlug) return
 
-                // Resolve the full path (expand ~)
-                const resolved = await resolvePath({ path: protoFullPath })
-                const fullPath = resolved.resolvedPath
+                const fullPath =
+                    coreOwnsRepoHostCreation && canInspectPath
+                        ? (await codeStore.inspectProductRepoPath({ path: protoFullPath })).resolvedPath
+                        : (await resolvePath({ path: protoFullPath })).resolvedPath
 
-                const createResult = await createDirectory(fullPath)
-                if (!createResult.success) {
-                    setSubmitError(createResult.error || "Failed to create directory")
-                    return
+                if (!coreOwnsRepoHostCreation) {
+                    const createResult = await createDirectory(fullPath)
+                    if (!createResult.success) {
+                        setSubmitError(createResult.error || "Failed to create directory")
+                        return
+                    }
+
+                    // Best-effort git init — prototypes work without git
+                    try {
+                        await initGit({ directory: fullPath })
+                    } catch {
+                        // ignore
+                    }
                 }
 
-                // Best-effort git init — prototypes work without git
-                try {
-                    await initGit({ directory: fullPath })
-                } catch {
-                    // ignore
-                }
-
-                const repo = await codeStore.repos.addRepo({ name: prototypeName.trim(), path: fullPath })
+                const repo = await codeStore.repos.addRepo({
+                    name: prototypeName.trim(),
+                    path: fullPath,
+                    createDirectory: coreOwnsRepoHostCreation,
+                })
                 if (repo) {
                     navigate.go("CodeWorkspace", { workspaceId: repo.id })
                 }
@@ -234,7 +359,7 @@ export const WorkspaceCreatePage = observer(() => {
     }
 
     // Derived state
-    const hasCodeModules = isGitApiAvailable()
+    const canBrowseDirectories = isDirectorySelectionAvailable()
     const hasValidDirectory = pathInfo?.exists && pathInfo?.isDirectory
     const isGitRepo = gitInfo && "isGitDirectory" in gitInfo && gitInfo.isGitDirectory
     const showGitWarning = hasValidDirectory && !isGitRepo && !isValidating
@@ -244,11 +369,12 @@ export const WorkspaceCreatePage = observer(() => {
 
     let canSubmit = false
     if (mode === "existing") {
-        canSubmit = Boolean(hasValidDirectory) && !isValidating && !isSubmitting
+        canSubmit = canCreateRepo && (!coreOwnsRepoHostCreation || canInspectRepoPath) && Boolean(hasValidDirectory) && !isValidating && !isSubmitting
     } else if (mode === "new") {
-        canSubmit = Boolean(hasValidParent) && hasValidNewDirName && !isValidatingParent && !isSubmitting
+        canSubmit =
+            canCreateRepo && (!coreOwnsRepoHostCreation || canInspectRepoPath) && Boolean(hasValidParent) && hasValidNewDirName && !isValidatingParent && !isSubmitting
     } else if (mode === "prototype") {
-        canSubmit = protoSlug.length > 0 && !isSubmitting
+        canSubmit = canCreateRepo && (!coreOwnsRepoHostCreation || canInspectRepoPath) && protoSlug.length > 0 && !isSubmitting
     }
 
     const submitLabel = mode === "existing" ? "Add Workspace" : mode === "new" ? "Create Workspace" : "Create Prototype"
@@ -319,7 +445,7 @@ export const WorkspaceCreatePage = observer(() => {
                                             placeholder="~/Projects/my-app or /path/to/directory"
                                             className="flex-1 px-4 py-3 bg-input text-base-content border border-border focus:outline-none focus:border-primary transition-all placeholder:text-muted/50"
                                         />
-                                        {hasCodeModules && (
+                                        {canBrowseDirectories && (
                                             <button
                                                 type="button"
                                                 onClick={handleBrowse}
@@ -350,29 +476,32 @@ export const WorkspaceCreatePage = observer(() => {
                                                 <p className="text-sm text-muted mb-3">
                                                     This directory is not under git version control. The agent may make changes that cannot be recovered. We
                                                     recommend initializing a git repository first.
+                                                    {coreOwnsRepoHostCreation ? " OpenADE Core will initialize one when you add this workspace." : ""}
                                                 </p>
-                                                <button
-                                                    type="button"
-                                                    onClick={handleInitGit}
-                                                    disabled={isInitializingGit}
-                                                    className={`btn px-4 py-2 text-sm font-medium transition-all ${
-                                                        isInitializingGit
-                                                            ? "bg-base-200/40 text-base-content/50 cursor-not-allowed"
-                                                            : "bg-base-200 text-base-content hover:bg-base-300 cursor-pointer"
-                                                    }`}
-                                                >
-                                                    {isInitializingGit ? (
-                                                        <>
-                                                            <Loader2 size="1em" className="inline animate-spin mr-2" />
-                                                            Initializing...
-                                                        </>
-                                                    ) : (
-                                                        <>
-                                                            <GitBranch size="1em" className="inline mr-2" />
-                                                            Initialize Git Repository
-                                                        </>
-                                                    )}
-                                                </button>
+                                                {!coreOwnsRepoHostCreation && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleInitGit}
+                                                        disabled={isInitializingGit}
+                                                        className={`btn px-4 py-2 text-sm font-medium transition-all ${
+                                                            isInitializingGit
+                                                                ? "bg-base-200/40 text-base-content/50 cursor-not-allowed"
+                                                                : "bg-base-200 text-base-content hover:bg-base-300 cursor-pointer"
+                                                        }`}
+                                                    >
+                                                        {isInitializingGit ? (
+                                                            <>
+                                                                <Loader2 size="1em" className="inline animate-spin mr-2" />
+                                                                Initializing...
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <GitBranch size="1em" className="inline mr-2" />
+                                                                Initialize Git Repository
+                                                            </>
+                                                        )}
+                                                    </button>
+                                                )}
                                                 {initGitError && <p className="mt-2 text-sm text-error">{initGitError}</p>}
                                             </div>
                                         </div>
@@ -414,7 +543,7 @@ export const WorkspaceCreatePage = observer(() => {
                                             placeholder="~/Projects"
                                             className="flex-1 px-4 py-3 bg-input text-base-content border border-border focus:outline-none focus:border-primary transition-all placeholder:text-muted/50"
                                         />
-                                        {hasCodeModules && (
+                                        {canBrowseDirectories && (
                                             <button
                                                 type="button"
                                                 onClick={handleBrowse}

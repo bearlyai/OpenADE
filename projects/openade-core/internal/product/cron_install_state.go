@@ -28,10 +28,22 @@ type cronInstallStateReadDTO struct {
 	Installations map[string]cronInstallStateRow `json:"installations"`
 }
 
+type cronInstallStateListDTO struct {
+	RepoIDs []string `json:"repoIds"`
+}
+
 type cronInstallStateReplaceDTO struct {
 	RepoID                string                         `json:"repoId"`
 	Installations         map[string]cronInstallStateRow `json:"installations"`
 	ReplacedInstallations int                            `json:"replacedInstallations"`
+}
+
+func (service *Service) handleCronInstallStateList(ctx context.Context, _ *core.Connection, _ json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
+	repoIDs, runtimeErr := service.listCronInstallStateRepoIDs(ctx)
+	if runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	return cronInstallStateListDTO{RepoIDs: repoIDs}, nil
 }
 
 func (service *Service) handleCronInstallStateRead(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
@@ -53,7 +65,7 @@ func (service *Service) handleCronInstallStateRead(ctx context.Context, _ *core.
 }
 
 func (service *Service) handleCronInstallStateReplace(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/cron/installState/replace", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodCronInstallStateReplace, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			RepoID        string                         `json:"repoId"`
 			Installations map[string]cronInstallStateRow `json:"installations"`
@@ -78,6 +90,28 @@ func (service *Service) handleCronInstallStateReplace(ctx context.Context, _ *co
 			ReplacedInstallations: len(installations),
 		}, nil
 	})
+}
+
+func (service *Service) listCronInstallStateRepoIDs(ctx context.Context) ([]string, *core.RuntimeError) {
+	keys, err := service.store.ListSettingKeysByPrefix(ctx, cronInstallStateSettingPrefix)
+	if err != nil {
+		return nil, handlerError(err)
+	}
+	repoIDs := make([]string, 0, len(keys))
+	for _, key := range keys {
+		repoID := strings.TrimPrefix(key, cronInstallStateSettingPrefix)
+		if repoID == "" {
+			continue
+		}
+		installations, runtimeErr := service.loadCronInstallState(ctx, repoID)
+		if runtimeErr != nil {
+			return nil, runtimeErr
+		}
+		if len(installations) > 0 {
+			repoIDs = append(repoIDs, repoID)
+		}
+	}
+	return repoIDs, nil
 }
 
 func (service *Service) loadCronInstallState(ctx context.Context, repoID string) (map[string]cronInstallStateRow, *core.RuntimeError) {

@@ -20,6 +20,7 @@ import (
 const pairMaxBodyBytes = 64 * 1024
 const pairRateLimitWindow = time.Minute
 const pairRateLimitMaxAttempts = 20
+const maxConcurrentRuntimeRequests = 16
 
 type HTTPServer struct {
 	Config             Config
@@ -257,6 +258,8 @@ func (server *HTTPServer) handleRuntimeRequests(
 	writeMessages chan<- outboundRuntimeMessage,
 	errs chan<- error,
 ) {
+	concurrent := runtimeConn.DeviceID() == ""
+	slots := make(chan struct{}, maxConcurrentRuntimeRequests)
 	for {
 		var message inboundRuntimeRequest
 		var ok bool
@@ -272,22 +275,70 @@ func (server *HTTPServer) handleRuntimeRequests(
 
 		started := time.Now()
 		request, runtimeErr := DecodeRuntimeRequest(message.Data)
-		var response runtimeResponse
-		if runtimeErr != nil {
-			response = server.Runtime.HandleProtocolError(runtimeConn, request, message.QueuedAt, started, runtimeErr)
-		} else {
-			response = server.Runtime.HandleRequest(ctx, runtimeConn, request, message.QueuedAt)
+		if runtimeErr != nil || !concurrent || request.Method == "initialize" || !runtimeConn.IsInitialized() {
+			closed, err := server.handleRuntimeRequest(ctx, runtimeConn, writeMessages, message, started, request, runtimeErr, true)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if closed {
+				return
+			}
+			continue
 		}
-		if err := enqueueRuntimeMessage(ctx, writeMessages, response); err != nil {
-			errs <- err
+
+		select {
+		case <-ctx.Done():
+			errs <- ctx.Err()
 			return
+		case slots <- struct{}{}:
 		}
+		go func(message inboundRuntimeRequest, started time.Time, request RuntimeRequest) {
+			defer func() {
+				<-slots
+			}()
+			if _, err := server.handleRuntimeRequest(ctx, runtimeConn, writeMessages, message, started, request, nil, false); err != nil {
+				reportRuntimeRequestError(ctx, errs, err)
+			}
+		}(message, started, request)
+	}
+}
+
+func (server *HTTPServer) handleRuntimeRequest(
+	ctx context.Context,
+	runtimeConn *Connection,
+	writeMessages chan<- outboundRuntimeMessage,
+	message inboundRuntimeRequest,
+	started time.Time,
+	request RuntimeRequest,
+	runtimeErr *RuntimeError,
+	consumeCloseAfterResponse bool,
+) (bool, error) {
+	var response runtimeResponse
+	if runtimeErr != nil {
+		response = server.Runtime.HandleProtocolError(runtimeConn, request, message.QueuedAt, started, runtimeErr)
+	} else {
+		response = server.Runtime.HandleRequest(ctx, runtimeConn, request, message.QueuedAt)
+	}
+	if err := enqueueRuntimeMessage(ctx, writeMessages, response); err != nil {
+		return false, err
+	}
+	if consumeCloseAfterResponse {
 		if reason := runtimeConn.consumeCloseAfterResponse(); reason != "" {
 			if err := enqueueRuntimeMessage(ctx, writeMessages, runtimeCloseMessage{Reason: reason}); err != nil {
-				errs <- err
+				return false, err
 			}
-			return
+			return true, nil
 		}
+	}
+	return false, nil
+}
+
+func reportRuntimeRequestError(ctx context.Context, errs chan<- error, err error) {
+	select {
+	case <-ctx.Done():
+	case errs <- err:
+	default:
 	}
 }
 

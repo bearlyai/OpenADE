@@ -61,3 +61,5 @@ export type CompanionEvent =
     | { type: "task_changed"; repoId: string; taskId: string; previewChanged?: boolean; at: string }
     | { type: "working_tasks"; taskIds: string[]; at: string }
     | { type: "devices_changed"; at: string }
+
+export { COMPANION_RUNTIME_NOTIFICATION_PERMISSIONS, COMPANION_RUNTIME_PERMISSIONS } from "./runtimePermissions"

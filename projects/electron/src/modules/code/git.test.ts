@@ -262,6 +262,19 @@ describe("Git Module Tests", () => {
             if (first.isGitDirectory) expect(fs.realpathSync(first.repoRoot)).toBe(fs.realpathSync(TEST_REPO_DIR))
         })
 
+        it("should resolve runtime git directory info from a nested subdirectory", async () => {
+            const gitModule = await import("./git")
+
+            const result = await gitModule.isRuntimeGitDirectory({ directory: TEST_SUBDIR })
+
+            expect(result).toMatchObject({
+                isGitDirectory: true,
+                relativePath: "subdir/nested",
+                mainBranch: "main",
+            })
+            if (result.isGitDirectory) expect(fs.realpathSync(result.repoRoot)).toBe(fs.realpathSync(TEST_REPO_DIR))
+        })
+
         it("should coalesce concurrent runtime git summary reads for the same repo", async () => {
             const gitModule = await import("./git")
 

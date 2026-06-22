@@ -24,6 +24,11 @@ export async function applyUpdate(): Promise<void> {
     await window.openadeAPI.app.applyUpdate()
 }
 
+export async function restartApp(): Promise<void> {
+    if (!window.openadeAPI) return
+    await window.openadeAPI.app.restart()
+}
+
 export async function retryUpdateCheck(): Promise<void> {
     if (!window.openadeAPI) return
     await window.openadeAPI.app.retryUpdateCheck()

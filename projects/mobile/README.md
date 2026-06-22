@@ -143,6 +143,8 @@ Before triggering release workflows:
 ```sh
 cd projects/mobile
 yarn install
+npx playwright install chromium
+yarn check
 yarn build
 npx cap sync ios
 ```

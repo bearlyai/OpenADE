@@ -8,8 +8,9 @@
 import { AlertTriangle, FolderOpen, FolderPlus, GitBranch, Loader2 } from "lucide-react"
 import { observer } from "mobx-react"
 import { useEffect, useRef, useState } from "react"
+import { OPENADE_METHOD, type OpenADEMethod } from "../../../../openade-client/src"
 import { type IsGitDirectoryResponse, type ResolvePathResponse, initGit, isGitApiAvailable, isGitDirectory, resolvePath } from "../../electronAPI/git"
-import { selectDirectory } from "../../electronAPI/shell"
+import { isDirectorySelectionAvailable, selectDirectory } from "../../electronAPI/shell"
 import type { CodeStore } from "../../store/store"
 import { getFileName } from "../utils/paths"
 
@@ -18,8 +19,11 @@ interface OnboardingWorkspaceStepProps {
     onWorkspaceAdded: () => void
 }
 
+const CORE_REPO_CREATE_METHODS = [OPENADE_METHOD.repoCreate, OPENADE_METHOD.repoPathInspect] as const
+
 export const OnboardingWorkspaceStep = observer(({ store, onWorkspaceAdded }: OnboardingWorkspaceStepProps) => {
     const inputRef = useRef<HTMLInputElement>(null)
+    const [, bumpCoreRepoCapabilityRevision] = useState(0)
 
     // Input state
     const [inputValue, setInputValue] = useState("")
@@ -36,6 +40,33 @@ export const OnboardingWorkspaceStep = observer(({ store, onWorkspaceAdded }: On
     // Submit state
     const [isSubmitting, setIsSubmitting] = useState(false)
 
+    const useRuntimeProductAPI = store.shouldUseRuntimeProductAPI()
+    const coreOwnsRepoHostCreation = store.usesCoreOwnedProductRuntime()
+    const canCreateRepo = store.canUseProductMethod(OPENADE_METHOD.repoCreate)
+    const canInspectRepoPath = store.canUseProductMethod(OPENADE_METHOD.repoPathInspect)
+
+    const canUseRepoMethodAfterConnect = async (method: OpenADEMethod): Promise<boolean> => {
+        if (coreOwnsRepoHostCreation) return store.canUseProductMethodAfterConnect(method)
+        return store.canUseProductMethod(method)
+    }
+
+    useEffect(() => {
+        if (!coreOwnsRepoHostCreation || useRuntimeProductAPI) return
+        let cancelled = false
+        void store
+            .ensureCoreOwnedProductMethodsAvailable(CORE_REPO_CREATE_METHODS)
+            .catch((err: unknown) => {
+                console.warn("[OnboardingWorkspaceStep] Failed to load Core repo creation capabilities:", err)
+            })
+            .finally(() => {
+                if (!cancelled) bumpCoreRepoCapabilityRevision((revision) => revision + 1)
+            })
+
+        return () => {
+            cancelled = true
+        }
+    }, [coreOwnsRepoHostCreation, store, useRuntimeProductAPI])
+
     // Auto-focus input
     useEffect(() => {
         inputRef.current?.focus()
@@ -46,36 +77,79 @@ export const OnboardingWorkspaceStep = observer(({ store, onWorkspaceAdded }: On
         if (!inputValue.trim()) {
             setPathInfo(null)
             setGitInfo(null)
+            setIsValidating(false)
             return
         }
 
+        let cancelled = false
+        const candidatePath = inputValue.trim()
         const timer = setTimeout(async () => {
-            if (!isGitApiAvailable()) return
-
             setIsValidating(true)
             setInitGitError(null)
 
             try {
-                const resolved = await resolvePath({ path: inputValue.trim() })
-                setPathInfo(resolved)
-
-                if (resolved.exists && resolved.isDirectory) {
-                    const git = await isGitDirectory({ directory: resolved.resolvedPath })
-                    setGitInfo(git)
+                if (coreOwnsRepoHostCreation) {
+                    const canInspect = await store.canUseProductMethodAfterConnect(OPENADE_METHOD.repoPathInspect)
+                    if (cancelled) return
+                    if (!canInspect) {
+                        setPathInfo(null)
+                        setGitInfo(null)
+                        return
+                    }
+                    const inspected = await store.inspectProductRepoPath({ path: candidatePath })
+                    if (cancelled) return
+                    setPathInfo({
+                        resolvedPath: inspected.resolvedPath,
+                        exists: inspected.exists,
+                        isDirectory: inspected.isDirectory,
+                    })
+                    setGitInfo(
+                        inspected.isGitRepo
+                            ? {
+                                  isGitDirectory: true,
+                                  repoRoot: inspected.repoRoot ?? inspected.resolvedPath,
+                                  relativePath: inspected.relativePath ?? "",
+                                  mainBranch: inspected.mainBranch ?? "main",
+                                  hasGhCli: inspected.hasGhCli ?? false,
+                              }
+                            : {
+                                  isGitDirectory: false,
+                                  error: inspected.error,
+                              }
+                    )
                 } else {
-                    setGitInfo(null)
+                    if (!isGitApiAvailable()) {
+                        setPathInfo(null)
+                        setGitInfo(null)
+                        return
+                    }
+                    const resolved = await resolvePath({ path: candidatePath })
+                    if (cancelled) return
+                    setPathInfo(resolved)
+
+                    if (resolved.exists && resolved.isDirectory) {
+                        const git = await isGitDirectory({ directory: resolved.resolvedPath })
+                        if (cancelled) return
+                        setGitInfo(git)
+                    } else {
+                        setGitInfo(null)
+                    }
                 }
             } catch (error) {
+                if (cancelled) return
                 console.error("[OnboardingWorkspaceStep] Error validating path:", error)
                 setPathInfo(null)
                 setGitInfo(null)
             } finally {
-                setIsValidating(false)
+                if (!cancelled) setIsValidating(false)
             }
         }, 300)
 
-        return () => clearTimeout(timer)
-    }, [inputValue])
+        return () => {
+            cancelled = true
+            clearTimeout(timer)
+        }
+    }, [coreOwnsRepoHostCreation, inputValue, store])
 
     const handleBrowse = async () => {
         const selected = await selectDirectory()
@@ -86,6 +160,7 @@ export const OnboardingWorkspaceStep = observer(({ store, onWorkspaceAdded }: On
 
     const handleInitGit = async () => {
         if (!pathInfo?.resolvedPath) return
+        if (coreOwnsRepoHostCreation) return
 
         setIsInitializingGit(true)
         setInitGitError(null)
@@ -106,13 +181,20 @@ export const OnboardingWorkspaceStep = observer(({ store, onWorkspaceAdded }: On
     }
 
     const handleSubmit = async () => {
+        if (!(await canUseRepoMethodAfterConnect(OPENADE_METHOD.repoCreate))) return
+        if (coreOwnsRepoHostCreation && !(await canUseRepoMethodAfterConnect(OPENADE_METHOD.repoPathInspect))) return
+
         const pathToUse = pathInfo?.resolvedPath || inputValue.trim()
         if (!pathToUse) return
 
         setIsSubmitting(true)
         try {
             const name = getFileName(pathToUse) || "Workspace"
-            const repo = await store.repos.addRepo({ name, path: pathToUse })
+            const repo = await store.repos.addRepo({
+                name,
+                path: pathToUse,
+                initializeGit: coreOwnsRepoHostCreation && Boolean(showGitWarning),
+            })
             if (repo) {
                 onWorkspaceAdded()
             }
@@ -122,11 +204,11 @@ export const OnboardingWorkspaceStep = observer(({ store, onWorkspaceAdded }: On
     }
 
     // Derived state
-    const hasCodeModules = isGitApiAvailable()
+    const canBrowseDirectories = isDirectorySelectionAvailable()
     const hasValidDirectory = pathInfo?.exists && pathInfo?.isDirectory
     const isGitRepo = gitInfo && "isGitDirectory" in gitInfo && gitInfo.isGitDirectory
     const showGitWarning = hasValidDirectory && !isGitRepo && !isValidating
-    const canSubmit = hasValidDirectory && !isValidating && !isSubmitting
+    const canSubmit = canCreateRepo && (!coreOwnsRepoHostCreation || canInspectRepoPath) && hasValidDirectory && !isValidating && !isSubmitting
 
     return (
         <div className="flex flex-col">
@@ -151,7 +233,7 @@ export const OnboardingWorkspaceStep = observer(({ store, onWorkspaceAdded }: On
                             placeholder="~/Projects/my-app"
                             className="flex-1 px-3 py-2 bg-input text-base-content border border-border focus:outline-none focus:border-primary transition-all placeholder:text-muted/50 text-sm"
                         />
-                        {hasCodeModules && (
+                        {canBrowseDirectories && (
                             <button
                                 type="button"
                                 onClick={handleBrowse}
@@ -178,18 +260,22 @@ export const OnboardingWorkspaceStep = observer(({ store, onWorkspaceAdded }: On
                             <AlertTriangle size={16} className="text-warning flex-shrink-0" />
                             <div className="flex-1 flex items-center justify-between gap-2">
                                 <span className="text-sm text-base-content">Not a git repository</span>
-                                <button
-                                    type="button"
-                                    onClick={handleInitGit}
-                                    disabled={isInitializingGit}
-                                    className={`px-2 py-1 text-xs font-medium transition-all ${
-                                        isInitializingGit
-                                            ? "bg-base-200/40 text-base-content/50 cursor-not-allowed"
-                                            : "bg-base-200 text-base-content hover:bg-base-300 cursor-pointer"
-                                    }`}
-                                >
-                                    {isInitializingGit ? "Initializing..." : "Initialize Git"}
-                                </button>
+                                {coreOwnsRepoHostCreation ? (
+                                    <span className="text-xs text-muted">Initializes on add</span>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={handleInitGit}
+                                        disabled={isInitializingGit}
+                                        className={`px-2 py-1 text-xs font-medium transition-all ${
+                                            isInitializingGit
+                                                ? "bg-base-200/40 text-base-content/50 cursor-not-allowed"
+                                                : "bg-base-200 text-base-content hover:bg-base-300 cursor-pointer"
+                                        }`}
+                                    >
+                                        {isInitializingGit ? "Initializing..." : "Initialize Git"}
+                                    </button>
+                                )}
                             </div>
                         </div>
                         {initGitError && <p className="mt-2 text-xs text-error">{initGitError}</p>}

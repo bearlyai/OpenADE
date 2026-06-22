@@ -141,7 +141,7 @@ func remoteDeviceToDTO(device storage.Device) remoteDeviceDTO {
 }
 
 func (service *Service) notifyRemoteDevicesChanged() {
-	service.runtime.Notify("remote/device/changed", remoteDeviceChangedNotificationDTO{
+	service.runtime.Notify(openADENotificationRemoteDeviceChanged, remoteDeviceChangedNotificationDTO{
 		Type: "devices_changed",
 		At:   formatTime(time.Now().UTC()),
 	})

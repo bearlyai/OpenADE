@@ -1,6 +1,11 @@
 import { FolderOpen, MessageSquarePlus, Server, Settings } from "lucide-react"
+import { useEffect, type ReactNode } from "react"
 import type {
     OpenADECronDefinitionsReadResult,
+    OpenADECronInstallStateReadResult,
+    OpenADEIsolationStrategy,
+    OpenADEMCPServer,
+    OpenADEPersonalSettings,
     OpenADEProject,
     OpenADEProjectFileReadResult,
     OpenADEProjectFilesFuzzySearchResult,
@@ -10,9 +15,10 @@ import type {
     OpenADEProjectGitSummaryReadResult,
     OpenADEProjectProcessListResult,
     OpenADEProjectProcessReconnectResult,
+    OpenADERepoPathInspectResult,
     OpenADEProjectSearchResult,
-    OpenADESnapshotPatchFile,
     OpenADESnapshot,
+    OpenADESnapshotPatchFile,
     OpenADETask,
     OpenADETaskChangesReadResult,
     OpenADETaskDiffReadResult,
@@ -21,35 +27,39 @@ import type {
     OpenADETaskGitCommitFilePatchResult,
     OpenADETaskGitCommitFilesResult,
     OpenADETaskGitFileAtTreeishResult,
-    OpenADETaskGitLogResult,
     OpenADETaskGitLogEntry,
+    OpenADETaskGitLogResult,
     OpenADETaskGitScopesReadResult,
     OpenADETaskGitSummaryResult,
     OpenADETaskPreview,
     OpenADETaskResourceInventory,
 } from "../../../openade-module/src"
-import { OpenADEChrome, type OpenADEChromeNavItem, type OpenADEChromeStatus } from "./OpenADEChrome"
-import { type OpenADESessionConfig, OpenADESessionsScreen, OpenADESettingsScreen, type OpenADEThemeSetting } from "./OpenADESessionScreens"
-import { ProjectTasksScreen } from "./project/ProjectTasksScreen"
-import { type ProjectSessionSummary, ProjectsScreen } from "./project/ProjectsScreen"
-import { NewTaskScreen } from "./task/NewTaskScreen"
-import type { TaskImageLoader, TaskSnapshotPatchView } from "./task/TaskEventThread"
-import type { TaskComposerAgentControls } from "./task/TaskComposer"
-import type { OpenADETaskCommentView, TaskProductCapabilities, TaskReviewType } from "./task/TaskProductPanel"
-import { TaskScreen } from "./task/TaskScreen"
 import type { TaskTerminalProductAccess } from "../components/terminalSession"
-import type {
-    ProjectCronCapabilities,
-    ProjectFileCapabilities,
-    ProjectGitCapabilities,
-    ProjectProcessCapabilities,
-    ProjectSearchCapabilities,
-} from "./project/ProjectHostPanels"
-import type { TaskGitCapabilities } from "./task/TaskGitPanel"
+import { OpenADEChrome, type OpenADEChromeNavItem, type OpenADEChromeStatus } from "./OpenADEChrome"
+import {
+    type OpenADESessionConfig,
+    OpenADESessionsScreen,
+    type OpenADESettingsProductState,
+    OpenADESettingsScreen,
+    type OpenADEThemeSetting,
+} from "./OpenADESessionScreens"
+import type { OpenADEShellCapabilities } from "./capabilities"
+import { ProjectTasksScreen, type ProjectUpdateInput } from "./project/ProjectTasksScreen"
+import { type ProjectSessionSummary, ProjectsScreen } from "./project/ProjectsScreen"
+import { NewTaskScreen, type NewTaskDraftView, type NewTaskPendingCreationView } from "./task/NewTaskScreen"
+import type { TaskComposerAgentControls, TaskComposerImageAttachment, TaskComposerRepeatState } from "./task/TaskComposer"
+import type { TaskImageLoader, TaskSnapshotPatchView } from "./task/TaskEventThread"
+import { TaskHyperPlanPicker, type TaskHyperPlanPresetId } from "./task/TaskHyperPlanPicker"
+import type { OpenADETaskCommentView, TaskReviewType } from "./task/TaskProductPanel"
+import { isolationStrategyForBranchCapability } from "./task/isolationStrategy"
+import { TaskScreen } from "./task/TaskScreen"
+import { canQueueTaskCommandWhileRunning, type TaskCommandType } from "./task/taskCommands"
 import type { TaskSnapshotBlock } from "./task/taskEventPresentation"
-import type { TaskCommandType } from "./task/taskCommands"
 
 export type OpenADEShellScreen = "projects" | "project" | "task" | "new_task" | "sessions" | "settings"
+export type OpenADEShellSettingsProductData = Omit<OpenADESettingsProductState, "capabilities">
+const emptyNewTaskDrafts: NewTaskDraftView[] = []
+const emptyNewTaskPendingCreations: NewTaskPendingCreationView[] = []
 
 const openADENavItems: Array<OpenADEChromeNavItem<OpenADEShellScreen>> = [
     { screen: "projects", label: "Projects", icon: FolderOpen },
@@ -71,6 +81,46 @@ function openADEShellTitle(screen: OpenADEShellScreen, selectedRepo: OpenADEProj
     return "Projects"
 }
 
+export function openADEShellSettingsProductStateForCapabilities(
+    productData: OpenADEShellSettingsProductData,
+    settingsCapabilities: OpenADEShellCapabilities["settingsCapabilities"]
+): OpenADESettingsProductState {
+    const personalSettingsCanRead = settingsCapabilities.personalSettings.canRead
+    const personalSettingsCanReplace = personalSettingsCanRead && settingsCapabilities.personalSettings.canReplace
+    const mcpServersCanRead = settingsCapabilities.mcpServers.canRead
+    const mcpServersCanMutate = mcpServersCanRead && (settingsCapabilities.mcpServers.canUpsert || settingsCapabilities.mcpServers.canDelete)
+
+    return {
+        capabilities: settingsCapabilities,
+        personalSettings: personalSettingsCanRead ? productData.personalSettings : null,
+        personalSettingsLoading: personalSettingsCanRead ? productData.personalSettingsLoading : false,
+        personalSettingsActionLoading: personalSettingsCanReplace ? productData.personalSettingsActionLoading : false,
+        mcpServers: mcpServersCanRead ? productData.mcpServers : [],
+        mcpServersLoading: mcpServersCanRead ? productData.mcpServersLoading : false,
+        mcpServerActionId: mcpServersCanMutate ? productData.mcpServerActionId : null,
+    }
+}
+
+function openADEShellSnapshotPatchesForCapabilities({
+    patches,
+    canReadPatch,
+    canReadSlice,
+}: {
+    patches?: Record<string, TaskSnapshotPatchView>
+    canReadPatch: boolean
+    canReadSlice: boolean
+}): Record<string, TaskSnapshotPatchView> | undefined {
+    if (!canReadPatch) return undefined
+    if (canReadSlice) return patches
+    if (!patches) return undefined
+    return Object.fromEntries(Object.entries(patches).map(([id, patch]) => [id, { ...patch, slices: undefined }]))
+}
+
+function agentControlsWithMcpCapability(agentControls: TaskComposerAgentControls | undefined, canUseMcpControl: boolean): TaskComposerAgentControls | undefined {
+    if (!agentControls || canUseMcpControl) return agentControls
+    return { ...agentControls, mcpControl: undefined }
+}
+
 export function OpenADEShell({
     className,
     screen,
@@ -84,6 +134,7 @@ export function OpenADEShell({
     connectionWarning,
     sessions,
     showArchivedProjects,
+    shellCapabilities,
     selectedRepo,
     selectedTask,
     visibleRepos,
@@ -102,17 +153,16 @@ export function OpenADEShell({
     projectGitBranches,
     projectGitSummary,
     projectGitLoading,
-    projectGitCapabilities,
     projectCronDefinitions,
+    projectCronInstallState,
     projectCronDefinitionsLoading,
-    projectCronCapabilities,
+    projectCronInstallStateLoading,
+    projectCronInstallActionId,
     projectProcesses,
     projectProcessesLoading,
     projectProcessActionId,
     projectProcessOutput,
-    projectFileCapabilities,
-    projectSearchCapabilities,
-    projectProcessCapabilities,
+    projectActionLoading,
     task,
     input,
     commandType,
@@ -139,29 +189,38 @@ export function OpenADEShell({
     taskResources,
     taskResourcesLoading,
     taskTerminalProductAccess,
-    taskGitCapabilities,
-    taskProductCapabilities,
-    taskCanReadResources,
-    taskCanDelete,
-    taskCanStartTurn,
-    taskCanEnqueueQueuedTurn,
-    taskCanInterrupt,
-    taskCanReadSnapshotPatch,
-    taskCanReadSnapshotPatchSlice,
     taskAgentControls,
+    taskHyperplanPresetId = "ensemble",
+    taskImageAttachments,
+    taskImageAttachLoading,
+    taskRepeatState,
+    taskComposerEditor,
+    onFocusTaskInputShortcut,
     newTaskRepoId,
     newTaskMode,
     newTaskTitle,
     newTaskPrompt,
-    newTaskCanCreate,
-    newTaskCanStartTurn,
+    newTaskIsolationStrategy,
+    newTaskBranches,
+    newTaskBranchesLoading,
+    newTaskPreferredSourceBranch,
     newTaskAgentControls,
+    newTaskHyperplanPresetId = "ensemble",
+    newTaskImageAttachments,
+    newTaskImageAttachLoading,
+    newTaskComposerEditor,
+    onFocusNewTaskInputShortcut,
+    newTaskDrafts = emptyNewTaskDrafts,
+    newTaskPendingCreations = emptyNewTaskPendingCreations,
+    newTaskCanStashDraft = false,
+    newTaskCanRestoreDraft = true,
+    newTaskCreateMore = false,
     configs,
     activeConfigId,
     settingsConfig,
+    settingsProductData,
     snapshot,
     themeSetting,
-    settingsCanSelfRevoke,
     loadTaskImage,
     taskSnapshotPatches,
     taskSnapshotPatchActionId,
@@ -169,7 +228,12 @@ export function OpenADEShell({
     onRefresh,
     onNavigate,
     onToggleArchivedProjects,
+    onSelectSession,
     onSelectProject,
+    onCreateProject,
+    onInspectProjectPath,
+    onUpdateProject,
+    onDeleteProject,
     onAddHost,
     onSelectTask,
     onNewTask,
@@ -186,14 +250,20 @@ export function OpenADEShell({
     onSearchProject,
     onRefreshProjectGit,
     onRefreshProjectCronDefinitions,
+    onRefreshProjectCronInstallState,
+    onSetProjectCronEnabled,
+    onRunProjectCron,
     onInputChange,
     onCommandTypeChange,
+    onAttachTaskImage,
+    onRemoveTaskImage,
     onTaskTitleChange,
     onSaveTaskTitle,
     onGenerateTaskTitle,
     onPrepareTaskEnvironment,
     onToggleTaskClosed,
     onDeleteTask,
+    onCancelPlan,
     onCommentDraftChange,
     onCreateComment,
     onStartEditComment,
@@ -212,21 +282,42 @@ export function OpenADEShell({
     onReadTaskCommitFilePatch,
     onReadTaskCommitFileAtTreeish,
     onCommitTaskGit,
+    onCommitAndPushTask,
+    onStartTaskRepeat,
+    onStopTaskRepeat,
     onRefreshTaskResources,
     onLoadTaskSnapshotPatch,
     onLoadTaskSnapshotPatchSlice,
     onSendTaskInput,
     onAbortTask,
+    onRetryTask,
+    onTaskHyperplanPresetChange,
     onNewTaskRepoChange,
     onNewTaskModeChange,
     onNewTaskTitleChange,
     onNewTaskPromptChange,
+    onNewTaskIsolationStrategyChange,
+    onRefreshNewTaskBranches,
+    onNewTaskHyperplanPresetChange,
+    onStashNewTaskDraft,
+    onRestoreNewTaskDraft,
+    onDeleteNewTaskDraft,
+    onRetryNewTaskPendingCreation,
+    onOpenNewTaskPendingCreation,
+    onCancelNewTaskPendingCreation,
+    onDismissNewTaskPendingCreation,
+    onNewTaskCreateMoreChange,
+    onAttachNewTaskImage,
+    onRemoveNewTaskImage,
     onCreateTask,
     onSelectHost,
     onRemoveHost,
     onForget,
     onSelfRevoke,
     onThemeChange,
+    onPersonalSettingsChange,
+    onMcpServerChange,
+    onMcpServerDelete,
 }: {
     className: string
     screen: OpenADEShellScreen
@@ -240,6 +331,7 @@ export function OpenADEShell({
     connectionWarning: string | null
     sessions: ProjectSessionSummary[]
     showArchivedProjects: boolean
+    shellCapabilities: OpenADEShellCapabilities
     selectedRepo: OpenADEProject | null
     selectedTask: OpenADETaskPreview | null
     visibleRepos: OpenADEProject[]
@@ -258,17 +350,16 @@ export function OpenADEShell({
     projectGitBranches: OpenADEProjectGitBranchesReadResult | null
     projectGitSummary: OpenADEProjectGitSummaryReadResult | null
     projectGitLoading: boolean
-    projectGitCapabilities: ProjectGitCapabilities
     projectCronDefinitions: OpenADECronDefinitionsReadResult | null
+    projectCronInstallState: OpenADECronInstallStateReadResult | null
     projectCronDefinitionsLoading: boolean
-    projectCronCapabilities: ProjectCronCapabilities
+    projectCronInstallStateLoading: boolean
+    projectCronInstallActionId: string | null
     projectProcesses: OpenADEProjectProcessListResult | null
     projectProcessesLoading: boolean
     projectProcessActionId: string | null
     projectProcessOutput: OpenADEProjectProcessReconnectResult | null
-    projectFileCapabilities: ProjectFileCapabilities
-    projectSearchCapabilities: ProjectSearchCapabilities
-    projectProcessCapabilities: ProjectProcessCapabilities
+    projectActionLoading: boolean
     task: OpenADETask | null
     input: string
     commandType: TaskCommandType
@@ -295,29 +386,38 @@ export function OpenADEShell({
     taskResources: OpenADETaskResourceInventory | null
     taskResourcesLoading: boolean
     taskTerminalProductAccess: TaskTerminalProductAccess | null
-    taskGitCapabilities: TaskGitCapabilities
-    taskProductCapabilities: TaskProductCapabilities
-    taskCanReadResources: boolean
-    taskCanDelete: boolean
-    taskCanStartTurn: boolean
-    taskCanEnqueueQueuedTurn: boolean
-    taskCanInterrupt: boolean
-    taskCanReadSnapshotPatch: boolean
-    taskCanReadSnapshotPatchSlice: boolean
     taskAgentControls?: TaskComposerAgentControls
+    taskHyperplanPresetId?: TaskHyperPlanPresetId
+    taskImageAttachments?: TaskComposerImageAttachment[]
+    taskImageAttachLoading?: boolean
+    taskRepeatState?: TaskComposerRepeatState
+    taskComposerEditor?: ReactNode
+    onFocusTaskInputShortcut?: () => void
     newTaskRepoId: string | null
     newTaskMode: TaskCommandType
     newTaskTitle: string
     newTaskPrompt: string
-    newTaskCanCreate: boolean
-    newTaskCanStartTurn: boolean
+    newTaskIsolationStrategy: OpenADEIsolationStrategy
+    newTaskBranches: OpenADEProjectGitBranchesReadResult | null
+    newTaskBranchesLoading: boolean
+    newTaskPreferredSourceBranch?: string | null
     newTaskAgentControls?: TaskComposerAgentControls
+    newTaskHyperplanPresetId?: TaskHyperPlanPresetId
+    newTaskImageAttachments?: TaskComposerImageAttachment[]
+    newTaskImageAttachLoading?: boolean
+    newTaskComposerEditor?: ReactNode
+    onFocusNewTaskInputShortcut?: () => void
+    newTaskDrafts?: NewTaskDraftView[]
+    newTaskPendingCreations?: NewTaskPendingCreationView[]
+    newTaskCanStashDraft?: boolean
+    newTaskCanRestoreDraft?: boolean
+    newTaskCreateMore?: boolean
     configs: OpenADESessionConfig[]
     activeConfigId: string
     settingsConfig: OpenADESessionConfig
+    settingsProductData: OpenADEShellSettingsProductData
     snapshot: OpenADESnapshot | null
     themeSetting: OpenADEThemeSetting
-    settingsCanSelfRevoke: boolean
     loadTaskImage?: TaskImageLoader
     taskSnapshotPatches?: Record<string, TaskSnapshotPatchView>
     taskSnapshotPatchActionId?: string | null
@@ -325,251 +425,562 @@ export function OpenADEShell({
     onRefresh: () => void
     onNavigate: (screen: OpenADEShellScreen) => void
     onToggleArchivedProjects: () => void
-    onSelectProject: (configId: string, repoId: string) => void
+    onSelectSession: (configId: string) => void
+    onSelectProject?: (configId: string, repoId: string) => void
+    onCreateProject?: (project: { name: string; path: string }) => Promise<boolean> | boolean
+    onInspectProjectPath?: (path: string) => Promise<OpenADERepoPathInspectResult | null> | OpenADERepoPathInspectResult | null
+    onUpdateProject?: (project: ProjectUpdateInput) => Promise<boolean> | boolean
+    onDeleteProject?: (repoId: string) => Promise<boolean> | boolean
     onAddHost: () => void
-    onSelectTask: (taskId: string) => void
-    onNewTask: () => void
-    onRefreshProjectProcesses: () => void
-    onStartProjectProcess: (definitionId: string) => void
-    onReconnectProjectProcess: (processId: string) => void
-    onStopProjectProcess: (processId: string) => void
-    onRefreshProjectFiles: () => void
-    onReadProjectFile: (path: string) => void
+    onSelectTask?: (taskId: string) => void
+    onNewTask?: () => void
+    onRefreshProjectProcesses?: () => void
+    onStartProjectProcess?: (definitionId: string) => void
+    onReconnectProjectProcess?: (processId: string) => void
+    onStopProjectProcess?: (processId: string) => void
+    onRefreshProjectFiles?: () => void
+    onReadProjectFile?: (path: string) => void
     onProjectFileSearchQueryChange: (value: string) => void
-    onSearchProjectFiles: () => void
-    onWriteProjectFile: (path: string, content: string) => void
+    onSearchProjectFiles?: () => void
+    onWriteProjectFile?: (path: string, content: string) => void
     onProjectSearchQueryChange: (value: string) => void
-    onSearchProject: () => void
-    onRefreshProjectGit: () => void
-    onRefreshProjectCronDefinitions: () => void
+    onSearchProject?: () => void
+    onRefreshProjectGit?: () => void
+    onRefreshProjectCronDefinitions?: () => void
+    onRefreshProjectCronInstallState?: () => void
+    onSetProjectCronEnabled?: (cronId: string, enabled: boolean) => void
+    onRunProjectCron?: (cronId: string) => void
     onInputChange: (value: string) => void
     onCommandTypeChange: (value: TaskCommandType) => void
+    onAttachTaskImage?: (file: File) => void
+    onRemoveTaskImage?: (imageId: string) => void
     onTaskTitleChange: (value: string) => void
-    onSaveTaskTitle: () => void
-    onGenerateTaskTitle: () => void
-    onPrepareTaskEnvironment: () => void
-    onToggleTaskClosed: () => void
-    onDeleteTask: () => void
+    onSaveTaskTitle?: () => void
+    onGenerateTaskTitle?: () => void
+    onPrepareTaskEnvironment?: () => void
+    onToggleTaskClosed?: () => void
+    onDeleteTask?: () => void
+    onCancelPlan?: (planEventId: string) => void
     onCommentDraftChange: (value: string) => void
-    onCreateComment: () => void
-    onStartEditComment: (comment: OpenADETaskCommentView) => void
+    onCreateComment?: () => void
+    onStartEditComment?: (comment: OpenADETaskCommentView) => void
     onEditingCommentDraftChange: (value: string) => void
-    onSaveComment: (commentId: string) => void
+    onSaveComment?: (commentId: string) => void
     onCancelEditComment: () => void
-    onDeleteComment: (commentId: string) => void
-    onCancelQueuedTurn: (queuedTurnId: string) => void
-    onReorderQueuedTurns: (queuedTurnIds: string[]) => void
+    onDeleteComment?: (commentId: string) => void
+    onCancelQueuedTurn?: (queuedTurnId: string) => void
+    onReorderQueuedTurns?: (queuedTurnIds: string[]) => void
     onReviewInstructionsChange: (value: string) => void
-    onStartReview: (reviewType: TaskReviewType) => void
-    onRefreshTaskGit: () => void
-    onReadTaskDiff: (file: OpenADETaskGitChangedFile) => void
-    onReadTaskFilePair: (file: OpenADETaskGitChangedFile) => void
-    onReadTaskCommitFiles: (commit: OpenADETaskGitLogEntry) => void
-    onReadTaskCommitFilePatch: (file: OpenADETaskGitChangedFile) => void
-    onReadTaskCommitFileAtTreeish: (file: OpenADETaskGitChangedFile) => void
-    onCommitTaskGit: (message: string) => void
-    onRefreshTaskResources: () => void
+    onStartReview?: (reviewType: TaskReviewType) => void
+    onRefreshTaskGit?: () => void
+    onReadTaskDiff?: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskFilePair?: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskCommitFiles?: (commit: OpenADETaskGitLogEntry) => void
+    onReadTaskCommitFilePatch?: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskCommitFileAtTreeish?: (file: OpenADETaskGitChangedFile) => void
+    onCommitTaskGit?: (message: string) => void
+    onCommitAndPushTask?: () => void
+    onStartTaskRepeat?: () => void
+    onStopTaskRepeat?: () => void
+    onRefreshTaskResources?: () => void
     onLoadTaskSnapshotPatch?: (block: TaskSnapshotBlock) => void
     onLoadTaskSnapshotPatchSlice?: (block: TaskSnapshotBlock, file: OpenADESnapshotPatchFile) => void
-    onSendTaskInput: () => void
-    onAbortTask: () => void
+    onSendTaskInput?: () => void
+    onAbortTask?: () => void
+    onRetryTask?: () => void
+    onTaskHyperplanPresetChange?: (value: TaskHyperPlanPresetId) => void
     onNewTaskRepoChange: (repoId: string) => void
     onNewTaskModeChange: (value: TaskCommandType) => void
     onNewTaskTitleChange: (value: string) => void
     onNewTaskPromptChange: (value: string) => void
-    onCreateTask: () => void
+    onNewTaskIsolationStrategyChange: (strategy: OpenADEIsolationStrategy) => void
+    onRefreshNewTaskBranches?: () => void
+    onNewTaskHyperplanPresetChange?: (value: TaskHyperPlanPresetId) => void
+    onStashNewTaskDraft?: () => void
+    onRestoreNewTaskDraft?: (draftId: string) => void
+    onDeleteNewTaskDraft?: (draftId: string) => void
+    onRetryNewTaskPendingCreation?: (creationId: string) => void
+    onOpenNewTaskPendingCreation?: (creationId: string) => void
+    onCancelNewTaskPendingCreation?: (creationId: string) => void
+    onDismissNewTaskPendingCreation?: (creationId: string) => void
+    onNewTaskCreateMoreChange?: (value: boolean) => void
+    onAttachNewTaskImage?: (file: File) => void
+    onRemoveNewTaskImage?: (imageId: string) => void
+    onCreateTask?: (mode?: TaskCommandType) => void
     onSelectHost: (configId: string) => void
     onRemoveHost: (configId: string) => void
     onForget: () => void
-    onSelfRevoke: () => void
+    onSelfRevoke?: () => void
     onThemeChange: (value: OpenADEThemeSetting) => void
+    onPersonalSettingsChange?: (settings: OpenADEPersonalSettings) => void
+    onMcpServerChange?: (server: OpenADEMCPServer) => void
+    onMcpServerDelete?: (serverId: string) => void
 }) {
+    const {
+        projectDirectoryCapabilities,
+        projectRecordCapabilities,
+        projectGitCapabilities,
+        projectCronCapabilities,
+        projectFileCapabilities,
+        projectSearchCapabilities,
+        projectProcessCapabilities,
+        taskGitCapabilities,
+        taskCanCommitGit,
+        taskTerminalCapabilities,
+        taskDirectoryCapabilities,
+        taskRecordCapabilities,
+        taskTurnCapabilities,
+        taskReviewCapabilities,
+        taskCommentCapabilities,
+        queuedTurnCapabilities,
+        taskResourceCapabilities,
+        taskImageCapabilities,
+        taskSnapshotPatchCapabilities,
+        settingsCapabilities,
+    } = shellCapabilities
+    const taskReadGranted = taskDirectoryCapabilities.canRead
+    const newTaskCreateGranted = taskRecordCapabilities.canCreate
+    const taskDeleteGranted = taskReadGranted && taskRecordCapabilities.canDelete
+    const taskMetadataGranted = taskReadGranted && taskRecordCapabilities.canUpdateMetadata
+    const taskTitleGenerateGranted = taskReadGranted && taskRecordCapabilities.canGenerateTitle
+    const taskEnvironmentPrepareGranted = taskReadGranted && taskRecordCapabilities.canPrepareEnvironment
+    const turnStartGranted = taskReadGranted && taskTurnCapabilities.canStart
+    const queuedTurnEnqueueGranted = taskReadGranted && taskTurnCapabilities.canEnqueue
+    const taskInterruptGranted = taskReadGranted && taskTurnCapabilities.canInterrupt
+    const taskReviewStartGranted = taskReadGranted && taskReviewCapabilities.canStart
+    const taskCommentCreateGranted = taskReadGranted && taskCommentCapabilities.canCreate
+    const taskCommentEditGranted = taskReadGranted && taskCommentCapabilities.canEdit
+    const taskCommentDeleteGranted = taskReadGranted && taskCommentCapabilities.canDelete
+    const queuedTurnCancelGranted = taskReadGranted && queuedTurnCapabilities.canCancel
+    const queuedTurnReorderGranted = taskReadGranted && queuedTurnCapabilities.canReorder
+    const projectCanReadSnapshot = projectDirectoryCapabilities.canReadSnapshot
+    const projectCanReadProjects = projectDirectoryCapabilities.canReadProjects
+    const projectCanCreate = projectRecordCapabilities.canCreate
+    const projectCanInspectPath = projectRecordCapabilities.canInspectPath
+    const projectCanUpdate = projectRecordCapabilities.canUpdate
+    const projectCanDelete = projectRecordCapabilities.canDelete
+    const newTaskCanReadBranches = projectGitCapabilities.canReadBranches
+    const personalSettingsCapabilities = settingsCapabilities.personalSettings
+    const mcpServerCapabilities = settingsCapabilities.mcpServers
+    const settingsCanReplacePersonal = personalSettingsCapabilities.canRead && personalSettingsCapabilities.canReplace
+    const settingsCanUpsertMcpServer = mcpServerCapabilities.canRead && mcpServerCapabilities.canUpsert
+    const settingsCanDeleteMcpServer = mcpServerCapabilities.canRead && mcpServerCapabilities.canDelete
+    const canReadProjectDirectory = projectCanReadSnapshot || projectCanReadProjects
+    const newTaskCanStartTurn = turnStartGranted && Boolean(onCreateTask)
+    const visibleReposForCapabilities = canReadProjectDirectory ? visibleRepos : []
+    const selectedRepoForCapabilities = canReadProjectDirectory ? selectedRepo : null
+    const selectedTaskForCapabilities = canReadProjectDirectory ? selectedTask : null
+    const snapshotForCapabilities = canReadProjectDirectory ? snapshot : null
+    const sessionsForCapabilities = canReadProjectDirectory ? sessions : sessions.map((session) => ({ ...session, snapshot: null }))
+    const workingTaskIdsForCapabilities = canReadProjectDirectory ? workingTaskIds : []
+    const canOpenNewTask = newTaskCreateGranted && canReadProjectDirectory && Boolean(onCreateTask)
+    const selectedTaskIsRunning = Boolean(selectedTaskForCapabilities && workingTaskIdsForCapabilities.includes(selectedTaskForCapabilities.id))
+    const taskCanSubmitAnyInput = Boolean(onSendTaskInput) && (turnStartGranted || queuedTurnEnqueueGranted)
+    const taskCanSubmitCurrentMode =
+        Boolean(onSendTaskInput) &&
+        (selectedTaskIsRunning ? queuedTurnEnqueueGranted && canQueueTaskCommandWhileRunning(commandType) : turnStartGranted)
+    const taskCanAttachUploadedImages = taskImageCapabilities.canWrite && taskCanSubmitCurrentMode && Boolean(onAttachTaskImage)
+    const newTaskCanAttachUploadedImages = taskImageCapabilities.canWrite && newTaskCanStartTurn && Boolean(onAttachNewTaskImage)
+    const taskImageLoader = taskImageCapabilities.canRead ? loadTaskImage : undefined
+    const canReadAnyProjectGit = projectGitCapabilities.canReadInfo || projectGitCapabilities.canReadBranches || projectGitCapabilities.canReadSummary
+    const canReadAnyTaskGit =
+        taskGitCapabilities.canReadChanges || taskGitCapabilities.canReadLog || taskGitCapabilities.canReadSummary || taskGitCapabilities.canReadScopes
+    const visibleProjectFiles = projectFileCapabilities.canList ? projectFiles : null
+    const visibleProjectFilesLoading = projectFileCapabilities.canList ? projectFilesLoading : false
+    const visibleProjectFileRead = projectFileCapabilities.canRead ? projectFileRead : null
+    const visibleProjectFileActionPath = projectFileCapabilities.canRead ? projectFileActionPath : null
+    const visibleProjectFileSearchResult = projectFileCapabilities.canSearch ? projectFileSearchResult : null
+    const visibleProjectFileSearchLoading = projectFileCapabilities.canSearch ? projectFileSearchLoading : false
+    const visibleProjectSearchResult = projectSearchCapabilities.canSearch ? projectSearchResult : null
+    const visibleProjectSearchLoading = projectSearchCapabilities.canSearch ? projectSearchLoading : false
+    const visibleProjectGitInfo = projectGitCapabilities.canReadInfo ? projectGitInfo : null
+    const visibleProjectGitBranches = projectGitCapabilities.canReadBranches ? projectGitBranches : null
+    const visibleProjectGitSummary = projectGitCapabilities.canReadSummary ? projectGitSummary : null
+    const visibleProjectGitLoading = canReadAnyProjectGit ? projectGitLoading : false
+    const visibleProjectCronDefinitions = projectCronCapabilities.canRead ? projectCronDefinitions : null
+    const visibleProjectCronDefinitionsLoading = projectCronCapabilities.canRead ? projectCronDefinitionsLoading : false
+    const visibleProjectCronInstallState = projectCronCapabilities.canReadInstallState ? projectCronInstallState : null
+    const visibleProjectCronInstallStateLoading = projectCronCapabilities.canReadInstallState ? projectCronInstallStateLoading : false
+    const visibleProjectCronInstallActionId =
+        (projectCronCapabilities.canRead && projectCronCapabilities.canRun) ||
+        (projectCronCapabilities.canReadInstallState && projectCronCapabilities.canReplaceInstallState)
+            ? projectCronInstallActionId
+            : null
+    const visibleProjectProcesses = projectProcessCapabilities.canRead ? projectProcesses : null
+    const visibleProjectProcessesLoading = projectProcessCapabilities.canRead ? projectProcessesLoading : false
+    const visibleProjectProcessActionId =
+        projectProcessCapabilities.canRead &&
+        (projectProcessCapabilities.canStart || projectProcessCapabilities.canReconnect || projectProcessCapabilities.canStop)
+            ? projectProcessActionId
+            : null
+    const visibleProjectProcessOutput = projectProcessCapabilities.canRead && projectProcessCapabilities.canReconnect ? projectProcessOutput : null
+    const visibleProjectActionLoading = projectCanUpdate || projectCanDelete ? projectActionLoading : false
+    const visibleTaskChanges = taskGitCapabilities.canReadChanges ? taskChanges : null
+    const visibleTaskGitLog = taskGitCapabilities.canReadLog ? taskGitLog : null
+    const visibleTaskGitSummary = taskGitCapabilities.canReadSummary ? taskGitSummary : null
+    const visibleTaskGitScopes = taskGitCapabilities.canReadScopes ? taskGitScopes : null
+    const visibleTaskChangesLoading = canReadAnyTaskGit ? taskChangesLoading : false
+    const visibleTaskDiff = taskGitCapabilities.canReadDiff ? taskDiff : null
+    const visibleTaskDiffActionPath = taskGitCapabilities.canReadDiff ? taskDiffActionPath : null
+    const visibleTaskFilePair = taskGitCapabilities.canReadFilePair ? taskFilePair : null
+    const visibleTaskFilePairActionPath = taskGitCapabilities.canReadFilePair ? taskFilePairActionPath : null
+    const visibleTaskCommitFiles = taskGitCapabilities.canReadCommitFiles ? taskCommitFiles : null
+    const visibleTaskCommitFilesActionSha = taskGitCapabilities.canReadCommitFiles ? taskCommitFilesActionSha : null
+    const visibleTaskCommitPatch = taskGitCapabilities.canReadCommitFilePatch ? taskCommitPatch : null
+    const visibleTaskCommitPatchActionKey = taskGitCapabilities.canReadCommitFilePatch ? taskCommitPatchActionKey : null
+    const visibleTaskTreeishFile = taskGitCapabilities.canReadFileAtTreeish ? taskTreeishFile : null
+    const visibleTaskTreeishFileActionKey = taskGitCapabilities.canReadFileAtTreeish ? taskTreeishFileActionKey : null
+    const visibleTaskResources = taskResourceCapabilities.canRead ? taskResources : null
+    const visibleTaskResourcesLoading = taskResourceCapabilities.canRead ? taskResourcesLoading : false
+    const newTaskCanLoadBranches = newTaskCanReadBranches && Boolean(onRefreshNewTaskBranches)
+    const newTaskVisibleBranches = newTaskCanLoadBranches ? newTaskBranches : null
+    const newTaskVisibleBranchesLoading = newTaskCanLoadBranches ? newTaskBranchesLoading : false
+    const newTaskVisibleIsolationStrategy = isolationStrategyForBranchCapability(newTaskIsolationStrategy, newTaskCanLoadBranches)
+    const visibleNewTaskTitle = canOpenNewTask ? newTaskTitle : ""
+    const visibleNewTaskPrompt = canOpenNewTask ? newTaskPrompt : ""
+    const visibleNewTaskMode = canOpenNewTask ? newTaskMode : "do"
+    const visibleTaskInput = taskCanSubmitAnyInput ? input : ""
+    const visibleTaskCommandType = taskCanSubmitAnyInput ? commandType : "do"
+    const taskVisibleSnapshotPatches = openADEShellSnapshotPatchesForCapabilities({
+        patches: taskSnapshotPatches,
+        canReadPatch: taskSnapshotPatchCapabilities.canRead,
+        canReadSlice: taskSnapshotPatchCapabilities.canReadSlice,
+    })
+    const taskTerminalAccessCapabilities =
+        taskTerminalProductAccess === null
+            ? null
+            : {
+                  canStart: taskTerminalProductAccess.capabilities.canStart && taskTerminalCapabilities.canStart,
+                  canReconnect: taskTerminalProductAccess.capabilities.canReconnect && taskTerminalCapabilities.canReconnect,
+                  canWrite: taskTerminalProductAccess.capabilities.canWrite && taskTerminalCapabilities.canWrite,
+                  canResize: taskTerminalProductAccess.capabilities.canResize && taskTerminalCapabilities.canResize,
+                  canStop: taskTerminalProductAccess.capabilities.canStop && taskTerminalCapabilities.canStop,
+              }
+    const taskTerminalAccess =
+        taskTerminalProductAccess && taskTerminalAccessCapabilities && (taskTerminalAccessCapabilities.canStart || taskTerminalAccessCapabilities.canReconnect)
+            ? { ...taskTerminalProductAccess, capabilities: taskTerminalAccessCapabilities }
+            : null
+    const effectiveScreen: OpenADEShellScreen =
+        (screen === "task" && !taskReadGranted) || (screen === "new_task" && !canOpenNewTask) || (screen === "project" && !canReadProjectDirectory)
+            ? selectedRepoForCapabilities
+                ? "project"
+                : "projects"
+            : screen
+    const settingsProductState = openADEShellSettingsProductStateForCapabilities(settingsProductData, settingsCapabilities)
+
+    const taskHyperplanPrimaryAgent =
+        taskAgentControls?.harnessId && taskAgentControls.selectedModel
+            ? { harnessId: taskAgentControls.harnessId, modelId: taskAgentControls.selectedModel }
+            : undefined
+    const taskCanSubmitHyperplan = selectedTaskIsRunning ? queuedTurnEnqueueGranted : turnStartGranted
+    const taskAgentControlsForCapabilities = agentControlsWithMcpCapability(
+        taskAgentControls,
+        mcpServerCapabilities.canRead && taskMetadataGranted
+    )
+    const newTaskAgentControlsForCapabilities = agentControlsWithMcpCapability(newTaskAgentControls, mcpServerCapabilities.canRead && newTaskCreateGranted)
+    const taskHyperplanControl = taskCanSubmitHyperplan ? (
+        <TaskHyperPlanPicker
+            value={taskHyperplanPresetId}
+            primaryAgent={taskHyperplanPrimaryAgent}
+            disabled={isSubmitting}
+            onChange={onTaskHyperplanPresetChange}
+        />
+    ) : undefined
+    const visibleTaskTitleDraft = taskMetadataGranted ? taskTitleDraft : (task?.title ?? "")
+    const visibleCommentDraft = taskCommentCreateGranted ? commentDraft : ""
+    const visibleReviewInstructions = taskReviewStartGranted ? reviewInstructions : ""
+
+    useEffect(() => {
+        if (!taskMetadataGranted && task && taskTitleDraft !== task.title) onTaskTitleChange(task.title)
+    }, [onTaskTitleChange, task, taskMetadataGranted, taskTitleDraft])
+
+    useEffect(() => {
+        if (!taskCommentCreateGranted && commentDraft) onCommentDraftChange("")
+    }, [commentDraft, onCommentDraftChange, taskCommentCreateGranted])
+
+    useEffect(() => {
+        if (!taskReviewStartGranted && reviewInstructions) onReviewInstructionsChange("")
+    }, [onReviewInstructionsChange, reviewInstructions, taskReviewStartGranted])
+
+    useEffect(() => {
+        if (taskCanSubmitAnyInput) return
+        if (input) onInputChange("")
+        if (commandType !== "do") onCommandTypeChange("do")
+        if (taskHyperplanPresetId !== "ensemble") onTaskHyperplanPresetChange?.("ensemble")
+    }, [commandType, input, onCommandTypeChange, onInputChange, onTaskHyperplanPresetChange, taskCanSubmitAnyInput, taskHyperplanPresetId])
+
+    useEffect(() => {
+        if (canOpenNewTask) {
+            if (!newTaskCanLoadBranches && newTaskIsolationStrategy.type !== "head") onNewTaskIsolationStrategyChange({ type: "head" })
+            return
+        }
+        if (newTaskTitle) onNewTaskTitleChange("")
+        if (newTaskPrompt) onNewTaskPromptChange("")
+        if (newTaskMode !== "do") onNewTaskModeChange("do")
+        if (newTaskIsolationStrategy.type !== "head") onNewTaskIsolationStrategyChange({ type: "head" })
+        if (newTaskHyperplanPresetId !== "ensemble") onNewTaskHyperplanPresetChange?.("ensemble")
+    }, [
+        canOpenNewTask,
+        newTaskCanLoadBranches,
+        newTaskHyperplanPresetId,
+        newTaskIsolationStrategy,
+        newTaskMode,
+        newTaskPrompt,
+        newTaskTitle,
+        onNewTaskHyperplanPresetChange,
+        onNewTaskIsolationStrategyChange,
+        onNewTaskModeChange,
+        onNewTaskPromptChange,
+        onNewTaskTitleChange,
+    ])
+
     return (
         <OpenADEChrome
             className={className}
-            title={openADEShellTitle(screen, selectedRepo, selectedTask)}
+            title={openADEShellTitle(effectiveScreen, selectedRepoForCapabilities, selectedTaskForCapabilities)}
             host={host}
             status={status}
-            showBack={screen === "project" || screen === "task" || screen === "new_task" || screen === "sessions" || screen === "settings"}
+            showBack={
+                effectiveScreen === "project" ||
+                effectiveScreen === "task" ||
+                effectiveScreen === "new_task" ||
+                effectiveScreen === "sessions" ||
+                effectiveScreen === "settings"
+            }
             isLoading={isLoading}
             error={error}
             notice={notice}
             connectionWarning={connectionWarning}
-            activeNav={screen === "project" ? "projects" : screen}
-            navItems={openADEShellNavItems(newTaskCanCreate)}
+            activeNav={effectiveScreen === "project" ? "projects" : effectiveScreen}
+            navItems={openADEShellNavItems(canOpenNewTask)}
             onBack={onBack}
             onRefresh={onRefresh}
             onNavigate={onNavigate}
         >
-            {screen === "projects" && (
+            {effectiveScreen === "projects" && (
                 <ProjectsScreen
-                    sessions={sessions}
+                    sessions={sessionsForCapabilities}
                     showArchived={showArchivedProjects}
+                    createProjectLoading={isSubmitting}
                     onToggleArchived={onToggleArchivedProjects}
-                    onSelectProject={onSelectProject}
+                    onSelectSession={onSelectSession}
+                    onSelectProject={canReadProjectDirectory ? onSelectProject : undefined}
+                    onCreateProject={projectCanCreate ? onCreateProject : undefined}
+                    onInspectProjectPath={projectCanInspectPath ? onInspectProjectPath : undefined}
                     onAddSession={onAddHost}
                 />
             )}
-            {screen === "project" && (
+            {effectiveScreen === "project" && (
                 <ProjectTasksScreen
-                    repo={selectedRepo}
-                    workingTaskIds={workingTaskIds}
-                    files={projectFiles}
-                    filesLoading={projectFilesLoading}
-                    fileRead={projectFileRead}
-                    fileActionPath={projectFileActionPath}
+                    repo={selectedRepoForCapabilities}
+                    workingTaskIds={workingTaskIdsForCapabilities}
+                    files={visibleProjectFiles}
+                    filesLoading={visibleProjectFilesLoading}
+                    fileRead={visibleProjectFileRead}
+                    fileActionPath={visibleProjectFileActionPath}
                     fileSearchQuery={projectFileSearchQuery}
-                    fileSearchResult={projectFileSearchResult}
-                    fileSearchLoading={projectFileSearchLoading}
+                    fileSearchResult={visibleProjectFileSearchResult}
+                    fileSearchLoading={visibleProjectFileSearchLoading}
                     searchQuery={projectSearchQuery}
-                    searchResult={projectSearchResult}
-                    searchLoading={projectSearchLoading}
-                    gitInfo={projectGitInfo}
-                    gitBranches={projectGitBranches}
-                    gitSummary={projectGitSummary}
-                    gitLoading={projectGitLoading}
+                    searchResult={visibleProjectSearchResult}
+                    searchLoading={visibleProjectSearchLoading}
+                    gitInfo={visibleProjectGitInfo}
+                    gitBranches={visibleProjectGitBranches}
+                    gitSummary={visibleProjectGitSummary}
+                    gitLoading={visibleProjectGitLoading}
                     gitCapabilities={projectGitCapabilities}
-                    cronDefinitions={projectCronDefinitions}
-                    cronDefinitionsLoading={projectCronDefinitionsLoading}
+                    cronDefinitions={visibleProjectCronDefinitions}
+                    cronInstallState={visibleProjectCronInstallState}
+                    cronDefinitionsLoading={visibleProjectCronDefinitionsLoading}
+                    cronInstallStateLoading={visibleProjectCronInstallStateLoading}
+                    cronInstallActionId={visibleProjectCronInstallActionId}
                     cronCapabilities={projectCronCapabilities}
-                    processes={projectProcesses}
-                    processesLoading={projectProcessesLoading}
-                    processActionId={projectProcessActionId}
-                    processOutput={projectProcessOutput}
+                    processes={visibleProjectProcesses}
+                    processesLoading={visibleProjectProcessesLoading}
+                    processActionId={visibleProjectProcessActionId}
+                    processOutput={visibleProjectProcessOutput}
                     fileCapabilities={projectFileCapabilities}
                     searchCapabilities={projectSearchCapabilities}
                     processCapabilities={projectProcessCapabilities}
-                    canCreateTask={newTaskCanCreate}
-                    onSelectTask={onSelectTask}
-                    onNewTask={onNewTask}
-                    onRefreshProcesses={onRefreshProjectProcesses}
-                    onStartProcess={onStartProjectProcess}
-                    onReconnectProcess={onReconnectProjectProcess}
-                    onStopProcess={onStopProjectProcess}
-                    onRefreshFiles={onRefreshProjectFiles}
-                    onReadFile={onReadProjectFile}
+                    projectActionLoading={visibleProjectActionLoading}
+                    onUpdateProject={projectCanUpdate ? onUpdateProject : undefined}
+                    onDeleteProject={projectCanDelete ? onDeleteProject : undefined}
+                    onSelectTask={taskReadGranted ? onSelectTask : undefined}
+                    onNewTask={canOpenNewTask ? onNewTask : undefined}
+                    onRefreshProcesses={projectProcessCapabilities.canRead ? onRefreshProjectProcesses : undefined}
+                    onStartProcess={projectProcessCapabilities.canRead && projectProcessCapabilities.canStart ? onStartProjectProcess : undefined}
+                    onReconnectProcess={projectProcessCapabilities.canRead && projectProcessCapabilities.canReconnect ? onReconnectProjectProcess : undefined}
+                    onStopProcess={projectProcessCapabilities.canRead && projectProcessCapabilities.canStop ? onStopProjectProcess : undefined}
+                    onRefreshFiles={projectFileCapabilities.canList ? onRefreshProjectFiles : undefined}
+                    onReadFile={projectFileCapabilities.canRead ? onReadProjectFile : undefined}
                     onFileSearchQueryChange={onProjectFileSearchQueryChange}
-                    onSearchFiles={onSearchProjectFiles}
-                    onWriteFile={onWriteProjectFile}
+                    onSearchFiles={projectFileCapabilities.canSearch ? onSearchProjectFiles : undefined}
+                    onWriteFile={projectFileCapabilities.canRead && projectFileCapabilities.canWrite ? onWriteProjectFile : undefined}
                     onSearchQueryChange={onProjectSearchQueryChange}
-                    onSearch={onSearchProject}
-                    onRefreshGit={onRefreshProjectGit}
-                    onRefreshCronDefinitions={onRefreshProjectCronDefinitions}
+                    onSearch={projectSearchCapabilities.canSearch ? onSearchProject : undefined}
+                    onRefreshGit={canReadAnyProjectGit ? onRefreshProjectGit : undefined}
+                    onRefreshCronDefinitions={projectCronCapabilities.canRead ? onRefreshProjectCronDefinitions : undefined}
+                    onRefreshCronInstallState={projectCronCapabilities.canReadInstallState ? onRefreshProjectCronInstallState : undefined}
+                    onSetCronEnabled={
+                        projectCronCapabilities.canReadInstallState && projectCronCapabilities.canReplaceInstallState ? onSetProjectCronEnabled : undefined
+                    }
+                    onRunCron={projectCronCapabilities.canRead && projectCronCapabilities.canRun ? onRunProjectCron : undefined}
                 />
             )}
-            {screen === "task" && (
+            {effectiveScreen === "task" && (
                 <TaskScreen
                     task={task}
-                    preview={selectedTask}
-                    isRunning={Boolean(selectedTask && workingTaskIds.includes(selectedTask.id))}
-                    input={input}
-                    commandType={commandType}
-                    titleDraft={taskTitleDraft}
-                    commentDraft={commentDraft}
+                    preview={selectedTaskForCapabilities}
+                    isRunning={Boolean(selectedTaskForCapabilities && workingTaskIdsForCapabilities.includes(selectedTaskForCapabilities.id))}
+                    input={visibleTaskInput}
+                    commandType={visibleTaskCommandType}
+                    titleDraft={visibleTaskTitleDraft}
+                    commentDraft={visibleCommentDraft}
                     editingCommentId={editingCommentId}
                     editingCommentDraft={editingCommentDraft}
-                    reviewInstructions={reviewInstructions}
-                    taskChanges={taskChanges}
-                    taskGitLog={taskGitLog}
-                    taskGitSummary={taskGitSummary}
-                    taskGitScopes={taskGitScopes}
-                    taskChangesLoading={taskChangesLoading}
-                    taskDiff={taskDiff}
-                    taskDiffActionPath={taskDiffActionPath}
-                    taskFilePair={taskFilePair}
-                    taskFilePairActionPath={taskFilePairActionPath}
-                    taskCommitFiles={taskCommitFiles}
-                    taskCommitFilesActionSha={taskCommitFilesActionSha}
-                    taskCommitPatch={taskCommitPatch}
-                    taskCommitPatchActionKey={taskCommitPatchActionKey}
-                    taskTreeishFile={taskTreeishFile}
-                    taskTreeishFileActionKey={taskTreeishFileActionKey}
-                    taskResources={taskResources}
-                    taskResourcesLoading={taskResourcesLoading}
-                    taskTerminalProductAccess={taskTerminalProductAccess}
+                    reviewInstructions={visibleReviewInstructions}
+                    taskChanges={visibleTaskChanges}
+                    taskGitLog={visibleTaskGitLog}
+                    taskGitSummary={visibleTaskGitSummary}
+                    taskGitScopes={visibleTaskGitScopes}
+                    taskChangesLoading={visibleTaskChangesLoading}
+                    taskDiff={visibleTaskDiff}
+                    taskDiffActionPath={visibleTaskDiffActionPath}
+                    taskFilePair={visibleTaskFilePair}
+                    taskFilePairActionPath={visibleTaskFilePairActionPath}
+                    taskCommitFiles={visibleTaskCommitFiles}
+                    taskCommitFilesActionSha={visibleTaskCommitFilesActionSha}
+                    taskCommitPatch={visibleTaskCommitPatch}
+                    taskCommitPatchActionKey={visibleTaskCommitPatchActionKey}
+                    taskTreeishFile={visibleTaskTreeishFile}
+                    taskTreeishFileActionKey={visibleTaskTreeishFileActionKey}
+                    taskResources={visibleTaskResources}
+                    taskResourcesLoading={visibleTaskResourcesLoading}
+                    taskTerminalProductAccess={taskTerminalAccess}
                     taskGitCapabilities={taskGitCapabilities}
-                    taskProductCapabilities={taskProductCapabilities}
-                    taskCanReadResources={taskCanReadResources}
-                    taskCanDelete={taskCanDelete}
-                    taskCanStartTurn={taskCanStartTurn}
-                    taskCanEnqueueQueuedTurn={taskCanEnqueueQueuedTurn}
-                    taskCanInterrupt={taskCanInterrupt}
+                    taskTurnCapabilities={{
+                        canStart: turnStartGranted && Boolean(onSendTaskInput),
+                        canEnqueue: queuedTurnEnqueueGranted && Boolean(onSendTaskInput),
+                        canInterrupt: taskInterruptGranted && Boolean(onAbortTask),
+                    }}
                     isLoading={isLoading}
                     isSubmitting={isSubmitting}
                     isOnline={isOnline}
-                    agentControls={taskAgentControls}
-                    loadImage={loadTaskImage}
-                    snapshotPatches={taskSnapshotPatches}
-                    snapshotPatchActionId={taskSnapshotPatchActionId}
+                    agentControls={taskAgentControlsForCapabilities}
+                    hyperplanControl={taskHyperplanControl}
+                    imageAttachments={taskImageAttachments}
+                    imageAttachLoading={taskImageAttachLoading}
+                    repeatState={taskRepeatState}
+                    editor={taskComposerEditor}
+                    onFocusInputShortcut={onFocusTaskInputShortcut}
+                    loadImage={taskImageLoader}
+                    snapshotPatches={taskVisibleSnapshotPatches}
+                    snapshotPatchActionId={taskSnapshotPatchCapabilities.canRead ? taskSnapshotPatchActionId : null}
                     onInputChange={onInputChange}
                     onCommandTypeChange={onCommandTypeChange}
-                    onTitleChange={onTaskTitleChange}
-                    onSaveTitle={onSaveTaskTitle}
-                    onGenerateTitle={onGenerateTaskTitle}
-                    onPrepareEnvironment={onPrepareTaskEnvironment}
-                    onToggleClosed={onToggleTaskClosed}
-                    onDeleteTask={onDeleteTask}
-                    onCommentDraftChange={onCommentDraftChange}
-                    onCreateComment={onCreateComment}
-                    onStartEditComment={onStartEditComment}
+                    onAttachImage={taskCanAttachUploadedImages ? onAttachTaskImage : undefined}
+                    onRemoveImage={taskCanAttachUploadedImages ? onRemoveTaskImage : undefined}
+                    onTitleChange={taskMetadataGranted ? onTaskTitleChange : undefined}
+                    onSaveTitle={taskMetadataGranted ? onSaveTaskTitle : undefined}
+                    onGenerateTitle={taskTitleGenerateGranted ? onGenerateTaskTitle : undefined}
+                    onPrepareEnvironment={taskEnvironmentPrepareGranted ? onPrepareTaskEnvironment : undefined}
+                    onToggleClosed={taskMetadataGranted ? onToggleTaskClosed : undefined}
+                    onDeleteTask={taskDeleteGranted ? onDeleteTask : undefined}
+                    onCancelPlan={taskMetadataGranted ? onCancelPlan : undefined}
+                    onCommentDraftChange={taskCommentCreateGranted ? onCommentDraftChange : undefined}
+                    onCreateComment={taskCommentCreateGranted ? onCreateComment : undefined}
+                    onStartEditComment={taskCommentEditGranted ? onStartEditComment : undefined}
                     onEditingCommentDraftChange={onEditingCommentDraftChange}
-                    onSaveComment={onSaveComment}
+                    onSaveComment={taskCommentEditGranted ? onSaveComment : undefined}
                     onCancelEditComment={onCancelEditComment}
-                    onDeleteComment={onDeleteComment}
-                    onCancelQueuedTurn={onCancelQueuedTurn}
-                    onReorderQueuedTurns={onReorderQueuedTurns}
-                    onReviewInstructionsChange={onReviewInstructionsChange}
-                    onStartReview={onStartReview}
-                    onRefreshTaskGit={onRefreshTaskGit}
-                    onReadTaskDiff={onReadTaskDiff}
-                    onReadTaskFilePair={onReadTaskFilePair}
-                    onReadTaskCommitFiles={onReadTaskCommitFiles}
-                    onReadTaskCommitFilePatch={onReadTaskCommitFilePatch}
-                    onReadTaskCommitFileAtTreeish={onReadTaskCommitFileAtTreeish}
-                    onCommitTaskGit={onCommitTaskGit}
-                    onRefreshTaskResources={onRefreshTaskResources}
-                    onLoadSnapshotPatch={taskCanReadSnapshotPatch ? onLoadTaskSnapshotPatch : undefined}
-                    onLoadSnapshotPatchSlice={taskCanReadSnapshotPatchSlice ? onLoadTaskSnapshotPatchSlice : undefined}
-                    onSend={onSendTaskInput}
-                    onAbort={onAbortTask}
+                    onDeleteComment={taskCommentDeleteGranted ? onDeleteComment : undefined}
+                    onCancelQueuedTurn={queuedTurnCancelGranted ? onCancelQueuedTurn : undefined}
+                    onReorderQueuedTurns={queuedTurnReorderGranted ? onReorderQueuedTurns : undefined}
+                    onReviewInstructionsChange={taskReviewStartGranted ? onReviewInstructionsChange : undefined}
+                    onStartReview={taskReviewStartGranted ? onStartReview : undefined}
+                    onRefreshTaskGit={canReadAnyTaskGit ? onRefreshTaskGit : undefined}
+                    onReadTaskDiff={taskGitCapabilities.canReadDiff ? onReadTaskDiff : undefined}
+                    onReadTaskFilePair={taskGitCapabilities.canReadFilePair ? onReadTaskFilePair : undefined}
+                    onReadTaskCommitFiles={taskGitCapabilities.canReadCommitFiles ? onReadTaskCommitFiles : undefined}
+                    onReadTaskCommitFilePatch={taskGitCapabilities.canReadCommitFilePatch ? onReadTaskCommitFilePatch : undefined}
+                    onReadTaskCommitFileAtTreeish={taskGitCapabilities.canReadFileAtTreeish ? onReadTaskCommitFileAtTreeish : undefined}
+                    onCommitTaskGit={taskCanCommitGit ? onCommitTaskGit : undefined}
+                    onCommitAndPush={turnStartGranted && !selectedTaskIsRunning ? onCommitAndPushTask : undefined}
+                    onStartRepeat={turnStartGranted && !selectedTaskIsRunning ? onStartTaskRepeat : undefined}
+                    onStopRepeat={onStopTaskRepeat}
+                    onRefreshTaskResources={taskResourceCapabilities.canRead ? onRefreshTaskResources : undefined}
+                    onLoadSnapshotPatch={taskSnapshotPatchCapabilities.canRead ? onLoadTaskSnapshotPatch : undefined}
+                    onLoadSnapshotPatchSlice={taskSnapshotPatchCapabilities.canReadSlice ? onLoadTaskSnapshotPatchSlice : undefined}
+                    onSend={taskCanSubmitCurrentMode ? onSendTaskInput : undefined}
+                    onAbort={taskInterruptGranted ? onAbortTask : undefined}
+                    onRetry={turnStartGranted && !selectedTaskIsRunning ? onRetryTask : undefined}
                 />
             )}
-            {screen === "new_task" && (
+            {effectiveScreen === "new_task" && (
                 <NewTaskScreen
-                    repos={visibleRepos}
+                    repos={visibleReposForCapabilities}
                     repoId={newTaskRepoId}
-                    mode={newTaskMode}
-                    title={newTaskTitle}
-                    prompt={newTaskPrompt}
+                    mode={visibleNewTaskMode}
+                    title={visibleNewTaskTitle}
+                    prompt={visibleNewTaskPrompt}
+                    isolationStrategy={newTaskVisibleIsolationStrategy}
+                    branchOptions={newTaskVisibleBranches}
+                    branchesLoading={newTaskVisibleBranchesLoading}
+                    preferredSourceBranch={newTaskPreferredSourceBranch}
                     isLoading={isLoading}
                     isSubmitting={isSubmitting}
                     isOnline={isOnline}
-                    canCreateTask={newTaskCanCreate}
-                    canStartTurn={newTaskCanStartTurn}
-                    agentControls={newTaskAgentControls}
+                    agentControls={newTaskAgentControlsForCapabilities}
+                    hyperplanPresetId={newTaskHyperplanPresetId}
+                    imageAttachments={newTaskImageAttachments}
+                    imageAttachLoading={newTaskImageAttachLoading}
+                    editor={newTaskComposerEditor}
+                    onFocusInputShortcut={onFocusNewTaskInputShortcut}
+                    drafts={newTaskDrafts}
+                    pendingCreations={newTaskPendingCreations}
+                    canStashDraft={newTaskCanStashDraft}
+                    canRestoreDraft={newTaskCanRestoreDraft}
+                    createMore={newTaskCreateMore}
                     onRepoChange={onNewTaskRepoChange}
                     onModeChange={onNewTaskModeChange}
                     onTitleChange={onNewTaskTitleChange}
                     onPromptChange={onNewTaskPromptChange}
-                    onCreate={onCreateTask}
+                    onIsolationStrategyChange={onNewTaskIsolationStrategyChange}
+                    onRefreshBranches={newTaskCanLoadBranches ? onRefreshNewTaskBranches : undefined}
+                    onHyperplanPresetChange={onNewTaskHyperplanPresetChange}
+                    onStashDraft={onStashNewTaskDraft}
+                    onRestoreDraft={onRestoreNewTaskDraft}
+                    onDeleteDraft={onDeleteNewTaskDraft}
+                    onRetryPendingCreation={onRetryNewTaskPendingCreation}
+                    onOpenPendingCreation={onOpenNewTaskPendingCreation}
+                    onCancelPendingCreation={onCancelNewTaskPendingCreation}
+                    onDismissPendingCreation={onDismissNewTaskPendingCreation}
+                    onCreateMoreChange={onNewTaskCreateMoreChange}
+                    onAttachImage={newTaskCanAttachUploadedImages ? onAttachNewTaskImage : undefined}
+                    onRemoveImage={newTaskCanAttachUploadedImages ? onRemoveNewTaskImage : undefined}
+                    onCreateTask={canOpenNewTask ? () => onCreateTask?.() : undefined}
+                    onCreateAndRun={canOpenNewTask && newTaskCanStartTurn ? onCreateTask : undefined}
                 />
             )}
-            {screen === "sessions" && (
+            {effectiveScreen === "sessions" && (
                 <OpenADESessionsScreen configs={configs} activeConfigId={activeConfigId} onSelect={onSelectHost} onRemove={onRemoveHost} onAdd={onAddHost} />
             )}
-            {screen === "settings" && (
+            {effectiveScreen === "settings" && (
                 <OpenADESettingsScreen
                     config={settingsConfig}
-                    snapshot={snapshot}
+                    snapshot={snapshotForCapabilities}
                     status={status}
                     themeSetting={themeSetting}
-                    canSelfRevoke={settingsCanSelfRevoke}
+                    productState={settingsProductState}
                     onRefresh={onRefresh}
                     onForget={onForget}
-                    onSelfRevoke={onSelfRevoke}
+                    onSelfRevoke={settingsCapabilities.canSelfRevoke ? onSelfRevoke : undefined}
                     onSessions={() => onNavigate("sessions")}
                     onAdd={onAddHost}
                     onThemeChange={onThemeChange}
+                    onPersonalSettingsChange={settingsCanReplacePersonal ? onPersonalSettingsChange : undefined}
+                    onMcpServerChange={settingsCanUpsertMcpServer ? onMcpServerChange : undefined}
+                    onMcpServerDelete={settingsCanDeleteMcpServer ? onMcpServerDelete : undefined}
                 />
             )}
         </OpenADEChrome>

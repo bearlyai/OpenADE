@@ -22,6 +22,7 @@ function installRuntimeBackedOpenADEApi(server: RuntimeServer): () => void {
         app: {
             activeWorkUnloadBlockerDisabled: true,
             quit: async () => undefined,
+            restart: async () => undefined,
             openUrl: async () => undefined,
             applyUpdate: async () => undefined,
             forceEnableDevTools: async () => undefined,
@@ -133,6 +134,7 @@ describe("MCP Electron API runtime bridge", () => {
             tokens: {
                 accessToken: "access-token",
                 refreshToken: "refresh-token",
+                clientId: "registered-client",
                 tokenType: "Bearer",
                 expiresAt: "2026-06-01T01:00:00.000Z",
             },
@@ -156,6 +158,7 @@ describe("MCP Electron API runtime bridge", () => {
                 tokens: {
                     accessToken: "access-token",
                     refreshToken: "refresh-token",
+                    clientId: "registered-client",
                     tokenType: "Bearer",
                     expiresAt: "2026-06-01T01:00:00.000Z",
                 },

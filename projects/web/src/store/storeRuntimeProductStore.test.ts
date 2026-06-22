@@ -4,7 +4,8 @@ import { act, createElement } from "react"
 import { createRoot } from "react-dom/client"
 import { describe, expect, it, vi } from "vitest"
 import * as Y from "yjs"
-import { OpenADEClient } from "../../../openade-client/src"
+import { OPENADE_METHOD, OPENADE_NOTIFICATION, OpenADEClient } from "../../../openade-client/src"
+import type { OpenADECoreRolloutState, OpenADECoreRuntimeEndpoint } from "../../../electron/src/preload-api"
 import { type OpenADEModuleAdapters, createOpenADEModule } from "../../../openade-module/src/module"
 import { buildOpenADETaskResourceInventory } from "../../../openade-module/src/taskResourceInventory"
 import type {
@@ -18,12 +19,15 @@ import type {
     OpenADEReviewStartRequest,
     OpenADESnapshotPatchIndex,
     OpenADETask,
+    OpenADETaskCreateRequest,
+    OpenADETaskGitLogResult,
+    OpenADETaskMetadataUpdateRequest,
     OpenADETaskPreview,
     OpenADETaskPreviewUsage,
     OpenADETurnStartRequest,
 } from "../../../openade-module/src/types"
 import { RuntimeLocalClient, type RuntimeLocalTransport } from "../../../runtime-client/src"
-import type { RuntimeMessage, RuntimeRecord, RuntimeRequest, RuntimeResponse } from "../../../runtime-protocol/src"
+import type { RuntimeListParams, RuntimeMessage, RuntimeNotification, RuntimeRecord, RuntimeRequest, RuntimeResponse } from "../../../runtime-protocol/src"
 import { type RuntimeConnection, RuntimeServer } from "../../../runtime/src"
 import { analytics } from "../analytics"
 import { EnvironmentSetupView } from "../components/EnvironmentSetupView"
@@ -53,6 +57,8 @@ import { createMcpServerStore } from "../persistence/mcpServerStore"
 import { createPersonalSettingsStore } from "../persistence/personalSettingsStore"
 import { createRepoStore } from "../persistence/repoStore"
 import { createTaskStore } from "../persistence/taskStore"
+import { localOpenADEClient } from "../runtime/localOpenADEClient"
+import { localRuntimeClient } from "../runtime/localRuntimeClient"
 import type { ImageAttachment, Task } from "../types"
 import type { SnapshotEventModel } from "./EventModel"
 import { TaskEnvironment } from "./TaskEnvironment"
@@ -62,6 +68,14 @@ import { readProcsResultFromProductProcesses } from "./projectProcessReadResult"
 import { CodeStore, type CodeStoreLegacyStoreConnectors } from "./store"
 
 const now = "2026-05-31T00:00:00.000Z"
+function createReleaseGate(): { wait: Promise<void>; release: () => void } {
+    let release = () => {}
+    const wait = new Promise<void>((resolve) => {
+        release = resolve
+    })
+    return { wait, release }
+}
+
 const subprocessMocks = vi.hoisted(() => ({
     setGlobalEnv: vi.fn(async () => ({ success: true })),
 }))
@@ -183,6 +197,14 @@ const gitLogCommits = [
     },
 ]
 
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((promiseResolve) => {
+        resolve = promiseResolve
+    })
+    return { promise, resolve }
+}
+
 interface RuntimeBridgeState {
     project: OpenADEProject | null
     task: OpenADETask | null
@@ -198,7 +220,9 @@ interface RuntimeBridgeState {
         repoId: string
         taskId: string
         hydrateSessionEvents: boolean | undefined
+        eventLimit?: number
     }>
+    taskReadGate?: Promise<void>
     taskGitSummaryReadCount?: number
     projectFiles?: Map<string, { content: string; encoding: "utf8" | "base64" }>
     projectFileWrites?: OpenADEProjectFileWriteRequest[]
@@ -218,12 +242,18 @@ interface RuntimeBridgeState {
     }
     personalSettings?: OpenADEPersonalSettings
     mcpServers?: OpenADEMCPServer[]
+    mcpServerReadCount?: number
+    personalSettingsReadCount?: number
     cronInstallStates?: Record<string, Record<string, OpenADECronInstallState>>
     legacyImportRequests?: OpenADELegacyResourcesImportRequest[]
     turnStartRequests?: OpenADETurnStartRequest[]
+    taskCreateRequests?: OpenADETaskCreateRequest[]
+    taskMetadataUpdateRequests?: OpenADETaskMetadataUpdateRequest[]
     reviewStartRequests?: OpenADEReviewStartRequest[]
     snapshotReadCount?: number
     projectReadCount?: number
+    taskListReadCount?: number
+    projectProcessListCount?: number
     projectGitInfoReadCount?: number
     projectGitBranchesReadCount?: number
     projectGitSummaryReadCount?: number
@@ -346,13 +376,19 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
             state.projectReadCount = (state.projectReadCount ?? 0) + 1
             return projectsFromState(state)
         },
-        readTaskList: async () => projectFromState(state)?.tasks ?? [],
+        readTaskList: async () => {
+            state.taskListReadCount = (state.taskListReadCount ?? 0) + 1
+            return projectFromState(state)?.tasks ?? []
+        },
         readTask: async (repoId, taskId, options) => {
-            state.taskReadRequests?.push({
+            const request: NonNullable<RuntimeBridgeState["taskReadRequests"]>[number] = {
                 repoId,
                 taskId,
                 hydrateSessionEvents: options?.hydrateSessionEvents,
-            })
+            }
+            if (options?.eventLimit !== undefined) request.eventLimit = options.eventLimit
+            state.taskReadRequests?.push(request)
+            await state.taskReadGate
             if (!state.task || taskId !== state.task.id) throw new Error(`Task ${taskId} not found`)
             return cloneTask(state.task)
         },
@@ -360,9 +396,12 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
         readDataDocumentBase64: async () => null,
         saveDataDocumentBase64: unsupportedMutation("saveDataDocumentBase64"),
         deleteDataDocument: unsupportedMutation("deleteDataDocument"),
-        readMcpServers: async () => ({
-            servers: (state.mcpServers ?? []).map((server) => structuredClone(server)),
-        }),
+        readMcpServers: async () => {
+            state.mcpServerReadCount = (state.mcpServerReadCount ?? 0) + 1
+            return {
+                servers: (state.mcpServers ?? []).map((server) => structuredClone(server)),
+            }
+        },
         replaceMcpServers: async (params) => {
             state.mcpServers = params.servers.map((server) => structuredClone(server))
             return {
@@ -388,13 +427,16 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
             return { serverId: params.serverId, deleted }
         },
         readPersonalSettings: async () => ({
-            settings: structuredClone(
-                state.personalSettings ?? {
-                    envVars: {},
-                    theme: "system",
-                    renderMarkdownMessages: true,
-                }
-            ),
+            settings: (() => {
+                state.personalSettingsReadCount = (state.personalSettingsReadCount ?? 0) + 1
+                return structuredClone(
+                    state.personalSettings ?? {
+                        envVars: {},
+                        theme: "system",
+                        renderMarkdownMessages: true,
+                    }
+                )
+            })(),
         }),
         replacePersonalSettings: async (params) => {
             state.personalSettings = structuredClone(params.settings)
@@ -444,6 +486,7 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
             if (!state.task) state.taskUsage = undefined
         },
         createTask: async (params) => {
+            state.taskCreateRequests = [...(state.taskCreateRequests ?? []), structuredClone(params)]
             requireStateProject(state, params.repoId)
             const taskId = params.taskId ?? "task-created"
             const slug = params.slug ?? taskId
@@ -767,6 +810,7 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
         },
         updateTaskMetadata: async (params) => {
             const current = requireStateTask(state, params.taskId)
+            state.taskMetadataUpdateRequests?.push(structuredClone(params))
             state.task = {
                 ...current,
                 title: params.title ?? current.title,
@@ -956,6 +1000,7 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
                 }
             },
             listProjectProcesses: async (params) => {
+                state.projectProcessListCount = (state.projectProcessListCount ?? 0) + 1
                 requireStateProject(state, params.repoId)
                 return {
                     repoId: params.repoId,
@@ -1332,11 +1377,12 @@ function createReadOnlyAdapters(state: RuntimeBridgeState): OpenADEModuleAdapter
     }
 }
 
-function createLocalRuntimeClient(server: RuntimeServer): RuntimeLocalClient {
+function createLocalRuntimeClient(server: RuntimeServer, permissions?: string[]): RuntimeLocalClient {
     const listeners = new Set<(message: RuntimeMessage) => void>()
     let dispose: (() => void) | null = null
     const connection: RuntimeConnection = {
         id: "desktop-product-store-test",
+        ...(permissions ? { permissions } : {}),
         send(message) {
             for (const listener of listeners) listener(message)
         },
@@ -1365,7 +1411,31 @@ function createLocalRuntimeClient(server: RuntimeServer): RuntimeLocalClient {
     })
 }
 
-function createRuntimeBackedClient(state: RuntimeBridgeState = createBridgeState()): {
+function createRuntimeBackedClient(): {
+    client: OpenADEClient
+    runtime: RuntimeLocalClient
+    server: RuntimeServer
+    state: RuntimeBridgeState
+}
+function createRuntimeBackedClient(state: RuntimeBridgeState): {
+    client: OpenADEClient
+    runtime: RuntimeLocalClient
+    server: RuntimeServer
+    state: RuntimeBridgeState
+}
+function createRuntimeBackedClient(
+    state: RuntimeBridgeState,
+    permissions: string[]
+): {
+    client: OpenADEClient
+    runtime: RuntimeLocalClient
+    server: RuntimeServer
+    state: RuntimeBridgeState
+}
+function createRuntimeBackedClient(
+    state: RuntimeBridgeState = createBridgeState(),
+    permissions?: string[]
+): {
     client: OpenADEClient
     runtime: RuntimeLocalClient
     server: RuntimeServer
@@ -1376,7 +1446,7 @@ function createRuntimeBackedClient(state: RuntimeBridgeState = createBridgeState
         protocolVersion: 1,
     })
     server.registerModule(createOpenADEModule(createReadOnlyAdapters(state)))
-    const runtime = createLocalRuntimeClient(server)
+    const runtime = createLocalRuntimeClient(server, permissions)
     return {
         server,
         state,
@@ -1387,6 +1457,11 @@ function createRuntimeBackedClient(state: RuntimeBridgeState = createBridgeState
             clientPlatform: "desktop",
         }),
     }
+}
+
+function allOpenADEMethodPermissionsExcept(excludedMethods: readonly string[]): string[] {
+    const excluded = new Set(excludedMethods)
+    return ["initialize", "runtime/list", ...Object.values(OPENADE_METHOD).filter((method) => !excluded.has(method))]
 }
 
 function runtimeRecord(status: RuntimeRecord["status"], updatedAt: string, ownerId = "task-1", runtimeId = "runtime-1"): RuntimeRecord {
@@ -1409,12 +1484,16 @@ function runtimeRequestFromUnknown(value: unknown): RuntimeRequest {
     return { id, method: record.method, params: record.params }
 }
 
-async function waitForRuntimeBridge(assertion: () => void): Promise<void> {
-    await vi.waitFor(assertion, { timeout: 1000, interval: 10 })
+async function waitForRuntimeBridge(assertion: () => void, timeout = 1000): Promise<void> {
+    await vi.waitFor(assertion, { timeout, interval: 10 })
 }
 
 async function waitForRuntimeNotificationsToSettle(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 250))
+}
+
+async function waitForRuntimeDeferredTaskRefresh(assertion: () => void): Promise<void> {
+    await waitForRuntimeBridge(assertion, 4000)
 }
 
 function createInMemoryLegacyStoreConnectors(
@@ -1454,7 +1533,7 @@ function createInMemoryLegacyStoreConnectors(
     }
 }
 
-function installCleanCoreRolloutState(): () => void {
+function installCoreRolloutState(overrides: Partial<OpenADECoreRolloutState> = {}): () => void {
     const previous = window.openadeAPI
     Object.defineProperty(window, "openadeAPI", {
         configurable: true,
@@ -1467,12 +1546,56 @@ function installCleanCoreRolloutState(): () => void {
             },
             core: {
                 ...previous?.core,
+                runtimeEndpoint: {
+                    url: "ws://127.0.0.1:37376/v1/runtime",
+                    token: "trusted-test-token",
+                },
                 rolloutState: {
                     status: "connected",
                     source: "managed",
                     reason: "managed-core",
                     automatic: true,
                     legacyYjsDocumentsPresent: false,
+                    legacyYjsMigrationAccepted: false,
+                    ...overrides,
+                },
+            },
+        },
+    })
+
+    return () => {
+        window.openadeAPI = previous
+    }
+}
+
+function installCleanCoreRolloutState(): () => void {
+    return installCoreRolloutState()
+}
+
+function installAcceptedLegacyImportCoreRolloutState(): () => void {
+    return installCoreRolloutState({
+        reason: "legacy-yjs-migration-accepted",
+        legacyYjsDocumentsPresent: true,
+        legacyYjsMigrationAccepted: true,
+    })
+}
+
+function installCoreMigrationRuntimeEndpoint(endpoint: OpenADECoreRuntimeEndpoint): () => void {
+    const previous = window.openadeAPI
+    Object.defineProperty(window, "openadeAPI", {
+        configurable: true,
+        writable: true,
+        value: {
+            ...previous,
+            core: {
+                ...previous?.core,
+                migrationRuntimeEndpoint: endpoint,
+                rolloutState: {
+                    status: "legacy-ipc",
+                    source: "legacy-ipc",
+                    reason: "legacy-yjs-documents",
+                    automatic: true,
+                    legacyYjsDocumentsPresent: true,
                     legacyYjsMigrationAccepted: false,
                 },
             },
@@ -1485,11 +1608,377 @@ function installCleanCoreRolloutState(): () => void {
 }
 
 describe("CodeStore runtime product store bridge", () => {
+    it("does not treat a connected Core rollout without a runtime endpoint as Core-owned", () => {
+        const previousOpenADEAPI = window.openadeAPI
+        Object.defineProperty(window, "openadeAPI", {
+            configurable: true,
+            writable: true,
+            value: {
+                ...previousOpenADEAPI,
+                core: {
+                    rolloutState: {
+                        status: "connected",
+                        source: "managed",
+                        reason: "managed-core",
+                        automatic: true,
+                        legacyYjsDocumentsPresent: false,
+                        legacyYjsMigrationAccepted: false,
+                    },
+                },
+            },
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+        })
+
+        try {
+            expect(codeStore.usesCoreOwnedProductRuntime()).toBe(false)
+            expect(codeStore.shouldUseCoreOwnedCronScheduler()).toBe(false)
+        } finally {
+            window.openadeAPI = previousOpenADEAPI
+            codeStore.disconnectAllStores()
+        }
+    })
+
+    it("ignores malformed Core endpoints when selecting the default runtime notification source", () => {
+        const previousOpenADEAPI = window.openadeAPI
+        Object.defineProperty(window, "openadeAPI", {
+            configurable: true,
+            writable: true,
+            value: {
+                core: {
+                    runtimeEndpoint: {
+                        url: "https://127.0.0.1:37376/v1/runtime",
+                        token: "trusted-token",
+                    },
+                },
+            },
+        })
+        const subscribeSpy = vi.spyOn(localRuntimeClient, "subscribe")
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+        })
+
+        try {
+            const source = (codeStore as unknown as { runtimeNotificationSource(): unknown }).runtimeNotificationSource()
+
+            expect(source).toBeNull()
+            expect(subscribeSpy).not.toHaveBeenCalled()
+        } finally {
+            window.openadeAPI = previousOpenADEAPI
+            codeStore.disconnectAllStores()
+            subscribeSpy.mockRestore()
+        }
+    })
+
+    it("initializes runtime-backed product sessions without opening legacy Yjs stores or renderer cron scheduling", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            snapshotReadCount: 0,
+            mcpServerReadCount: 0,
+            personalSettings: {
+                envVars: {},
+                theme: "code-theme-clean",
+                renderMarkdownMessages: false,
+            },
+        })
+        let repoConnectCount = 0
+        let mcpConnectCount = 0
+        let personalSettingsConnectCount = 0
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(
+                () => {
+                    repoConnectCount += 1
+                },
+                () => {
+                    mcpConnectCount += 1
+                },
+                () => {
+                    personalSettingsConnectCount += 1
+                }
+            ),
+        })
+
+        try {
+            await codeStore.initializeStores()
+
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(true)
+            expect(codeStore.usesCoreOwnedProductRuntime()).toBe(false)
+            expect(repoConnectCount).toBe(0)
+            expect(mcpConnectCount).toBe(0)
+            expect(personalSettingsConnectCount).toBe(0)
+            expect(codeStore.repoStore).toBeNull()
+            expect(codeStore.personalSettingsStore?.settings.current.theme).toBe("code-theme-clean")
+            expect(codeStore.personalSettingsStore?.settings.current.renderMarkdownMessages).toBe(false)
+            expect(state.personalSettingsReadCount ?? 0).toBe(1)
+            expect(state.mcpServerReadCount ?? 0).toBe(0)
+            expect(codeStore.crons.started).toBe(false)
+            expect(state.projectProcessListCount ?? 0).toBe(0)
+
+            await codeStore.mcpServers.initializeProductSettingsProjection()
+            expect(state.mcpServerReadCount ?? 0).toBe(1)
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("does not start renderer cron scheduling when runtime product initialization fails", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient(
+            {
+                ...createBridgeState(),
+                snapshotReadCount: 0,
+                projectProcessListCount: 0,
+                personalSettingsReadCount: 0,
+            },
+            allOpenADEMethodPermissionsExcept([OPENADE_METHOD.projectList, OPENADE_METHOD.snapshotRead])
+        )
+        let repoConnectCount = 0
+        let mcpConnectCount = 0
+        let personalSettingsConnectCount = 0
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(
+                () => {
+                    repoConnectCount += 1
+                },
+                () => {
+                    mcpConnectCount += 1
+                },
+                () => {
+                    personalSettingsConnectCount += 1
+                }
+            ),
+        })
+        const cronStart = vi.spyOn(codeStore.crons, "startAll")
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+        const legacyGitInfoRead = vi.spyOn(localOpenADEClient, "readProjectGitInfo").mockRejectedValue(new Error("legacy git info should not be used"))
+
+        try {
+            await codeStore.initializeStores()
+
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+            expect(codeStore.runtimeProductStoreStatus).toBe("error")
+            expect(repoConnectCount).toBe(0)
+            expect(mcpConnectCount).toBe(0)
+            expect(personalSettingsConnectCount).toBe(0)
+            expect(codeStore.repoStore).toBeNull()
+            expect(codeStore.personalSettingsStore?.settings.current.theme).toBe("system")
+            expect(state.personalSettingsReadCount ?? 0).toBe(1)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.projectGitInfoRead)).toBe(false)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskMetadataUpdate)).toBe(false)
+            await expect(codeStore.readProductProjectGitInfo({ repoId: "repo-1" })).rejects.toThrow(
+                `Runtime product store is not initialized for ${OPENADE_METHOD.projectGitInfoRead}`
+            )
+            expect(legacyGitInfoRead).not.toHaveBeenCalled()
+            expect(cronStart).not.toHaveBeenCalled()
+            expect(state.projectProcessListCount ?? 0).toBe(0)
+        } finally {
+            legacyGitInfoRead.mockRestore()
+            warn.mockRestore()
+            cronStart.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("loads and refreshes runtime task routes before broad product projection is initialized", async () => {
+        const { client, runtime, server, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            projectReadCount: 0,
+            snapshotReadCount: 0,
+            taskReadRequests: [],
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+            expect(codeStore.shouldUseRuntimeProductTaskRoute()).toBe(true)
+
+            await expect(codeStore.loadRuntimeProductTaskForRoute("repo-1", "task-1")).resolves.toMatchObject({ id: "task-1", repoId: "repo-1" })
+
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
+            expect(state.projectReadCount ?? 0).toBe(0)
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+            expect(state.projectProcessListCount ?? 0).toBe(0)
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+            expect(codeStore.hasProductTaskModelSource("task-1")).toBe(true)
+
+            const legacyTaskRefresh = vi.spyOn(codeStore, "refreshTaskStoreFromStorage")
+            const legacyRepoRefresh = vi.spyOn(codeStore, "refreshRepoStoreFromStorage")
+            state.task = {
+                ...requireStateTask(state, "task-1"),
+                title: "Route notification refresh",
+                updatedAt: "2026-05-31T00:03:00.000Z",
+            }
+            state.taskReadRequests = []
+            server.notify("openade/task/updated", {
+                repoId: "repo-1",
+                taskId: "task-1",
+            })
+
+            await waitForRuntimeDeferredTaskRefresh(() => {
+                expect(codeStore.tasks.getTask("task-1")?.title).toBe("Route notification refresh")
+            })
+
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
+            expect(state.projectReadCount ?? 0).toBe(0)
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+            expect(state.projectProcessListCount ?? 0).toBe(0)
+            expect(legacyTaskRefresh).not.toHaveBeenCalled()
+            expect(legacyRepoRefresh).not.toHaveBeenCalled()
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("initializes direct Core task-route shell capabilities without broad project projection", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            personalSettingsReadCount: 0,
+            projectReadCount: 0,
+            snapshotReadCount: 0,
+            taskReadRequests: [],
+            personalSettings: {
+                envVars: {},
+                theme: "code-theme-clean",
+                renderMarkdownMessages: true,
+                newTaskHarnessId: "claude-code",
+                newTaskModelId: "opus",
+            },
+        })
+        let repoConnectCount = 0
+        let mcpConnectCount = 0
+        let personalSettingsConnectCount = 0
+        let runtimeSubscribeCount = 0
+        let runtimeUnsubscribeCount = 0
+        const runtimeNotificationSource = {
+            subscribe(listener: (notification: RuntimeNotification) => void): () => void {
+                runtimeSubscribeCount += 1
+                const unsubscribe = runtime.subscribe(listener)
+                return () => {
+                    runtimeUnsubscribeCount += 1
+                    unsubscribe()
+                }
+            },
+        }
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(
+                () => {
+                    repoConnectCount += 1
+                },
+                () => {
+                    mcpConnectCount += 1
+                },
+                () => {
+                    personalSettingsConnectCount += 1
+                }
+            ),
+        })
+
+        try {
+            await expect(codeStore.loadRuntimeProductTaskForRoute("repo-1", "task-1")).resolves.toMatchObject({ id: "task-1" })
+            expect(runtimeSubscribeCount).toBe(1)
+            await codeStore.initializeRuntimeTaskRouteShell()
+            expect(runtimeSubscribeCount).toBe(1)
+            expect(runtimeUnsubscribeCount).toBe(0)
+            await codeStore.initializeRuntimeTaskRouteShell()
+            expect(runtimeSubscribeCount).toBe(1)
+            expect(runtimeUnsubscribeCount).toBe(0)
+
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskRead)).toBe(true)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.turnStart)).toBe(true)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskMetadataUpdate)).toBe(true)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.queuedTurnCancel)).toBe(true)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskDelete)).toBe(true)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskGitSummaryRead)).toBe(true)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskTerminalStart)).toBe(true)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.projectFilesFuzzySearch)).toBe(true)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.projectProcessList)).toBe(true)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.projectSdkCapabilitiesRead)).toBe(false)
+            expect(state.personalSettingsReadCount ?? 0).toBe(0)
+            expect(personalSettingsConnectCount).toBe(0)
+            expect(mcpConnectCount).toBe(0)
+            expect(repoConnectCount).toBe(0)
+            expect(state.mcpServerReadCount ?? 0).toBe(0)
+            expect(state.projectReadCount ?? 0).toBe(0)
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+            expect(state.projectProcessListCount ?? 0).toBe(0)
+            expect(codeStore.personalSettingsStore).toBeNull()
+            expect(codeStore.mcpServerStore).toBeNull()
+
+            await codeStore.mcpServers.initializeProductSettingsProjection()
+            expect(state.mcpServerReadCount ?? 0).toBe(1)
+            expect(codeStore.mcpServerStore).not.toBeNull()
+
+            await codeStore.initializeStores()
+
+            expect(state.personalSettingsReadCount ?? 0).toBe(1)
+            expect(state.mcpServerReadCount ?? 0).toBe(1)
+            expect(state.projectReadCount ?? 0).toBe(1)
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+            expect(codeStore.personalSettingsStore?.settings.current.theme).toBe("code-theme-clean")
+            expect(codeStore.defaultHarnessId).toBe("claude-code")
+            expect(codeStore.defaultModel).toBe("opus")
+            expect(codeStore.mcpServerStore).not.toBeNull()
+            expect(repoConnectCount).toBe(0)
+            expect(mcpConnectCount).toBe(0)
+            expect(personalSettingsConnectCount).toBe(0)
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
     it("starts clean managed Core product reads without opening the legacy repo Yjs document", async () => {
         subprocessMocks.setGlobalEnv.mockClear()
         const restoreOpenADEAPI = installCleanCoreRolloutState()
         const { client, runtime, server, state } = createRuntimeBackedClient({
             ...createBridgeState(),
+            snapshotReadCount: 0,
+            projectReadCount: 0,
+            mcpServerReadCount: 0,
+            mcpServers: [
+                {
+                    id: "core-mcp-1",
+                    name: "Core MCP",
+                    transportType: "stdio",
+                    enabled: true,
+                    command: "node",
+                    args: ["core-mcp.js"],
+                    healthStatus: "unknown",
+                    createdAt: now,
+                    updatedAt: now,
+                },
+            ],
             personalSettings: {
                 envVars: { OPENADE_TEST_ENV: "core" },
                 theme: "code-theme-clean",
@@ -1499,6 +1988,13 @@ describe("CodeStore runtime product store bridge", () => {
             },
         })
         server.supervisor.register(runtimeRecord("running", "2026-05-31T00:01:00.000Z"))
+        const runtimeListDeferred = createDeferred<RuntimeRecord[]>()
+        let runtimeListResolved = false
+        const runtimeListRequests: RuntimeListParams[] = []
+        const listRuntimesSpy = vi.spyOn(client, "listRuntimes").mockImplementation(async (params = {}) => {
+            runtimeListRequests.push(params)
+            return runtimeListDeferred.promise
+        })
         const legacyRuntimeRequests: RuntimeRequest[] = []
         const legacyRuntimeRequest = vi.fn(async (rawRequest: unknown): Promise<RuntimeResponse> => {
             const runtimeRequest = runtimeRequestFromUnknown(rawRequest)
@@ -1533,6 +2029,7 @@ describe("CodeStore runtime product store bridge", () => {
                 },
             },
         })
+        const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
         let repoConnectCount = 0
         let mcpConnectCount = 0
         let personalSettingsConnectCount = 0
@@ -1571,16 +2068,883 @@ describe("CodeStore runtime product store bridge", () => {
             })
             await vi.waitFor(() => expect(state.personalSettings?.theme).toBe("code-theme-black"))
             expect(codeStore.mcpServerStore).not.toBeNull()
+            expect(codeStore.mcpServers.servers).toEqual([])
+            expect(state.mcpServerReadCount ?? 0).toBe(0)
             expect(codeStore.crons.started).toBe(false)
+            expect(state.projectProcessListCount ?? 0).toBe(0)
             expect(subprocessMocks.setGlobalEnv).not.toHaveBeenCalled()
-            expect(codeStore.runtimeProductSnapshot?.repos).toHaveLength(1)
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+            expect(state.projectReadCount ?? 0).toBe(1)
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
             expect(codeStore.repos.repos.map((repo) => repo.id)).toEqual(["repo-1"])
-            expect(codeStore.runtimes.isTaskRunning("task-1")).toBe(true)
+            expect(codeStore.runtimes.isTaskRunning("task-1")).toBe(false)
+            await waitForRuntimeBridge(() => {
+                expect(runtimeListRequests).toEqual([{ ownerType: "openade-task", statuses: ["starting", "running"] }])
+            })
+            expect(trackSpy).toHaveBeenCalledWith(
+                "app_opened",
+                expect.objectContaining({
+                    runtimeProductStoreStatus: "ready",
+                    runtimeProductStoreHasSnapshot: false,
+                    runtimeProductStoreHasProjectProjection: true,
+                    runtimeProductStoreRepoCount: 1,
+                    runtimeProductStoreTaskPreviewCount: 1,
+                    runtimeProductStoreCachedTaskCount: 0,
+                    runtimeProductTransport: "core-websocket",
+                    coreRolloutStatus: "connected",
+                    coreRolloutReason: "managed-core",
+                })
+            )
             expect(legacyRuntimeRequests.filter((request) => request.method === "runtime/list")).toHaveLength(0)
+
+            runtimeListResolved = true
+            runtimeListDeferred.resolve([runtimeRecord("running", "2026-05-31T00:01:00.000Z")])
+            await waitForRuntimeBridge(() => {
+                expect(codeStore.runtimes.isTaskRunning("task-1")).toBe(true)
+            })
+            await codeStore.mcpServers.initializeProductSettingsProjection()
+            await codeStore.mcpServers.initializeProductSettingsProjection()
+            expect(state.mcpServerReadCount ?? 0).toBe(1)
+            expect(codeStore.mcpServers.servers).toEqual([expect.objectContaining({ id: "core-mcp-1", command: "node" })])
+        } finally {
+            if (!runtimeListResolved) runtimeListDeferred.resolve([])
+            listRuntimesSpy.mockRestore()
+            trackSpy.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("forces the runtime product bridge on when rollout says Core owns product state", async () => {
+        subprocessMocks.setGlobalEnv.mockClear()
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient({ ...createBridgeState(), snapshotReadCount: 0, projectReadCount: 0 })
+        let repoConnectCount = 0
+        let mcpConnectCount = 0
+        let personalSettingsConnectCount = 0
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: false,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(
+                () => {
+                    repoConnectCount += 1
+                },
+                () => {
+                    mcpConnectCount += 1
+                },
+                () => {
+                    personalSettingsConnectCount += 1
+                }
+            ),
+        })
+
+        try {
+            await codeStore.initializeStores()
+
+            expect(codeStore.usesCoreOwnedProductRuntime()).toBe(true)
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(true)
+            expect(codeStore.runtimeProductStoreStatus).toBe("ready")
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+            expect(state.projectReadCount ?? 0).toBe(1)
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.repos.repos.map((repo) => repo.id)).toEqual(["repo-1"])
+            expect(codeStore.repoStore).toBeNull()
+            expect(repoConnectCount).toBe(0)
+            expect(mcpConnectCount).toBe(0)
+            expect(personalSettingsConnectCount).toBe(0)
+            expect(subprocessMocks.setGlobalEnv).not.toHaveBeenCalled()
+
+            await codeStore.repos.loadRepos()
+            expect(state.projectReadCount ?? 0).toBe(1)
         } finally {
             codeStore.disconnectAllStores()
             await runtime.close()
             restoreOpenADEAPI()
+        }
+    })
+
+    it("initializes desktop server-mode product state from project list instead of full snapshot when available", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient({ ...createBridgeState(), snapshotReadCount: 0, projectReadCount: 0 })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            expect(codeStore.usesCoreOwnedProductRuntime()).toBe(false)
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(true)
+            expect(codeStore.runtimeProductStoreStatus).toBe("ready")
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+            expect(state.projectReadCount ?? 0).toBe(1)
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([expect.objectContaining({ id: "task-1", title: "Runtime task" })])
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("starts clean managed Core from scoped project list when snapshot is not advertised", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient(
+            {
+                ...createBridgeState(),
+                projectReadCount: 0,
+                snapshotReadCount: 0,
+            },
+            ["initialize", OPENADE_METHOD.projectList]
+        )
+        const productStore = new OpenADEProductStore(client)
+        const refreshSnapshot = vi.spyOn(productStore, "refreshSnapshot")
+        const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => productStore,
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(),
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            expect(refreshSnapshot).not.toHaveBeenCalled()
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+            expect(state.projectReadCount ?? 0).toBe(1)
+            expect(codeStore.runtimeProductStoreStatus).toBe("ready")
+            expect(codeStore.runtimeProductStoreError).toBeNull()
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.repos.repos.map((repo) => repo.id)).toEqual(["repo-1"])
+            expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([expect.objectContaining({ id: "task-1", title: "Runtime task" })])
+            expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_error", expect.objectContaining({ source: "initialize_snapshot" }))
+            expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
+        } finally {
+            refreshSnapshot.mockRestore()
+            trackSpy.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("coalesces runtime product initialization and does not reread after it is ready", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient(
+            {
+                ...createBridgeState(),
+                projectReadCount: 0,
+                snapshotReadCount: 0,
+            },
+            ["initialize", OPENADE_METHOD.projectList]
+        )
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(),
+        })
+
+        try {
+            await Promise.all([codeStore.initializeRuntimeProductStore(), codeStore.initializeRuntimeProductStore()])
+
+            expect(codeStore.runtimeProductStoreStatus).toBe("ready")
+            expect(state.projectReadCount ?? 0).toBe(1)
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+
+            await codeStore.initializeRuntimeProductStore()
+            expect(state.projectReadCount ?? 0).toBe(1)
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("refreshes a project-list-only Core projection after the runtime capability cache is cleared", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient(
+            {
+                ...createBridgeState(),
+                projectReadCount: 0,
+                snapshotReadCount: 0,
+            },
+            ["initialize", OPENADE_METHOD.projectList]
+        )
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(),
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+            expect(state.projectReadCount ?? 0).toBe(1)
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.repos.repos).toEqual([expect.objectContaining({ id: "repo-1", name: "Runtime Repo" })])
+
+            await runtime.close()
+            expect(client.hasMethod(OPENADE_METHOD.projectList)).toBe(false)
+            if (!state.project) throw new Error("Expected bridge project")
+            state.project = {
+                ...state.project,
+                name: "Reconnected Core project list refresh",
+            }
+
+            await codeStore.refreshRepoStoreFromStorage()
+
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+            expect(state.projectReadCount ?? 0).toBe(2)
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.repos.repos).toEqual([expect.objectContaining({ id: "repo-1", name: "Reconnected Core project list refresh" })])
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("does not persist Core-owned personal settings when personal settings replace is unavailable", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient(createBridgeState(), [
+            "initialize",
+            OPENADE_METHOD.snapshotRead,
+            OPENADE_METHOD.settingsPersonalRead,
+        ])
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeStores()
+
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.settingsPersonalReplace)).toBe(false)
+            expect(codeStore.personalSettingsStore?.settings.current.theme).toBe("system")
+
+            codeStore.personalSettingsStore?.settings.set({ theme: "code-theme-black" })
+            await Promise.resolve()
+            await Promise.resolve()
+
+            expect(codeStore.personalSettingsStore?.settings.current.theme).toBe("code-theme-black")
+            expect(state.personalSettings?.theme).toBe("system")
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("uses default Core-owned personal settings when personal settings read is unavailable", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient(createBridgeState(), ["initialize", OPENADE_METHOD.snapshotRead])
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            state.personalSettings = {
+                envVars: {},
+                theme: "code-theme-black",
+                renderMarkdownMessages: true,
+            }
+
+            await codeStore.initializeStores()
+
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.settingsPersonalRead)).toBe(false)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.settingsPersonalReplace)).toBe(false)
+            expect(codeStore.personalSettingsStore?.settings.current).toMatchObject({
+                theme: "system",
+                envVars: {},
+                renderMarkdownMessages: true,
+            })
+            codeStore.personalSettingsStore?.settings.set({ theme: "code-theme-clean" })
+            await Promise.resolve()
+            await Promise.resolve()
+            expect(state.personalSettings?.theme).toBe("code-theme-black")
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("uses Core-owned product reads after accepted legacy import without reopening legacy Yjs stores", async () => {
+        subprocessMocks.setGlobalEnv.mockClear()
+        const restoreOpenADEAPI = installAcceptedLegacyImportCoreRolloutState()
+        const { client, runtime } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            personalSettings: {
+                envVars: { OPENADE_TEST_ENV: "accepted-core" },
+                theme: "code-theme-black",
+                renderMarkdownMessages: true,
+                newTaskHarnessId: "codex",
+                newTaskModelId: "gpt-5.3-codex",
+            },
+        })
+        let repoConnectCount = 0
+        let mcpConnectCount = 0
+        let personalSettingsConnectCount = 0
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(
+                () => {
+                    repoConnectCount += 1
+                },
+                () => {
+                    mcpConnectCount += 1
+                },
+                () => {
+                    personalSettingsConnectCount += 1
+                }
+            ),
+        })
+
+        try {
+            await codeStore.initializeStores()
+
+            expect(codeStore.usesCleanManagedCoreRuntime()).toBe(false)
+            expect(codeStore.usesCoreOwnedProductRuntime()).toBe(true)
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(true)
+            expect(codeStore.shouldUseCoreOwnedCronScheduler()).toBe(true)
+            expect(repoConnectCount).toBe(0)
+            expect(mcpConnectCount).toBe(0)
+            expect(personalSettingsConnectCount).toBe(0)
+            expect(codeStore.repoStore).toBeNull()
+            expect(codeStore.personalSettingsStore?.settings.current.envVars).toEqual({ OPENADE_TEST_ENV: "accepted-core" })
+            expect(codeStore.crons.started).toBe(false)
+            expect(subprocessMocks.setGlobalEnv).not.toHaveBeenCalled()
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("refreshes Core-owned repo projections through scoped project reads after startup", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            projectReadCount: 0,
+            snapshotReadCount: 0,
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            expect(codeStore.usesCoreOwnedProductRuntime()).toBe(true)
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+            expect(state.projectReadCount ?? 0).toBe(1)
+            expect(codeStore.repos.repos[0]?.id).toBe("repo-1")
+            const snapshotReadsAfterStartup = state.snapshotReadCount ?? 0
+            const projectReadsAfterStartup = state.projectReadCount ?? 0
+            if (!state.project) throw new Error("Expected bridge project")
+            state.project = {
+                ...state.project,
+                name: "Scoped Core project refresh",
+            }
+
+            await codeStore.refreshRepoStoreFromStorage()
+
+            expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsAfterStartup)
+            expect(state.projectReadCount ?? 0).toBe(projectReadsAfterStartup + 1)
+            expect(codeStore.repos.repos).toEqual([expect.objectContaining({ id: "repo-1", name: "Scoped Core project refresh" })])
+
+            state.project = {
+                ...state.project,
+                name: "Scoped Core repo mutation refresh",
+            }
+
+            await codeStore.refreshProductStateAfterRepoMutation()
+
+            expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsAfterStartup)
+            expect(state.projectReadCount ?? 0).toBe(projectReadsAfterStartup + 2)
+            expect(codeStore.repos.repos).toEqual([expect.objectContaining({ id: "repo-1", name: "Scoped Core repo mutation refresh" })])
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("refreshes Core-owned repo projections through snapshot reads when project-list is unavailable", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient(
+            {
+                ...createBridgeState(),
+                projectReadCount: 0,
+                snapshotReadCount: 0,
+            },
+            allOpenADEMethodPermissionsExcept([OPENADE_METHOD.projectList])
+        )
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            expect(codeStore.usesCoreOwnedProductRuntime()).toBe(true)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.projectList)).toBe(false)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.snapshotRead)).toBe(true)
+            const snapshotReadsAfterStartup = state.snapshotReadCount ?? 0
+            const projectReadsAfterStartup = state.projectReadCount ?? 0
+            if (!state.project) throw new Error("Expected bridge project")
+            state.project = {
+                ...state.project,
+                name: "Snapshot Core project refresh",
+            }
+
+            await codeStore.refreshRepoStoreFromStorage()
+
+            expect(state.projectReadCount ?? 0).toBe(projectReadsAfterStartup)
+            expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsAfterStartup + 1)
+            expect(codeStore.runtimeProductSnapshot?.repos).toEqual([expect.objectContaining({ id: "repo-1", name: "Snapshot Core project refresh" })])
+            expect(codeStore.repos.repos).toEqual([expect.objectContaining({ id: "repo-1", name: "Snapshot Core project refresh" })])
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("keeps accepted legacy-import Core sessions on scoped project-list fallback when the initial snapshot refresh fails", async () => {
+        subprocessMocks.setGlobalEnv.mockClear()
+        const restoreOpenADEAPI = installAcceptedLegacyImportCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            personalSettings: {
+                envVars: { OPENADE_TEST_ENV: "accepted-core" },
+                theme: "code-theme-black",
+                renderMarkdownMessages: true,
+                newTaskHarnessId: "codex",
+                newTaskModelId: "gpt-5.3-codex",
+            },
+            taskReadRequests: [],
+        })
+        const productStore = new OpenADEProductStore(client)
+        vi.spyOn(productStore, "refreshSnapshot").mockImplementationOnce(async () => {
+            await runtime.connect()
+            throw new Error("accepted snapshot unavailable")
+        })
+        let repoConnectCount = 0
+        let mcpConnectCount = 0
+        let personalSettingsConnectCount = 0
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => productStore,
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(
+                () => {
+                    repoConnectCount += 1
+                },
+                () => {
+                    mcpConnectCount += 1
+                },
+                () => {
+                    personalSettingsConnectCount += 1
+                }
+            ),
+        })
+
+        try {
+            await codeStore.initializeStores()
+
+            expect(codeStore.usesCleanManagedCoreRuntime()).toBe(false)
+            expect(codeStore.usesCoreOwnedProductRuntime()).toBe(true)
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(true)
+            expect(codeStore.runtimeProductStoreStatus).toBe("ready")
+            expect(codeStore.runtimeProductStoreError).toBeNull()
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.repos.repos).toEqual([expect.objectContaining({ id: "repo-1", path: "/tmp/runtime-repo" })])
+            expect(repoConnectCount).toBe(0)
+            expect(mcpConnectCount).toBe(0)
+            expect(personalSettingsConnectCount).toBe(0)
+            expect(codeStore.repoStore).toBeNull()
+            expect(codeStore.personalSettingsStore?.settings.current.theme).toBe("code-theme-black")
+            expect(codeStore.personalSettingsStore?.settings.current.envVars).toEqual({ OPENADE_TEST_ENV: "accepted-core" })
+            expect(codeStore.crons.started).toBe(false)
+            expect(subprocessMocks.setGlobalEnv).not.toHaveBeenCalled()
+
+            const snapshotReadsBeforeScopedRecovery = state.snapshotReadCount ?? 0
+            const projects = await codeStore.loadRuntimeProductProjects()
+            expect(projects.map((project) => project.id)).toEqual(["repo-1"])
+            expect(codeStore.repos.repos.map((project) => project.id)).toEqual(["repo-1"])
+            expect(state.projectReadCount).toBe(1)
+            expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsBeforeScopedRecovery)
+
+            const loadedTask = await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+            expect(loadedTask?.id).toBe("task-1")
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("attaches the Core product store for task refreshes before app-store initialization without broad projection repair", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            projectReadCount: 0,
+            snapshotReadCount: 0,
+            taskReadRequests: [],
+        })
+        let repoConnectCount = 0
+        let mcpConnectCount = 0
+        let personalSettingsConnectCount = 0
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(
+                () => {
+                    repoConnectCount += 1
+                },
+                () => {
+                    mcpConnectCount += 1
+                },
+                () => {
+                    personalSettingsConnectCount += 1
+                }
+            ),
+        })
+
+        try {
+            expect(codeStore.storeInitialized).toBe(false)
+            expect(codeStore.usesCoreOwnedProductRuntime()).toBe(true)
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+
+            await codeStore.refreshTaskStoreFromStorage("task-1")
+
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(true)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskRead)).toBe(true)
+            expect(codeStore.runtimeProductStoreStatus).toBe("disabled")
+            expect(state.projectReadCount ?? 0).toBe(0)
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+            expect(state.taskReadRequests).toEqual([])
+            expect(codeStore.tasks.getTask("task-1")).toBeNull()
+            expect(repoConnectCount).toBe(0)
+            expect(mcpConnectCount).toBe(0)
+            expect(personalSettingsConnectCount).toBe(0)
+            expect(codeStore.repoStore).toBeNull()
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("attaches the Core product store for repo refreshes before app-store initialization", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            projectReadCount: 0,
+        })
+        let repoConnectCount = 0
+        let mcpConnectCount = 0
+        let personalSettingsConnectCount = 0
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(
+                () => {
+                    repoConnectCount += 1
+                },
+                () => {
+                    mcpConnectCount += 1
+                },
+                () => {
+                    personalSettingsConnectCount += 1
+                }
+            ),
+        })
+
+        try {
+            expect(codeStore.storeInitialized).toBe(false)
+            expect(codeStore.usesCoreOwnedProductRuntime()).toBe(true)
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+
+            await codeStore.refreshRepoStoreFromStorage()
+
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(true)
+            expect(codeStore.runtimeProductStoreStatus).toBe("ready")
+            expect(state.projectReadCount ?? 0).toBe(1)
+            expect(codeStore.repos.repos).toEqual([expect.objectContaining({ id: "repo-1", name: "Runtime Repo" })])
+            expect(repoConnectCount).toBe(0)
+            expect(mcpConnectCount).toBe(0)
+            expect(personalSettingsConnectCount).toBe(0)
+            expect(codeStore.repoStore).toBeNull()
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("attaches the Core product store for SmartEditor file search before app-store initialization", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient(createBridgeState())
+        const productStore = new OpenADEProductStore(client)
+        const runtimeFuzzySearch = vi.spyOn(productStore, "fuzzySearchProjectFiles")
+        const legacyFuzzySearch = vi.spyOn(filesApi, "fuzzySearch").mockRejectedValue(new Error("legacy fuzzy search should not be used"))
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => productStore,
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(),
+        })
+
+        try {
+            const projectedRepo = projectFromState(state)
+            if (!projectedRepo) throw new Error("Expected projected repo")
+            runInAction(() => {
+                ;(
+                    codeStore as unknown as {
+                        runtimeProductProjects: Map<string, OpenADEProject>
+                    }
+                ).runtimeProductProjects.set(projectedRepo.id, projectedRepo)
+            })
+
+            expect(codeStore.storeInitialized).toBe(false)
+            expect(codeStore.usesCoreOwnedProductRuntime()).toBe(true)
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+
+            const manager = codeStore.smartEditors.getManager("task-create", "repo-1")
+            expect(manager.canSearchFileMentions("/tmp/runtime-repo")).toBe(true)
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+            expect(runtimeFuzzySearch).not.toHaveBeenCalled()
+
+            await expect(manager.searchFileMentions("/tmp/runtime-repo", "runtime")).resolves.toEqual(
+                expect.objectContaining({ results: [runtimeSearchFixture.path] })
+            )
+
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(true)
+            expect(runtimeFuzzySearch).toHaveBeenCalledWith({
+                repoId: "repo-1",
+                query: "runtime",
+                matchDirs: false,
+                limit: 20,
+                includeHidden: true,
+            })
+            expect(legacyFuzzySearch).not.toHaveBeenCalled()
+        } finally {
+            legacyFuzzySearch.mockRestore()
+            runtimeFuzzySearch.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("uses route-owned SmartEditor file search before broad product projection is active", async () => {
+        const { client, runtime } = createRuntimeBackedClient(createBridgeState())
+        const productStore = new OpenADEProductStore(client)
+        const runtimeFuzzySearch = vi.spyOn(productStore, "fuzzySearchProjectFiles")
+        const legacyFuzzySearch = vi.spyOn(filesApi, "fuzzySearch").mockRejectedValue(new Error("legacy fuzzy search should not be used"))
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => productStore,
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(),
+        })
+
+        try {
+            expect(codeStore.shouldUseRuntimeProductTaskRoute()).toBe(true)
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+
+            await expect(codeStore.loadRuntimeProductTaskForRoute("repo-1", "task-1")).resolves.toMatchObject({ id: "task-1" })
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+
+            const manager = codeStore.smartEditors.getManager("task-task-1", "repo-1")
+            expect(manager.canSearchFileMentions("/tmp/runtime-repo")).toBe(true)
+
+            await expect(manager.searchFileMentions("/tmp/runtime-repo", "runtime", 20)).resolves.toEqual(
+                expect.objectContaining({ results: [runtimeSearchFixture.path] })
+            )
+
+            expect(runtimeFuzzySearch).toHaveBeenCalledWith({
+                repoId: "repo-1",
+                taskId: "task-1",
+                query: "runtime",
+                matchDirs: false,
+                limit: 20,
+                includeHidden: true,
+            })
+            expect(legacyFuzzySearch).not.toHaveBeenCalled()
+        } finally {
+            legacyFuzzySearch.mockRestore()
+            runtimeFuzzySearch.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("coalesces concurrent SmartEditor fuzzy searches across managers", async () => {
+        const { client, runtime } = createRuntimeBackedClient({
+            project: { ...project, path: "/tmp/runtime-repo" },
+            task: { ...task, isolationStrategy: { type: "head" } },
+        })
+        const productStore = new OpenADEProductStore(client)
+        const originalFuzzySearch = productStore.fuzzySearchProjectFiles.bind(productStore)
+        const releaseSearch = createReleaseGate()
+        const runtimeFuzzySearch = vi.spyOn(productStore, "fuzzySearchProjectFiles").mockImplementation(async (params) => {
+            await releaseSearch.wait
+            return originalFuzzySearch(params)
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => productStore,
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            const taskEditorManager = codeStore.smartEditors.getManager("task-create", "repo-1")
+            const scratchpadManager = codeStore.smartEditors.getManager("scratchpad-pad-1", "repo-1")
+            const firstSearch = taskEditorManager.searchFileMentions("/tmp/runtime-repo", "runtime", 20)
+            const secondSearch = scratchpadManager.searchFileMentions("/tmp/runtime-repo", "runtime", 20)
+
+            await vi.waitFor(() => {
+                expect(runtimeFuzzySearch).toHaveBeenCalledTimes(1)
+            })
+            releaseSearch.release()
+
+            await expect(Promise.all([firstSearch, secondSearch])).resolves.toEqual([
+                expect.objectContaining({ results: [runtimeSearchFixture.path] }),
+                expect.objectContaining({ results: [runtimeSearchFixture.path] }),
+            ])
+        } finally {
+            releaseSearch.release()
+            runtimeFuzzySearch.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("normalizes runtime fuzzy search in-flight defaults without merging generated-file searches", async () => {
+        const { client, runtime } = createRuntimeBackedClient({
+            project: { ...project, path: "/tmp/runtime-repo" },
+            task: { ...task, isolationStrategy: { type: "head" } },
+        })
+        const productStore = new OpenADEProductStore(client)
+        const originalFuzzySearch = productStore.fuzzySearchProjectFiles.bind(productStore)
+        const releaseSearch = createReleaseGate()
+        const runtimeFuzzySearch = vi.spyOn(productStore, "fuzzySearchProjectFiles").mockImplementation(async (params) => {
+            await releaseSearch.wait
+            return originalFuzzySearch(params)
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => productStore,
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            const defaultSearch = codeStore.fuzzySearchProductProjectFiles({
+                repoId: "repo-1",
+                taskId: "task-1",
+                query: "runtime",
+                limit: 20,
+            })
+            const explicitFalseSearch = codeStore.fuzzySearchProductProjectFiles({
+                repoId: "repo-1",
+                taskId: "task-1",
+                query: "runtime",
+                matchDirs: false,
+                limit: 20,
+                includeHidden: false,
+                includeGenerated: false,
+            })
+            const generatedSearch = codeStore.fuzzySearchProductProjectFiles({
+                repoId: "repo-1",
+                taskId: "task-1",
+                query: "runtime",
+                matchDirs: false,
+                limit: 20,
+                includeHidden: false,
+                includeGenerated: true,
+            })
+
+            await vi.waitFor(() => {
+                expect(runtimeFuzzySearch).toHaveBeenCalledTimes(2)
+            })
+            expect(runtimeFuzzySearch).toHaveBeenNthCalledWith(
+                2,
+                expect.objectContaining({
+                    includeGenerated: true,
+                })
+            )
+            releaseSearch.release()
+
+            await expect(Promise.all([defaultSearch, explicitFalseSearch, generatedSearch])).resolves.toEqual([
+                expect.objectContaining({ results: [runtimeSearchFixture.path] }),
+                expect.objectContaining({ results: [runtimeSearchFixture.path] }),
+                expect.objectContaining({ results: [runtimeSearchFixture.path] }),
+            ])
+        } finally {
+            releaseSearch.release()
+            runtimeFuzzySearch.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
         }
     })
 
@@ -1634,7 +2998,7 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
-    it("keeps clean managed Core fail-closed instead of opening legacy stores when snapshot refresh fails", async () => {
+    it("falls back to scoped Core project list instead of opening legacy stores when snapshot refresh fails", async () => {
         subprocessMocks.setGlobalEnv.mockClear()
         const restoreOpenADEAPI = installCleanCoreRolloutState()
         const { client, runtime, server, state } = createRuntimeBackedClient({
@@ -1671,7 +3035,10 @@ describe("CodeStore runtime product store bridge", () => {
             ],
         }
         const productStore = new OpenADEProductStore(client)
-        vi.spyOn(productStore, "refreshSnapshot").mockRejectedValueOnce(new Error("snapshot unavailable"))
+        vi.spyOn(productStore, "refreshSnapshot").mockImplementationOnce(async () => {
+            await runtime.connect()
+            throw new Error("snapshot unavailable")
+        })
         let repoConnectCount = 0
         let mcpConnectCount = 0
         let personalSettingsConnectCount = 0
@@ -1697,14 +3064,14 @@ describe("CodeStore runtime product store bridge", () => {
         try {
             await codeStore.initializeStores()
 
-            expect(codeStore.runtimeProductStoreStatus).toBe("error")
-            expect(codeStore.runtimeProductStoreError).toContain("snapshot unavailable")
+            expect(codeStore.runtimeProductStoreStatus).toBe("ready")
+            expect(codeStore.runtimeProductStoreError).toBeNull()
             expect(repoConnectCount).toBe(0)
             expect(mcpConnectCount).toBe(0)
             expect(personalSettingsConnectCount).toBe(0)
             expect(codeStore.repoStore).toBeNull()
             expect(codeStore.runtimeProductSnapshot).toBeNull()
-            expect(codeStore.repos.repos).toEqual([])
+            expect(codeStore.repos.repos.map((repo) => repo.id)).toEqual(["repo-1"])
             const staleLegacyRepoStore = createRepoStore(new Y.Doc())
             staleLegacyRepoStore.repos.push({
                 id: "legacy-repo",
@@ -1753,9 +3120,10 @@ describe("CodeStore runtime product store bridge", () => {
                 }
             ).taskStoreConnections = new Map([["legacy-task", staleLegacyTaskConnection]])
 
-            expect(codeStore.repos.repos).toEqual([])
+            expect(codeStore.repos.repos.map((repo) => repo.id)).toEqual(["repo-1"])
             expect(codeStore.getTaskPreviewsForRepo("legacy-repo")).toEqual([])
-            expect(codeStore.getTaskPreviewReposForStats()).toEqual([])
+            expect(codeStore.getTaskPreviewsForRepo("repo-1").map((task) => task.id)).toEqual(["task-1"])
+            expect(codeStore.getTaskPreviewReposForStats().map((repo) => repo.id)).toEqual(["repo-1"])
             expect(codeStore.tasks.getTask("legacy-task")).toBeNull()
             expect(codeStore.tasks.getTaskModel("legacy-task")).toBeNull()
             expect(codeStore.findProductRepoIdForTask("legacy-task")).toBeNull()
@@ -1861,7 +3229,7 @@ describe("CodeStore runtime product store bridge", () => {
                     limit: 20,
                     includeHidden: true,
                 })
-                expect(runtimeGitInfoRead).toHaveBeenCalledWith({ repoId: "repo-1" })
+                expect(runtimeGitInfoRead).not.toHaveBeenCalled()
                 expect(runtimeFileList).toHaveBeenCalledWith({
                     repoId: "repo-1",
                     taskId: "task-1",
@@ -1933,9 +3301,9 @@ describe("CodeStore runtime product store bridge", () => {
                     expect(setupContainer.textContent).toContain("Complete")
                 })
                 expect(rawSetup).not.toHaveBeenCalled()
-                expect(codeStore.repos.getRepo("repo-1")).toBeUndefined()
+                expect(codeStore.repos.getRepo("repo-1")).toEqual(expect.objectContaining({ id: "repo-1", path: "/tmp/runtime-repo" }))
                 expect(codeStore.runtimeProductSnapshot).toBeNull()
-                expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+                expect(state.taskReadRequests).toEqual([])
                 expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsBeforeSetup)
             } finally {
                 await act(async () => setupRoot.unmount())
@@ -2009,7 +3377,10 @@ describe("CodeStore runtime product store bridge", () => {
             taskReadRequests: [],
         })
         const productStore = new OpenADEProductStore(client)
-        vi.spyOn(productStore, "refreshSnapshot").mockRejectedValueOnce(new Error("snapshot unavailable"))
+        vi.spyOn(productStore, "refreshSnapshot").mockImplementationOnce(async () => {
+            await runtime.connect()
+            throw new Error("snapshot unavailable")
+        })
         const codeStore = new CodeStore({
             getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
             navigateToTask: () => undefined,
@@ -2023,7 +3394,7 @@ describe("CodeStore runtime product store bridge", () => {
         try {
             await codeStore.initializeStores()
             expect(codeStore.runtimeProductSnapshot).toBeNull()
-            expect(codeStore.repos.getRepo("repo-1")).toBeUndefined()
+            expect(codeStore.repos.getRepo("repo-1")).toEqual(expect.objectContaining({ id: "repo-1", path: "/tmp/runtime-repo" }))
 
             refreshAfterCreation = vi.spyOn(codeStore, "refreshProductStateAfterTaskCreation")
             const creationId = codeStore.creation.newTask({
@@ -2036,31 +3407,39 @@ describe("CodeStore runtime product store bridge", () => {
             })
 
             await waitForRuntimeBridge(() => {
-                expect(codeStore.creation.getCreation(creationId)?.completedTaskId).toBe("task-started")
-                expect(codeStore.tasks.getTask("task-started")).toEqual(expect.objectContaining({ id: "task-started", repoId: "repo-1" }))
+                expect(codeStore.creation.getCreation(creationId)?.completedTaskId).toBe("task-created")
+                expect(codeStore.tasks.getTask("task-created")).toEqual(expect.objectContaining({ id: "task-created", repoId: "repo-1" }))
             })
             expect(refreshAfterCreation).not.toHaveBeenCalled()
+            expect(state.taskCreateRequests?.[0]).toMatchObject({
+                repoId: "repo-1",
+                input: "create a task with Core only",
+                createdBy: { id: "user-1", email: "user@example.com" },
+                deviceId: expect.any(String),
+                isolationStrategy: { type: "head" },
+            })
             expect(state.turnStartRequests?.[0]).toMatchObject({
                 repoId: "repo-1",
+                inTaskId: "task-created",
                 type: "do",
                 input: "create a task with Core only",
-                isolationStrategy: { type: "head" },
                 harnessId: "codex",
                 modelId: "gpt-test",
             })
-            expect(state.task?.id).toBe("task-started")
+            expect(state.turnStartRequests?.[0]).not.toHaveProperty("isolationStrategy")
+            expect(state.task?.id).toBe("task-created")
             await waitForRuntimeBridge(() => {
                 expect(state.task?.title).toBe("Runtime generated title")
             })
             expect(state.taskReadRequests).toEqual([
                 {
                     repoId: "repo-1",
-                    taskId: "task-started",
+                    taskId: "task-created",
                     hydrateSessionEvents: false,
                 },
             ])
             expect(codeStore.runtimeProductSnapshot).toBeNull()
-            expect(codeStore.repos.getRepo("repo-1")).toBeUndefined()
+            expect(codeStore.repos.getRepo("repo-1")).toEqual(expect.objectContaining({ id: "repo-1", path: "/tmp/runtime-repo" }))
         } finally {
             refreshAfterCreation?.mockRestore()
             codeStore.disconnectAllStores()
@@ -2069,13 +3448,14 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
-    it("refreshes clean managed Core task mutations through project list when snapshot projection is unavailable", async () => {
+    it("refreshes clean managed Core task mutations through scoped task-list reads when snapshot projection is unavailable", async () => {
         const restoreOpenADEAPI = installCleanCoreRolloutState()
         const { client, runtime, state } = createRuntimeBackedClient({
             ...createBridgeState(),
             taskReadRequests: [],
             projectReadCount: 0,
             snapshotReadCount: 0,
+            taskListReadCount: 0,
         })
         const productStore = new OpenADEProductStore(client)
         const refreshSnapshot = vi.spyOn(productStore, "refreshSnapshot").mockRejectedValue(new Error("snapshot unavailable"))
@@ -2091,8 +3471,8 @@ describe("CodeStore runtime product store bridge", () => {
         try {
             await codeStore.initializeStores()
             expect(codeStore.runtimeProductSnapshot).toBeNull()
-            expect(codeStore.runtimeProductStoreStatus).toBe("error")
-            expect(refreshSnapshot).toHaveBeenCalledTimes(1)
+            expect(codeStore.runtimeProductStoreStatus).toBe("ready")
+            expect(refreshSnapshot).not.toHaveBeenCalled()
 
             await codeStore.loadRuntimeProductProjects()
             expect(codeStore.runtimeProductSnapshot).toBeNull()
@@ -2102,6 +3482,7 @@ describe("CodeStore runtime product store bridge", () => {
 
             const projectReadsBeforeMutation = state.projectReadCount ?? 0
             const snapshotReadsBeforeMutation = state.snapshotReadCount ?? 0
+            const taskListReadsBeforeMutation = state.taskListReadCount ?? 0
             state.taskReadRequests = []
             if (!state.task) throw new Error("Expected bridge task")
             state.task = {
@@ -2112,9 +3493,10 @@ describe("CodeStore runtime product store bridge", () => {
 
             await codeStore.refreshProductStateAfterTaskMutation("task-1")
 
-            expect(refreshSnapshot).toHaveBeenCalledTimes(1)
+            expect(refreshSnapshot).not.toHaveBeenCalled()
             expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsBeforeMutation)
-            expect(state.projectReadCount ?? 0).toBe(projectReadsBeforeMutation + 1)
+            expect(state.projectReadCount ?? 0).toBe(projectReadsBeforeMutation)
+            expect(state.taskListReadCount ?? 0).toBe(taskListReadsBeforeMutation + 1)
             expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
             expect(codeStore.runtimeProductSnapshot).toBeNull()
             expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([
@@ -2137,12 +3519,296 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
-    it("refreshes clean managed Core task notifications through project list when snapshot projection is unavailable", async () => {
+    it("refreshes direct clean managed Core task mutations without creating a task-list projection", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            taskReadRequests: [],
+            projectReadCount: 0,
+            snapshotReadCount: 0,
+            taskListReadCount: 0,
+        })
+        const productStore = new OpenADEProductStore(client)
+        const refreshSnapshot = vi.spyOn(productStore, "refreshSnapshot").mockRejectedValue(new Error("snapshot unavailable"))
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: false,
+            runtimeProductStoreFactory: () => productStore,
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(),
+        })
+
+        try {
+            await codeStore.loadRuntimeProductTaskForRoute("repo-1", "task-1")
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(state.projectReadCount ?? 0).toBe(0)
+            expect(state.taskListReadCount ?? 0).toBe(0)
+
+            const snapshotReadsBeforeMutation = state.snapshotReadCount ?? 0
+            state.taskReadRequests = []
+            if (!state.task) throw new Error("Expected bridge task")
+            state.task = {
+                ...state.task,
+                title: "Direct Core mutation title",
+                updatedAt: "2026-05-31T00:02:00.000Z",
+            }
+
+            await codeStore.refreshProductStateAfterTaskMutation("task-1")
+
+            expect(refreshSnapshot).not.toHaveBeenCalled()
+            expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsBeforeMutation)
+            expect(state.projectReadCount ?? 0).toBe(0)
+            expect(state.taskListReadCount ?? 0).toBe(0)
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+            expect(codeStore.tasks.getTask("task-1")).toEqual(
+                expect.objectContaining({
+                    id: "task-1",
+                    title: "Direct Core mutation title",
+                })
+            )
+        } finally {
+            refreshSnapshot.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("keeps unknown direct clean managed Core task mutations from repairing through broad projection reads", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            taskReadRequests: [],
+            projectReadCount: 0,
+            snapshotReadCount: 0,
+            taskListReadCount: 0,
+        })
+        const productStore = new OpenADEProductStore(client)
+        const refreshSnapshot = vi.spyOn(productStore, "refreshSnapshot").mockRejectedValue(new Error("snapshot unavailable"))
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: false,
+            runtimeProductStoreFactory: () => productStore,
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(),
+        })
+
+        try {
+            expect(codeStore.usesCoreOwnedProductRuntime()).toBe(true)
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+
+            await codeStore.refreshProductStateAfterTaskMutation("task-unknown")
+
+            expect(refreshSnapshot).not.toHaveBeenCalled()
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+            expect(state.projectReadCount ?? 0).toBe(0)
+            expect(state.taskListReadCount ?? 0).toBe(0)
+            expect(state.taskReadRequests).toEqual([])
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+        } finally {
+            refreshSnapshot.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("keeps direct clean managed Core notification fallback scoped when product notification handling fails", async () => {
         const restoreOpenADEAPI = installCleanCoreRolloutState()
         const { client, runtime, server, state } = createRuntimeBackedClient({
             ...createBridgeState(),
             taskReadRequests: [],
             projectReadCount: 0,
+            snapshotReadCount: 0,
+            taskListReadCount: 0,
+        })
+        const productStore = new OpenADEProductStore(client)
+        const refreshSnapshot = vi.spyOn(productStore, "refreshSnapshot").mockRejectedValue(new Error("snapshot unavailable"))
+        const handleNotification = vi.spyOn(productStore, "handleNotification").mockRejectedValueOnce(new Error("notification cache failed"))
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: false,
+            runtimeProductStoreFactory: () => productStore,
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(),
+        })
+
+        try {
+            await codeStore.loadRuntimeProductTaskForRoute("repo-1", "task-1")
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(state.projectReadCount ?? 0).toBe(0)
+            expect(state.taskListReadCount ?? 0).toBe(0)
+
+            const snapshotReadsBeforeNotification = state.snapshotReadCount ?? 0
+            state.taskReadRequests = []
+            state.task = {
+                ...requireStateTask(state, "task-1"),
+                title: "Direct Core fallback notification title",
+                updatedAt: "2026-05-31T00:02:45.000Z",
+            }
+
+            server.notify(OPENADE_NOTIFICATION.taskUpdated, {
+                repoId: "repo-1",
+                taskId: "task-1",
+            })
+
+            await waitForRuntimeDeferredTaskRefresh(() => {
+                expect(codeStore.tasks.getTask("task-1")?.title).toBe("Direct Core fallback notification title")
+            })
+
+            expect(handleNotification).toHaveBeenCalled()
+            expect(refreshSnapshot).not.toHaveBeenCalled()
+            expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsBeforeNotification)
+            expect(state.projectReadCount ?? 0).toBe(0)
+            expect(state.taskListReadCount ?? 0).toBe(0)
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+        } finally {
+            handleNotification.mockRestore()
+            refreshSnapshot.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("refreshes clean managed Core task mutations without probing task-list when task-list is unavailable", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient(
+            {
+                ...createBridgeState(),
+                taskReadRequests: [],
+                projectReadCount: 0,
+                snapshotReadCount: 0,
+                taskListReadCount: 0,
+            },
+            allOpenADEMethodPermissionsExcept([OPENADE_METHOD.taskList])
+        )
+        const productStore = new OpenADEProductStore(client)
+        const refreshSnapshot = vi.spyOn(productStore, "refreshSnapshot").mockRejectedValue(new Error("snapshot unavailable"))
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => productStore,
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(),
+        })
+
+        try {
+            await codeStore.initializeStores()
+            await codeStore.loadRuntimeProductProjects()
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskList)).toBe(false)
+            expect(codeStore.findProductRepoIdForTask("task-1")).toBe("repo-1")
+
+            const projectReadsBeforeMutation = state.projectReadCount ?? 0
+            const snapshotReadsBeforeMutation = state.snapshotReadCount ?? 0
+            const taskListReadsBeforeMutation = state.taskListReadCount ?? 0
+            state.taskReadRequests = []
+            if (!state.task) throw new Error("Expected bridge task")
+            state.task = {
+                ...state.task,
+                title: "Task-list denied mutation title",
+                updatedAt: "2026-05-31T00:02:30.000Z",
+            }
+
+            await codeStore.refreshProductStateAfterTaskMutation("task-1")
+
+            expect(refreshSnapshot).not.toHaveBeenCalled()
+            expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsBeforeMutation)
+            expect(state.projectReadCount ?? 0).toBe(projectReadsBeforeMutation)
+            expect(state.taskListReadCount ?? 0).toBe(taskListReadsBeforeMutation)
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
+            expect(codeStore.tasks.getTask("task-1")).toEqual(
+                expect.objectContaining({
+                    id: "task-1",
+                    title: "Task-list denied mutation title",
+                })
+            )
+        } finally {
+            refreshSnapshot.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("refreshes clean managed Core task creation repairs through scoped task-list reads", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            taskReadRequests: [],
+            projectReadCount: 0,
+            snapshotReadCount: 0,
+            taskListReadCount: 0,
+        })
+        const productStore = new OpenADEProductStore(client)
+        const refreshSnapshot = vi.spyOn(productStore, "refreshSnapshot").mockRejectedValue(new Error("snapshot unavailable"))
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => productStore,
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(),
+        })
+
+        try {
+            await codeStore.initializeStores()
+            await codeStore.loadRuntimeProductProjects()
+
+            const projectReadsBeforeCreation = state.projectReadCount ?? 0
+            const snapshotReadsBeforeCreation = state.snapshotReadCount ?? 0
+            const taskListReadsBeforeCreation = state.taskListReadCount ?? 0
+            state.taskReadRequests = []
+            if (!state.task) throw new Error("Expected bridge task")
+            state.task = {
+                ...state.task,
+                id: "task-created",
+                slug: "task-created",
+                title: "Clean Core created task",
+                createdAt: "2026-05-31T00:04:00.000Z",
+                updatedAt: "2026-05-31T00:04:00.000Z",
+            }
+
+            await codeStore.refreshProductStateAfterTaskCreation("repo-1", "task-created")
+
+            expect(refreshSnapshot).not.toHaveBeenCalled()
+            expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsBeforeCreation)
+            expect(state.projectReadCount ?? 0).toBe(projectReadsBeforeCreation)
+            expect(state.taskListReadCount ?? 0).toBe(taskListReadsBeforeCreation + 1)
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-created", hydrateSessionEvents: false }])
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([
+                expect.objectContaining({
+                    id: "task-created",
+                    title: "Clean Core created task",
+                }),
+            ])
+            expect(codeStore.tasks.getTask("task-created")).toEqual(
+                expect.objectContaining({
+                    id: "task-created",
+                    title: "Clean Core created task",
+                })
+            )
+        } finally {
+            refreshSnapshot.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("refreshes repo-less clean managed Core preview notifications through scoped task lists when snapshot projection is unavailable", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, server, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            taskReadRequests: [],
+            projectReadCount: 0,
+            taskListReadCount: 0,
             snapshotReadCount: 0,
         })
         const productStore = new OpenADEProductStore(client)
@@ -2167,22 +3833,23 @@ describe("CodeStore runtime product store bridge", () => {
         try {
             await codeStore.initializeStores()
             expect(codeStore.runtimeProductSnapshot).toBeNull()
-            expect(refreshSnapshot).toHaveBeenCalledTimes(1)
+            expect(refreshSnapshot).not.toHaveBeenCalled()
 
             await codeStore.loadRuntimeProductProjects()
             expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([expect.objectContaining({ id: "task-1", title: "Runtime task" })])
 
             const projectReadsBeforeNotification = state.projectReadCount ?? 0
+            const taskListReadsBeforeNotification = state.taskListReadCount ?? 0
             const snapshotReadsBeforeNotification = state.snapshotReadCount ?? 0
             state.taskReadRequests = []
             if (!state.task) throw new Error("Expected bridge task")
             state.task = {
                 ...state.task,
-                title: "Notification project-list title",
+                title: "Notification task-list title",
                 updatedAt: "2026-05-31T00:03:00.000Z",
             }
 
-            server.notify("openade/task/updated", {
+            server.notify("openade/task/previewChanged", {
                 taskId: "task-1",
             })
 
@@ -2190,14 +3857,15 @@ describe("CodeStore runtime product store bridge", () => {
                 expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([
                     expect.objectContaining({
                         id: "task-1",
-                        title: "Notification project-list title",
+                        title: "Notification task-list title",
                     }),
                 ])
             })
 
-            expect(refreshSnapshot).toHaveBeenCalledTimes(1)
+            expect(refreshSnapshot).not.toHaveBeenCalled()
             expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsBeforeNotification)
-            expect(state.projectReadCount ?? 0).toBe(projectReadsBeforeNotification + 1)
+            expect(state.projectReadCount ?? 0).toBe(projectReadsBeforeNotification)
+            expect(state.taskListReadCount ?? 0).toBe(taskListReadsBeforeNotification + 1)
             expect(state.taskReadRequests).toEqual([])
             expect(codeStore.runtimeProductSnapshot).toBeNull()
             expect(legacyTaskRefresh).not.toHaveBeenCalled()
@@ -2206,6 +3874,62 @@ describe("CodeStore runtime product store bridge", () => {
             refreshSnapshot.mockRestore()
             vi.mocked(codeStore.refreshTaskStoreFromStorage).mockRestore()
             vi.mocked(codeStore.refreshRepoStoreFromStorage).mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("syncs repo-less clean managed Core task updates into cached desktop task detail without projection reads", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, server, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            taskReadRequests: [],
+            projectReadCount: 0,
+            taskListReadCount: 0,
+            snapshotReadCount: 0,
+        })
+        const productStore = new OpenADEProductStore(client)
+        const refreshSnapshot = vi.spyOn(productStore, "refreshSnapshot").mockRejectedValue(new Error("snapshot unavailable"))
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => productStore,
+            runtimeNotificationSource: runtime,
+            legacyStoreConnectors: createInMemoryLegacyStoreConnectors(),
+        })
+
+        try {
+            await codeStore.initializeStores()
+            await codeStore.loadRuntimeProductProjects()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+
+            const projectReadsBeforeNotification = state.projectReadCount ?? 0
+            const taskListReadsBeforeNotification = state.taskListReadCount ?? 0
+            const snapshotReadsBeforeNotification = state.snapshotReadCount ?? 0
+            state.taskReadRequests = []
+            state.task = {
+                ...requireStateTask(state, "task-1"),
+                title: "Repo-less task detail update",
+                updatedAt: "2026-05-31T00:04:00.000Z",
+            }
+
+            server.notify("openade/task/updated", {
+                taskId: "task-1",
+            })
+
+            await waitForRuntimeDeferredTaskRefresh(() => {
+                expect(codeStore.tasks.getTask("task-1")?.title).toBe("Repo-less task detail update")
+            })
+
+            expect(refreshSnapshot).not.toHaveBeenCalled()
+            expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsBeforeNotification)
+            expect(state.projectReadCount ?? 0).toBe(projectReadsBeforeNotification)
+            expect(state.taskListReadCount ?? 0).toBe(taskListReadsBeforeNotification)
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
+        } finally {
+            refreshSnapshot.mockRestore()
             codeStore.disconnectAllStores()
             await runtime.close()
             restoreOpenADEAPI()
@@ -2235,7 +3959,7 @@ describe("CodeStore runtime product store bridge", () => {
         try {
             await codeStore.initializeStores()
             expect(codeStore.runtimeProductSnapshot).toBeNull()
-            expect(codeStore.repos.getRepo("repo-1")).toBeUndefined()
+            expect(codeStore.repos.getRepo("repo-1")).toEqual(expect.objectContaining({ id: "repo-1", path: "/tmp/runtime-repo" }))
 
             await expect(
                 resolveTaskListCopyPath({
@@ -2245,11 +3969,11 @@ describe("CodeStore runtime product store bridge", () => {
                 })
             ).resolves.toBe("/tmp/runtime-repo")
 
-            expect(refreshSnapshot).toHaveBeenCalledTimes(1)
+            expect(refreshSnapshot).not.toHaveBeenCalled()
             expect(state.snapshotReadCount ?? 0).toBe(0)
             expect(state.projectReadCount ?? 0).toBeLessThanOrEqual(1)
-            expect(state.projectGitInfoReadCount).toBe(1)
-            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+            expect(state.projectGitInfoReadCount).toBe(0)
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
             expect(codeStore.runtimeProductSnapshot).toBeNull()
             expect(codeStore.tasks.getTask("task-1")).toEqual(expect.objectContaining({ id: "task-1", repoId: "repo-1" }))
         } finally {
@@ -2286,7 +4010,7 @@ describe("CodeStore runtime product store bridge", () => {
         try {
             await codeStore.initializeStores()
             expect(codeStore.runtimeProductSnapshot).toBeNull()
-            expect(codeStore.repos.getRepo("repo-1")).toBeUndefined()
+            expect(codeStore.repos.getRepo("repo-1")).toEqual(expect.objectContaining({ id: "repo-1", path: "/tmp/runtime-repo" }))
 
             await expect(codeStore.repos.getGitInfo("repo-1")).resolves.toMatchObject({
                 repoRoot: "/tmp/runtime-repo",
@@ -2304,7 +4028,7 @@ describe("CodeStore runtime product store bridge", () => {
                 hasChanges: false,
             })
 
-            expect(refreshSnapshot).toHaveBeenCalledTimes(1)
+            expect(refreshSnapshot).not.toHaveBeenCalled()
             expect(state.snapshotReadCount ?? 0).toBe(0)
             expect(state.projectGitInfoReadCount).toBe(1)
             expect(state.projectGitBranchesReadCount).toBe(1)
@@ -2345,10 +4069,18 @@ describe("CodeStore runtime product store bridge", () => {
         try {
             await codeStore.initializeStores()
             expect(codeStore.runtimeProductSnapshot).toBeNull()
-            expect(codeStore.repos.getRepo("repo-1")).toBeUndefined()
+            expect(codeStore.repos.getRepo("repo-1")).toEqual(expect.objectContaining({ id: "repo-1", path: "/tmp/runtime-repo" }))
 
             await expect(codeStore.loadRuntimeProductTask("repo-1", "task-1")).resolves.toMatchObject({ id: "task-1", repoId: "repo-1" })
             expect(codeStore.tasks.getTask("task-1")).toEqual(expect.objectContaining({ id: "task-1" }))
+            const taskModel = codeStore.tasks.getTaskModel("task-1")
+            if (!taskModel) throw new Error("Expected loaded Core task to create a TaskModel")
+            const disposeTaskModel = vi.spyOn(taskModel, "dispose")
+            codeStore.runtimes.applyOpenADETaskRuntimeState("task-1", {
+                isRunning: true,
+                runtimeIds: ["runtime-task-1"],
+            })
+            expect(codeStore.runtimes.isTaskRunning("task-1")).toBe(true)
 
             const taskReadsBeforeDeletion = [...(state.taskReadRequests ?? [])]
             const projectReadsBeforeDeletion = state.projectReadCount ?? 0
@@ -2366,6 +4098,9 @@ describe("CodeStore runtime product store bridge", () => {
             })
 
             expect(codeStore.tasks.getTask("task-1")).toBeNull()
+            expect(codeStore.tasks.getTaskModel("task-1")).toBeNull()
+            expect(codeStore.runtimes.isTaskRunning("task-1")).toBe(false)
+            expect(disposeTaskModel).toHaveBeenCalledTimes(1)
             expect(codeStore.getCachedProductTask("task-1")).toBeNull()
             expect(productStore.getCachedTask("repo-1", "task-1")).toBeNull()
             expect(codeStore.runtimeProductSnapshot).toBeNull()
@@ -2373,7 +4108,7 @@ describe("CodeStore runtime product store bridge", () => {
             expect(state.taskReadRequests).toEqual(taskReadsBeforeDeletion)
             expect(state.projectReadCount ?? 0).toBe(projectReadsBeforeDeletion)
             expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsBeforeDeletion)
-            expect(refreshSnapshot).toHaveBeenCalledTimes(1)
+            expect(refreshSnapshot).not.toHaveBeenCalled()
         } finally {
             refreshSnapshot.mockRestore()
             codeStore.disconnectAllStores()
@@ -2404,7 +4139,7 @@ describe("CodeStore runtime product store bridge", () => {
         try {
             await codeStore.initializeStores()
             expect(codeStore.runtimeProductSnapshot).toBeNull()
-            expect(codeStore.repos.getRepo("repo-1")).toBeUndefined()
+            expect(codeStore.repos.getRepo("repo-1")).toEqual(expect.objectContaining({ id: "repo-1", path: "/tmp/runtime-repo" }))
 
             await expect(codeStore.loadRuntimeProductTask("repo-1", "task-1")).resolves.toMatchObject({ id: "task-1", repoId: "repo-1" })
             expect(codeStore.tasks.getTask("task-1")).toEqual(expect.objectContaining({ id: "task-1" }))
@@ -2428,7 +4163,7 @@ describe("CodeStore runtime product store bridge", () => {
             expect(state.taskReadRequests).toEqual(taskReadsBeforeDeletion)
             expect(state.projectReadCount ?? 0).toBe(projectReadsBeforeDeletion)
             expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsBeforeDeletion)
-            expect(refreshSnapshot).toHaveBeenCalledTimes(1)
+            expect(refreshSnapshot).not.toHaveBeenCalled()
         } finally {
             refreshSnapshot.mockRestore()
             codeStore.disconnectAllStores()
@@ -2505,7 +4240,7 @@ describe("CodeStore runtime product store bridge", () => {
             expect(legacyDescribePath).not.toHaveBeenCalled()
             expect(legacyContentSearch).not.toHaveBeenCalled()
             expect(legacyFuzzySearch).not.toHaveBeenCalled()
-            expect(refreshSnapshot).toHaveBeenCalledTimes(1)
+            expect(refreshSnapshot).not.toHaveBeenCalled()
         } finally {
             localStorage.removeItem("code:fileUsageStats")
             refreshSnapshot.mockRestore()
@@ -2674,6 +4409,97 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
+    it("bootstraps the Core product store for legacy resource imports before normal runtime initialization", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient()
+        const legacyImport = vi.spyOn(localOpenADEClient, "importLegacyResources").mockRejectedValue(new Error("legacy import should not be used"))
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+            expect(codeStore.runtimeProductStoreStatus).toBe("disabled")
+
+            const result = await codeStore.importProductLegacyResources({
+                dataDir: "/tmp/legacy-openade-data",
+                importSessions: true,
+            })
+
+            expect(legacyImport).not.toHaveBeenCalled()
+            expect(state.legacyImportRequests).toHaveLength(1)
+            expect(state.legacyImportRequests?.[0]).toMatchObject({
+                dataDir: "/tmp/legacy-openade-data",
+                importSessions: true,
+            })
+            expect(result.images?.importedImages).toBe(1)
+            expect(result.sessions?.importedSessions).toBe(1)
+            expect(codeStore.runtimeProductStoreStatus).toBe("ready")
+            expect(codeStore.runtimeProductStoreError).toBeNull()
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(true)
+            expect(codeStore.repos.getRepo("repo-1")).toEqual(expect.objectContaining({ id: "repo-1", name: "Runtime Repo" }))
+            expect(state.snapshotReadCount ?? 0).toBeGreaterThan(0)
+        } finally {
+            legacyImport.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("imports legacy resources through a migration-only Core endpoint without selecting Core for normal product state", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient()
+        const restoreOpenADEAPI = installCoreMigrationRuntimeEndpoint({
+            url: "ws://127.0.0.1:37376/v1/runtime",
+            token: "migration-token",
+        })
+        let migrationEndpointSeen: OpenADECoreRuntimeEndpoint | null = null
+        const legacyImport = vi.spyOn(localOpenADEClient, "importLegacyResources").mockRejectedValue(new Error("legacy import should not be used"))
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            coreMigrationProductStoreFactory: (endpoint) => {
+                migrationEndpointSeen = endpoint
+                return new OpenADEProductStore(client)
+            },
+        })
+
+        try {
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+            expect(codeStore.runtimeProductStoreStatus).toBe("disabled")
+
+            const result = await codeStore.importProductLegacyResources({
+                dataDir: "/tmp/legacy-openade-data",
+                importSessions: true,
+            })
+
+            expect(migrationEndpointSeen).toEqual({
+                url: "ws://127.0.0.1:37376/v1/runtime",
+                token: "migration-token",
+            })
+            expect(legacyImport).not.toHaveBeenCalled()
+            expect(state.legacyImportRequests).toHaveLength(1)
+            expect(state.legacyImportRequests?.[0]).toMatchObject({
+                dataDir: "/tmp/legacy-openade-data",
+                importSessions: true,
+            })
+            expect(result.images?.importedImages).toBe(1)
+            expect(result.sessions?.importedSessions).toBe(1)
+            expect(codeStore.runtimeProductStoreStatus).toBe("disabled")
+            expect(codeStore.runtimeProductStoreError).toBeNull()
+            expect(codeStore.runtimeProductSnapshot).toBeNull()
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+        } finally {
+            legacyImport.mockRestore()
+            restoreOpenADEAPI()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
     it("hydrates a desktop runtime-backed snapshot and task through a real local runtime client", async () => {
         const { client, runtime } = createRuntimeBackedClient()
         const codeStore = new CodeStore({
@@ -2775,7 +4601,285 @@ describe("CodeStore runtime product store bridge", () => {
                 })
             ).resolves.toMatchObject({ id: "task-1" })
             expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: true }])
+
+            state.taskReadRequests = []
+            await expect(
+                codeStore.loadRuntimeProductTask("repo-1", "task-1", {
+                    hydrateSessionEvents: false,
+                })
+            ).resolves.toMatchObject({ id: "task-1" })
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
         } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("uses a smaller bounded route task read without seeding the broad lightweight cache", async () => {
+        const { client, runtime, server, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            task: {
+                ...cloneTask(task),
+                runtimeState: {
+                    isRunning: true,
+                    runtimeIds: ["runtime-route-task"],
+                    updatedAt: now,
+                },
+            },
+            taskReadRequests: [],
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            state.taskReadRequests = []
+            await expect(codeStore.loadRuntimeProductTaskForRoute("repo-1", "task-1")).resolves.toMatchObject({ id: "task-1" })
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
+            expect(codeStore.runtimes.isTaskRunning("task-1")).toBe(true)
+
+            state.taskReadRequests = []
+            await expect(codeStore.loadRuntimeProductTaskForRoute("repo-1", "task-1")).resolves.toMatchObject({ id: "task-1" })
+            expect(state.taskReadRequests).toEqual([])
+
+            state.taskReadRequests = []
+            await codeStore.tasks.markTaskViewed("task-1")
+            await waitForRuntimeNotificationsToSettle()
+            await expect(codeStore.loadRuntimeProductTaskForRoute("repo-1", "task-1")).resolves.toMatchObject({ id: "task-1" })
+            expect(state.taskReadRequests).toEqual([])
+
+            state.taskReadRequests = []
+            state.task = {
+                ...requireStateTask(state, "task-1"),
+                title: "External route invalidation",
+                updatedAt: "2026-05-31T00:10:00.000Z",
+            }
+            server.notify(OPENADE_NOTIFICATION.taskUpdated, { repoId: "repo-1", taskId: "task-1" })
+            await waitForRuntimeNotificationsToSettle()
+            await expect(codeStore.loadRuntimeProductTaskForRoute("repo-1", "task-1")).resolves.toMatchObject({
+                id: "task-1",
+                title: "External route invalidation",
+            })
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
+
+            state.taskReadRequests = []
+            await expect(codeStore.loadRuntimeProductTask("repo-1", "task-1")).resolves.toMatchObject({ id: "task-1" })
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("scopes route task-read in-flight checks by repo, task, and read options", async () => {
+        const taskReadGate = createDeferred<void>()
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            taskReadRequests: [],
+            taskReadGate: taskReadGate.promise,
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            const routeRead = codeStore.loadRuntimeProductTaskForRoute("repo-1", "task-1")
+            await vi.waitFor(() => {
+                expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
+            })
+
+            expect(codeStore.hasProductTaskReadInFlight("repo-1", "task-1")).toBe(true)
+            expect(codeStore.hasProductTaskReadInFlight("repo-2", "task-1")).toBe(false)
+            expect(codeStore.hasProductTaskReadInFlight("repo-1", "task-1", { hydrateSessionEvents: false })).toBe(false)
+
+            taskReadGate.resolve(undefined)
+            await expect(routeRead).resolves.toMatchObject({ id: "task-1" })
+            expect(codeStore.hasProductTaskReadInFlight("repo-1", "task-1")).toBe(false)
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("clears stale route task-read problems when later Core task refreshes succeed", async () => {
+        const { client, runtime, server, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            task: null,
+            taskReadRequests: [],
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            await expect(codeStore.loadRuntimeProductTaskForRoute("repo-1", "task-1")).rejects.toThrow()
+            expect(codeStore.hasRuntimeProductRouteTaskReadMiss("repo-1", "task-1") || codeStore.getRuntimeProductRouteTaskReadError("repo-1", "task-1") !== null).toBe(
+                true
+            )
+
+            state.task = cloneTask(task)
+            state.taskReadRequests = []
+            await expect(codeStore.loadRuntimeProductTask("repo-1", "task-1")).resolves.toMatchObject({ id: "task-1" })
+
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+            expect(codeStore.hasRuntimeProductRouteTaskReadMiss("repo-1", "task-1")).toBe(false)
+            expect(codeStore.getRuntimeProductRouteTaskReadError("repo-1", "task-1")).toBeNull()
+
+            state.task = null
+            await expect(codeStore.loadRuntimeProductTaskForRoute("repo-1", "task-1")).rejects.toThrow()
+            expect(codeStore.hasRuntimeProductRouteTaskReadMiss("repo-1", "task-1") || codeStore.getRuntimeProductRouteTaskReadError("repo-1", "task-1") !== null).toBe(
+                true
+            )
+
+            state.task = {
+                ...cloneTask(task),
+                title: "Deferred refresh repaired task",
+                updatedAt: "2026-05-31T00:09:00.000Z",
+            }
+            state.taskReadRequests = []
+            server.notify(OPENADE_NOTIFICATION.taskUpdated, { repoId: "repo-1", taskId: "task-1" })
+
+            await waitForRuntimeDeferredTaskRefresh(() => {
+                expect(codeStore.tasks.getTask("task-1")?.title).toBe("Deferred refresh repaired task")
+            })
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
+            expect(codeStore.hasRuntimeProductRouteTaskReadMiss("repo-1", "task-1")).toBe(false)
+            expect(codeStore.getRuntimeProductRouteTaskReadError("repo-1", "task-1")).toBeNull()
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("attaches clean managed Core for generic task reads without initializing project projections first", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            taskReadRequests: [],
+            projectReadCount: 0,
+            snapshotReadCount: 0,
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: false,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            expect(codeStore.usesCoreOwnedProductRuntime()).toBe(true)
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+
+            await expect(codeStore.loadProductTaskForRead("repo-1", "task-1")).resolves.toMatchObject({
+                id: "task-1",
+                title: "Runtime task",
+            })
+
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(true)
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+            expect(state.projectReadCount ?? 0).toBe(0)
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("attaches clean managed Core for direct product helper reads without app-shell initialization", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            projectReadCount: 0,
+            snapshotReadCount: 0,
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: false,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            expect(codeStore.usesCoreOwnedProductRuntime()).toBe(true)
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+
+            await expect(
+                codeStore.readProductProjectFile({
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    path: runtimeSearchFixture.path,
+                    maxBytes: 1024,
+                })
+            ).resolves.toMatchObject({
+                repoId: "repo-1",
+                path: runtimeSearchFixture.path,
+                content: runtimeSearchFixture.content,
+            })
+
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(true)
+            expect(state.snapshotReadCount ?? 0).toBe(0)
+            expect(state.projectReadCount ?? 0).toBeLessThanOrEqual(1)
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("fails closed before cached task detail or runtime reads when task read is not advertised", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient(
+            {
+                ...createBridgeState(),
+                taskReadRequests: [],
+            },
+            ["initialize", OPENADE_METHOD.snapshotRead]
+        )
+        const runtimeRequest = vi.spyOn(runtime, "requestWithOptions")
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskRead)).toBe(false)
+            expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([expect.objectContaining({ id: "task-1" })])
+            runtimeRequest.mockClear()
+
+            await expect(codeStore.getRuntimeProductTask("repo-1", "task-1")).resolves.toBeNull()
+            await expect(codeStore.loadRuntimeProductTask("repo-1", "task-1")).resolves.toBeNull()
+            await expect(codeStore.loadProductTaskForRead("repo-1", "task-1")).resolves.toBeNull()
+
+            expect(codeStore.tasks.getTask("task-1")).toBeNull()
+            expect(codeStore.tasks.getTaskModel("task-1")).toBeNull()
+            expect(state.taskReadRequests).toEqual([])
+            expect(runtimeRequest).not.toHaveBeenCalled()
+        } finally {
+            runtimeRequest.mockRestore()
             codeStore.disconnectAllStores()
             await runtime.close()
         }
@@ -2823,9 +4927,13 @@ describe("CodeStore runtime product store bridge", () => {
             ).taskStoreConnections = new Map([["task-1", legacyTaskConnection]])
 
             const initialSnapshotReads = state.snapshotReadCount ?? 0
+            const initialProjectReads = state.projectReadCount ?? 0
             state.taskReadRequests = []
 
             await codeStore.refreshRepoStoreFromStorage()
+            expect(state.snapshotReadCount ?? 0).toBe(initialSnapshotReads)
+            expect(state.projectReadCount ?? 0).toBe(initialProjectReads)
+
             await codeStore.refreshTaskStoreFromStorage("task-1")
             await codeStore.syncRepoStore()
             await codeStore.reloadRepoStoreFromStorage()
@@ -2834,8 +4942,130 @@ describe("CodeStore runtime product store bridge", () => {
             expect(legacyRepoConnection.sync).not.toHaveBeenCalled()
             expect(legacyRepoConnection.disconnect).not.toHaveBeenCalled()
             expect(legacyTaskRefresh).not.toHaveBeenCalled()
-            expect(state.snapshotReadCount ?? 0).toBeGreaterThan(initialSnapshotReads)
-            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+            expect(state.snapshotReadCount ?? 0).toBe(initialSnapshotReads)
+            expect(state.projectReadCount ?? 0).toBeGreaterThan(initialProjectReads)
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("keeps route-owned runtime task refreshes off legacy Yjs before product projection initializes", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            taskReadRequests: [],
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const legacyRepoRefresh = vi.fn(async () => true)
+        const legacyTaskRefresh = vi.fn(async () => true)
+        const legacyRepoConnection = {
+            store: createRepoStore(new Y.Doc()),
+            sync: vi.fn(async () => undefined),
+            refresh: legacyRepoRefresh,
+            disconnect: vi.fn(),
+        }
+        const legacyTaskConnection = {
+            store: {},
+            sync: async () => undefined,
+            refresh: legacyTaskRefresh,
+            disconnect: vi.fn(),
+        }
+
+        try {
+            await codeStore.loadRuntimeProductTaskForRoute("repo-1", "task-1")
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+            expect(codeStore.shouldUseRuntimeProductTaskRoute()).toBe(true)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskMetadataUpdate)).toBe(true)
+            ;(
+                codeStore as unknown as {
+                    repoStoreConnection: typeof legacyRepoConnection
+                }
+            ).repoStoreConnection = legacyRepoConnection
+            ;(
+                codeStore as unknown as {
+                    taskStoreConnections: Map<string, typeof legacyTaskConnection>
+                }
+            ).taskStoreConnections = new Map([["task-1", legacyTaskConnection]])
+
+            const initialSnapshotReads = state.snapshotReadCount ?? 0
+            const initialProjectReads = state.projectReadCount ?? 0
+            state.taskReadRequests = []
+            state.taskMetadataUpdateRequests = []
+
+            await codeStore.updateProductTaskMetadata({
+                taskId: "task-1",
+                title: "Route-owned metadata update",
+            })
+
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+            expect(state.task?.title).toBe("Route-owned metadata update")
+            expect(state.taskMetadataUpdateRequests).toEqual([
+                expect.objectContaining({
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    title: "Route-owned metadata update",
+                }),
+            ])
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+            await codeStore.createProductComment({
+                taskId: "task-1",
+                source: { type: "llm_output", eventId: "event-1", lineStart: 1, lineEnd: 1 },
+                content: "Route-owned comment",
+                selectedText: { text: "Runtime", linesBefore: "", linesAfter: "" },
+                author: { id: "user-1", email: "user@example.com" },
+            })
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+            await codeStore.startProductReview({
+                repoId: "repo-1",
+                taskId: "task-1",
+                reviewType: "plan",
+                harnessId: "codex",
+                modelId: "gpt-test",
+            })
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+            await codeStore.startProductTurn({
+                repoId: "repo-1",
+                type: "do",
+                input: "Route-owned turn",
+                inTaskId: "task-1",
+                harnessId: "codex",
+                modelId: "gpt-test",
+            })
+
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+            expect(codeStore.tasks.getTask("task-1")).toEqual(
+                expect.objectContaining({
+                    title: "Route-owned metadata update",
+                    comments: expect.arrayContaining([expect.objectContaining({ content: "Route-owned comment" })]),
+                    events: expect.arrayContaining([
+                        expect.objectContaining({ id: "event-review", status: "in_progress" }),
+                        expect.objectContaining({ id: "event-started", status: "in_progress" }),
+                    ]),
+                })
+            )
+
+            await codeStore.refreshRepoStoreFromStorage()
+            await codeStore.refreshTaskStoreFromStorage("task-1")
+            await codeStore.refreshProductStateAfterTaskMutation("task-1")
+            await codeStore.refreshProductStateAfterTaskCreation("repo-1", "task-1")
+            await codeStore.refreshProductStateAfterRepoMutation()
+            await codeStore.syncRepoStore()
+            await codeStore.reloadRepoStoreFromStorage()
+
+            expect(legacyRepoRefresh).not.toHaveBeenCalled()
+            expect(legacyRepoConnection.sync).not.toHaveBeenCalled()
+            expect(legacyTaskRefresh).not.toHaveBeenCalled()
+            expect(state.snapshotReadCount ?? 0).toBe(initialSnapshotReads)
+            expect(state.projectReadCount ?? 0).toBe(initialProjectReads)
+            expect(state.taskReadRequests.length).toBeGreaterThan(0)
+            expect(state.taskReadRequests.every((request) => request.repoId === "repo-1" && request.taskId === "task-1")).toBe(true)
         } finally {
             codeStore.disconnectAllStores()
             await runtime.close()
@@ -2874,6 +5104,8 @@ describe("CodeStore runtime product store bridge", () => {
         const revokeObjectURL = vi.fn()
         const originalCreateObjectURL = URL.createObjectURL
         const originalRevokeObjectURL = URL.revokeObjectURL
+        const originalIntersectionObserver = globalThis.IntersectionObserver
+        let triggerIntersection: (() => void) | null = null
         Object.defineProperty(URL, "createObjectURL", {
             configurable: true,
             value: createObjectURL,
@@ -2881,6 +5113,53 @@ describe("CodeStore runtime product store bridge", () => {
         Object.defineProperty(URL, "revokeObjectURL", {
             configurable: true,
             value: revokeObjectURL,
+        })
+        class TestIntersectionObserver {
+            readonly root = null
+            readonly rootMargin = "200px"
+            readonly thresholds = []
+            private observed: Element | null = null
+
+            constructor(private readonly callback: IntersectionObserverCallback) {
+                triggerIntersection = () => {
+                    if (!this.observed) return
+                    const rect = this.observed.getBoundingClientRect()
+                    this.callback(
+                        [
+                            {
+                                boundingClientRect: rect,
+                                intersectionRatio: 1,
+                                intersectionRect: rect,
+                                isIntersecting: true,
+                                rootBounds: null,
+                                target: this.observed,
+                                time: performance.now(),
+                            },
+                        ],
+                        this as unknown as IntersectionObserver
+                    )
+                }
+            }
+
+            observe(target: Element): void {
+                this.observed = target
+            }
+
+            unobserve(target: Element): void {
+                if (this.observed === target) this.observed = null
+            }
+
+            disconnect(): void {
+                this.observed = null
+            }
+
+            takeRecords(): IntersectionObserverEntry[] {
+                return []
+            }
+        }
+        Object.defineProperty(globalThis, "IntersectionObserver", {
+            configurable: true,
+            value: TestIntersectionObserver as unknown as typeof IntersectionObserver,
         })
         ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
         const container = document.createElement("div")
@@ -2917,11 +5196,36 @@ describe("CodeStore runtime product store bridge", () => {
                         })
                     )
                 )
+                await Promise.resolve()
+            })
+            await act(async () => {
+                triggerIntersection?.()
                 await new Promise((resolve) => setTimeout(resolve, 20))
             })
             expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:runtime-image")
             expect(createObjectURL).toHaveBeenCalledTimes(1)
             expect(legacyImageLoad).not.toHaveBeenCalled()
+
+            await act(async () => {
+                await runtime.close()
+                root.render(
+                    createElement(
+                        CodeStoreProvider,
+                        { store: codeStore },
+                        createElement(ImageAttachments, {
+                            images: [image],
+                            taskId: "task-1",
+                        })
+                    )
+                )
+                await Promise.resolve()
+            })
+
+            await vi.waitFor(() => {
+                expect(container.querySelector("img")).toBeNull()
+            })
+            expect(revokeObjectURL).toHaveBeenCalledWith("blob:runtime-image")
+            expect(createObjectURL).toHaveBeenCalledTimes(1)
         } finally {
             act(() => root.unmount())
             container.remove()
@@ -2933,6 +5237,87 @@ describe("CodeStore runtime product store bridge", () => {
             Object.defineProperty(URL, "revokeObjectURL", {
                 configurable: true,
                 value: originalRevokeObjectURL,
+            })
+            Object.defineProperty(globalThis, "IntersectionObserver", {
+                configurable: true,
+                value: originalIntersectionObserver,
+            })
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("does not read classic action images when runtime image read is unavailable", async () => {
+        const image = {
+            id: "runtime-image-denied",
+            mediaType: "image/png",
+            ext: "png",
+            originalWidth: 2,
+            originalHeight: 1,
+            resizedWidth: 2,
+            resizedHeight: 1,
+        }
+        const taskWithImage: OpenADETask = {
+            ...cloneTask(task),
+            events: task.events.map((event) => (taskEventRecord(event) && event.id === "event-1" ? { ...event, images: [image] } : event)),
+        }
+        const { client, runtime } = createRuntimeBackedClient(
+            {
+                ...createBridgeState(),
+                task: taskWithImage,
+            },
+            ["initialize", OPENADE_METHOD.snapshotRead]
+        )
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const runtimeImageRead = vi.spyOn(codeStore, "readProductTaskImage")
+        const legacyImageLoad = vi.spyOn(dataFolderApi, "load").mockRejectedValue(new Error("legacy image data folder should not be used"))
+        const createObjectURL = vi.fn(() => "blob:runtime-image-denied")
+        const originalCreateObjectURL = URL.createObjectURL
+        Object.defineProperty(URL, "createObjectURL", {
+            configurable: true,
+            value: createObjectURL,
+        })
+        ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+        const container = document.createElement("div")
+        document.body.appendChild(container)
+        const root = createRoot(container)
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskImageRead)).toBe(false)
+
+            await act(async () => {
+                root.render(
+                    createElement(
+                        CodeStoreProvider,
+                        { store: codeStore },
+                        createElement(ImageAttachments, {
+                            images: [image],
+                            taskId: "task-1",
+                        })
+                    )
+                )
+                await new Promise((resolve) => setTimeout(resolve, 20))
+            })
+
+            expect(container.querySelector("img")).toBeNull()
+            expect(runtimeImageRead).not.toHaveBeenCalled()
+            expect(legacyImageLoad).not.toHaveBeenCalled()
+            expect(createObjectURL).not.toHaveBeenCalled()
+        } finally {
+            act(() => root.unmount())
+            container.remove()
+            legacyImageLoad.mockRestore()
+            runtimeImageRead.mockRestore()
+            Object.defineProperty(URL, "createObjectURL", {
+                configurable: true,
+                value: originalCreateObjectURL,
             })
             codeStore.disconnectAllStores()
             await runtime.close()
@@ -3054,9 +5439,17 @@ describe("CodeStore runtime product store bridge", () => {
             const legacyRepoRefresh = vi.spyOn(codeStore, "refreshRepoStoreFromStorage")
 
             state.taskReadRequests = []
+            state.taskMetadataUpdateRequests = []
             await codeStore.tasks.markTaskViewed("task-1")
 
             expect(codeStore.getTaskPreviewsForRepo("repo-1")[0]?.lastViewedAt).toBeDefined()
+            expect(state.taskMetadataUpdateRequests).toEqual([
+                expect.objectContaining({
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    lastViewedAt: expect.any(String),
+                }),
+            ])
             expect(state.taskReadRequests).toEqual([])
             expect(legacyTaskRefresh).not.toHaveBeenCalled()
             expect(legacyRepoRefresh).not.toHaveBeenCalled()
@@ -3133,7 +5526,7 @@ describe("CodeStore runtime product store bridge", () => {
             expect(legacyTaskRead).not.toHaveBeenCalled()
             expect(legacyRepoRefresh).not.toHaveBeenCalled()
             expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
-            expect(state.snapshotReadCount).toBe(snapshotReadsAfterInitialize)
+            expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsAfterInitialize)
             expect(codeStore.runtimeProductSnapshot?.repos[0]?.tasks[0]?.usage).toMatchObject({
                 usageVersion: 2,
                 eventCount: 1,
@@ -3142,6 +5535,32 @@ describe("CodeStore runtime product store bridge", () => {
                 usageVersion: 2,
                 eventCount: 1,
             })
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("does not backfill runtime stats through metadata when task metadata update is unavailable", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient(createBridgeState(), [OPENADE_METHOD.snapshotRead, OPENADE_METHOD.taskRead, "initialize"])
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            state.taskReadRequests = []
+            await codeStore.backfillTaskUsagePreview("repo-1", "task-1")
+
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskMetadataUpdate)).toBe(false)
+            expect(state.taskReadRequests).toEqual([])
+            expect(codeStore.runtimeProductSnapshot?.repos[0]?.tasks[0]?.usage).toBeUndefined()
+            expect(codeStore.getTaskPreviewReposForStats()[0]?.tasks[0]?.usage).toBeUndefined()
         } finally {
             codeStore.disconnectAllStores()
             await runtime.close()
@@ -3173,7 +5592,7 @@ describe("CodeStore runtime product store bridge", () => {
             expect(state.usageBackfillRequests).toEqual([{ repoId: "repo-1", taskIds: ["task-1"], force: undefined }])
             expect(state.usageRecalculateRequests).toEqual([])
             expect(state.taskReadRequests).toEqual([])
-            expect(state.snapshotReadCount).toBe(snapshotReadsAfterInitialize)
+            expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsAfterInitialize)
             expect(legacyTaskRead).not.toHaveBeenCalled()
             expect(legacyRepoRefresh).not.toHaveBeenCalled()
             expect(codeStore.getTaskPreviewReposForStats()[0]?.tasks[0]?.usage).toMatchObject({
@@ -3181,6 +5600,34 @@ describe("CodeStore runtime product store bridge", () => {
                 inputTokens: 34,
                 eventCount: 1,
             })
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+            restoreOpenADEAPI()
+        }
+    })
+
+    it("does not backfill Core-owned stats when task usage backfill is unavailable", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const { client, runtime, state } = createRuntimeBackedClient(createBridgeState(), [OPENADE_METHOD.snapshotRead, "initialize"])
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            state.usageBackfillRequests = []
+            await codeStore.backfillTaskUsagePreviews([{ repoId: "repo-1", taskId: "task-1" }])
+            await codeStore.backfillTaskUsagePreview("repo-1", "task-1")
+
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskUsageBackfill)).toBe(false)
+            expect(state.usageBackfillRequests).toEqual([])
+            expect(codeStore.getTaskPreviewReposForStats()[0]?.tasks[0]?.usage).toBeUndefined()
         } finally {
             codeStore.disconnectAllStores()
             await runtime.close()
@@ -3456,7 +5903,59 @@ describe("CodeStore runtime product store bridge", () => {
                 fastMode: true,
             })
             expect(state.taskReadRequests).toEqual([])
-            expect(state.snapshotReadCount).toBe(snapshotReadsBeforeReview)
+            expect(state.snapshotReadCount ?? 0).toBe(snapshotReadsBeforeReview)
+        } finally {
+            await act(async () => root.unmount())
+            container.remove()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("keeps the review picker fail-closed when review start is not advertised", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const container = document.createElement("div")
+        document.body.appendChild(container)
+        const root = createRoot(container)
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+            vi.spyOn(codeStore, "canUseProductMethod").mockImplementation((method) => method !== OPENADE_METHOD.reviewStart)
+
+            await act(async () => {
+                root.render(createElement(CodeStoreProvider, { store: codeStore }, createElement(NiceModal.Provider)))
+            })
+            await act(async () => {
+                void NiceModal.show(ReviewPickerModal, {
+                    taskId: "task-1",
+                    reviewType: "work",
+                    customInstructions: "Do not submit when denied",
+                })
+            })
+
+            await waitForRuntimeBridge(() => {
+                expect(document.body.textContent).toContain("Review is not available from this runtime.")
+            })
+            const reviewButton = Array.from(document.body.querySelectorAll("button")).find((button) => {
+                const text = button.textContent?.trim()
+                return text !== undefined && text.length > 0 && text !== "Cancel" && button.getAttribute("title") !== "Close"
+            })
+            if (!reviewButton) throw new Error("Review option button was not rendered")
+
+            expect(reviewButton.disabled).toBe(true)
+            await act(async () => {
+                reviewButton.click()
+            })
+
+            expect(state.reviewStartRequests ?? []).toEqual([])
         } finally {
             await act(async () => root.unmount())
             container.remove()
@@ -3536,6 +6035,37 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
+    it("does not start classic repeat turns when turn start is not advertised", async () => {
+        const state = createBridgeState()
+        const { client, runtime } = createRuntimeBackedClient(state, [OPENADE_METHOD.snapshotRead, OPENADE_METHOD.taskRead, "initialize"])
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+            const taskModel = codeStore.tasks.getTaskModel("task-1")
+            expect(taskModel).not.toBeNull()
+            taskModel?.input.setValue("Repeat should not run")
+
+            codeStore.repeat.start("task-1")
+
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.turnStart)).toBe(false)
+            expect(codeStore.repeat.isActive).toBe(false)
+            expect(codeStore.repeat.iterationCount).toBe(0)
+            expect(state.turnStartRequests ?? []).toEqual([])
+        } finally {
+            codeStore.repeat.stop()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
     it("cleans up cancelled server-accepted task creation through runtime product APIs", async () => {
         const { client, runtime, state } = createRuntimeBackedClient({
             project: { ...project, tasks: [] },
@@ -3575,10 +6105,10 @@ describe("CodeStore runtime product store bridge", () => {
                 expect(codeStore.creation.getCreation(creationId)).toBeNull()
                 expect(state.task).toBeNull()
             })
-            expect(interruptTurn).toHaveBeenCalledWith("task-started")
+            expect(interruptTurn).toHaveBeenCalledWith("task-created")
             expect(deleteTask).toHaveBeenCalledWith({
                 repoId: "repo-1",
-                taskId: "task-started",
+                taskId: "task-created",
                 options: {
                     deleteSnapshots: true,
                     deleteImages: true,
@@ -3656,8 +6186,59 @@ describe("CodeStore runtime product store bridge", () => {
             })
             expect(rawSetup).not.toHaveBeenCalled()
             expect(refreshAfterMutation).not.toHaveBeenCalled()
-            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
             expect(state.snapshotReadCount).toBe(snapshotReadsBeforeSetup)
+        } finally {
+            await act(async () => root.unmount())
+            container.remove()
+            rawSetup.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("does not auto-run classic environment setup when the runtime omits prepare capability", async () => {
+        const state = createBridgeState()
+        const { client, runtime } = createRuntimeBackedClient(state, [OPENADE_METHOD.snapshotRead, OPENADE_METHOD.taskRead, "initialize"])
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const rawSetup = vi.spyOn(TaskEnvironment, "setup").mockRejectedValue(new Error("legacy environment setup should not be used"))
+        const container = document.createElement("div")
+        document.body.appendChild(container)
+        const root = createRoot(container)
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+            const taskModel = codeStore.tasks.getTaskModel("task-1")
+            if (!taskModel) throw new Error("Task model was not created")
+            state.taskReadRequests = []
+
+            await act(async () => {
+                root.render(
+                    createElement(
+                        CodeStoreProvider,
+                        { store: codeStore },
+                        createElement(EnvironmentSetupView, {
+                            taskModel,
+                            onComplete: () => undefined,
+                        })
+                    )
+                )
+            })
+
+            await waitForRuntimeBridge(() => {
+                expect(container.textContent).toContain("Environment setup is not available from this runtime")
+            })
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskEnvironmentPrepare)).toBe(false)
+            expect(rawSetup).not.toHaveBeenCalled()
+            expect(state.task?.deviceEnvironments).toEqual([])
+            expect(state.taskReadRequests).toEqual([])
         } finally {
             await act(async () => root.unmount())
             container.remove()
@@ -3708,7 +6289,7 @@ describe("CodeStore runtime product store bridge", () => {
                     actionEventId: "event-1",
                     referenceBranch: "main",
                     mergeBaseCommit: "merge-base",
-                    fullPatch: "",
+                    fullPatch: snapshotPatch,
                     patchFileId: "patch-1",
                     stats: { filesChanged: 1, insertions: 2, deletions: 1 },
                     files: [],
@@ -3888,6 +6469,112 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
+    it("uses the prepared runtime worktree directory for classic shell working-dir hints", async () => {
+        const previousDeviceId = localStorage.getItem("openade-device-id")
+        localStorage.setItem("openade-device-id", "runtime-device")
+        const { client, runtime } = createRuntimeBackedClient({
+            project: { ...project, path: "/tmp/runtime-repo" },
+            task: {
+                ...task,
+                isolationStrategy: { type: "worktree", sourceBranch: "main" },
+                deviceEnvironments: [
+                    {
+                        id: "runtime-device",
+                        deviceId: "runtime-device",
+                        worktreeDir: "/tmp/runtime-worktree",
+                        setupComplete: true,
+                        createdAt: now,
+                        lastUsedAt: now,
+                    },
+                ],
+                events: [
+                    {
+                        id: "setup-runtime-device",
+                        type: "setup_environment",
+                        status: "completed",
+                        createdAt: now,
+                        completedAt: now,
+                        worktreeId: "runtime-task",
+                        deviceId: "runtime-device",
+                        workingDir: "/tmp/runtime-worktree/packages/web",
+                        setupOutput: "Runtime worktree ready",
+                    },
+                ],
+            },
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const legacyDescribePath = vi.spyOn(filesApi, "describePath").mockRejectedValue(new Error("legacy file browse should not be used"))
+        const runtimeGitInfoRead = vi.spyOn(codeStore, "readProductProjectGitInfo")
+        const runtimeFileRead = vi.spyOn(codeStore, "readProductProjectFile")
+        const runtimeFuzzySearch = vi.spyOn(codeStore, "fuzzySearchProductProjectFiles")
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+
+            const taskModel = codeStore.tasks.getTaskModel("task-1")
+            if (!taskModel) throw new Error("Expected runtime task model")
+            const loadEnvironment = vi.spyOn(taskModel, "loadEnvironment")
+
+            expect(taskModel.taskWorkingDirHint).toBe("/tmp/runtime-worktree/packages/web")
+            await expect(taskModel.ensureTaskWorkingDirHint()).resolves.toBe("/tmp/runtime-worktree/packages/web")
+            expect(runtimeGitInfoRead).not.toHaveBeenCalled()
+            await expect(resolveTaskListCopyPath({ codeStore, workspaceId: "repo-1", selectedTaskId: "task-1" })).resolves.toBe(
+                "/tmp/runtime-worktree/packages/web"
+            )
+            expect(loadEnvironment).not.toHaveBeenCalled()
+            expect(runtimeGitInfoRead).not.toHaveBeenCalled()
+            expect(taskModel.fileBrowser.workingDir).toBe("/tmp/runtime-worktree/packages/web")
+            expect(taskModel.contentSearch.workingDir).toBe("/tmp/runtime-worktree/packages/web")
+
+            const editorManager = codeStore.smartEditors.getManager("task-task-1", "repo-1")
+            await expect(editorManager.searchFileMentions("/tmp/runtime-worktree/packages/web", "runtime", 20)).resolves.toEqual({
+                results: ["src/runtime-search.ts"],
+                treeMatch: null,
+            })
+            await expect(editorManager.searchFileMentions("/tmp/runtime-repo", "runtime", 20)).resolves.toEqual({ results: [], treeMatch: null })
+            expect(editorManager.canSearchFileMentions("/tmp/runtime-repo")).toBe(false)
+
+            await taskModel.fileBrowser.openFileReference("runtime-search.ts", {
+                line: 2,
+            })
+
+            await vi.waitFor(() => {
+                expect(taskModel.fileBrowser.activeFileData?.content).toBe(runtimeSearchFixture.content)
+            })
+            expect(runtimeFuzzySearch).toHaveBeenCalledWith({
+                repoId: "repo-1",
+                taskId: "task-1",
+                query: "runtime-search.ts",
+                matchDirs: false,
+                limit: 12,
+                includeHidden: true,
+                includeGenerated: true,
+            })
+            expect(runtimeFileRead).toHaveBeenCalledWith({
+                repoId: "repo-1",
+                taskId: "task-1",
+                path: "src/runtime-search.ts",
+                maxBytes: 5 * 1024 * 1024,
+            })
+            expect(legacyDescribePath).not.toHaveBeenCalled()
+        } finally {
+            if (previousDeviceId === null) localStorage.removeItem("openade-device-id")
+            else localStorage.setItem("openade-device-id", previousDeviceId)
+            runtimeFileRead.mockRestore()
+            runtimeFuzzySearch.mockRestore()
+            legacyDescribePath.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
     it("loads classic cron definitions through runtime cron definition reads", async () => {
         const { client, runtime } = createRuntimeBackedClient({
             project: { ...project, path: "/tmp/runtime-repo" },
@@ -3925,6 +6612,47 @@ describe("CodeStore runtime product store bridge", () => {
             runtimeCronDefinitions.mockRestore()
             runtimeProcessList.mockRestore()
         } finally {
+            codeStore.crons.stop()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("skips runtime cron definition and install-state reads when cron read capabilities are absent", async () => {
+        const { client, runtime } = createRuntimeBackedClient(
+            {
+                ...createBridgeState(),
+                project: { ...project, path: "/tmp/runtime-repo" },
+                task: { ...task, isolationStrategy: { type: "head" } },
+            },
+            allOpenADEMethodPermissionsExcept([OPENADE_METHOD.cronDefinitionsRead, OPENADE_METHOD.cronInstallStateRead])
+        )
+        const runtimeRequest = vi.spyOn(runtime, "requestWithOptions")
+        const legacyLoad = vi.spyOn(dataFolderApi, "load").mockRejectedValue(new Error("legacy cron data folder should not be used"))
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.cronDefinitionsRead)).toBe(false)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.cronInstallStateRead)).toBe(false)
+            runtimeRequest.mockClear()
+
+            await codeStore.crons.ensureRepoConfigLoaded("repo-1")
+
+            const requestedMethods = runtimeRequest.mock.calls.map((call) => call[0])
+            expect(requestedMethods).not.toContain(OPENADE_METHOD.cronDefinitionsRead)
+            expect(requestedMethods).not.toContain(OPENADE_METHOD.cronInstallStateRead)
+            expect(legacyLoad).not.toHaveBeenCalled()
+            expect(codeStore.crons.getCronsForRepo("repo-1")).toEqual([])
+        } finally {
+            runtimeRequest.mockRestore()
+            legacyLoad.mockRestore()
             codeStore.crons.stop()
             codeStore.disconnectAllStores()
             await runtime.close()
@@ -4020,19 +6748,22 @@ describe("CodeStore runtime product store bridge", () => {
                 root.render(createElement(CodeStoreProvider, { store: codeStore }, createElement(CronsSidebarContent, { workspaceId: "repo-1" })))
             })
 
+            expect(container.textContent).toContain("Add a cron job")
+            expect(container.textContent).not.toContain("Runtime Cron")
+            expect(runtimeCronDefinitions).not.toHaveBeenCalled()
+            expect(runtimeProcessList).not.toHaveBeenCalled()
+
+            const addCronButton = Array.from(container.querySelectorAll("button")).find((candidate) => candidate.textContent === "Add a cron job")
+            if (!(addCronButton instanceof HTMLButtonElement)) throw new Error("Add cron button was not rendered")
+            await act(async () => {
+                addCronButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }))
+            })
             await vi.waitFor(() => {
-                expect(container.textContent).toContain("Runtime Cron")
                 expect(runtimeCronDefinitions).toHaveBeenCalledWith({
                     repoId: "repo-1",
                 })
+                expect(modalShow).toHaveBeenCalled()
                 expect(runtimeProcessList).not.toHaveBeenCalled()
-            })
-
-            const cronLabel = Array.from(container.querySelectorAll("span")).find((candidate) => candidate.textContent === "Runtime Cron")
-            if (!(cronLabel instanceof HTMLSpanElement)) throw new Error("Runtime cron row was not rendered")
-
-            await act(async () => {
-                cronLabel.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }))
             })
 
             type CronEditorModalProps = {
@@ -4045,7 +6776,7 @@ describe("CodeStore runtime product store bridge", () => {
             expect(shownProps).toEqual(
                 expect.objectContaining({
                     initialTab: "crons",
-                    initialFilePath: "/tmp/runtime-repo/openade.toml",
+                    initialFilePath: undefined,
                     productScope: { repoId: "repo-1" },
                     productAccess: expect.any(Object),
                 })
@@ -4173,6 +6904,89 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
+    it("does not issue stale classic process editor discovery reads when project process list is unavailable", async () => {
+        const state = createBridgeState()
+        state.project = { ...project, path: "/tmp/runtime-repo" }
+        state.task = { ...task, isolationStrategy: { type: "head" } }
+        const { client, runtime } = createRuntimeBackedClient(state, [OPENADE_METHOD.snapshotRead, OPENADE_METHOD.taskRead, "initialize"])
+        const runtimeRequest = vi.spyOn(runtime, "requestWithOptions")
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const runtimeProcessList = vi.spyOn(codeStore, "listProductProjectProcesses")
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.projectProcessList)).toBe(false)
+            runtimeRequest.mockClear()
+
+            const configs = await readProcsEditorConfigs({
+                codeStore,
+                searchPath: "/tmp/runtime-repo",
+                productScope: { repoId: "repo-1" },
+            })
+
+            expect(configs).toEqual({
+                repoRoot: "/tmp/runtime-repo",
+                searchRoot: "/tmp/runtime-repo",
+                isWorktree: false,
+                configs: [],
+                errors: [],
+            })
+            expect(runtimeProcessList).not.toHaveBeenCalled()
+            expect(runtimeRequest.mock.calls.map((call) => call[0])).not.toContain(OPENADE_METHOD.projectProcessList)
+        } finally {
+            runtimeRequest.mockRestore()
+            runtimeProcessList.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("does not issue stale classic process editor file reads when project file read is unavailable", async () => {
+        const state = createBridgeState()
+        state.project = { ...project, path: "/tmp/runtime-repo" }
+        state.task = { ...task, isolationStrategy: { type: "head" } }
+        const { client, runtime } = createRuntimeBackedClient(state, allOpenADEMethodPermissionsExcept([OPENADE_METHOD.projectFileRead]))
+        const runtimeRequest = vi.spyOn(runtime, "requestWithOptions")
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const runtimeFileRead = vi.spyOn(codeStore, "readProductProjectFile")
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.projectFileRead)).toBe(false)
+            runtimeRequest.mockClear()
+
+            await expect(
+                loadProcsEditorFile({
+                    codeStore,
+                    filePath: "/tmp/runtime-repo/openade.toml",
+                    repoRoot: "/tmp/runtime-repo",
+                    searchPath: "/tmp/runtime-repo",
+                    productScope: { repoId: "repo-1" },
+                })
+            ).rejects.toThrow("Project file reads are not available from this runtime")
+
+            expect(runtimeFileRead).not.toHaveBeenCalled()
+            expect(runtimeRequest.mock.calls.map((call) => call[0])).not.toContain(OPENADE_METHOD.projectFileRead)
+        } finally {
+            runtimeRequest.mockRestore()
+            runtimeFileRead.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
     it("saves classic process config edits through scoped runtime project file writes", async () => {
         const { client, runtime, state } = createRuntimeBackedClient({
             project: { ...project, path: "/tmp/runtime-repo" },
@@ -4233,6 +7047,215 @@ describe("CodeStore runtime product store bridge", () => {
             expect(result?.configs[0]?.relativePath).toBe("openade.toml")
         } finally {
             runtimeFileWrite.mockRestore()
+            runtimeProcessList.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("saves classic process config edits without post-save process reads when project process list is unavailable", async () => {
+        const state = createBridgeState()
+        state.project = { ...project, path: "/tmp/runtime-repo" }
+        state.task = { ...task, isolationStrategy: { type: "head" } }
+        const { client, runtime } = createRuntimeBackedClient(state, allOpenADEMethodPermissionsExcept([OPENADE_METHOD.projectProcessList]))
+        const runtimeRequest = vi.spyOn(runtime, "requestWithOptions")
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const runtimeFileWrite = vi.spyOn(codeStore, "writeProductProjectFile")
+        const runtimeProcessList = vi.spyOn(codeStore, "listProductProjectProcesses")
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.projectFileWrite)).toBe(true)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.projectProcessList)).toBe(false)
+            runtimeRequest.mockClear()
+
+            const result = await saveProcsEditorFile({
+                codeStore,
+                selectedFilePath: "/tmp/runtime-repo/openade.toml",
+                relativePath: "openade.toml",
+                processes: [{ name: "Runtime Process", type: "task", command: "npm test" }],
+                crons: [],
+                searchPath: "/tmp/runtime-repo",
+                productScope: { repoId: "repo-1", taskId: "task-1" },
+            })
+
+            expect(result).toBeNull()
+            expect(runtimeFileWrite).toHaveBeenCalledWith({
+                repoId: "repo-1",
+                taskId: "task-1",
+                path: "openade.toml",
+                encoding: "utf8",
+                content: expect.stringContaining("[[process]]"),
+                createDirs: true,
+            })
+            expect(runtimeProcessList).not.toHaveBeenCalled()
+            expect(runtimeRequest.mock.calls.map((call) => call[0])).toContain(OPENADE_METHOD.projectFileWrite)
+            expect(runtimeRequest.mock.calls.map((call) => call[0])).not.toContain(OPENADE_METHOD.projectProcessList)
+            expect(state.projectFiles?.get("openade.toml")?.content).toContain('command = "npm test"')
+        } finally {
+            runtimeRequest.mockRestore()
+            runtimeFileWrite.mockRestore()
+            runtimeProcessList.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("refuses classic process config saves when project file write is unavailable", async () => {
+        const state = createBridgeState()
+        state.project = { ...project, path: "/tmp/runtime-repo" }
+        state.task = { ...task, isolationStrategy: { type: "head" } }
+        const { client, runtime } = createRuntimeBackedClient(state, [OPENADE_METHOD.snapshotRead, "initialize"])
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const runtimeFileWrite = vi.spyOn(codeStore, "writeProductProjectFile")
+        const runtimeProcessList = vi.spyOn(codeStore, "listProductProjectProcesses")
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            await expect(
+                saveProcsEditorFile({
+                    codeStore,
+                    selectedFilePath: "/tmp/runtime-repo/openade.toml",
+                    relativePath: "openade.toml",
+                    processes: [{ name: "Runtime Process", type: "task", command: "npm test" }],
+                    crons: [],
+                    searchPath: "/tmp/runtime-repo",
+                    productScope: { repoId: "repo-1", taskId: "task-1" },
+                })
+            ).rejects.toThrow("Project file writes are not available from this runtime")
+
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.projectFileWrite)).toBe(false)
+            expect(runtimeFileWrite).not.toHaveBeenCalled()
+            expect(runtimeProcessList).not.toHaveBeenCalled()
+            expect(state.projectFileWrites ?? []).toEqual([])
+        } finally {
+            runtimeFileWrite.mockRestore()
+            runtimeProcessList.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("does not issue stale classic process tray reads when project process list is unavailable", async () => {
+        const state = createBridgeState()
+        state.project = { ...project, path: "/tmp/runtime-repo" }
+        state.task = { ...task, isolationStrategy: { type: "head" } }
+        const { client, runtime } = createRuntimeBackedClient(state, [OPENADE_METHOD.snapshotRead, OPENADE_METHOD.taskRead, "initialize"])
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const runtimeProcessList = vi.spyOn(codeStore, "listProductProjectProcesses")
+        ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+        const container = document.createElement("div")
+        document.body.appendChild(container)
+        const root = createRoot(container)
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.projectProcessList)).toBe(false)
+
+            await act(async () => {
+                root.render(
+                    createElement(
+                        CodeStoreProvider,
+                        { store: codeStore },
+                        createElement(ProcessesTray, {
+                            searchPath: "/tmp/runtime-repo",
+                            context: { type: "repo", root: "/tmp/runtime-repo" },
+                            workspaceId: "repo-1",
+                            isOpen: true,
+                            productScope: { repoId: "repo-1", taskId: "task-1" },
+                        })
+                    )
+                )
+                await new Promise((resolve) => setTimeout(resolve, 20))
+            })
+
+            expect(runtimeProcessList).not.toHaveBeenCalled()
+            expect(container.textContent).not.toContain("Runtime Process")
+        } finally {
+            act(() => root.unmount())
+            container.remove()
+            runtimeProcessList.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("does not reload the open classic process tray when equivalent context props are recreated", async () => {
+        const { client, runtime } = createRuntimeBackedClient({
+            project: { ...project, path: "/tmp/runtime-repo" },
+            task: { ...task, isolationStrategy: { type: "head" } },
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const runtimeProcessList = vi.spyOn(codeStore, "listProductProjectProcesses")
+        ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+        const container = document.createElement("div")
+        document.body.appendChild(container)
+        const root = createRoot(container)
+
+        const renderTray = () => {
+            root.render(
+                createElement(
+                    CodeStoreProvider,
+                    { store: codeStore },
+                    createElement(ProcessesTray, {
+                        searchPath: "/tmp/runtime-repo",
+                        context: { type: "repo", root: "/tmp/runtime-repo" },
+                        workspaceId: "repo-1",
+                        isOpen: true,
+                        productScope: { repoId: "repo-1", taskId: "task-1" },
+                    })
+                )
+            )
+        }
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+
+            await act(async () => {
+                renderTray()
+            })
+            await vi.waitFor(() => {
+                expect(container.textContent).toContain("Runtime Process")
+                expect(runtimeProcessList).toHaveBeenCalledTimes(1)
+            })
+
+            runtimeProcessList.mockClear()
+            await act(async () => {
+                renderTray()
+                await new Promise((resolve) => setTimeout(resolve, 20))
+            })
+
+            expect(runtimeProcessList).not.toHaveBeenCalled()
+        } finally {
+            act(() => root.unmount())
+            container.remove()
             runtimeProcessList.mockRestore()
             codeStore.disconnectAllStores()
             await runtime.close()
@@ -4435,6 +7458,9 @@ describe("CodeStore runtime product store bridge", () => {
         const runtimeProcessStop = vi.spyOn(codeStore, "stopProductProjectProcess")
         const context = { type: "repo" as const, root: "/tmp/runtime-repo" }
         const productAccess = {
+            canStartProjectProcess: true,
+            canReconnectProjectProcess: true,
+            canStopProjectProcess: true,
             startProjectProcess: (args: { definitionId: string }) =>
                 codeStore.startProductProjectProcess({
                     repoId: "repo-1",
@@ -4480,6 +7506,66 @@ describe("CodeStore runtime product store bridge", () => {
             expect(codeStore.repoProcesses.getProcessesForContext(context)).toEqual([])
         } finally {
             runtimeProcessStop.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("does not call unavailable runtime changes methods from a stale classic changes manager", async () => {
+        const { client, runtime } = createRuntimeBackedClient(
+            createBridgeState(),
+            allOpenADEMethodPermissionsExcept([OPENADE_METHOD.taskChangesRead, OPENADE_METHOD.taskDiffRead, OPENADE_METHOD.taskFilePairRead])
+        )
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const runtimeChangesRead = vi.spyOn(codeStore, "readProductTaskChanges")
+        const runtimeDiffRead = vi.spyOn(codeStore, "readProductTaskDiff")
+        const runtimeFilePairRead = vi.spyOn(codeStore, "readProductTaskFilePair")
+        const legacyChangedFiles = vi.spyOn(gitApi, "getChangedFiles").mockRejectedValue(new Error("legacy changed-files read should not be used"))
+        const legacyDiffRead = vi.spyOn(gitApi, "getWorktreeFilePatch").mockRejectedValue(new Error("legacy diff read should not be used"))
+        const legacyFilePairRead = vi.spyOn(gitApi, "getFilePair").mockRejectedValue(new Error("legacy file-pair read should not be used"))
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskChangesRead)).toBe(false)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskDiffRead)).toBe(false)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskFilePairRead)).toBe(false)
+
+            const taskModel = codeStore.tasks.getTaskModel("task-1")
+            if (!taskModel) throw new Error("Expected runtime task model")
+            await taskModel.refreshGitState({ force: true })
+            expect(taskModel.gitStatus?.hasChanges).toBe(true)
+
+            const changes = taskModel.changes
+            changes.initializeForTray()
+            changes.ensureSelectedFileLoaded("current")
+            changes.ensureSelectedFileLoaded("unified", 3)
+            changes.setDiffSource("from-base")
+
+            await new Promise((resolve) => setTimeout(resolve, 0))
+
+            expect(runtimeChangesRead).not.toHaveBeenCalled()
+            expect(runtimeDiffRead).not.toHaveBeenCalled()
+            expect(runtimeFilePairRead).not.toHaveBeenCalled()
+            expect(legacyChangedFiles).not.toHaveBeenCalled()
+            expect(legacyDiffRead).not.toHaveBeenCalled()
+            expect(legacyFilePairRead).not.toHaveBeenCalled()
+            expect(changes.filePair).toBeNull()
+            expect(changes.filePatch).toBeNull()
+            expect(changes.fromBaseFiles).toBeNull()
+        } finally {
+            runtimeChangesRead.mockRestore()
+            runtimeDiffRead.mockRestore()
+            runtimeFilePairRead.mockRestore()
+            legacyChangedFiles.mockRestore()
+            legacyDiffRead.mockRestore()
+            legacyFilePairRead.mockRestore()
             codeStore.disconnectAllStores()
             await runtime.close()
         }
@@ -4578,6 +7664,124 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
+    it("does not append delayed git log pagination after the tray switches task scope", async () => {
+        const { client, runtime } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const branchRead = vi.spyOn(gitApi, "listBranches").mockRejectedValue(new Error("legacy branch list should not be used"))
+        const worktreeRead = vi.spyOn(gitApi, "listWorkTrees").mockRejectedValue(new Error("legacy worktree list should not be used"))
+        const legacyLogRead = vi.spyOn(gitApi, "getLog").mockRejectedValue(new Error("legacy git log read should not be used"))
+        const delayedPage = createDeferred<OpenADETaskGitLogResult>()
+        const runtimeGitLogRead = vi.spyOn(codeStore, "readProductTaskGitLog")
+        runtimeGitLogRead.mockImplementation(async (args) => {
+            if ((args.skip ?? 0) > 0) return delayedPage.promise
+            return {
+                repoId: args.repoId,
+                taskId: args.taskId,
+                commits: [gitLogCommits[0]],
+                hasMore: true,
+            }
+        })
+        ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+        const container = document.createElement("div")
+        document.body.appendChild(container)
+        const root = createRoot(container)
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+
+            await act(async () => {
+                root.render(
+                    createElement(
+                        CodeStoreProvider,
+                        { store: codeStore },
+                        createElement(GitLogTray, {
+                            taskId: "task-1",
+                            workDir: "/tmp/runtime-repo",
+                            currentBranch: "main",
+                            className: "h-full",
+                        })
+                    )
+                )
+            })
+
+            await vi.waitFor(() => {
+                expect(container.textContent).toContain("Runtime product store commit")
+                expect(container.textContent).not.toContain("Stale paged commit")
+            })
+            const loadMoreButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.trim() === "Load more")
+            expect(loadMoreButton).toBeTruthy()
+
+            await act(async () => {
+                loadMoreButton?.click()
+            })
+            await vi.waitFor(() => {
+                expect(runtimeGitLogRead).toHaveBeenCalledWith({
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    ref: "HEAD",
+                    scopeId: undefined,
+                    limit: 50,
+                    skip: 1,
+                })
+            })
+
+            await act(async () => {
+                root.render(
+                    createElement(
+                        CodeStoreProvider,
+                        { store: codeStore },
+                        createElement(GitLogTray, {
+                            taskId: "task-missing-from-runtime-projection",
+                            workDir: "/tmp/runtime-repo",
+                            currentBranch: "main",
+                            className: "h-full",
+                        })
+                    )
+                )
+            })
+            await vi.waitFor(() => {
+                expect(container.textContent).toContain("Task git context unavailable")
+            })
+
+            await act(async () => {
+                delayedPage.resolve({
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    commits: [
+                        {
+                            ...gitLogCommits[1],
+                            message: "Stale paged commit",
+                        },
+                    ],
+                    hasMore: false,
+                })
+                await Promise.resolve()
+            })
+
+            expect(container.textContent).toContain("Task git context unavailable")
+            expect(container.textContent).not.toContain("Stale paged commit")
+            expect(branchRead).not.toHaveBeenCalled()
+            expect(worktreeRead).not.toHaveBeenCalled()
+            expect(legacyLogRead).not.toHaveBeenCalled()
+        } finally {
+            act(() => root.unmount())
+            container.remove()
+            runtimeGitLogRead.mockRestore()
+            branchRead.mockRestore()
+            worktreeRead.mockRestore()
+            legacyLogRead.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
     it("does not fall back to raw git log APIs when runtime task git context is unavailable", async () => {
         const { client, runtime } = createRuntimeBackedClient({ ...createBridgeState(), task: null })
         const codeStore = new CodeStore({
@@ -4632,6 +7836,103 @@ describe("CodeStore runtime product store bridge", () => {
             act(() => root.unmount())
             container.remove()
             runtimeScopeRead.mockRestore()
+            branchRead.mockRestore()
+            worktreeRead.mockRestore()
+            legacyLogRead.mockRestore()
+            legacyCommitFilesRead.mockRestore()
+            legacyCommitPatchRead.mockRestore()
+            legacyFileRead.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it.each([
+        [OPENADE_METHOD.taskGitScopesRead, "Task git scopes unavailable"],
+        [OPENADE_METHOD.taskGitLog, "Failed to load commit history"],
+        [OPENADE_METHOD.taskGitCommitFilesRead, "Failed to load changed files for commit"],
+        [OPENADE_METHOD.taskGitCommitFilePatchRead, "Failed to load diff"],
+        [OPENADE_METHOD.taskGitFileAtTreeishRead, "Failed to load file content for diff"],
+    ])("does not call unavailable runtime git method %s from a stale-mounted git log tray", async (deniedMethod, expectedMessage) => {
+        const { client, runtime } = createRuntimeBackedClient(createBridgeState(), allOpenADEMethodPermissionsExcept([deniedMethod]))
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const branchRead = vi.spyOn(gitApi, "listBranches").mockRejectedValue(new Error("legacy branch list should not be used"))
+        const worktreeRead = vi.spyOn(gitApi, "listWorkTrees").mockRejectedValue(new Error("legacy worktree list should not be used"))
+        const legacyLogRead = vi.spyOn(gitApi, "getLog").mockRejectedValue(new Error("legacy git log read should not be used"))
+        const legacyCommitFilesRead = vi.spyOn(gitApi, "getCommitFiles").mockRejectedValue(new Error("legacy commit-file read should not be used"))
+        const legacyCommitPatchRead = vi.spyOn(gitApi, "getCommitFilePatch").mockRejectedValue(new Error("legacy commit patch read should not be used"))
+        const legacyFileRead = vi.spyOn(gitApi, "getFileAtTreeish").mockRejectedValue(new Error("legacy commit file read should not be used"))
+        const runtimeScopeRead = vi.spyOn(codeStore, "readProductTaskGitScopes")
+        const runtimeGitLogRead = vi.spyOn(codeStore, "readProductTaskGitLog")
+        const runtimeCommitFilesRead = vi.spyOn(codeStore, "readProductTaskGitCommitFiles")
+        const runtimeCommitPatchRead = vi.spyOn(codeStore, "readProductTaskGitCommitFilePatch")
+        const runtimeFileRead = vi.spyOn(codeStore, "readProductTaskGitFileAtTreeish")
+        ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+        const container = document.createElement("div")
+        document.body.appendChild(container)
+        const root = createRoot(container)
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+            expect(codeStore.canUseProductMethod(deniedMethod)).toBe(false)
+            if (deniedMethod === OPENADE_METHOD.taskGitFileAtTreeishRead) {
+                codeStore.ui.setViewMode("current")
+            }
+
+            await act(async () => {
+                root.render(
+                    createElement(
+                        CodeStoreProvider,
+                        { store: codeStore },
+                        createElement(GitLogTray, {
+                            taskId: "task-1",
+                            workDir: "/tmp/runtime-repo",
+                            currentBranch: "main",
+                            className: "h-full",
+                        })
+                    )
+                )
+            })
+
+            await vi.waitFor(() => {
+                expect(container.textContent).toContain(expectedMessage)
+            })
+            if (deniedMethod === OPENADE_METHOD.taskGitScopesRead) {
+                expect(runtimeScopeRead).not.toHaveBeenCalled()
+            }
+            if (deniedMethod === OPENADE_METHOD.taskGitLog) {
+                expect(runtimeGitLogRead).not.toHaveBeenCalled()
+            }
+            if (deniedMethod === OPENADE_METHOD.taskGitCommitFilesRead) {
+                expect(runtimeCommitFilesRead).not.toHaveBeenCalled()
+            }
+            if (deniedMethod === OPENADE_METHOD.taskGitCommitFilePatchRead) {
+                expect(runtimeCommitPatchRead).not.toHaveBeenCalled()
+            }
+            if (deniedMethod === OPENADE_METHOD.taskGitFileAtTreeishRead) {
+                expect(runtimeFileRead).not.toHaveBeenCalled()
+            }
+            expect(branchRead).not.toHaveBeenCalled()
+            expect(worktreeRead).not.toHaveBeenCalled()
+            expect(legacyLogRead).not.toHaveBeenCalled()
+            expect(legacyCommitFilesRead).not.toHaveBeenCalled()
+            expect(legacyCommitPatchRead).not.toHaveBeenCalled()
+            expect(legacyFileRead).not.toHaveBeenCalled()
+        } finally {
+            act(() => root.unmount())
+            container.remove()
+            runtimeScopeRead.mockRestore()
+            runtimeGitLogRead.mockRestore()
+            runtimeCommitFilesRead.mockRestore()
+            runtimeCommitPatchRead.mockRestore()
+            runtimeFileRead.mockRestore()
             branchRead.mockRestore()
             worktreeRead.mockRestore()
             legacyLogRead.mockRestore()
@@ -4701,6 +8002,49 @@ describe("CodeStore runtime product store bridge", () => {
             rawBranchRead.mockRestore()
             rawSummaryRead.mockRestore()
             rawGhRead.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("does not preflight runtime branch or summary reads through project git info", async () => {
+        const { client, runtime, state } = createRuntimeBackedClient({
+            ...createBridgeState(),
+            projectGitInfoReadCount: 0,
+            projectGitBranchesReadCount: 0,
+            projectGitSummaryReadCount: 0,
+        })
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const rawGitInfoRead = vi.spyOn(gitApi, "isGitDirectory").mockRejectedValue(new Error("legacy git info should not be used"))
+        const productInfoRead = vi.spyOn(codeStore, "readProductProjectGitInfo")
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+
+            await expect(codeStore.repos.listBranches("repo-1", { includeRemote: true })).resolves.toMatchObject({
+                defaultBranch: "main",
+                branches: [expect.objectContaining({ name: "main", isDefault: true })],
+            })
+            await expect(codeStore.repos.getGitSummary("repo-1")).resolves.toMatchObject({
+                branch: "main",
+                headCommit: "abc123",
+                hasChanges: false,
+            })
+
+            expect(state.projectGitInfoReadCount).toBe(0)
+            expect(state.projectGitBranchesReadCount).toBe(1)
+            expect(state.projectGitSummaryReadCount).toBe(1)
+            expect(productInfoRead).not.toHaveBeenCalled()
+            expect(rawGitInfoRead).not.toHaveBeenCalled()
+        } finally {
+            productInfoRead.mockRestore()
+            rawGitInfoRead.mockRestore()
             codeStore.disconnectAllStores()
             await runtime.close()
         }
@@ -5116,6 +8460,145 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
+    it("does not issue runtime snapshot artifact reads when snapshot read methods are unavailable", async () => {
+        const state = createBridgeState()
+        if (!state.task) throw new Error("Expected runtime task fixture")
+        state.task = {
+            ...state.task,
+            events: [
+                ...state.task.events,
+                {
+                    id: "snapshot-1",
+                    type: "snapshot",
+                    status: "completed",
+                    createdAt: now,
+                    completedAt: now,
+                    userInput: "",
+                    actionEventId: "event-1",
+                    referenceBranch: "main",
+                    mergeBaseCommit: "merge-base",
+                    fullPatch: "",
+                    patchFileId: "patch-1",
+                    stats: { filesChanged: 1, insertions: 2, deletions: 1 },
+                    files: [],
+                },
+            ],
+        }
+        const { client, runtime } = createRuntimeBackedClient(state, ["initialize", OPENADE_METHOD.snapshotRead, OPENADE_METHOD.taskRead])
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const runtimePatchRead = vi.spyOn(codeStore, "readProductTaskSnapshotPatch")
+        const runtimeIndexRead = vi.spyOn(codeStore, "readProductTaskSnapshotIndex")
+        const runtimeSliceRead = vi.spyOn(codeStore, "readProductTaskSnapshotPatchSlice")
+        const legacyPatchRead = vi.spyOn(snapshotsApi, "loadPatch").mockRejectedValue(new Error("legacy snapshot patch read should not be used"))
+        const legacyIndexRead = vi.spyOn(snapshotsApi, "loadIndex").mockRejectedValue(new Error("legacy snapshot index read should not be used"))
+        const legacySliceRead = vi.spyOn(snapshotsApi, "loadPatchSlice").mockRejectedValue(new Error("legacy snapshot slice read should not be used"))
+        const writeText = vi.fn<Clipboard["writeText"]>().mockResolvedValue(undefined)
+        const previousClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard")
+        Object.defineProperty(navigator, "clipboard", {
+            configurable: true,
+            value: { writeText },
+        })
+        ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+        const container = document.createElement("div")
+        document.body.appendChild(container)
+        const root = createRoot(container)
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskSnapshotPatchRead)).toBe(false)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskSnapshotIndexRead)).toBe(false)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskSnapshotPatchReadSlice)).toBe(false)
+
+            const snapshotModel = codeStore.tasks.getTaskModel("task-1")?.events.find((event) => event.id === "snapshot-1") as SnapshotEventModel | undefined
+            if (!snapshotModel) throw new Error("Expected snapshot event model")
+
+            await snapshotModel.loadIndex()
+            await snapshotModel.loadPatch()
+            expect(snapshotModel.fullPatch).toBe("")
+
+            await act(async () => {
+                root.render(
+                    createElement(
+                        CodeStoreProvider,
+                        { store: codeStore },
+                        createElement(ViewPatch, {
+                            patchFileId: "patch-1",
+                            patchIndex: snapshotPatchIndex,
+                            taskId: "task-1",
+                            snapshotEventId: "snapshot-1",
+                        })
+                    )
+                )
+            })
+            await vi.waitFor(() => {
+                expect(container.textContent).toContain("Could not load patch preview")
+            })
+
+            await act(async () => {
+                root.render(
+                    createElement(
+                        CodeStoreProvider,
+                        { store: codeStore },
+                        createElement(SnapshotEventItem, {
+                            event: {
+                                id: "snapshot-1",
+                                type: "snapshot",
+                                status: "completed",
+                                createdAt: now,
+                                completedAt: now,
+                                userInput: "",
+                                actionEventId: "event-1",
+                                referenceBranch: "main",
+                                mergeBaseCommit: "merge-base",
+                                fullPatch: snapshotPatch,
+                                patchFileId: "patch-1",
+                                stats: { filesChanged: 1, insertions: 2, deletions: 1 },
+                                files: [],
+                            },
+                            expanded: true,
+                            onToggle: () => undefined,
+                            taskId: "task-1",
+                        })
+                    )
+                )
+            })
+
+            expect(container.querySelector<HTMLButtonElement>('button[title="Copy patch to clipboard"]')).toBeNull()
+            expect(container.querySelector<HTMLButtonElement>('button[title="Download patch file"]')).toBeNull()
+            expect(container.textContent).not.toContain("+snapshot product store")
+            expect(writeText).not.toHaveBeenCalled()
+            expect(runtimePatchRead).not.toHaveBeenCalled()
+            expect(runtimeIndexRead).not.toHaveBeenCalled()
+            expect(runtimeSliceRead).not.toHaveBeenCalled()
+            expect(legacyPatchRead).not.toHaveBeenCalled()
+            expect(legacyIndexRead).not.toHaveBeenCalled()
+            expect(legacySliceRead).not.toHaveBeenCalled()
+        } finally {
+            act(() => root.unmount())
+            container.remove()
+            runtimePatchRead.mockRestore()
+            runtimeIndexRead.mockRestore()
+            runtimeSliceRead.mockRestore()
+            legacyPatchRead.mockRestore()
+            legacyIndexRead.mockRestore()
+            legacySliceRead.mockRestore()
+            if (previousClipboard) {
+                Object.defineProperty(navigator, "clipboard", previousClipboard)
+            } else {
+                Reflect.deleteProperty(navigator, "clipboard")
+            }
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
     it("keeps a cached runtime snapshot as the read source during transient bridge errors", async () => {
         const { client, runtime } = createRuntimeBackedClient()
         const codeStore = new CodeStore({
@@ -5187,6 +8670,9 @@ describe("CodeStore runtime product store bridge", () => {
             getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
             navigateToTask: () => undefined,
             enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => {
+                throw new Error("Core product store unavailable")
+            },
         })
 
         try {
@@ -5217,12 +8703,15 @@ describe("CodeStore runtime product store bridge", () => {
 
     it("fails closed instead of falling back to the legacy product client in clean managed Core sessions", async () => {
         const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const dataFolderSave = vi.spyOn(dataFolderApi, "save").mockRejectedValue(new Error("legacy image data folder should not be used"))
         const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
-        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
         const codeStore = new CodeStore({
             getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
             navigateToTask: () => undefined,
             enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => {
+                throw new Error("Core product store unavailable")
+            },
         })
 
         try {
@@ -5234,28 +8723,172 @@ describe("CodeStore runtime product store bridge", () => {
                     createdBy: { id: "user-1", email: "user@example.com" },
                     clientRequestId: "clean-core-fallback-repo-create",
                 })
-            ).rejects.toThrow("Clean managed Core cannot fall back to the legacy product client for openade/repo/create")
+            ).rejects.toThrow("Core product store unavailable")
 
-            expect(trackSpy).toHaveBeenCalledWith(
-                "runtime_product_store_fallback",
-                expect.objectContaining({
-                    source: "legacy_product_client",
-                    reason: "openade/repo/create",
-                    coreRolloutStatus: "connected",
-                    coreRolloutSource: "managed",
-                    coreLegacyYjsDocumentsPresent: false,
+            await expect(
+                codeStore.persistProductTaskImage({
+                    id: "clean-core-image",
+                    ext: "png",
+                    mediaType: "image/png",
+                    data: new Uint8Array([1, 2, 3]).buffer,
                 })
-            )
+            ).rejects.toThrow("Core product store unavailable")
+            expect(dataFolderSave).not.toHaveBeenCalled()
+            expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.objectContaining({ source: "legacy_product_client" }))
         } finally {
+            dataFolderSave.mockRestore()
             trackSpy.mockRestore()
-            warnSpy.mockRestore()
             restoreOpenADEAPI()
             codeStore.disconnectAllStores()
         }
     })
 
+    it("keeps stale legacy repo and task stores closed when Core owns product state but the product store is missing", async () => {
+        const restoreOpenADEAPI = installCleanCoreRolloutState()
+        const trackSpy = vi.spyOn(analytics, "track").mockImplementation(() => undefined)
+        const staleLegacyRepoStore = createRepoStore(new Y.Doc())
+        staleLegacyRepoStore.repos.push({
+            id: "legacy-repo",
+            name: "Legacy Repo",
+            path: "/tmp/legacy-repo",
+            createdBy: { id: "legacy-user", email: "legacy@example.com" },
+            createdAt: now,
+            updatedAt: now,
+            tasks: [
+                {
+                    id: "legacy-task",
+                    slug: "legacy-task",
+                    title: "Stale legacy task",
+                    createdAt: now,
+                },
+            ],
+        })
+        const staleLegacyTask: Task = {
+            id: "legacy-task",
+            repoId: "legacy-repo",
+            slug: "legacy-task",
+            title: "Stale legacy task",
+            description: "This Yjs task should not leak while Core owns product state.",
+            isolationStrategy: { type: "head" },
+            deviceEnvironments: [],
+            createdBy: { id: "legacy-user", email: "legacy@example.com" },
+            events: [],
+            comments: [],
+            sessionIds: {},
+            createdAt: now,
+            updatedAt: now,
+        }
+        const staleLegacyTaskConnection = {
+            store: createTaskStore(new Y.Doc(), staleLegacyTask),
+            sync: vi.fn(async () => undefined),
+            refresh: vi.fn(async () => true),
+            disconnect: vi.fn(),
+        }
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+        })
+
+        try {
+            runInAction(() => {
+                codeStore.repoStore = staleLegacyRepoStore
+            })
+            ;(
+                codeStore as unknown as {
+                    taskStoreConnections: Map<string, typeof staleLegacyTaskConnection>
+                }
+            ).taskStoreConnections = new Map([["legacy-task", staleLegacyTaskConnection]])
+
+            expect(codeStore.usesCoreOwnedProductRuntime()).toBe(true)
+            expect(codeStore.shouldUseRuntimeProductAPI()).toBe(false)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.repoCreate)).toBe(false)
+            expect(codeStore.repos.repos).toEqual([])
+            expect(codeStore.getTaskPreviewsForRepo("legacy-repo")).toEqual([])
+            expect(codeStore.getTaskPreviewReposForStats()).toEqual([])
+            expect(codeStore.findProductRepoIdForTask("legacy-task")).toBeNull()
+            expect(codeStore.tasks.getTask("legacy-task")).toBeNull()
+            expect(codeStore.tasks.getTaskModel("legacy-task")).toBeNull()
+            await expect(codeStore.loadProductTaskForRead("legacy-repo", "legacy-task")).resolves.toBeNull()
+            await expect(codeStore.getTaskStore("legacy-repo", "legacy-task")).rejects.toThrow("Legacy task stores are disabled while Core owns product state")
+
+            await expect(codeStore.refreshRepoStoreFromStorage()).resolves.toBeUndefined()
+            await expect(codeStore.refreshTaskStoreFromStorage("legacy-task")).resolves.toBeUndefined()
+            await expect(
+                (
+                    codeStore as unknown as {
+                        refreshProductTaskAfterRuntimeNotification(taskId: string): Promise<boolean>
+                    }
+                ).refreshProductTaskAfterRuntimeNotification("legacy-task")
+            ).resolves.toBe(false)
+            expect(staleLegacyTaskConnection.refresh).not.toHaveBeenCalled()
+            expect(trackSpy).not.toHaveBeenCalledWith("runtime_product_store_fallback", expect.anything())
+        } finally {
+            trackSpy.mockRestore()
+            restoreOpenADEAPI()
+            codeStore.disconnectAllStores()
+        }
+    })
+
+    it("fails closed before runtime requests or legacy product fallback when a product method is not advertised", async () => {
+        const state = createBridgeState()
+        const { client, runtime } = createRuntimeBackedClient(state, ["initialize", OPENADE_METHOD.snapshotRead])
+        const runtimeRequest = vi.spyOn(runtime, "requestWithOptions")
+        const legacyFileRead = vi.spyOn(localOpenADEClient, "readProjectFile").mockRejectedValue(new Error("legacy project file read should not be used"))
+        const legacyMetadataUpdate = vi
+            .spyOn(localOpenADEClient, "updateTaskMetadata")
+            .mockRejectedValue(new Error("legacy metadata update should not be used"))
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.projectFileRead)).toBe(false)
+            expect(codeStore.canUseProductMethod(OPENADE_METHOD.taskMetadataUpdate)).toBe(false)
+            runtimeRequest.mockClear()
+
+            await expect(
+                codeStore.readProductProjectFile({
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    path: "README.md",
+                    maxBytes: 1024,
+                })
+            ).rejects.toThrow(`Runtime product method unavailable: ${OPENADE_METHOD.projectFileRead}`)
+            await expect(
+                codeStore.updateProductTaskMetadata({
+                    taskId: "task-1",
+                    title: "Denied metadata update",
+                })
+            ).rejects.toThrow(`Runtime product method unavailable: ${OPENADE_METHOD.taskMetadataUpdate}`)
+            expect(state.task?.title).toBe("Runtime task")
+            expect(runtimeRequest).not.toHaveBeenCalled()
+            expect(legacyFileRead).not.toHaveBeenCalled()
+            expect(legacyMetadataUpdate).not.toHaveBeenCalled()
+        } finally {
+            runtimeRequest.mockRestore()
+            legacyFileRead.mockRestore()
+            legacyMetadataUpdate.mockRestore()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
     it("prunes repo-scoped desktop bridge state from real repo deletion notifications", async () => {
-        const { client, runtime, server, state } = createRuntimeBackedClient()
+        const state = createBridgeState()
+        state.task = {
+            ...cloneTask(task),
+            runtimeState: {
+                isRunning: true,
+                runtimeIds: ["runtime-delete-task"],
+            },
+        }
+        const { client, runtime, server } = createRuntimeBackedClient(state)
         const codeStore = new CodeStore({
             getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
             navigateToTask: () => undefined,
@@ -5270,17 +8903,23 @@ describe("CodeStore runtime product store bridge", () => {
 
             expect(codeStore.repos.repos).toEqual([expect.objectContaining({ id: "repo-1" })])
             expect(codeStore.tasks.getTask("task-1")).toMatchObject({ id: "task-1" })
+            expect(codeStore.runtimes.isTaskRunning("task-1")).toBe(true)
+            const taskModel = codeStore.tasks.getTaskModel("task-1")
+            if (!taskModel) throw new Error("Expected cached task model before repo deletion")
+            const taskModelDispose = vi.spyOn(taskModel, "dispose")
 
             state.project = null
             state.task = null
             server.notify("openade/repo/deleted", { repoId: "repo-1" })
 
             await waitForRuntimeBridge(() => {
-                expect(codeStore.runtimeProductSnapshot?.repos).toEqual([])
+                expect(codeStore.runtimeProductSnapshot?.repos ?? []).toEqual([])
                 expect(codeStore.repos.repos).toEqual([])
                 expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([])
                 expect(codeStore.tasks.getTask("task-1")).toBeNull()
                 expect(codeStore.tasks.getTaskModel("task-1")).toBeNull()
+                expect(codeStore.runtimes.isTaskRunning("task-1")).toBe(false)
+                expect(taskModelDispose).toHaveBeenCalled()
             })
         } finally {
             codeStore.disconnectAllStores()
@@ -5408,6 +9047,155 @@ describe("CodeStore runtime product store bridge", () => {
         }
     })
 
+    it("uses already-refreshed runtime DTO task events when a task runtime settles", async () => {
+        const { client, runtime, server, state } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const afterEvents: Array<{ taskId: string; eventType: string }> = []
+        const unsubscribe = codeStore.execution.onAfterEvent((taskId, eventType) => {
+            afterEvents.push({ taskId, eventType })
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+
+            server.notify("runtime/updated", runtimeRecord("running", "2026-05-31T00:01:00.000Z"))
+            await waitForRuntimeBridge(() => {
+                expect(codeStore.runtimes.isTaskRunning("task-1")).toBe(true)
+            })
+
+            state.task = {
+                ...cloneTask(task),
+                updatedAt: "2026-05-31T00:02:00.000Z",
+                events: [
+                    ...task.events,
+                    {
+                        id: "event-run-plan",
+                        type: "action",
+                        status: "completed",
+                        createdAt: "2026-05-31T00:02:00.000Z",
+                        completedAt: "2026-05-31T00:02:01.000Z",
+                        userInput: "Run the accepted plan",
+                        execution: {
+                            harnessId: "codex",
+                            executionId: "exec-run-plan",
+                            modelId: "gpt-test",
+                            events: [],
+                        },
+                        source: {
+                            type: "run_plan",
+                            userLabel: "Run Plan",
+                            planEventId: "event-1",
+                        },
+                        includesCommentIds: [],
+                        result: { success: true },
+                    },
+                ],
+            }
+            state.taskReadRequests = []
+            server.notify("openade/task/updated", {
+                repoId: "repo-1",
+                taskId: "task-1",
+            })
+            await waitForRuntimeDeferredTaskRefresh(() => {
+                expect(codeStore.tasks.getTask("task-1")?.events.map((event) => event.id)).toEqual(["event-1", "event-run-plan"])
+            })
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
+
+            state.taskReadRequests = []
+            server.notify("runtime/completed", runtimeRecord("completed", "2026-05-31T00:02:02.000Z"))
+            await waitForRuntimeBridge(() => {
+                expect(afterEvents).toEqual([{ taskId: "task-1", eventType: "run_plan" }])
+                expect(codeStore.runtimes.isTaskRunning("task-1")).toBe(false)
+            })
+            expect(state.taskReadRequests).toEqual([])
+        } finally {
+            unsubscribe()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("lets a pending task-update notification satisfy runtime settlement before forcing another task read", async () => {
+        const { client, runtime, server, state } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+        const afterEvents: Array<{ taskId: string; eventType: string }> = []
+        const unsubscribe = codeStore.execution.onAfterEvent((taskId, eventType) => {
+            afterEvents.push({ taskId, eventType })
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+            server.notify("runtime/updated", runtimeRecord("running", "2026-05-31T00:01:00.000Z"))
+            await waitForRuntimeBridge(() => {
+                expect(codeStore.runtimes.isTaskRunning("task-1")).toBe(true)
+            })
+
+            state.task = {
+                ...cloneTask(task),
+                updatedAt: "2026-05-31T00:02:00.000Z",
+                events: [
+                    ...task.events,
+                    {
+                        id: "event-run-plan",
+                        type: "action",
+                        status: "completed",
+                        createdAt: "2026-05-31T00:02:00.000Z",
+                        completedAt: "2026-05-31T00:02:01.000Z",
+                        userInput: "Run the accepted plan",
+                        execution: {
+                            harnessId: "codex",
+                            executionId: "exec-run-plan",
+                            modelId: "gpt-test",
+                            events: [],
+                        },
+                        source: {
+                            type: "run_plan",
+                            userLabel: "Run Plan",
+                            planEventId: "event-1",
+                        },
+                        includesCommentIds: [],
+                        result: { success: true },
+                    },
+                ],
+            }
+            state.taskReadRequests = []
+            server.notify("openade/task/updated", {
+                repoId: "repo-1",
+                taskId: "task-1",
+            })
+            server.notify("runtime/completed", runtimeRecord("completed", "2026-05-31T00:02:02.000Z"))
+
+            await waitForRuntimeNotificationsToSettle()
+            expect(state.taskReadRequests).toEqual([])
+            expect(afterEvents).toEqual([])
+
+            await waitForRuntimeDeferredTaskRefresh(() => {
+                expect(afterEvents).toEqual([{ taskId: "task-1", eventType: "run_plan" }])
+                expect(codeStore.runtimes.isTaskRunning("task-1")).toBe(false)
+                expect(codeStore.tasks.getTask("task-1")?.events.map((event) => event.id)).toEqual(["event-1", "event-run-plan"])
+            })
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
+        } finally {
+            unsubscribe()
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
     it("refreshes cached desktop bridge state from real runtime notifications", async () => {
         const { client, runtime, server, state } = createRuntimeBackedClient()
         const codeStore = new CodeStore({
@@ -5484,7 +9272,7 @@ describe("CodeStore runtime product store bridge", () => {
                 taskId: "task-1",
             })
 
-            await waitForRuntimeBridge(() => {
+            await waitForRuntimeDeferredTaskRefresh(() => {
                 expect(codeStore.tasks.getTask("task-1")).toMatchObject({
                     title: "Runtime notification task",
                     events: [
@@ -5497,7 +9285,7 @@ describe("CodeStore runtime product store bridge", () => {
                     comments: [expect.objectContaining({ id: "comment-1" }), expect.objectContaining({ id: "comment-2" })],
                 })
             })
-            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
 
             const queuedTurn: NonNullable<OpenADETask["queuedTurns"]>[number] = {
                 id: "queued-1",
@@ -5530,10 +9318,10 @@ describe("CodeStore runtime product store bridge", () => {
                 turn: queuedTurn,
             })
 
-            await waitForRuntimeBridge(() => {
+            await waitForRuntimeDeferredTaskRefresh(() => {
                 expect(codeStore.tasks.getTask("task-1")?.queuedTurns).toEqual([expect.objectContaining({ id: "queued-1", status: "running" })])
             })
-            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
 
             state.task = {
                 ...state.task,
@@ -5542,20 +9330,14 @@ describe("CodeStore runtime product store bridge", () => {
                 lastEventAt: "2026-05-31T00:02:00.000Z",
             }
             state.taskReadRequests = []
+            const projectReadsBeforePreviewNotification = state.projectReadCount ?? 0
+            const taskListReadsBeforePreviewNotification = state.taskListReadCount ?? 0
             server.notify("openade/task/previewChanged", {
                 repoId: "repo-1",
                 taskId: "task-1",
             })
 
             await waitForRuntimeBridge(() => {
-                expect(codeStore.runtimeProductSnapshot?.repos[0]?.tasks).toEqual([
-                    expect.objectContaining({
-                        id: "task-1",
-                        title: "Runtime preview notification task",
-                        closed: true,
-                        lastEventAt: "2026-05-31T00:02:00.000Z",
-                    }),
-                ])
                 expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([
                     expect.objectContaining({
                         id: "task-1",
@@ -5564,24 +9346,147 @@ describe("CodeStore runtime product store bridge", () => {
                     }),
                 ])
             })
+            expect(state.projectReadCount ?? 0).toBe(projectReadsBeforePreviewNotification)
+            expect(state.taskListReadCount ?? 0).toBe(taskListReadsBeforePreviewNotification + 1)
+            expect(state.taskReadRequests).toEqual([])
+
+            state.task = {
+                ...state.task,
+                title: "Runtime preview burst task",
+                closed: false,
+                lastEventAt: "2026-05-31T00:02:30.000Z",
+            }
+            state.taskReadRequests = []
+            const projectReadsBeforePreviewBurst = state.projectReadCount ?? 0
+            const taskListReadsBeforePreviewBurst = state.taskListReadCount ?? 0
+            server.notify("openade/task/previewChanged", {
+                repoId: "repo-1",
+                taskId: "task-1",
+            })
+            server.notify("openade/task/previewChanged", {
+                repoId: "repo-1",
+                taskId: "task-1",
+            })
+            server.notify("openade/task/previewChanged", {
+                repoId: "repo-1",
+                taskId: "task-1",
+            })
+
+            await waitForRuntimeBridge(() => {
+                expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([
+                    expect.objectContaining({
+                        id: "task-1",
+                        title: "Runtime preview burst task",
+                        closed: false,
+                    }),
+                ])
+            })
+            await waitForRuntimeNotificationsToSettle()
+            expect(state.projectReadCount ?? 0).toBe(projectReadsBeforePreviewBurst)
+            expect(state.taskListReadCount ?? 0).toBe(taskListReadsBeforePreviewBurst + 1)
             expect(state.taskReadRequests).toEqual([])
 
             state.task = null
             state.taskReadRequests = []
+            const projectReadsBeforeDeletion = state.projectReadCount ?? 0
+            const taskListReadsBeforeDeletion = state.taskListReadCount ?? 0
             server.notify("openade/task/deleted", {
                 repoId: "repo-1",
                 taskId: "task-1",
             })
 
             await waitForRuntimeBridge(() => {
-                expect(codeStore.runtimeProductSnapshot?.repos[0]?.tasks).toEqual([])
                 expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([])
                 expect(codeStore.tasks.getTask("task-1")).toBeNull()
                 expect(codeStore.tasks.getTaskModel("task-1")).toBeNull()
             })
+            expect(state.projectReadCount ?? 0).toBe(projectReadsBeforeDeletion)
+            expect(state.taskListReadCount ?? 0).toBe(taskListReadsBeforeDeletion + 1)
             expect(state.taskReadRequests).toEqual([])
             expect(legacyTaskRefresh).not.toHaveBeenCalled()
             expect(legacyRepoRefresh).not.toHaveBeenCalled()
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("does not run delayed task reads after a repo refresh supersedes task update notifications", async () => {
+        const { client, runtime, server, state } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            await codeStore.loadRuntimeProductTask("repo-1", "task-1")
+
+            state.task = {
+                ...requireStateTask(state, "task-1"),
+                title: "Repo refresh superseded task update",
+                updatedAt: "2026-05-31T00:04:00.000Z",
+            }
+            state.taskReadRequests = []
+            server.notify("openade/task/updated", {
+                repoId: "repo-1",
+                taskId: "task-1",
+            })
+            server.notify("openade/repo/updated", {
+                repoId: "repo-1",
+            })
+
+            await waitForRuntimeNotificationsToSettle()
+
+            expect(codeStore.runtimeProductSnapshot?.repos[0]?.id).toBe("repo-1")
+            expect(state.taskReadRequests).toEqual([])
+        } finally {
+            codeStore.disconnectAllStores()
+            await runtime.close()
+        }
+    })
+
+    it("coalesces global runtime task-preview notifications into one project refresh", async () => {
+        const { client, runtime, server, state } = createRuntimeBackedClient()
+        const codeStore = new CodeStore({
+            getCurrentUser: () => ({ id: "user-1", email: "user@example.com" }),
+            navigateToTask: () => undefined,
+            enableRuntimeProductStore: true,
+            runtimeProductStoreFactory: () => new OpenADEProductStore(client),
+            runtimeNotificationSource: runtime,
+        })
+
+        try {
+            await codeStore.initializeRuntimeProductStore()
+            const projectReadsBeforePreviewBurst = state.projectReadCount ?? 0
+            const taskListReadsBeforePreviewBurst = state.taskListReadCount ?? 0
+
+            state.task = {
+                ...requireStateTask(state, "task-1"),
+                title: "Global preview burst task",
+                closed: true,
+                lastEventAt: "2026-05-31T00:07:00.000Z",
+            }
+            server.notify("openade/task/previewChanged", { taskId: "task-1" })
+            server.notify("openade/task/previewChanged", { taskId: "task-1" })
+            server.notify("openade/task/previewChanged", { taskId: "task-1" })
+
+            await waitForRuntimeBridge(() => {
+                expect(codeStore.getTaskPreviewsForRepo("repo-1")).toEqual([
+                    expect.objectContaining({
+                        id: "task-1",
+                        title: "Global preview burst task",
+                        closed: true,
+                    }),
+                ])
+            })
+            await waitForRuntimeNotificationsToSettle()
+
+            expect(state.projectReadCount ?? 0).toBe(projectReadsBeforePreviewBurst + 1)
+            expect(state.taskListReadCount ?? 0).toBe(taskListReadsBeforePreviewBurst)
         } finally {
             codeStore.disconnectAllStores()
             await runtime.close()
@@ -5669,7 +9574,7 @@ describe("CodeStore runtime product store bridge", () => {
                 at: "2026-05-31T00:03:02.000Z",
             })
 
-            await waitForRuntimeBridge(() => {
+            await waitForRuntimeDeferredTaskRefresh(() => {
                 expect(codeStore.tasks.getTask("task-1")?.events).toEqual(
                     expect.arrayContaining([
                         expect.objectContaining({
@@ -5679,7 +9584,7 @@ describe("CodeStore runtime product store bridge", () => {
                     ])
                 )
             })
-            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false }])
+            expect(state.taskReadRequests).toEqual([{ repoId: "repo-1", taskId: "task-1", hydrateSessionEvents: false, eventLimit: 12 }])
         } finally {
             codeStore.disconnectAllStores()
             await runtime.close()

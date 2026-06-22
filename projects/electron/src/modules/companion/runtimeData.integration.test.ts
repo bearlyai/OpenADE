@@ -1,8 +1,9 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import logger from "electron-log"
 import * as Y from "yjs"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createOpenADEYjsWriter } from "../../../../openade-module/src"
 import { type RuntimeMessage } from "../../../../runtime-protocol/src"
 import { saveYjsDocument } from "../code/yjsStorage"
@@ -68,6 +69,10 @@ function connection() {
             },
         },
     }
+}
+
+function yjsDocPath(id: string): string {
+    return path.join(storageDir, id.replace(/:/g, "_"))
 }
 
 describe("OpenADE runtime data integration", () => {
@@ -235,6 +240,34 @@ describe("OpenADE runtime data integration", () => {
         expect(allowed.result).toEqual(expect.arrayContaining(["code:repos", "code:personal_settings"]))
         expect(raw.error).toBeUndefined()
         expect(raw.result).toMatchObject({ id: "code:repos", data: expect.any(String) })
+    })
+
+    it("includes trusted runtime operation labels in raw Yjs read diagnostics", async () => {
+        const runtime = getRuntimeServer()
+        const trustedConnection = connection().connection
+        const id = "code:diagnostic-context"
+        const doc = new Y.Doc()
+        doc.getMap("example").set("value", "diagnostic")
+        fs.writeFileSync(yjsDocPath(id), Y.encodeStateAsUpdate(doc))
+        doc.destroy()
+        const debug = vi.spyOn(logger, "debug").mockImplementation(() => undefined)
+
+        const raw = await runtime.handleRequest(
+            { id: 3, method: "data/yjs/read", params: { id, operation: "ElectronStorage.refreshDoc" } },
+            trustedConnection
+        )
+
+        expect(raw.error).toBeUndefined()
+        expect(raw.result).toMatchObject({ id, data: expect.any(String) })
+        const normalLoad = debug.mock.calls.find(([message]) => String(message).includes(`[YjsStorage] Loaded document: ${id}`))
+        expect(normalLoad).toBeDefined()
+        const message = String(normalLoad?.[0])
+        const details = JSON.parse(message.slice(message.indexOf("{"))) as Record<string, unknown>
+        expect(details).toMatchObject({
+            id,
+            runtimeMethod: "data/yjs/read",
+            operation: "ElectronStorage.refreshDoc",
+        })
     })
 
     it("keeps raw Yjs backup writes trusted-runtime only", async () => {
@@ -715,11 +748,13 @@ describe("OpenADE runtime data integration", () => {
             },
             testConnection.connection
         )
+        const metadataClientRequestId = "runtime-metadata-update"
         await runtime.handleRequest(
             {
                 id: 11,
                 method: "openade/task/metadata/update",
                 params: {
+                    repoId: "repo-1",
                     taskId: "task-2",
                     title: "Runtime Updated Task",
                     closed: true,
@@ -737,10 +772,19 @@ describe("OpenADE runtime data integration", () => {
                     enabledMcpServerIds: ["mcp-runtime"],
                     sessionIds: { codex: "session-1" },
                     updatedAt: "2026-05-26T02:21:00.000Z",
+                    clientRequestId: metadataClientRequestId,
                 },
             },
             testConnection.connection
         )
+        const metadataNotification = testConnection.messages.find((message) => {
+            if (!("method" in message) || message.method !== "openade/task/updated") return false
+            const params =
+                typeof message.params === "object" && message.params !== null && !Array.isArray(message.params)
+                    ? (message.params as Record<string, unknown>)
+                    : {}
+            return params.clientRequestId === metadataClientRequestId
+        })
 
         const task = await runtime.handleRequest(
             { id: 12, method: "openade/task/read", params: { repoId: "repo-1", taskId: "task-2" } },
@@ -755,6 +799,14 @@ describe("OpenADE runtime data integration", () => {
         expect(snapshotCreated.result).toEqual({ eventId: "snapshot-created", createdAt: "2026-05-26T02:16:00.000Z" })
         expect(commentCreated.error).toBeUndefined()
         expect(commentCreated.result).toEqual({ commentId: "comment-runtime", createdAt: "2026-05-26T02:17:00.000Z" })
+        expect(metadataNotification).toMatchObject({
+            method: "openade/task/updated",
+            params: {
+                repoId: "repo-1",
+                taskId: "task-2",
+                clientRequestId: metadataClientRequestId,
+            },
+        })
         expect(task.error).toBeUndefined()
         expect(task.result).toMatchObject({
             id: "task-2",

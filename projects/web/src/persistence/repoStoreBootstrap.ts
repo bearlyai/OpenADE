@@ -27,9 +27,6 @@ export async function connectRepoStore(): Promise<RepoStoreConnection> {
 
     const store = createRepoStore(doc)
 
-    // Fire initial sync (non-blocking)
-    sync().catch((e) => console.error("[RepoStore] Initial sync failed:", e))
-
     return {
         store,
         sync,

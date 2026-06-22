@@ -88,6 +88,11 @@ describe("RuntimeManager", () => {
         const manager = new RuntimeManager()
         manager.applyNotification({ method: "runtime/updated", params: runtimeWithId("runtime-orphaned", "orphaned") })
         manager.applyNotification({ method: "runtime/updated", params: runtimeWithId("runtime-stale-running", "running", "task-stale") })
+        manager.applyOpenADETaskRuntimeState("task-hinted", {
+            isRunning: true,
+            runtimeIds: ["runtime-hinted"],
+            updatedAt: startedAt,
+        })
 
         const source = {
             listRuntimes: async (params: RuntimeListParams): Promise<RuntimeRecord[]> =>
@@ -96,9 +101,24 @@ describe("RuntimeManager", () => {
 
         const removed = await manager.hydrateOpenADETasks(source)
 
-        expect(removed).toEqual(["task-stale"])
+        expect(removed).toEqual(["task-stale", "task-hinted"])
         expect(manager.isTaskOrphaned("task-1")).toBe(true)
         expect(manager.isTaskRunning("task-stale")).toBe(false)
+        expect(manager.isTaskRunning("task-hinted")).toBe(false)
         expect(manager.isTaskRunning("task-active")).toBe(true)
+    })
+
+    it("uses task-read runtime state as a running hint until the matching runtime settles", () => {
+        const manager = new RuntimeManager()
+
+        manager.applyOpenADETaskRuntimeState("task-1", {
+            isRunning: true,
+            runtimeIds: ["runtime-1"],
+            updatedAt: startedAt,
+        })
+
+        expect(manager.isTaskRunning("task-1")).toBe(true)
+        expect(manager.applyNotification({ method: "runtime/completed", params: runtime("completed") })).toEqual(["task-1"])
+        expect(manager.isTaskRunning("task-1")).toBe(false)
     })
 })

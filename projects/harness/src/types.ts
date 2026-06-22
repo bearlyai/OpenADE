@@ -38,6 +38,7 @@ export interface McpHttpServerConfig {
 export interface McpOAuthTokens {
     accessToken: string
     refreshToken?: string
+    clientId?: string
     expiresAt?: string
     tokenType: string
 }
@@ -78,6 +79,7 @@ export interface McpRefreshOAuthParams {
     serverId: string
     serverUrl: string
     refreshToken: string
+    clientId?: string
 }
 
 export interface McpRefreshOAuthResponse {

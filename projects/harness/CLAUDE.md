@@ -15,6 +15,7 @@ Unified TypeScript interface for driving AI coding CLIs (Claude Code, Codex) as 
 
 ```bash
 yarn install          # install deps
+yarn check            # no-any, typecheck, and unit tests
 yarn typecheck        # tsgo --noEmit
 yarn build            # tsc → dist/
 yarn test             # unit tests (excludes *.integration.test.ts)

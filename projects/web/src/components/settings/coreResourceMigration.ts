@@ -1,13 +1,72 @@
 import type { OpenADELegacyResourcesImportRequest, OpenADELegacyResourcesImportResult } from "../../../../openade-module/src"
+import type { OpenADEProductLegacyYjsImportReport } from "../../kernel/productStore"
+import { shouldAcceptCoreLegacyYjsMigration } from "../../runtime/coreMigration"
 
 export interface CoreLegacyResourceImportStore {
     importProductLegacyResources(params: OpenADELegacyResourcesImportRequest): Promise<OpenADELegacyResourcesImportResult>
+}
+
+export interface CoreLegacyResourceImportRequestInput {
+    dataDir?: string | null
+    imageDir?: string | null
+    snapshotDir?: string | null
+    importSessions?: boolean
+    claudeConfigDir?: string | null
+    codexHome?: string | null
 }
 
 export interface CoreLegacyResourceImportSelection {
     store: CoreLegacyResourceImportStore
     selectDataDir: () => Promise<string | null>
     importSessions: boolean
+}
+
+export interface CoreLegacyAllImportStore extends CoreLegacyResourceImportStore {
+    importProductLegacyYjsData(): Promise<OpenADEProductLegacyYjsImportReport>
+    markProductLegacyYjsMigrationAccepted(report: OpenADEProductLegacyYjsImportReport, resources: OpenADELegacyResourcesImportResult): Promise<void>
+}
+
+export interface CoreLegacyAllImportSelection {
+    store: CoreLegacyAllImportStore
+    selectDataDir: () => Promise<string | null>
+    importSessions: boolean
+}
+
+export interface CoreLegacyAllImportResult {
+    data: OpenADEProductLegacyYjsImportReport
+    resources: OpenADELegacyResourcesImportResult
+    accepted: boolean
+}
+
+export function formatCoreLegacyMigrationAcceptedNotice(): string {
+    return "Core launch accepted after clean data and resources import; restart OpenADE to use Core on next launch"
+}
+
+function nonEmptyOptional(value: string | null | undefined): string | undefined {
+    const trimmed = value?.trim()
+    return trimmed ? trimmed : undefined
+}
+
+export function coreLegacyResourceImportRequest(input: CoreLegacyResourceImportRequestInput): OpenADELegacyResourcesImportRequest {
+    const request: OpenADELegacyResourcesImportRequest = {}
+    const dataDir = nonEmptyOptional(input.dataDir)
+    const imageDir = nonEmptyOptional(input.imageDir)
+    const snapshotDir = nonEmptyOptional(input.snapshotDir)
+    const claudeConfigDir = nonEmptyOptional(input.claudeConfigDir)
+    const codexHome = nonEmptyOptional(input.codexHome)
+
+    if (dataDir) request.dataDir = dataDir
+    if (imageDir) request.imageDir = imageDir
+    if (snapshotDir) request.snapshotDir = snapshotDir
+    if (input.importSessions === true) request.importSessions = true
+    if (claudeConfigDir) request.claudeConfigDir = claudeConfigDir
+    if (codexHome) request.codexHome = codexHome
+
+    if (!request.dataDir && !request.imageDir && !request.snapshotDir && request.importSessions !== true && !request.claudeConfigDir && !request.codexHome) {
+        throw new Error("Choose legacy resources before importing.")
+    }
+
+    return request
 }
 
 export async function importCoreLegacyResourcesFromSelection({
@@ -17,7 +76,26 @@ export async function importCoreLegacyResourcesFromSelection({
 }: CoreLegacyResourceImportSelection): Promise<OpenADELegacyResourcesImportResult | null> {
     const dataDir = await selectDataDir()
     if (!dataDir) return null
-    return store.importProductLegacyResources({ dataDir, importSessions })
+    return store.importProductLegacyResources(coreLegacyResourceImportRequest({ dataDir, importSessions }))
+}
+
+export async function importCoreLegacyDataAndResourcesFromSelection({
+    store,
+    selectDataDir,
+    importSessions,
+}: CoreLegacyAllImportSelection): Promise<CoreLegacyAllImportResult | null> {
+    const dataDir = await selectDataDir()
+    if (!dataDir) return null
+    const selectedDataDir = nonEmptyOptional(dataDir)
+    if (!selectedDataDir) throw new Error("Choose legacy resources before importing.")
+    const resourcesRequest = coreLegacyResourceImportRequest({ dataDir: selectedDataDir, importSessions })
+
+    const data = await store.importProductLegacyYjsData()
+    const resources = await store.importProductLegacyResources(resourcesRequest)
+    const accepted = shouldAcceptCoreLegacyYjsMigration(data, resources)
+    if (accepted) await store.markProductLegacyYjsMigrationAccepted(data, resources)
+
+    return { data, resources, accepted }
 }
 
 export function formatCoreLegacyResourceImportResult(result: OpenADELegacyResourcesImportResult): string {

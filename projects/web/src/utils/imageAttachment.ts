@@ -7,7 +7,7 @@
 
 import { ulid } from "ulid"
 import type { OpenADETaskImageWriteRequest } from "../../../openade-module/src"
-import { dataFolderApi } from "../electronAPI/dataFolder"
+import { areDesktopFallbackChunksEnabled } from "../featureFlags"
 import type { ImageAttachment } from "../types"
 import { mimeToExt, resizeImage } from "./imageResize"
 
@@ -76,6 +76,10 @@ export function imagePersistencePayloadToWriteRequest(payload: ImagePersistenceP
 }
 
 export async function persistImageToDataFolder(payload: ImagePersistencePayload): Promise<void> {
+    if (!areDesktopFallbackChunksEnabled) {
+        throw new Error("Desktop image persistence is unavailable in this build")
+    }
+    const { dataFolderApi } = await import("../electronAPI/dataFolder")
     await dataFolderApi.save("images", payload.id, payload.data, payload.ext)
 }
 
@@ -87,12 +91,17 @@ export async function processImageBlob(blob: Blob, options: ProcessImageBlobOpti
 
     const ext = mimeToExt(resized.mediaType)
     const buffer = await resized.blob.arrayBuffer()
-    await (options.persistImage ?? persistImageToDataFolder)({
+    const payload = {
         id,
         ext,
         mediaType: resized.mediaType,
         data: buffer,
-    })
+    }
+    if (options.persistImage) {
+        await options.persistImage(payload)
+    } else {
+        await persistImageToDataFolder(payload)
+    }
 
     // Generate preview data URL from resized blob
     const dataUrl = URL.createObjectURL(resized.blob)

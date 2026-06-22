@@ -17,16 +17,66 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import { createPortal } from "react-dom"
 import { twMerge } from "tailwind-merge"
 import { usePortalContainer } from "../hooks/usePortalContainer"
-import type { SdkCapabilitiesManager, SlashCommandEntry } from "../store/managers/SdkCapabilitiesManager"
-import type { SmartEditorFileTreeMatch, SmartEditorManager } from "../store/managers/SmartEditorManager"
+import type { ImageAttachment } from "../types"
 import { type PersistImage, processImageBlob } from "../utils/imageAttachment"
 import { emitEmptyEditorGlobalShortcut, isEmptyEditorGlobalShortcut } from "../utils/keyboardShortcuts"
-import { getFileName } from "./utils/paths"
+
+export interface SlashCommandEntry {
+    name: string
+    type: "slash_command" | "skill"
+}
+
+export interface SmartEditorFileTreeChild {
+    name: string
+    isDir: boolean
+    fullPath: string
+}
+
+export interface SmartEditorFileTreeMatch {
+    path: string
+    children: SmartEditorFileTreeChild[]
+}
+
+export interface SmartEditorFileSearchResult {
+    results: string[]
+    treeMatch: SmartEditorFileTreeMatch | null
+}
+
+export interface SmartEditorManagerContract {
+    value: string
+    files: string[]
+    editorContent: Record<string, unknown> | null
+    pendingImages: ImageAttachment[]
+    setValue(value: string): void
+    setFiles(files: string[]): void
+    setEditorContent(content: Record<string, unknown> | null): void
+    setTextContent(text: string): void
+    clear(): void
+    addImage(image: ImageAttachment, dataUrl: string): void
+    insertFile(path: string): void
+    canSearchFileMentions(dir: string): boolean
+    getFileMentionFavorites(limit?: number): string[]
+    searchFileMentions(dir: string, query: string, limit?: number): Promise<SmartEditorFileSearchResult>
+    registerInsertCallback(cb: (path: string) => void): void
+    unregisterInsertCallback(): void
+    registerClearCallback(cb: () => void): void
+    unregisterClearCallback(): void
+    registerSetContentCallback(cb: (content: string | Record<string, unknown> | null) => void): void
+    unregisterSetContentCallback(): void
+}
+
+export interface SmartEditorSdkCapabilitiesContract {
+    slashCommands: string[]
+    skills: string[]
+    allCommands: SlashCommandEntry[]
+    loadCapabilities(cwd: string): Promise<void>
+}
 
 interface SmartEditorProps {
     /** Required: manager instance for state management */
-    manager: SmartEditorManager
+    manager: SmartEditorManagerContract
     placeholder?: string
+    ariaLabel?: string
     disabled?: boolean
     className?: string
     editorClassName?: string
@@ -34,13 +84,18 @@ interface SmartEditorProps {
     allowGlobalShortcutsWhenEmpty?: boolean
     /** Directory for @file mention autocomplete, null to disable */
     fileMentionsDir: string | null
+    /** Final capability gate for @file mention autocomplete. */
+    enableFileMentions?: boolean
     /** Directory for /slash command autocomplete, null to disable */
     slashCommandsDir: string | null
     /** Lazy directory resolver for runtime/Core sessions where task open intentionally does not load environment. */
     resolveWorkingDir?: () => Promise<string | null>
     /** SDK capabilities manager for slash command discovery */
-    sdkCapabilities?: SdkCapabilitiesManager
+    sdkCapabilities?: SmartEditorSdkCapabilitiesContract
+    /** Lazy SDK capabilities resolver for task routes that should not touch host capability reads on first paint. */
+    resolveSdkCapabilities?: () => SmartEditorSdkCapabilitiesContract | undefined
     persistImage?: PersistImage
+    enableImagePasteDrop?: boolean
 }
 
 export interface SmartEditorRef {
@@ -242,9 +297,20 @@ interface SlashSuggestionPopupState {
     anchorRect: DOMRect | null
 }
 
+interface PendingFileSearchRequest {
+    dir: string
+    query: string
+    requestId: number
+}
+
 function filterSlashCommands(commands: SlashCommandEntry[], query: string): SlashCommandEntry[] {
     const lower = query.toLowerCase()
     return commands.filter((cmd) => cmd.name.toLowerCase().includes(lower))
+}
+
+function getMentionFileName(path: string): string {
+    const parts = path.split(/[/\\]/).filter(Boolean)
+    return parts[parts.length - 1] ?? path
 }
 
 // ============================================================================
@@ -257,21 +323,31 @@ export const SmartEditor = observer(
             {
                 manager,
                 placeholder,
+                ariaLabel,
                 disabled,
                 className,
                 editorClassName,
                 onKeyDown,
                 allowGlobalShortcutsWhenEmpty,
                 fileMentionsDir,
+                enableFileMentions = true,
                 slashCommandsDir,
                 resolveWorkingDir,
                 sdkCapabilities,
+                resolveSdkCapabilities,
                 persistImage,
+                enableImagePasteDrop = true,
             },
             ref
         ) => {
             const portalContainer = usePortalContainer()
             const [resolvedWorkingDir, setResolvedWorkingDir] = useState<string | null>(null)
+            const [resolvedSdkCapabilities, setResolvedSdkCapabilities] = useState<SmartEditorSdkCapabilitiesContract | undefined>(sdkCapabilities)
+            const workingDirResolveInFlightRef = useRef<Promise<string | null> | null>(null)
+
+            useEffect(() => {
+                setResolvedSdkCapabilities(sdkCapabilities)
+            }, [sdkCapabilities])
 
             // --- File mention suggestion state (@ trigger) ---
             const [fileSuggestion, setFileSuggestion] = useState<FileSuggestionPopupState>({
@@ -295,22 +371,37 @@ export const SmartEditor = observer(
             const effectiveFileMentionsDir = fileMentionsDir ?? resolvedWorkingDir
             const effectiveSlashCommandsDir = slashCommandsDir ?? resolvedWorkingDir
             const canResolveWorkingDir = resolveWorkingDir !== undefined
+            const activeSdkCapabilities = sdkCapabilities ?? resolvedSdkCapabilities
             const mentionsEnabled =
-                (effectiveFileMentionsDir !== null && manager.canSearchFileMentions(effectiveFileMentionsDir)) ||
-                (effectiveFileMentionsDir === null && canResolveWorkingDir)
-            const slashEnabled = effectiveSlashCommandsDir !== null || canResolveWorkingDir
+                enableFileMentions &&
+                ((effectiveFileMentionsDir !== null && manager.canSearchFileMentions(effectiveFileMentionsDir)) ||
+                    (effectiveFileMentionsDir === null && canResolveWorkingDir))
+            const slashEnabled =
+                (activeSdkCapabilities !== undefined || resolveSdkCapabilities !== undefined) && (effectiveSlashCommandsDir !== null || canResolveWorkingDir)
 
             const resolveEditorWorkingDir = useCallback(async (): Promise<string | null> => {
                 const current = fileMentionsDir ?? slashCommandsDir ?? resolvedWorkingDir
                 if (current) return current
-                const resolved = (await resolveWorkingDir?.()) ?? null
-                if (resolved) setResolvedWorkingDir(resolved)
-                return resolved
+                if (!resolveWorkingDir) return null
+                if (workingDirResolveInFlightRef.current) return workingDirResolveInFlightRef.current
+                const pending = resolveWorkingDir()
+                    .then((resolved) => {
+                        const next = resolved ?? null
+                        if (next) setResolvedWorkingDir(next)
+                        return next
+                    })
+                    .finally(() => {
+                        if (workingDirResolveInFlightRef.current === pending) {
+                            workingDirResolveInFlightRef.current = null
+                        }
+                    })
+                workingDirResolveInFlightRef.current = pending
+                return pending
             }, [fileMentionsDir, slashCommandsDir, resolvedWorkingDir, resolveWorkingDir])
 
             const slashCommands = useMemo(
-                () => (slashEnabled && sdkCapabilities ? sdkCapabilities.allCommands : []),
-                [slashEnabled, sdkCapabilities?.skills, sdkCapabilities?.slashCommands]
+                () => (slashEnabled && activeSdkCapabilities ? activeSdkCapabilities.allCommands : []),
+                [slashEnabled, activeSdkCapabilities?.skills, activeSdkCapabilities?.slashCommands]
             )
 
             // --- File mention floating ---
@@ -349,49 +440,113 @@ export const SmartEditor = observer(
             const fileSuggestionPropsRef = useRef<SuggestionProps<string> | null>(null)
             const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
             const lastQueryRef = useRef<string>("")
+            const searchRequestIdRef = useRef(0)
+            const fileSearchInFlightRef = useRef(false)
+            const queuedFileSearchRef = useRef<PendingFileSearchRequest | null>(null)
+            const runFileSearchRef = useRef<((request: PendingFileSearchRequest) => Promise<void>) | null>(null)
+
+            const runFileSearch = useCallback(
+                async (request: PendingFileSearchRequest) => {
+                    if (fileSearchInFlightRef.current) {
+                        queuedFileSearchRef.current = request
+                        return
+                    }
+
+                    fileSearchInFlightRef.current = true
+                    try {
+                        const result = await manager.searchFileMentions(request.dir, request.query, 20)
+                        if (request.requestId === searchRequestIdRef.current && request.query === lastQueryRef.current) {
+                            const items = result.results.map((path) => ({
+                                type: "file" as const,
+                                name: getMentionFileName(path),
+                                fullPath: path,
+                            }))
+                            setFileSuggestion((prev) => ({
+                                ...prev,
+                                items,
+                                treeMatch: result.treeMatch || null,
+                                selectedIndex: 0,
+                            }))
+                        }
+                    } catch (err) {
+                        console.error("[SmartEditor] Search failed:", err)
+                        if (request.requestId === searchRequestIdRef.current && request.query === lastQueryRef.current) {
+                            setFileSuggestion((prev) => ({
+                                ...prev,
+                                items: [],
+                                treeMatch: null,
+                            }))
+                        }
+                    } finally {
+                        fileSearchInFlightRef.current = false
+                        const queued = queuedFileSearchRef.current
+                        queuedFileSearchRef.current = null
+                        if (queued && queued.requestId === searchRequestIdRef.current && queued.query === lastQueryRef.current) {
+                            void runFileSearchRef.current?.(queued)
+                        }
+                    }
+                },
+                [manager]
+            )
+
+            useEffect(() => {
+                runFileSearchRef.current = runFileSearch
+                return () => {
+                    if (runFileSearchRef.current === runFileSearch) {
+                        runFileSearchRef.current = null
+                    }
+                }
+            }, [runFileSearch])
 
             const handleFileSearch = useCallback(
                 async (query: string) => {
-                    const dir = effectiveFileMentionsDir ?? (await resolveEditorWorkingDir())
-                    if (!dir || !manager.canSearchFileMentions(dir)) return
-
+                    const normalizedQuery = query.trim()
+                    searchRequestIdRef.current += 1
+                    const requestId = searchRequestIdRef.current
+                    lastQueryRef.current = normalizedQuery
+                    queuedFileSearchRef.current = null
                     if (searchTimeoutRef.current) {
                         clearTimeout(searchTimeoutRef.current)
+                        searchTimeoutRef.current = null
                     }
 
-                    lastQueryRef.current = query
+                    if (normalizedQuery === "") {
+                        const items = manager.getFileMentionFavorites(20).map((path) => ({
+                            type: "file" as const,
+                            name: getMentionFileName(path),
+                            fullPath: path,
+                        }))
+                        setFileSuggestion((prev) => ({
+                            ...prev,
+                            items,
+                            treeMatch: null,
+                            selectedIndex: 0,
+                        }))
+                        return
+                    }
 
-                    const delay = query ? 150 : 50
+                    const dir = effectiveFileMentionsDir ?? (await resolveEditorWorkingDir())
+                    if (requestId !== searchRequestIdRef.current) return
+                    if (!dir || !manager.canSearchFileMentions(dir)) return
+
                     searchTimeoutRef.current = setTimeout(async () => {
-                        try {
-                            const result = await manager.searchFileMentions(dir, query, 20)
-                            if (query === lastQueryRef.current) {
-                                const items = result.results.map((path) => ({
-                                    type: "file" as const,
-                                    name: getFileName(path),
-                                    fullPath: path,
-                                }))
-                                setFileSuggestion((prev) => ({
-                                    ...prev,
-                                    items,
-                                    treeMatch: result.treeMatch || null,
-                                    selectedIndex: 0,
-                                }))
-                            }
-                        } catch (err) {
-                            console.error("[SmartEditor] Search failed:", err)
-                            if (query === lastQueryRef.current) {
-                                setFileSuggestion((prev) => ({
-                                    ...prev,
-                                    items: [],
-                                    treeMatch: null,
-                                }))
-                            }
-                        }
-                    }, delay)
+                        if (requestId !== searchRequestIdRef.current || normalizedQuery !== lastQueryRef.current) return
+                        void runFileSearch({ dir, query: normalizedQuery, requestId })
+                    }, 150)
                 },
-                [effectiveFileMentionsDir, manager, resolveEditorWorkingDir]
+                [effectiveFileMentionsDir, manager, resolveEditorWorkingDir, runFileSearch]
             )
+
+            useEffect(() => {
+                return () => {
+                    searchRequestIdRef.current += 1
+                    queuedFileSearchRef.current = null
+                    if (searchTimeoutRef.current) {
+                        clearTimeout(searchTimeoutRef.current)
+                        searchTimeoutRef.current = null
+                    }
+                }
+            }, [])
 
             const fileDisplayItems: SuggestionItem[] = fileSuggestion.treeMatch
                 ? fileSuggestion.treeMatch.children.map((child) => ({
@@ -464,16 +619,21 @@ export const SmartEditor = observer(
             }, [slashCommands])
 
             const ensureSlashCapabilities = useCallback(() => {
-                if (!sdkCapabilities) return
+                let capabilities = activeSdkCapabilities
+                if (!capabilities && resolveSdkCapabilities) {
+                    capabilities = resolveSdkCapabilities()
+                    if (capabilities) setResolvedSdkCapabilities(capabilities)
+                }
+                if (!capabilities) return
                 const dir = effectiveSlashCommandsDir
                 if (dir) {
-                    void sdkCapabilities.loadCapabilities(dir)
+                    void capabilities.loadCapabilities(dir)
                     return
                 }
                 void resolveEditorWorkingDir().then((resolvedDir) => {
-                    if (resolvedDir) void sdkCapabilities.loadCapabilities(resolvedDir)
+                    if (resolvedDir) void capabilities.loadCapabilities(resolvedDir)
                 })
-            }, [effectiveSlashCommandsDir, resolveEditorWorkingDir, sdkCapabilities])
+            }, [activeSdkCapabilities, effectiveSlashCommandsDir, resolveEditorWorkingDir, resolveSdkCapabilities])
 
             useEffect(() => {
                 if (!slashSuggestion.open) return
@@ -689,8 +849,10 @@ export const SmartEditor = observer(
                     editorProps: {
                         attributes: {
                             class: "outline-none h-full",
+                            ...(ariaLabel ? { "aria-label": ariaLabel } : {}),
                         },
                         handleDrop: (_view, event) => {
+                            if (!enableImagePasteDrop) return false
                             const files = event.dataTransfer?.files
                             if (files) {
                                 for (const file of Array.from(files)) {
@@ -706,6 +868,7 @@ export const SmartEditor = observer(
                             return false
                         },
                         handlePaste: (_view, event) => {
+                            if (!enableImagePasteDrop) return false
                             const items = event.clipboardData?.items
                             if (items) {
                                 for (const item of Array.from(items)) {
@@ -754,7 +917,7 @@ export const SmartEditor = observer(
                         },
                     },
                 },
-                [extensions, manager, persistImage]
+                [ariaLabel, enableImagePasteDrop, extensions, manager, persistImage]
             )
 
             useEffect(() => {

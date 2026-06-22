@@ -1,10 +1,13 @@
 import type { HarnessInstallStatus as SharedHarnessInstallStatus } from "@openade/harness/browser"
+import type { RuntimeClientLike } from "../../../openade-client/src"
 import { isCodeModuleAvailable } from "./capabilities"
 import { localRuntimeClient } from "../runtime/localRuntimeClient"
+import { resolveCoreRolloutState, resolveCoreRuntimeEndpoint, selectedLocalProductRuntimeClient } from "../runtime/localProductRuntimeClient"
 
 export type HarnessInstallStatus = SharedHarnessInstallStatus
 
 export type HarnessStatusMap = Record<string, HarnessInstallStatus>
+const HARNESS_PROVIDER_STATUS_METHOD = "agent/provider/status"
 
 export interface HarnessStatusResult {
     statuses: HarnessStatusMap
@@ -36,6 +39,8 @@ function normalizeHarnessStatus(value: unknown): HarnessInstallStatus | null {
 }
 
 export function isHarnessStatusApiAvailable(): boolean {
+    if (resolveCoreRuntimeEndpoint()) return true
+    if (coreRolloutRequiresCoreProductRuntime()) return false
     return isCodeModuleAvailable() && !!window.openadeAPI?.runtime
 }
 
@@ -52,16 +57,42 @@ export function normalizeHarnessStatuses(raw: unknown): HarnessStatusMap {
     return result
 }
 
-export async function getHarnessStatuses(): Promise<HarnessStatusResult> {
-    if (!isHarnessStatusApiAvailable()) {
+function harnessStatusRuntimeClient(): RuntimeClientLike {
+    return resolveCoreRuntimeEndpoint() ? selectedLocalProductRuntimeClient() : localRuntimeClient
+}
+
+function coreRolloutRequiresCoreProductRuntime(): boolean {
+    const rolloutState = resolveCoreRolloutState()
+    if (!rolloutState || rolloutState.status !== "connected" || rolloutState.source === "legacy-ipc") return false
+    return rolloutState.legacyYjsDocumentsPresent === false || rolloutState.legacyYjsMigrationAccepted === true
+}
+
+function unavailableHarnessStatusError(): string {
+    if (coreRolloutRequiresCoreProductRuntime()) return "Harness status is unavailable until OpenADE Core is connected."
+    return "Harness status is only available in Electron."
+}
+
+export async function getHarnessStatuses(runtimeClient: RuntimeClientLike = harnessStatusRuntimeClient()): Promise<HarnessStatusResult> {
+    const usesCoreRuntime = resolveCoreRuntimeEndpoint() !== null
+    if (!usesCoreRuntime && !isHarnessStatusApiAvailable()) {
         return {
             statuses: {},
-            error: "Harness status is only available in Electron.",
+            error: unavailableHarnessStatusError(),
         }
     }
 
     try {
-        const raw = await localRuntimeClient.request("agent/provider/status")
+        if (usesCoreRuntime) {
+            await runtimeClient.connect()
+            if (!runtimeClient.hasMethod(HARNESS_PROVIDER_STATUS_METHOD)) {
+                return {
+                    statuses: {},
+                    error: "Harness status is not advertised by the selected runtime.",
+                }
+            }
+        }
+
+        const raw = await runtimeClient.request(HARNESS_PROVIDER_STATUS_METHOD)
         const rawRecord = isRecord(raw) ? raw : null
         const statusPayload = rawRecord && "status" in rawRecord ? rawRecord.status : raw
         const statuses = normalizeHarnessStatuses(statusPayload)

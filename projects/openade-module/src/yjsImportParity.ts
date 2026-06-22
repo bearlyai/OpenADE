@@ -21,9 +21,18 @@ export interface OpenADELegacyYjsCoreParityOptions {
     repoIds?: string[]
     taskIds?: string[]
     hydrateSessionEvents?: boolean
+    workingTaskIds?: string[]
 }
 
-export type OpenADELegacyYjsCoreParityMismatchScope = "repo" | "taskPreview" | "task" | "resourceInventory" | "event" | "comment" | "queuedTurn"
+export type OpenADELegacyYjsCoreParityMismatchScope =
+    | "snapshot"
+    | "repo"
+    | "taskPreview"
+    | "task"
+    | "resourceInventory"
+    | "event"
+    | "comment"
+    | "queuedTurn"
 
 export interface OpenADELegacyYjsCoreParityMismatch {
     scope: OpenADELegacyYjsCoreParityMismatchScope
@@ -52,13 +61,34 @@ export async function compareOpenADELegacyYjsToCore(
 ): Promise<OpenADELegacyYjsCoreParityReport> {
     const repoFilter = options.repoIds ? new Set(options.repoIds) : null
     const taskFilter = options.taskIds ? new Set(options.taskIds) : null
-    const legacyProjects = (await projection.readProjects()).filter((project) => !repoFilter || repoFilter.has(project.id))
+    const legacySnapshot = await projection.readSnapshot({ workingTaskIds: options.workingTaskIds })
+    const legacyProjects = legacySnapshot.repos.filter((project) => !repoFilter || repoFilter.has(project.id))
+    const legacyProjectsById = new Map(legacyProjects.map((project) => [project.id, project]))
     const coreSnapshot = await core.getSnapshot()
     const coreProjects = new Map(coreSnapshot.repos.map((project) => [project.id, project]))
     const report: OpenADELegacyYjsCoreParityReport = {
         scannedRepos: legacyProjects.length,
         scannedTasks: 0,
         mismatches: [],
+    }
+    compareRecord(
+        report,
+        { scope: "snapshot" },
+        snapshotComparable(legacySnapshot),
+        snapshotComparable(coreSnapshot)
+    )
+
+    for (const coreProject of coreSnapshot.repos) {
+        if (repoFilter && !repoFilter.has(coreProject.id)) continue
+        if (!legacyProjectsById.has(coreProject.id)) {
+            pushMismatch(report, {
+                scope: "repo",
+                repoId: coreProject.id,
+                field: "repo",
+                legacy: undefined,
+                core: projectComparable(coreProject),
+            })
+        }
     }
 
     for (const legacyProject of legacyProjects) {
@@ -70,8 +100,10 @@ export async function compareOpenADELegacyYjsToCore(
         compareRecord(report, { scope: "repo", repoId: legacyProject.id }, projectComparable(legacyProject), projectComparable(coreProject))
 
         const corePreviews = new Map(coreProject.tasks.map((preview) => [preview.id, preview]))
+        const legacyPreviewIds = new Set<string>()
         for (const legacyPreview of legacyProject.tasks) {
             if (taskFilter && !taskFilter.has(legacyPreview.id)) continue
+            legacyPreviewIds.add(legacyPreview.id)
             report.scannedTasks += 1
             const corePreview = corePreviews.get(legacyPreview.id)
             if (!corePreview) {
@@ -102,6 +134,18 @@ export async function compareOpenADELegacyYjsToCore(
                 resourceInventoryComparable(legacyInventory),
                 resourceInventoryComparable(coreInventory)
             )
+        }
+        for (const corePreview of coreProject.tasks) {
+            if (taskFilter && !taskFilter.has(corePreview.id)) continue
+            if (legacyPreviewIds.has(corePreview.id)) continue
+            pushMismatch(report, {
+                scope: "taskPreview",
+                repoId: legacyProject.id,
+                taskId: corePreview.id,
+                field: "taskPreview",
+                legacy: undefined,
+                core: taskPreviewComparable(corePreview),
+            })
         }
     }
 
@@ -153,6 +197,12 @@ function projectComparable(project: OpenADEProject): NormalizedRecord {
         name: project.name,
         path: project.path,
         archived: project.archived,
+    })
+}
+
+function snapshotComparable(snapshot: OpenADESnapshot): NormalizedRecord {
+    return compactRecord({
+        workingTaskIds: [...snapshot.workingTaskIds].sort(),
     })
 }
 

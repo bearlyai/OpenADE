@@ -1,19 +1,56 @@
-import { describe, expect, it } from "vitest"
-import { OpenADEClient } from "../../../openade-client/src"
+import { describe, expect, it, vi } from "vitest"
+import { OPENADE_METHOD, OPENADE_NOTIFICATION, OpenADEClient } from "../../../openade-client/src"
 import { createOpenADEModule, publishOpenADECompanionEvent, type OpenADEModuleAdapters } from "../../../openade-module/src/module"
 import type {
     OpenADECommentCreateRequest,
     OpenADECommentDeleteRequest,
     OpenADECommentEditRequest,
     OpenADECronInstallState,
+    OpenADECronInstallStateListResult,
     OpenADEMCPServer,
+    OpenADEMCPServersReadResult,
     OpenADEPersonalSettings,
+    OpenADEPersonalSettingsReadResult,
     OpenADEProject,
+    OpenADEProjectFileReadRequest,
+    OpenADEProjectFileReadResult,
+    OpenADEProjectFilesFuzzySearchRequest,
+    OpenADEProjectFilesFuzzySearchResult,
+    OpenADEProjectFilesTreeRequest,
+    OpenADEProjectFilesTreeResult,
+    OpenADEProjectGitBranchesReadRequest,
+    OpenADEProjectGitBranchesReadResult,
+    OpenADEProjectGitInfoRequest,
+    OpenADEProjectGitInfoResult,
+    OpenADEProjectGitSummaryReadRequest,
+    OpenADEProjectGitSummaryReadResult,
+    OpenADEProjectProcessListRequest,
+    OpenADEProjectProcessListResult,
+    OpenADEProjectSearchRequest,
+    OpenADEProjectSearchResult,
     OpenADEQueuedTurn,
     OpenADESnapshot,
     OpenADETask,
+    OpenADETaskChangesReadRequest,
+    OpenADETaskChangesReadResult,
     OpenADETaskCreateRequest,
     OpenADETaskCreateResult,
+    OpenADETaskDiffReadRequest,
+    OpenADETaskDiffReadResult,
+    OpenADETaskFilePairReadRequest,
+    OpenADETaskFilePairReadResult,
+    OpenADETaskGitCommitFilePatchRequest,
+    OpenADETaskGitCommitFilePatchResult,
+    OpenADETaskGitCommitFilesRequest,
+    OpenADETaskGitCommitFilesResult,
+    OpenADETaskGitFileAtTreeishRequest,
+    OpenADETaskGitFileAtTreeishResult,
+    OpenADETaskGitLogRequest,
+    OpenADETaskGitLogResult,
+    OpenADETaskGitScopesReadRequest,
+    OpenADETaskGitScopesReadResult,
+    OpenADETaskGitSummaryRequest,
+    OpenADETaskGitSummaryResult,
     OpenADETaskMetadataUpdateRequest,
     OpenADETaskReadOptions,
     OpenADETaskPreviewUsage,
@@ -26,6 +63,112 @@ import { RuntimeServer } from "../../../runtime/src"
 import type { RuntimeMessage, RuntimeRecord, RuntimeRequest } from "../../../runtime-protocol/src"
 import { RuntimeLocalClient, type RuntimeLocalTransport } from "../../../runtime-client/src"
 import { OpenADEProductStore } from "./productStore"
+
+class DirectReadOpenADEClient extends OpenADEClient {
+    constructor(private readonly directRuntime: RuntimeLocalClient) {
+        super({
+            runtime: directRuntime,
+            clientName: "product-store-direct-read-test",
+            clientPlatform: "web",
+        })
+    }
+
+    override getSnapshot(): Promise<OpenADESnapshot> {
+        return this.directRuntime.request("openade/snapshot/read")
+    }
+
+    override listProjects(): Promise<OpenADEProject[]> {
+        return this.directRuntime.request("openade/project/list")
+    }
+
+    override listTasks(repoId: string): Promise<OpenADETaskPreview[]> {
+        return this.directRuntime.request("openade/task/list", { repoId })
+    }
+
+    override getTask(repoId: string, taskId: string, options?: OpenADETaskReadOptions): Promise<OpenADETask> {
+        return this.directRuntime.request("openade/task/read", { repoId, taskId, ...options })
+    }
+
+    override listProjectFiles(args: OpenADEProjectFilesTreeRequest): Promise<OpenADEProjectFilesTreeResult> {
+        return this.directRuntime.request("openade/project/files/tree", args)
+    }
+
+    override readProjectFile(args: OpenADEProjectFileReadRequest): Promise<OpenADEProjectFileReadResult> {
+        return this.directRuntime.request("openade/project/file/read", args)
+    }
+
+    override fuzzySearchProjectFiles(args: OpenADEProjectFilesFuzzySearchRequest): Promise<OpenADEProjectFilesFuzzySearchResult> {
+        return this.directRuntime.request("openade/project/files/fuzzySearch", args)
+    }
+
+    override searchProject(args: OpenADEProjectSearchRequest): Promise<OpenADEProjectSearchResult> {
+        return this.directRuntime.request("openade/project/search", args)
+    }
+
+    override readProjectGitInfo(args: OpenADEProjectGitInfoRequest): Promise<OpenADEProjectGitInfoResult> {
+        return this.directRuntime.request("openade/project/git/info/read", args)
+    }
+
+    override readProjectGitBranches(args: OpenADEProjectGitBranchesReadRequest): Promise<OpenADEProjectGitBranchesReadResult> {
+        return this.directRuntime.request("openade/project/git/branches/read", args)
+    }
+
+    override readProjectGitSummary(args: OpenADEProjectGitSummaryReadRequest): Promise<OpenADEProjectGitSummaryReadResult> {
+        return this.directRuntime.request("openade/project/git/summary/read", args)
+    }
+
+    override listProjectProcesses(args: OpenADEProjectProcessListRequest): Promise<OpenADEProjectProcessListResult> {
+        return this.directRuntime.request("openade/project/process/list", args)
+    }
+
+    override listCronInstallStateRepos(): Promise<OpenADECronInstallStateListResult> {
+        return this.directRuntime.request("openade/cron/installState/list")
+    }
+
+    override readTaskGitSummary(args: OpenADETaskGitSummaryRequest): Promise<OpenADETaskGitSummaryResult> {
+        return this.directRuntime.request("openade/task/git/summary/read", args)
+    }
+
+    override readTaskChanges(args: OpenADETaskChangesReadRequest): Promise<OpenADETaskChangesReadResult> {
+        return this.directRuntime.request("openade/task/changes/read", args)
+    }
+
+    override readTaskGitScopes(args: OpenADETaskGitScopesReadRequest): Promise<OpenADETaskGitScopesReadResult> {
+        return this.directRuntime.request("openade/task/git/scopes/read", args)
+    }
+
+    override readTaskDiff(args: OpenADETaskDiffReadRequest): Promise<OpenADETaskDiffReadResult> {
+        return this.directRuntime.request("openade/task/diff/read", args)
+    }
+
+    override readTaskFilePair(args: OpenADETaskFilePairReadRequest): Promise<OpenADETaskFilePairReadResult> {
+        return this.directRuntime.request("openade/task/filePair/read", args)
+    }
+
+    override readTaskGitLog(args: OpenADETaskGitLogRequest): Promise<OpenADETaskGitLogResult> {
+        return this.directRuntime.request("openade/task/git/log", args)
+    }
+
+    override readTaskGitCommitFiles(args: OpenADETaskGitCommitFilesRequest): Promise<OpenADETaskGitCommitFilesResult> {
+        return this.directRuntime.request("openade/task/git/commit/files/read", args)
+    }
+
+    override readTaskGitFileAtTreeish(args: OpenADETaskGitFileAtTreeishRequest): Promise<OpenADETaskGitFileAtTreeishResult> {
+        return this.directRuntime.request("openade/task/git/fileAtTreeish/read", args)
+    }
+
+    override readTaskGitCommitFilePatch(args: OpenADETaskGitCommitFilePatchRequest): Promise<OpenADETaskGitCommitFilePatchResult> {
+        return this.directRuntime.request("openade/task/git/commit/filePatch/read", args)
+    }
+
+    override readMcpServers(): Promise<OpenADEMCPServersReadResult> {
+        return this.directRuntime.request("openade/settings/mcpServers/read")
+    }
+
+    override readPersonalSettings(): Promise<OpenADEPersonalSettingsReadResult> {
+        return this.directRuntime.request("openade/settings/personal/read")
+    }
+}
 
 function now(): string {
     return "2026-05-31T00:00:00.000Z"
@@ -47,11 +190,12 @@ function runtimeRecord(runtimeId: string, status: RuntimeRecord["status"], owner
     }
 }
 
-function createLocalRuntimeClient(server: RuntimeServer): RuntimeLocalClient {
+function createLocalRuntimeClient(server: RuntimeServer, permissions?: string[]): RuntimeLocalClient {
     const listeners = new Set<(message: RuntimeMessage) => void>()
     let dispose: (() => void) | null = null
     const connection: RuntimeConnection = {
         id: "product-store-test",
+        ...(permissions ? { permissions } : {}),
         send(message) {
             for (const listener of listeners) listener(message)
         },
@@ -100,6 +244,10 @@ function createDeferred(): Deferred {
 
 interface RuntimeBackedStoreOptions {
     beforeRuntimeList?: () => Promise<void>
+    beforeFuzzySearchProjectFiles?: () => Promise<void>
+    clientMode?: "openade-client" | "direct-read-client"
+    permissions?: string[]
+    omitAcceptedNewTaskTurnPayload?: boolean
 }
 
 interface WrittenImageFixture {
@@ -115,10 +263,15 @@ function createRuntimeBackedStore(options: RuntimeBackedStoreOptions = {}): {
     taskReadRequests: OpenADETaskReadOptions[]
     writtenImages: Map<string, WrittenImageFixture>
     publishTaskChanged(previewChanged?: boolean, clientRequestId?: string): void
+    publishRepoUpdated(name: string): void
+    renameTaskPreview(title: string): void
+    removeTaskPreview(taskId: string): void
     publishTaskUpdated(repoId: string, taskId: string): void
     publishActionEventUpdated(repoId: string, taskId: string, eventId: string, eventStatus: string): void
     snapshotRequestCount(): number
+    projectListRequestCount(): number
     taskListRequestCount(): number
+    metadataUpdateRequestCount(): number
     runtimeListRequestCount(): number
     projectGitInfoRequestCount(): number
     projectGitBranchesRequestCount(): number
@@ -127,6 +280,7 @@ function createRuntimeBackedStore(options: RuntimeBackedStoreOptions = {}): {
     processListRequestCount(): number
     cronDefinitionsRequestCount(): number
     cronInstallStateReadRequestCount(): number
+    cronInstallStateListRequestCount(): number
     fuzzySearchRequestCount(): number
     projectSearchRequestCount(): number
     projectGitSummaryRequestCount(): number
@@ -150,13 +304,17 @@ function createRuntimeBackedStore(options: RuntimeBackedStoreOptions = {}): {
 } {
     let runtimeListRequests = 0
     let cronDefinitionsRequests = 0
+    let cronInstallStateListRequests = 0
     let taskListRequests = 0
+    let projectListRequests = 0
+    let metadataUpdateRequests = 0
     const server = new RuntimeServer({
         serverName: "product-store-runtime",
         protocolVersion: 1,
         runHandlerWithContext: async (event, run) => {
             if (event.method === "runtime/list") runtimeListRequests += 1
             if (event.method === "openade/cron/definitions/read") cronDefinitionsRequests += 1
+            if (event.method === "openade/cron/installState/list") cronInstallStateListRequests += 1
             if (event.method === "runtime/list" && options.beforeRuntimeList) await options.beforeRuntimeList()
             return run()
         },
@@ -181,6 +339,7 @@ function createRuntimeBackedStore(options: RuntimeBackedStoreOptions = {}): {
         description: "Task detail",
         isolationStrategy: { type: "head" },
         deviceEnvironments: [],
+        preview,
         events: [
             {
                 id: "event-image",
@@ -301,6 +460,21 @@ function createRuntimeBackedStore(options: RuntimeBackedStoreOptions = {}): {
         })
     }
 
+    function publishRepoUpdated(name: string): void {
+        project.name = name
+        server.notify("openade/repo/updated", { repoId: project.id, at: now() })
+    }
+
+    function renameTaskPreview(title: string): void {
+        preview.title = title
+        task.title = title
+    }
+
+    function removeTaskPreview(taskId: string): void {
+        project.tasks = project.tasks.filter((candidate) => candidate.id !== taskId)
+        tasks.delete(taskId)
+    }
+
     function publishTaskUpdated(repoId: string, taskId: string): void {
         server.notify("openade/task/updated", { repoId, taskId, at: now() })
     }
@@ -316,6 +490,7 @@ function createRuntimeBackedStore(options: RuntimeBackedStoreOptions = {}): {
     }
 
     async function updateTaskMetadata(params: OpenADETaskMetadataUpdateRequest): Promise<void> {
+        metadataUpdateRequests += 1
         const current = tasks.get(params.taskId)
         if (!current) throw new Error(`Task ${params.taskId} not found`)
         if (params.title) {
@@ -471,7 +646,7 @@ function createRuntimeBackedStore(options: RuntimeBackedStoreOptions = {}): {
             eventId,
             executionId: createdTask ? "exec-created" : "exec-1",
             createdAt: now(),
-            ...(createdTask
+            ...(createdTask && !options.omitAcceptedNewTaskTurnPayload
                 ? {
                       task: structuredClone(current),
                       preview: structuredClone(currentPreview),
@@ -486,7 +661,10 @@ function createRuntimeBackedStore(options: RuntimeBackedStoreOptions = {}): {
             snapshotRequests += 1
             return snapshot(options)
         },
-        readProjects: async () => [project],
+        readProjects: async () => {
+            projectListRequests += 1
+            return [project]
+        },
         readTaskList: async () => {
             taskListRequests += 1
             return project.tasks
@@ -504,6 +682,12 @@ function createRuntimeBackedStore(options: RuntimeBackedStoreOptions = {}): {
                 installations: structuredClone(cronInstallStates.get(params.repoId) ?? {}),
             }
         },
+        listCronInstallStateRepos: async () => ({
+            repoIds: Array.from(cronInstallStates.entries())
+                .filter(([, installations]) => Object.keys(installations).length > 0)
+                .map(([repoId]) => repoId)
+                .sort(),
+        }),
         replaceCronInstallState: async (params) => {
             const installations = structuredClone(params.installations)
             cronInstallStates.set(params.repoId, installations)
@@ -553,6 +737,7 @@ function createRuntimeBackedStore(options: RuntimeBackedStoreOptions = {}): {
             }),
             fuzzySearchProjectFiles: async (params) => {
                 fuzzySearchRequests += 1
+                await options.beforeFuzzySearchProjectFiles?.()
                 return {
                     repoId: params.repoId,
                     taskId: params.taskId,
@@ -1201,24 +1386,31 @@ function createRuntimeBackedStore(options: RuntimeBackedStoreOptions = {}): {
     }
     server.registerModule(createOpenADEModule(adapters))
 
-    const runtime = createLocalRuntimeClient(server)
+    const runtime = createLocalRuntimeClient(server, options.permissions)
+    const client =
+        options.clientMode === "direct-read-client"
+            ? new DirectReadOpenADEClient(runtime)
+            : new OpenADEClient({
+                  runtime,
+                  clientName: "product-store-test",
+                  clientPlatform: "web",
+              })
     return {
         server,
         runtime,
-        store: new OpenADEProductStore(
-            new OpenADEClient({
-                runtime,
-                clientName: "product-store-test",
-                clientPlatform: "web",
-            })
-        ),
+        store: new OpenADEProductStore(client),
         taskReadRequests,
         writtenImages,
         publishTaskChanged,
+        publishRepoUpdated,
+        renameTaskPreview,
+        removeTaskPreview,
         publishTaskUpdated,
         publishActionEventUpdated,
         snapshotRequestCount: () => snapshotRequests,
+        projectListRequestCount: () => projectListRequests,
         taskListRequestCount: () => taskListRequests,
+        metadataUpdateRequestCount: () => metadataUpdateRequests,
         runtimeListRequestCount: () => runtimeListRequests,
         projectGitInfoRequestCount: () => projectGitInfoRequests,
         projectGitBranchesRequestCount: () => projectGitBranchesRequests,
@@ -1227,6 +1419,7 @@ function createRuntimeBackedStore(options: RuntimeBackedStoreOptions = {}): {
         processListRequestCount: () => processListRequests,
         cronDefinitionsRequestCount: () => cronDefinitionsRequests,
         cronInstallStateReadRequestCount: () => cronInstallStateReadRequests,
+        cronInstallStateListRequestCount: () => cronInstallStateListRequests,
         fuzzySearchRequestCount: () => fuzzySearchRequests,
         projectSearchRequestCount: () => projectSearchRequests,
         projectGitSummaryRequestCount: () => projectGitSummaryRequests,
@@ -1253,6 +1446,15 @@ function createRuntimeBackedStore(options: RuntimeBackedStoreOptions = {}): {
 async function flushAsyncNotifications(): Promise<void> {
     await Promise.resolve()
     await Promise.resolve()
+}
+
+async function waitForCondition(condition: () => boolean, label: string): Promise<void> {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+        await flushAsyncNotifications()
+        if (condition()) return
+        await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    throw new Error(`Timed out waiting for ${label}`)
 }
 
 async function waitForNotificationCoalescing(): Promise<void> {
@@ -1286,7 +1488,340 @@ describe("OpenADEProductStore", () => {
             await store.getTask("repo-1", "task-1", { hydrateSessionEvents: true })
 
             expect(taskReadRequests).toEqual([{ hydrateSessionEvents: true }, { hydrateSessionEvents: true }])
+
+            taskReadRequests.length = 0
+            await store.getTask("repo-1", "task-1", { hydrateSessionEvents: false })
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }])
         } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("keeps lightweight task reads warm across idle churn without hiding explicit refreshes", async () => {
+        const { store, runtime, taskReadRequests } = createRuntimeBackedStore()
+        let now = 1_000_000
+        const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now)
+
+        try {
+            await store.getTask("repo-1", "task-1")
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }])
+
+            now += 10_000
+            await store.getTask("repo-1", "task-1")
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }])
+
+            await store.refreshTask("repo-1", "task-1")
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }, { hydrateSessionEvents: false }])
+
+            now += 15_001
+            await store.getTask("repo-1", "task-1")
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }, { hydrateSessionEvents: false }, { hydrateSessionEvents: false }])
+        } finally {
+            nowSpy.mockRestore()
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("coalesces concurrent snapshot, project, task-list, and task-detail reads before they hit the runtime", async () => {
+        const { store, runtime, snapshotRequestCount, projectListRequestCount, taskListRequestCount, taskReadRequests } = createRuntimeBackedStore({
+            clientMode: "direct-read-client",
+        })
+
+        try {
+            const [firstSnapshot, secondSnapshot] = await Promise.all([
+                store.refreshSnapshot({ bypassCache: true }),
+                store.refreshSnapshot({ bypassCache: true }),
+            ])
+            expect(firstSnapshot.server.hostName).toBe("test-host")
+            expect(secondSnapshot.server.hostName).toBe("test-host")
+            expect(snapshotRequestCount()).toBe(1)
+
+            const [firstProjects, secondProjects] = await Promise.all([store.listProjects({ bypassCache: true }), store.listProjects({ bypassCache: true })])
+            expect(firstProjects.map((repo) => repo.id)).toEqual(["repo-1"])
+            expect(secondProjects.map((repo) => repo.id)).toEqual(["repo-1"])
+            expect(projectListRequestCount()).toBe(1)
+
+            const [firstPreviews, secondPreviews] = await Promise.all([
+                store.listTasks("repo-1", { bypassCache: true }),
+                store.listTasks("repo-1", { bypassCache: true }),
+            ])
+            expect(firstPreviews.map((task) => task.id)).toEqual(["task-1"])
+            expect(secondPreviews.map((task) => task.id)).toEqual(["task-1"])
+            expect(taskListRequestCount()).toBe(1)
+
+            await Promise.all([
+                store.getTask("repo-1", "task-1", { hydrateSessionEvents: false }, { bypassCache: true }),
+                store.getTask("repo-1", "task-1", { hydrateSessionEvents: false }, { bypassCache: true }),
+            ])
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }])
+
+            await Promise.all([
+                store.getTask("repo-1", "task-1", { hydrateSessionEvents: true }, { bypassCache: true }),
+                store.getTask("repo-1", "task-1", { hydrateSessionEvents: true }, { bypassCache: true }),
+            ])
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }, { hydrateSessionEvents: true }])
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("fails direct product-store reads before runtime requests when capabilities omit the method", async () => {
+        const { store, runtime, projectFileReadRequestCount } = createRuntimeBackedStore({
+            permissions: ["initialize", OPENADE_METHOD.snapshotRead],
+        })
+
+        try {
+            await expect(store.readProjectFile({ repoId: "repo-1", path: "README.md" })).rejects.toThrow(
+                `OpenADE runtime method unavailable: ${OPENADE_METHOD.projectFileRead}`
+            )
+            expect(projectFileReadRequestCount()).toBe(0)
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("coalesces concurrent expensive project and task host reads before they hit the runtime", async () => {
+        const {
+            store,
+            runtime,
+            processListRequestCount,
+            cronDefinitionsRequestCount,
+            cronInstallStateReadRequestCount,
+            cronInstallStateListRequestCount,
+            projectFilesTreeRequestCount,
+            projectFileReadRequestCount,
+            fuzzySearchRequestCount,
+            projectSearchRequestCount,
+            projectGitInfoRequestCount,
+            projectGitBranchesRequestCount,
+            projectGitSummaryRequestCount,
+            taskGitSummaryRequestCount,
+            taskGitScopesRequestCount,
+            taskGitLogRequestCount,
+            taskGitCommitFilesRequestCount,
+            taskGitFileAtTreeishRequestCount,
+            taskGitCommitFilePatchRequestCount,
+            taskChangesRequestCount,
+            taskDiffRequestCount,
+            taskFilePairRequestCount,
+            mcpServersReadRequestCount,
+            personalSettingsReadRequestCount,
+        } = createRuntimeBackedStore({ clientMode: "direct-read-client" })
+
+        try {
+            await Promise.all([store.listProjectProcesses({ repoId: "repo-1" }), store.listProjectProcesses({ repoId: "repo-1" })])
+            expect(processListRequestCount()).toBe(1)
+
+            await Promise.all([store.readCronDefinitions({ repoId: "repo-1" }), store.readCronDefinitions({ repoId: "repo-1" })])
+            expect(cronDefinitionsRequestCount()).toBe(0)
+
+            await Promise.all([store.readCronInstallState({ repoId: "repo-1" }), store.readCronInstallState({ repoId: "repo-1" })])
+            expect(cronInstallStateReadRequestCount()).toBe(1)
+
+            await Promise.all([store.listCronInstallStateRepos(), store.listCronInstallStateRepos()])
+            expect(cronInstallStateListRequestCount()).toBe(1)
+
+            const fuzzyArgs = {
+                repoId: "repo-1",
+                taskId: "task-1",
+                query: "runtime",
+                limit: 10,
+            }
+            await Promise.all([store.fuzzySearchProjectFiles(fuzzyArgs), store.fuzzySearchProjectFiles(fuzzyArgs)])
+            expect(fuzzySearchRequestCount()).toBe(1)
+
+            const treeArgs = {
+                repoId: "repo-1",
+                taskId: "task-1",
+                path: "src",
+                maxDepth: 1,
+            }
+            await Promise.all([store.listProjectFiles(treeArgs), store.listProjectFiles(treeArgs)])
+            expect(projectFilesTreeRequestCount()).toBe(1)
+
+            const fileArgs = {
+                repoId: "repo-1",
+                taskId: "task-1",
+                path: "src/runtime.ts",
+            }
+            await Promise.all([store.readProjectFile(fileArgs), store.readProjectFile(fileArgs)])
+            expect(projectFileReadRequestCount()).toBe(1)
+
+            const searchArgs = {
+                repoId: "repo-1",
+                taskId: "task-1",
+                query: "runtime",
+                limit: 10,
+                caseSensitive: false,
+            }
+            await Promise.all([store.searchProject(searchArgs), store.searchProject(searchArgs)])
+            expect(projectSearchRequestCount()).toBe(1)
+
+            await Promise.all([store.readProjectGitInfo({ repoId: "repo-1" }), store.readProjectGitInfo({ repoId: "repo-1" })])
+            expect(projectGitInfoRequestCount()).toBe(1)
+
+            await Promise.all([store.readProjectGitBranches({ repoId: "repo-1" }), store.readProjectGitBranches({ repoId: "repo-1" })])
+            expect(projectGitBranchesRequestCount()).toBe(1)
+
+            await Promise.all([
+                store.readProjectGitSummary({ repoId: "repo-1" }, { bypassCache: true }),
+                store.readProjectGitSummary({ repoId: "repo-1" }, { bypassCache: true }),
+            ])
+            expect(projectGitSummaryRequestCount()).toBe(1)
+
+            await Promise.all([
+                store.readTaskGitSummary({ repoId: "repo-1", taskId: "task-1" }, { bypassCache: true }),
+                store.readTaskGitSummary({ repoId: "repo-1", taskId: "task-1" }, { bypassCache: true }),
+            ])
+            expect(taskGitSummaryRequestCount()).toBe(1)
+
+            const taskScope = { repoId: "repo-1", taskId: "task-1" }
+            await Promise.all([store.readTaskGitScopes(taskScope), store.readTaskGitScopes(taskScope)])
+            expect(taskGitScopesRequestCount()).toBe(1)
+
+            const logArgs = { ...taskScope, ref: "HEAD", limit: 50, skip: 0 }
+            await Promise.all([store.readTaskGitLog(logArgs), store.readTaskGitLog(logArgs)])
+            expect(taskGitLogRequestCount()).toBe(1)
+
+            const commitFilesArgs = { ...taskScope, commit: "abc123" }
+            await Promise.all([store.readTaskGitCommitFiles(commitFilesArgs), store.readTaskGitCommitFiles(commitFilesArgs)])
+            expect(taskGitCommitFilesRequestCount()).toBe(1)
+
+            const fileAtTreeishArgs = { ...taskScope, treeish: "abc123", filePath: "README.md" }
+            await Promise.all([store.readTaskGitFileAtTreeish(fileAtTreeishArgs), store.readTaskGitFileAtTreeish(fileAtTreeishArgs)])
+            expect(taskGitFileAtTreeishRequestCount()).toBe(1)
+
+            const commitPatchArgs = { ...taskScope, commit: "abc123", filePath: "README.md" }
+            await Promise.all([store.readTaskGitCommitFilePatch(commitPatchArgs), store.readTaskGitCommitFilePatch(commitPatchArgs)])
+            expect(taskGitCommitFilePatchRequestCount()).toBe(1)
+
+            const changesArgs = { ...taskScope, fromTreeish: "HEAD" }
+            await Promise.all([store.readTaskChanges(changesArgs), store.readTaskChanges(changesArgs)])
+            expect(taskChangesRequestCount()).toBe(1)
+
+            const diffArgs = { ...taskScope, filePath: "README.md", contextLines: 3 as const }
+            await Promise.all([store.readTaskDiff(diffArgs), store.readTaskDiff(diffArgs)])
+            expect(taskDiffRequestCount()).toBe(1)
+
+            const filePairArgs = { ...taskScope, filePath: "README.md" }
+            await Promise.all([store.readTaskFilePair(filePairArgs), store.readTaskFilePair(filePairArgs)])
+            expect(taskFilePairRequestCount()).toBe(1)
+
+            await Promise.all([store.readMcpServers(), store.readMcpServers()])
+            expect(mcpServersReadRequestCount()).toBe(1)
+
+            await Promise.all([store.readPersonalSettings(), store.readPersonalSettings()])
+            expect(personalSettingsReadRequestCount()).toBe(1)
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("normalizes fuzzy search cache defaults without merging generated-file searches", async () => {
+        const { store, runtime, fuzzySearchRequestCount } = createRuntimeBackedStore({ clientMode: "direct-read-client" })
+
+        try {
+            await Promise.all([
+                store.fuzzySearchProjectFiles({
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    query: "defaults",
+                    limit: 10,
+                }),
+                store.fuzzySearchProjectFiles({
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    query: "defaults",
+                    matchDirs: false,
+                    limit: 10,
+                    includeHidden: false,
+                    includeGenerated: false,
+                }),
+            ])
+            expect(fuzzySearchRequestCount()).toBe(1)
+
+            await store.fuzzySearchProjectFiles({
+                repoId: "repo-1",
+                taskId: "task-1",
+                query: "defaults",
+                matchDirs: false,
+                limit: 10,
+                includeHidden: false,
+                includeGenerated: true,
+            })
+            expect(fuzzySearchRequestCount()).toBe(2)
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("coalesces identical concurrent task metadata updates before they hit the runtime", async () => {
+        const { store, runtime, metadataUpdateRequestCount } = createRuntimeBackedStore()
+
+        try {
+            await store.getTask("repo-1", "task-1")
+
+            await Promise.all([
+                store.updateTaskMetadata({
+                    taskId: "task-1",
+                    lastViewedAt: "2026-05-31T00:10:00.000Z",
+                }),
+                store.updateTaskMetadata({
+                    taskId: "task-1",
+                    lastViewedAt: "2026-05-31T00:10:00.000Z",
+                }),
+            ])
+
+            expect(metadataUpdateRequestCount()).toBe(1)
+            expect(store.getCachedTask("repo-1", "task-1")).toMatchObject({
+                lastViewedAt: "2026-05-31T00:10:00.000Z",
+            })
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("does not cache invalidated in-flight scoped reads after writes clear them", async () => {
+        const fuzzySearchStarted = createDeferred()
+        const { store, runtime, fuzzySearchRequestCount } = createRuntimeBackedStore({
+            clientMode: "direct-read-client",
+            beforeFuzzySearchProjectFiles: () => fuzzySearchStarted.promise,
+        })
+        const fuzzyArgs = {
+            repoId: "repo-1",
+            taskId: "task-1",
+            query: "runtime",
+            limit: 10,
+        }
+
+        try {
+            const pendingSearch = store.fuzzySearchProjectFiles(fuzzyArgs)
+            await waitForCondition(() => fuzzySearchRequestCount() === 1, "fuzzy search request to start")
+
+            await store.writeProjectFile(
+                {
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    path: "src/runtime.ts",
+                    content: "runtime product search\n",
+                },
+                { clientRequestId: "clear-in-flight-search" }
+            )
+
+            fuzzySearchStarted.resolve()
+            await expect(pendingSearch).resolves.toMatchObject({ results: ["src/runtime.ts"] })
+
+            await store.fuzzySearchProjectFiles(fuzzyArgs)
+            expect(fuzzySearchRequestCount()).toBe(2)
+        } finally {
+            fuzzySearchStarted.resolve()
             store.destroy()
             await runtime.close()
         }
@@ -1306,6 +1841,348 @@ describe("OpenADEProductStore", () => {
             expect(snapshotRequestCount()).toBe(snapshotRequests)
             expect(store.snapshot?.repos[0]?.tasks).toEqual(previews)
             expect(store.getCachedProjects()?.[0]?.tasks).toEqual(previews)
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("refreshes task preview and delete notifications through scoped task-list reads", async () => {
+        const { store, runtime, snapshotRequestCount, projectListRequestCount, taskListRequestCount, renameTaskPreview, removeTaskPreview } =
+            createRuntimeBackedStore()
+
+        try {
+            await store.refreshSnapshot()
+            const snapshotRequests = snapshotRequestCount()
+            const projectListRequests = projectListRequestCount()
+
+            renameTaskPreview("Task preview from scoped list")
+            await store.handleNotification({
+                method: "openade/task/previewChanged",
+                params: { repoId: "repo-1", taskId: "task-1", at: now() },
+            })
+
+            expect(taskListRequestCount()).toBe(1)
+            expect(projectListRequestCount()).toBe(projectListRequests)
+            expect(snapshotRequestCount()).toBe(snapshotRequests)
+            expect(store.snapshot?.repos[0]?.tasks).toEqual([expect.objectContaining({ id: "task-1", title: "Task preview from scoped list" })])
+
+            removeTaskPreview("task-1")
+            await store.handleNotification({
+                method: "openade/task/deleted",
+                params: { repoId: "repo-1", taskId: "task-1", at: now() },
+            })
+
+            expect(taskListRequestCount()).toBe(2)
+            expect(projectListRequestCount()).toBe(projectListRequests)
+            expect(snapshotRequestCount()).toBe(snapshotRequests)
+            expect(store.snapshot?.repos[0]?.tasks).toEqual([])
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("scopes repo-less task preview notifications through cached project membership", async () => {
+        const { store, runtime, snapshotRequestCount, projectListRequestCount, taskListRequestCount, renameTaskPreview } = createRuntimeBackedStore()
+
+        try {
+            await store.listProjects()
+            const snapshotRequests = snapshotRequestCount()
+            const projectListRequests = projectListRequestCount()
+            const taskListRequests = taskListRequestCount()
+
+            renameTaskPreview("Repo-less scoped preview")
+            await store.handleNotification({
+                method: "openade/task/previewChanged",
+                params: { taskId: "task-1", at: now() },
+            })
+
+            expect(taskListRequestCount()).toBe(taskListRequests + 1)
+            expect(projectListRequestCount()).toBe(projectListRequests)
+            expect(snapshotRequestCount()).toBe(snapshotRequests)
+            expect(store.getCachedProjects()?.[0]?.tasks).toEqual([expect.objectContaining({ id: "task-1", title: "Repo-less scoped preview" })])
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("acknowledges repo-less uncached task updates without broad projection reads", async () => {
+        const { store, runtime, snapshotRequestCount, projectListRequestCount, taskListRequestCount, taskReadRequests } = createRuntimeBackedStore()
+
+        try {
+            await store.listProjects()
+            const snapshotRequests = snapshotRequestCount()
+            const projectListRequests = projectListRequestCount()
+            const taskListRequests = taskListRequestCount()
+            taskReadRequests.length = 0
+
+            await expect(
+                store.handleNotification({
+                    method: "openade/task/updated",
+                    params: { taskId: "task-background", at: now() },
+                })
+            ).resolves.toBe(true)
+
+            expect(taskReadRequests).toEqual([])
+            expect(taskListRequestCount()).toBe(taskListRequests)
+            expect(projectListRequestCount()).toBe(projectListRequests)
+            expect(snapshotRequestCount()).toBe(snapshotRequests)
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("coalesces and rate-limits subscribed task-preview bursts into scoped task-list reads", async () => {
+        const { store, runtime, server, snapshotRequestCount, projectListRequestCount, taskListRequestCount, renameTaskPreview } =
+            createRuntimeBackedStore()
+        vi.useFakeTimers()
+
+        try {
+            store.subscribe()
+            await store.refreshSnapshot()
+            const snapshotRequests = snapshotRequestCount()
+            const projectListRequests = projectListRequestCount()
+            const taskListRequests = taskListRequestCount()
+
+            renameTaskPreview("Task preview first")
+            server.notify(OPENADE_NOTIFICATION.taskPreviewChanged, { repoId: "repo-1", taskId: "task-1", at: now() })
+            renameTaskPreview("Task preview second")
+            server.notify(OPENADE_NOTIFICATION.taskPreviewChanged, { repoId: "repo-1", taskId: "task-1", at: now() })
+            renameTaskPreview("Task preview final")
+            server.notify(OPENADE_NOTIFICATION.taskPreviewChanged, { repoId: "repo-1", taskId: "task-1", at: now() })
+
+            await flushAsyncNotifications()
+            expect(taskListRequestCount()).toBe(taskListRequests)
+
+            await vi.advanceTimersByTimeAsync(180)
+            await flushAsyncNotifications()
+
+            expect(taskListRequestCount()).toBe(taskListRequests + 1)
+            expect(projectListRequestCount()).toBe(projectListRequests)
+            expect(snapshotRequestCount()).toBe(snapshotRequests)
+            expect(store.snapshot?.repos[0]?.tasks).toEqual([expect.objectContaining({ id: "task-1", title: "Task preview final" })])
+
+            renameTaskPreview("Task preview later")
+            server.notify(OPENADE_NOTIFICATION.taskPreviewChanged, { repoId: "repo-1", taskId: "task-1", at: now() })
+
+            await vi.advanceTimersByTimeAsync(180)
+            await flushAsyncNotifications()
+            expect(taskListRequestCount()).toBe(taskListRequests + 1)
+
+            await vi.advanceTimersByTimeAsync(9_820)
+            await flushAsyncNotifications()
+            expect(taskListRequestCount()).toBe(taskListRequests + 2)
+            expect(store.snapshot?.repos[0]?.tasks).toEqual([expect.objectContaining({ id: "task-1", title: "Task preview later" })])
+        } finally {
+            store.destroy()
+            vi.useRealTimers()
+            await runtime.close()
+        }
+    })
+
+    it("refreshes cached task preview notifications through a scoped task-list read", async () => {
+        const { store, runtime, snapshotRequestCount, projectListRequestCount, taskListRequestCount, taskReadRequests, renameTaskPreview } =
+            createRuntimeBackedStore()
+
+        try {
+            await store.refreshSnapshot()
+            await store.getTask("repo-1", "task-1", { hydrateSessionEvents: false, eventLimit: 30 })
+            taskReadRequests.length = 0
+            const snapshotRequests = snapshotRequestCount()
+            const projectListRequests = projectListRequestCount()
+            const taskListRequests = taskListRequestCount()
+
+            renameTaskPreview("Task preview from cached detail")
+            await expect(
+                store.handleNotification({
+                    method: OPENADE_NOTIFICATION.taskPreviewChanged,
+                    params: { repoId: "repo-1", taskId: "task-1", at: now() },
+                })
+            ).resolves.toBe(true)
+
+            expect(taskReadRequests).toEqual([])
+            expect(taskListRequestCount()).toBe(taskListRequests + 1)
+            expect(projectListRequestCount()).toBe(projectListRequests)
+            expect(snapshotRequestCount()).toBe(snapshotRequests)
+            expect(store.snapshot?.repos[0]?.tasks).toEqual([expect.objectContaining({ id: "task-1", title: "Task preview from cached detail" })])
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("keeps direct-task preview notifications off scoped task lists when project projection is absent", async () => {
+        const { store, runtime, snapshotRequestCount, projectListRequestCount, taskListRequestCount, taskReadRequests, renameTaskPreview } =
+            createRuntimeBackedStore()
+        vi.useFakeTimers()
+        vi.setSystemTime(new Date("2026-05-31T00:00:00.000Z"))
+
+        try {
+            await store.getTask("repo-1", "task-1", { hydrateSessionEvents: false, eventLimit: 12 })
+            taskReadRequests.length = 0
+            const snapshotRequests = snapshotRequestCount()
+            const projectListRequests = projectListRequestCount()
+            const taskListRequests = taskListRequestCount()
+
+            renameTaskPreview("Direct task preview update")
+            await expect(
+                store.handleNotification({
+                    method: OPENADE_NOTIFICATION.taskPreviewChanged,
+                    params: { repoId: "repo-1", taskId: "task-1", at: now() },
+                })
+            ).resolves.toBe(true)
+
+            expect(taskReadRequests).toEqual([])
+            expect(taskListRequestCount()).toBe(taskListRequests)
+            expect(projectListRequestCount()).toBe(projectListRequests)
+            expect(snapshotRequestCount()).toBe(snapshotRequests)
+
+            await vi.advanceTimersByTimeAsync(2_200)
+
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false, eventLimit: 12 }])
+            expect(taskListRequestCount()).toBe(taskListRequests)
+            expect(projectListRequestCount()).toBe(projectListRequests)
+            expect(snapshotRequestCount()).toBe(snapshotRequests)
+        } finally {
+            store.destroy()
+            vi.useRealTimers()
+            await runtime.close()
+        }
+    })
+
+    it("coalesces companion task-deleted bridge bursts into one scoped task-list read", async () => {
+        const { store, runtime, server, snapshotRequestCount, projectListRequestCount, taskListRequestCount, removeTaskPreview } = createRuntimeBackedStore()
+
+        try {
+            store.subscribe()
+            await store.refreshSnapshot()
+            const snapshotRequests = snapshotRequestCount()
+            const projectListRequests = projectListRequestCount()
+            const taskListRequests = taskListRequestCount()
+
+            removeTaskPreview("task-1")
+            publishOpenADECompanionEvent(server, {
+                type: "task_deleted",
+                repoId: "repo-1",
+                taskId: "task-1",
+                at: now(),
+            })
+            await waitForCondition(() => taskListRequestCount() > taskListRequests, "task delete bridge task-list refresh")
+            await flushAsyncNotifications()
+
+            expect(taskListRequestCount()).toBe(taskListRequests + 1)
+            expect(projectListRequestCount()).toBe(projectListRequests)
+            expect(snapshotRequestCount()).toBe(snapshotRequests)
+            expect(store.snapshot?.repos[0]?.tasks).toEqual([])
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("refreshes project notifications through the scoped project-list method without rereading the snapshot", async () => {
+        const { store, runtime, snapshotRequestCount, projectListRequestCount, publishRepoUpdated } = createRuntimeBackedStore()
+
+        try {
+            await store.refreshSnapshot()
+            const snapshotRequests = snapshotRequestCount()
+            const projectListRequests = projectListRequestCount()
+
+            publishRepoUpdated("Runtime project renamed")
+            await store.handleNotification({
+                method: "openade/repo/updated",
+                params: { repoId: "repo-1", at: now() },
+            })
+
+            expect(projectListRequestCount()).toBe(projectListRequests + 1)
+            expect(snapshotRequestCount()).toBe(snapshotRequests)
+            expect(store.snapshot?.server.hostName).toBe("test-host")
+            expect(store.snapshot?.workingTaskIds).toEqual([])
+            expect(store.snapshot?.repos[0]).toEqual(expect.objectContaining({ id: "repo-1", name: "Runtime project renamed" }))
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("keeps direct-task project notifications from creating project projections", async () => {
+        const { store, runtime, snapshotRequestCount, projectListRequestCount, taskListRequestCount, taskReadRequests, publishRepoUpdated } =
+            createRuntimeBackedStore()
+
+        try {
+            await store.getTask("repo-1", "task-1", { hydrateSessionEvents: false, eventLimit: 12 })
+            taskReadRequests.length = 0
+            const snapshotRequests = snapshotRequestCount()
+            const projectListRequests = projectListRequestCount()
+            const taskListRequests = taskListRequestCount()
+
+            publishRepoUpdated("Runtime project renamed")
+            await expect(
+                store.handleNotification({
+                    method: OPENADE_NOTIFICATION.repoUpdated,
+                    params: { repoId: "repo-1", at: now() },
+                })
+            ).resolves.toBe(true)
+
+            expect(taskReadRequests).toEqual([])
+            expect(taskListRequestCount()).toBe(taskListRequests)
+            expect(projectListRequestCount()).toBe(projectListRequests)
+            expect(snapshotRequestCount()).toBe(snapshotRequests)
+            expect(store.getCachedProjects()).toBeNull()
+            expect(store.getCachedTask("repo-1", "task-1")).toEqual(expect.objectContaining({ id: "task-1" }))
+
+            await expect(
+                store.handleNotification({
+                    method: OPENADE_NOTIFICATION.taskPreviewChanged,
+                    params: { at: now() },
+                })
+            ).resolves.toBe(true)
+
+            expect(taskReadRequests).toEqual([])
+            expect(taskListRequestCount()).toBe(taskListRequests)
+            expect(projectListRequestCount()).toBe(projectListRequests)
+            expect(snapshotRequestCount()).toBe(snapshotRequests)
+            expect(store.getCachedProjects()).toBeNull()
+            expect(store.getCachedTask("repo-1", "task-1")).toEqual(expect.objectContaining({ id: "task-1" }))
+
+            await expect(
+                store.handleNotification({
+                    method: OPENADE_NOTIFICATION.snapshotChanged,
+                    params: { type: "task_deleted", repoId: "repo-1", taskId: "task-1", at: now() },
+                })
+            ).resolves.toBe(true)
+
+            expect(taskReadRequests).toEqual([])
+            expect(taskListRequestCount()).toBe(taskListRequests)
+            expect(projectListRequestCount()).toBe(projectListRequests)
+            expect(snapshotRequestCount()).toBe(snapshotRequests)
+            expect(store.getCachedProjects()).toBeNull()
+            expect(store.getCachedTask("repo-1", "task-1")).toBeNull()
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("fails closed without requesting runtime-list when active-runtime hydration is unavailable", async () => {
+        const { store, runtime, server, runtimeListRequestCount } = createRuntimeBackedStore({
+            permissions: ["initialize"],
+        })
+        const params = {
+            ownerType: "openade-task",
+            statuses: ["starting", "running"] as RuntimeRecord["status"][],
+        }
+
+        try {
+            server.supervisor.register(runtimeRecord("runtime-1", "running", "task-1", "2026-05-31T00:01:00.000Z"))
+
+            await expect(store.listRuntimes(params)).resolves.toEqual([])
+
+            expect(runtime.capabilities?.methods).not.toContain("runtime/list")
+            expect(runtimeListRequestCount()).toBe(0)
         } finally {
             store.destroy()
             await runtime.close()
@@ -1545,6 +2422,13 @@ describe("OpenADEProductStore", () => {
                 sessionIds: { claude: "session-1" },
                 queuedTurns: [],
                 updatedAt,
+            })
+            expect(store.getCachedTask("repo-1", "task-1")?.preview).toMatchObject({
+                title: "Accepted metadata",
+                closed: true,
+                lastViewedAt,
+                lastEventAt,
+                usage,
             })
         } finally {
             store.destroy()
@@ -1854,8 +2738,65 @@ describe("OpenADEProductStore", () => {
         }
     })
 
+    it("repairs unpatchable accepted new-task turns through scoped task-list and task reads", async () => {
+        const { store, runtime, taskReadRequests, snapshotRequestCount, taskListRequestCount } = createRuntimeBackedStore({
+            omitAcceptedNewTaskTurnPayload: true,
+        })
+
+        try {
+            await store.refreshSnapshot()
+            taskReadRequests.length = 0
+            const existingSnapshotRequests = snapshotRequestCount()
+            const existingTaskListRequests = taskListRequestCount()
+
+            const result = await store.startTurn(
+                {
+                    repoId: "repo-1",
+                    type: "do",
+                    input: "Create a runtime-backed task without a patch payload",
+                    isolationStrategy: { type: "head" },
+                    harnessId: "codex",
+                    modelId: "gpt-test",
+                },
+                { clientRequestId: "turn-new-task-fallback" }
+            )
+
+            expect(result).toEqual(
+                expect.objectContaining({
+                    taskId: "task-created",
+                    eventId: "event-created",
+                    executionId: "exec-created",
+                    createdAt: now(),
+                })
+            )
+            expect(result.task).toBeUndefined()
+            expect(result.preview).toBeUndefined()
+            expect(store.getCachedTask("repo-1", "task-created")).toEqual(
+                expect.objectContaining({
+                    id: "task-created",
+                    description: "Create a runtime-backed task without a patch payload",
+                })
+            )
+            expect(store.snapshot?.repos[0]?.tasks).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({
+                        id: "task-created",
+                        lastEvent: expect.objectContaining({ status: "in_progress" }),
+                    }),
+                ])
+            )
+            expect(taskListRequestCount()).toBe(existingTaskListRequests + 1)
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }])
+            expect(snapshotRequestCount()).toBe(existingSnapshotRequests)
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
     it("suppresses self-accepted action-start notifications without hiding later task updates", async () => {
         const { store, runtime, taskReadRequests, publishActionEventUpdated } = createRuntimeBackedStore()
+        vi.useFakeTimers()
 
         try {
             store.subscribe()
@@ -1872,12 +2813,88 @@ describe("OpenADEProductStore", () => {
                 },
                 { clientRequestId: "turn-tagged-notification" }
             )
-            await waitForNotificationCoalescing()
+            await vi.advanceTimersByTimeAsync(180)
+            await flushAsyncNotifications()
             expect(taskReadRequests).toEqual([])
 
             publishActionEventUpdated("repo-1", "task-1", "event-1", "completed")
-            await waitForNotificationCoalescing()
+            await vi.advanceTimersByTimeAsync(180)
+            await flushAsyncNotifications()
+            expect(taskReadRequests).toEqual([])
+
+            await vi.advanceTimersByTimeAsync(2_000)
+            await flushAsyncNotifications()
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false, eventLimit: 12 }])
+        } finally {
+            store.destroy()
+            vi.useRealTimers()
+            await runtime.close()
+        }
+    })
+
+    it("cancels queued action-start notifications after unpatchable accepted turn fallback reads", async () => {
+        const { store, runtime, taskReadRequests } = createRuntimeBackedStore()
+        vi.useFakeTimers()
+
+        try {
+            store.subscribe()
+            await store.refreshSnapshot()
+
+            taskReadRequests.length = 0
+            await store.startTurn(
+                {
+                    repoId: "repo-1",
+                    inTaskId: "task-1",
+                    type: "run_plan",
+                    input: "Run plan without cached plan context",
+                },
+                { clientRequestId: "turn-unpatchable-notification" }
+            )
+
             expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }])
+
+            await vi.advanceTimersByTimeAsync(2_500)
+            await flushAsyncNotifications()
+
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }])
+        } finally {
+            store.destroy()
+            vi.useRealTimers()
+            await runtime.close()
+        }
+    })
+
+    it("repairs unpatchable direct-task turn starts without creating project projections", async () => {
+        const { store, runtime, taskReadRequests, snapshotRequestCount, projectListRequestCount, taskListRequestCount } = createRuntimeBackedStore()
+
+        try {
+            await store.getTask("repo-1", "task-1", { hydrateSessionEvents: false, eventLimit: 12 })
+            taskReadRequests.length = 0
+            const existingSnapshotRequests = snapshotRequestCount()
+            const existingProjectListRequests = projectListRequestCount()
+            const existingTaskListRequests = taskListRequestCount()
+
+            await store.startTurn(
+                {
+                    repoId: "repo-1",
+                    inTaskId: "task-1",
+                    type: "run_plan",
+                    input: "Run plan without a project projection",
+                },
+                { clientRequestId: "turn-direct-task-fallback" }
+            )
+
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }])
+            expect(taskListRequestCount()).toBe(existingTaskListRequests)
+            expect(projectListRequestCount()).toBe(existingProjectListRequests)
+            expect(snapshotRequestCount()).toBe(existingSnapshotRequests)
+            expect(store.getCachedProjects()).toBeNull()
+            expect(store.getCachedTask("repo-1", "task-1")).toEqual(
+                expect.objectContaining({
+                    id: "task-1",
+                    events: expect.arrayContaining([expect.objectContaining({ id: "event-1", status: "in_progress" })]),
+                })
+            )
         } finally {
             store.destroy()
             await runtime.close()
@@ -1886,6 +2903,7 @@ describe("OpenADEProductStore", () => {
 
     it("suppresses self-accepted mutation notifications without hiding later task updates", async () => {
         const { store, runtime, taskReadRequests, snapshotRequestCount, publishTaskUpdated } = createRuntimeBackedStore()
+        vi.useFakeTimers()
 
         try {
             store.subscribe()
@@ -1907,7 +2925,8 @@ describe("OpenADEProductStore", () => {
                 },
                 { clientRequestId: "mutation-notification-seed" }
             )
-            await waitForNotificationCoalescing()
+            await vi.advanceTimersByTimeAsync(180)
+            await flushAsyncNotifications()
 
             taskReadRequests.length = 0
             const existingSnapshotRequests = snapshotRequestCount()
@@ -1924,7 +2943,8 @@ describe("OpenADEProductStore", () => {
                 { clientRequestId: "comment-tagged-echo" }
             )
             await store.cancelQueuedTurn({ repoId: "repo-1", taskId: "task-1", queuedTurnId: "queued-1" }, { clientRequestId: "queue-tagged-echo" })
-            await waitForNotificationCoalescing()
+            await vi.advanceTimersByTimeAsync(180)
+            await flushAsyncNotifications()
 
             expect(taskReadRequests).toEqual([])
             expect(snapshotRequestCount()).toBe(existingSnapshotRequests)
@@ -1942,16 +2962,50 @@ describe("OpenADEProductStore", () => {
             )
 
             publishTaskUpdated("repo-1", "task-1")
-            await waitForNotificationCoalescing()
+            await vi.advanceTimersByTimeAsync(180)
+            await flushAsyncNotifications()
+            expect(taskReadRequests).toEqual([])
+
+            await vi.advanceTimersByTimeAsync(2_000)
+            await flushAsyncNotifications()
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false, eventLimit: 12 }])
+        } finally {
+            store.destroy()
+            vi.useRealTimers()
+            await runtime.close()
+        }
+    })
+
+    it("cancels a deferred task notification refresh after a newer direct task read", async () => {
+        const { store, runtime, taskReadRequests, publishTaskUpdated } = createRuntimeBackedStore()
+        vi.useFakeTimers()
+
+        try {
+            store.subscribe()
+            await store.refreshSnapshot()
+            await store.getTask("repo-1", "task-1")
+
+            taskReadRequests.length = 0
+            publishTaskUpdated("repo-1", "task-1")
+            await vi.advanceTimersByTimeAsync(180)
+            await flushAsyncNotifications()
+            expect(taskReadRequests).toEqual([])
+
+            await store.refreshTask("repo-1", "task-1")
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }])
+
+            await vi.advanceTimersByTimeAsync(2_000)
+            await flushAsyncNotifications()
             expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }])
         } finally {
             store.destroy()
+            vi.useRealTimers()
             await runtime.close()
         }
     })
 
     it("suppresses self-accepted mutation notifications on the direct runtime bridge path", async () => {
-        const { store, runtime, taskReadRequests, snapshotRequestCount } = createRuntimeBackedStore()
+        const { store, runtime, taskReadRequests, snapshotRequestCount, projectListRequestCount, taskListRequestCount } = createRuntimeBackedStore()
 
         try {
             await store.refreshSnapshot()
@@ -1959,6 +3013,8 @@ describe("OpenADEProductStore", () => {
 
             taskReadRequests.length = 0
             const existingSnapshotRequests = snapshotRequestCount()
+            const existingProjectListRequests = projectListRequestCount()
+            const existingTaskListRequests = taskListRequestCount()
             await store.updateTaskMetadata({ taskId: "task-1", title: "Direct tagged metadata echo" }, { clientRequestId: "metadata-direct-echo" })
 
             await expect(
@@ -1994,7 +3050,9 @@ describe("OpenADEProductStore", () => {
                 })
             ).resolves.toBe(true)
             expect(taskReadRequests).toEqual([])
-            expect(snapshotRequestCount()).toBe(existingSnapshotRequests + 1)
+            expect(snapshotRequestCount()).toBe(existingSnapshotRequests)
+            expect(projectListRequestCount()).toBe(existingProjectListRequests)
+            expect(taskListRequestCount()).toBe(existingTaskListRequests + 1)
         } finally {
             store.destroy()
             await runtime.close()
@@ -2003,6 +3061,7 @@ describe("OpenADEProductStore", () => {
 
     it("suppresses self-accepted action-start notifications on the direct runtime bridge path", async () => {
         const { store, runtime, taskReadRequests } = createRuntimeBackedStore()
+        vi.useFakeTimers()
 
         try {
             await store.refreshSnapshot()
@@ -2044,9 +3103,14 @@ describe("OpenADEProductStore", () => {
                     },
                 })
             ).resolves.toBe(true)
-            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }])
+            expect(taskReadRequests).toEqual([])
+
+            await vi.advanceTimersByTimeAsync(2_000)
+            await flushAsyncNotifications()
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false, eventLimit: 12 }])
         } finally {
             store.destroy()
+            vi.useRealTimers()
             await runtime.close()
         }
     })
@@ -2218,8 +3282,9 @@ describe("OpenADEProductStore", () => {
         }
     })
 
-    it("coalesces subscribed task update notifications before refreshing task detail", async () => {
+    it("coalesces subscribed task update notifications and defers bursty cached task refreshes", async () => {
         const { store, runtime, taskReadRequests, publishTaskChanged } = createRuntimeBackedStore()
+        vi.useFakeTimers()
 
         try {
             await store.refreshSnapshot()
@@ -2230,17 +3295,24 @@ describe("OpenADEProductStore", () => {
             publishTaskChanged(false)
             publishTaskChanged(false)
             publishTaskChanged(false)
-            await waitForNotificationCoalescing()
+            await vi.advanceTimersByTimeAsync(180)
+            await flushAsyncNotifications()
 
-            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false }])
+            expect(taskReadRequests).toEqual([])
+
+            await vi.advanceTimersByTimeAsync(2_000)
+            await flushAsyncNotifications()
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false, eventLimit: 12 }])
 
             taskReadRequests.length = 0
             publishTaskChanged(true)
-            await waitForNotificationCoalescing()
+            await vi.advanceTimersByTimeAsync(180)
+            await flushAsyncNotifications()
 
             expect(taskReadRequests).toEqual([])
         } finally {
             store.destroy()
+            vi.useRealTimers()
             await runtime.close()
         }
     })
@@ -2264,14 +3336,183 @@ describe("OpenADEProductStore", () => {
         }
     })
 
+    it("preserves bounded task read options when refreshing cached task notifications", async () => {
+        const { store, runtime, taskReadRequests } = createRuntimeBackedStore()
+        vi.useFakeTimers()
+
+        try {
+            await store.refreshSnapshot()
+            await store.getTask("repo-1", "task-1", { hydrateSessionEvents: false, eventLimit: 30 })
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false, eventLimit: 30 }])
+
+            await expect(
+                store.handleNotification({
+                    method: OPENADE_NOTIFICATION.taskUpdated,
+                    params: {
+                        repoId: "repo-1",
+                        taskId: "task-1",
+                        at: now(),
+                    },
+                })
+            ).resolves.toBe(true)
+
+            expect(taskReadRequests).toEqual([])
+
+            await vi.advanceTimersByTimeAsync(2_000)
+            await flushAsyncNotifications()
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false, eventLimit: 30 }])
+        } finally {
+            store.destroy()
+            vi.useRealTimers()
+            await runtime.close()
+        }
+    })
+
+    it("uses a longer refresh window for already-visible in-progress task updates", async () => {
+        const { store, runtime, taskReadRequests } = createRuntimeBackedStore()
+        vi.useFakeTimers()
+
+        try {
+            await store.getTask("repo-1", "task-1", { hydrateSessionEvents: false, eventLimit: 30 })
+            await store.startTurn({ repoId: "repo-1", inTaskId: "task-1", type: "do", input: "Run it" }, { clientRequestId: "turn-start" })
+            expect(store.getCachedTask("repo-1", "task-1")?.events).toEqual(
+                expect.arrayContaining([expect.objectContaining({ id: "event-1", status: "in_progress" })])
+            )
+
+            taskReadRequests.length = 0
+            await expect(
+                store.handleNotification({
+                    method: OPENADE_NOTIFICATION.taskUpdated,
+                    params: {
+                        repoId: "repo-1",
+                        taskId: "task-1",
+                        previewChanged: false,
+                        eventId: "event-1",
+                        eventStatus: "in_progress",
+                        at: now(),
+                    },
+                })
+            ).resolves.toBe(true)
+            await flushAsyncNotifications()
+            expect(taskReadRequests).toEqual([])
+
+            await expect(
+                store.handleNotification({
+                    method: OPENADE_NOTIFICATION.taskUpdated,
+                    params: {
+                        repoId: "repo-1",
+                        taskId: "task-1",
+                        previewChanged: false,
+                        eventId: "event-1",
+                        eventStatus: "in_progress",
+                        at: now(),
+                    },
+                })
+            ).resolves.toBe(true)
+
+            await vi.advanceTimersByTimeAsync(2_000)
+            await flushAsyncNotifications()
+            expect(taskReadRequests).toEqual([])
+
+            await vi.advanceTimersByTimeAsync(13_000)
+            await flushAsyncNotifications()
+            expect(taskReadRequests).toEqual([{ hydrateSessionEvents: false, eventLimit: 30 }])
+        } finally {
+            store.destroy()
+            vi.useRealTimers()
+            await runtime.close()
+        }
+    })
+
+    it("keeps scoped host read caches across in-progress non-preview task updates", async () => {
+        const { store, runtime, fuzzySearchRequestCount, processListRequestCount, taskGitSummaryRequestCount } = createRuntimeBackedStore()
+        const fuzzyArgs = {
+            repoId: "repo-1",
+            taskId: "task-1",
+            query: "runtime",
+            limit: 10,
+        }
+        const processArgs = {
+            repoId: "repo-1",
+            taskId: "task-1",
+        }
+        const gitSummaryArgs = {
+            repoId: "repo-1",
+            taskId: "task-1",
+        }
+
+        try {
+            await store.fuzzySearchProjectFiles(fuzzyArgs)
+            await store.listProjectProcesses(processArgs)
+            await store.readTaskGitSummary(gitSummaryArgs)
+
+            expect(fuzzySearchRequestCount()).toBe(1)
+            expect(processListRequestCount()).toBe(1)
+            expect(taskGitSummaryRequestCount()).toBe(1)
+
+            await store.handleNotification({
+                method: OPENADE_NOTIFICATION.taskUpdated,
+                params: {
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    previewChanged: false,
+                    eventId: "event-1",
+                    eventStatus: "in_progress",
+                    at: now(),
+                },
+            })
+
+            await store.fuzzySearchProjectFiles(fuzzyArgs)
+            await store.listProjectProcesses(processArgs)
+            await store.readTaskGitSummary(gitSummaryArgs)
+
+            expect(fuzzySearchRequestCount()).toBe(1)
+            expect(processListRequestCount()).toBe(1)
+            expect(taskGitSummaryRequestCount()).toBe(1)
+
+            await store.handleNotification({
+                method: OPENADE_NOTIFICATION.taskUpdated,
+                params: {
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    at: now(),
+                },
+            })
+
+            await store.fuzzySearchProjectFiles(fuzzyArgs)
+            await store.listProjectProcesses(processArgs)
+            await store.readTaskGitSummary(gitSummaryArgs)
+
+            expect(fuzzySearchRequestCount()).toBe(2)
+            expect(processListRequestCount()).toBe(1)
+            expect(taskGitSummaryRequestCount()).toBe(2)
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
     it("reuses fresh process-list reads and invalidates them after process config mutations", async () => {
         const { store, runtime, processListRequestCount } = createRuntimeBackedStore()
+        let currentTime = 1_779_811_200_000
+        const dateNow = vi.spyOn(Date, "now").mockImplementation(() => currentTime)
 
         try {
             await store.listProjectProcesses({ repoId: "repo-1" })
             await store.listProjectProcesses({ repoId: "repo-1" })
 
             expect(processListRequestCount()).toBe(1)
+
+            currentTime += 10_000
+            await store.listProjectProcesses({ repoId: "repo-1" })
+            expect(processListRequestCount()).toBe(1)
+
+            await store.listProjectProcesses({ repoId: "repo-1" }, { bypassCache: true })
+            expect(processListRequestCount()).toBe(2)
+
+            currentTime += 15_001
+            await store.listProjectProcesses({ repoId: "repo-1" })
+            expect(processListRequestCount()).toBe(3)
 
             const started = await store.startProjectProcess(
                 { repoId: "repo-1", definitionId: "openade.toml::Echo" },
@@ -2289,7 +3530,7 @@ describe("OpenADEProductStore", () => {
                     completed: false,
                 }),
             ])
-            expect(processListRequestCount()).toBe(1)
+            expect(processListRequestCount()).toBe(3)
 
             await store.stopProjectProcess({ repoId: "repo-1", processId: started.processId }, { clientRequestId: "process-cache-stop" })
             const afterStoppedProcess = await store.listProjectProcesses({
@@ -2297,7 +3538,7 @@ describe("OpenADEProductStore", () => {
             })
 
             expect(afterStoppedProcess.instances).toEqual([])
-            expect(processListRequestCount()).toBe(1)
+            expect(processListRequestCount()).toBe(3)
 
             await store.writeProjectFile(
                 {
@@ -2309,8 +3550,9 @@ describe("OpenADEProductStore", () => {
             )
             await store.listProjectProcesses({ repoId: "repo-1" })
 
-            expect(processListRequestCount()).toBe(2)
+            expect(processListRequestCount()).toBe(4)
         } finally {
+            dateNow.mockRestore()
             store.destroy()
             await runtime.close()
         }
@@ -2361,8 +3603,38 @@ describe("OpenADEProductStore", () => {
         }
     })
 
-    it("reuses fresh cron install state reads and patches accepted replace results", async () => {
-        const { store, runtime, cronInstallStateReadRequestCount } = createRuntimeBackedStore()
+    it("serves cron definitions from a fresh process-list parse", async () => {
+        const { store, runtime, cronDefinitionsRequestCount, processListRequestCount } = createRuntimeBackedStore({ clientMode: "direct-read-client" })
+
+        try {
+            await expect(store.listProjectProcesses({ repoId: "repo-1" })).resolves.toMatchObject({
+                configs: [
+                    expect.objectContaining({
+                        relativePath: "openade.toml",
+                        crons: [expect.objectContaining({ id: "openade.toml::Runtime Cron" })],
+                    }),
+                ],
+            })
+
+            await expect(store.readCronDefinitions({ repoId: "repo-1" })).resolves.toMatchObject({
+                configs: [
+                    expect.objectContaining({
+                        relativePath: "openade.toml",
+                        crons: [expect.objectContaining({ id: "openade.toml::Runtime Cron" })],
+                    }),
+                ],
+            })
+
+            expect(processListRequestCount()).toBe(1)
+            expect(cronDefinitionsRequestCount()).toBe(0)
+        } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("reuses fresh cron install state reads and indexes, patches accepted replace results, and invalidates the index", async () => {
+        const { store, runtime, cronInstallStateReadRequestCount, cronInstallStateListRequestCount } = createRuntimeBackedStore()
 
         try {
             await expect(store.readCronInstallState({ repoId: "repo-1" })).resolves.toMatchObject({
@@ -2382,6 +3654,10 @@ describe("OpenADEProductStore", () => {
 
             expect(cronInstallStateReadRequestCount()).toBe(1)
 
+            await expect(store.listCronInstallStateRepos()).resolves.toEqual({ repoIds: ["repo-1"] })
+            await expect(store.listCronInstallStateRepos()).resolves.toEqual({ repoIds: ["repo-1"] })
+            expect(cronInstallStateListRequestCount()).toBe(1)
+
             await store.replaceCronInstallState(
                 {
                     repoId: "repo-1",
@@ -2397,6 +3673,9 @@ describe("OpenADEProductStore", () => {
                 { clientRequestId: "cron-cache-replace" }
             )
 
+            await expect(store.listCronInstallStateRepos()).resolves.toEqual({ repoIds: ["repo-1"] })
+            expect(cronInstallStateListRequestCount()).toBe(2)
+
             await expect(store.readCronInstallState({ repoId: "repo-1" })).resolves.toMatchObject({
                 installations: {
                     "openade.toml::Runtime Cron": expect.objectContaining({
@@ -2406,6 +3685,16 @@ describe("OpenADEProductStore", () => {
                 },
             })
             expect(cronInstallStateReadRequestCount()).toBe(1)
+
+            await store.replaceCronInstallState(
+                {
+                    repoId: "repo-1",
+                    installations: {},
+                },
+                { clientRequestId: "cron-cache-clear" }
+            )
+            await expect(store.listCronInstallStateRepos()).resolves.toEqual({ repoIds: [] })
+            expect(cronInstallStateListRequestCount()).toBe(3)
         } finally {
             store.destroy()
             await runtime.close()
@@ -2414,6 +3703,8 @@ describe("OpenADEProductStore", () => {
 
     it("reuses fresh project search reads and invalidates them after scoped file writes", async () => {
         const { store, runtime, fuzzySearchRequestCount, projectSearchRequestCount } = createRuntimeBackedStore()
+        let currentTime = 1_779_811_200_000
+        const dateNow = vi.spyOn(Date, "now").mockImplementation(() => currentTime)
 
         try {
             const fuzzyArgs = {
@@ -2442,6 +3733,33 @@ describe("OpenADEProductStore", () => {
             expect(fuzzySearchRequestCount()).toBe(1)
             expect(projectSearchRequestCount()).toBe(1)
 
+            currentTime += 2_000
+            await expect(store.fuzzySearchProjectFiles(fuzzyArgs)).resolves.toMatchObject({ results: ["src/runtime.ts"] })
+            await expect(store.searchProject(searchArgs)).resolves.toMatchObject({
+                matches: [expect.objectContaining({ path: "src/runtime.ts" })],
+            })
+
+            expect(fuzzySearchRequestCount()).toBe(1)
+            expect(projectSearchRequestCount()).toBe(1)
+
+            currentTime += 8_000
+            await expect(store.fuzzySearchProjectFiles(fuzzyArgs)).resolves.toMatchObject({ results: ["src/runtime.ts"] })
+            await expect(store.searchProject(searchArgs)).resolves.toMatchObject({
+                matches: [expect.objectContaining({ path: "src/runtime.ts" })],
+            })
+
+            expect(fuzzySearchRequestCount()).toBe(1)
+            expect(projectSearchRequestCount()).toBe(1)
+
+            currentTime += 5_001
+            await expect(store.fuzzySearchProjectFiles(fuzzyArgs)).resolves.toMatchObject({ results: ["src/runtime.ts"] })
+            await expect(store.searchProject(searchArgs)).resolves.toMatchObject({
+                matches: [expect.objectContaining({ path: "src/runtime.ts" })],
+            })
+
+            expect(fuzzySearchRequestCount()).toBe(2)
+            expect(projectSearchRequestCount()).toBe(2)
+
             await store.writeProjectFile(
                 {
                     repoId: "repo-1",
@@ -2455,9 +3773,10 @@ describe("OpenADEProductStore", () => {
             await store.fuzzySearchProjectFiles(fuzzyArgs)
             await store.searchProject(searchArgs)
 
-            expect(fuzzySearchRequestCount()).toBe(2)
-            expect(projectSearchRequestCount()).toBe(2)
+            expect(fuzzySearchRequestCount()).toBe(3)
+            expect(projectSearchRequestCount()).toBe(3)
         } finally {
+            dateNow.mockRestore()
             store.destroy()
             await runtime.close()
         }
@@ -2803,6 +4122,43 @@ describe("OpenADEProductStore", () => {
             expect(projectGitInfoRequestCount()).toBe(2)
             expect(projectGitBranchesRequestCount()).toBe(3)
         } finally {
+            store.destroy()
+            await runtime.close()
+        }
+    })
+
+    it("keeps git summaries warm across short task-open churn while explicit refreshes bypass", async () => {
+        const { store, runtime, projectGitSummaryRequestCount, taskGitSummaryRequestCount } = createRuntimeBackedStore()
+        let currentTime = 1_779_811_200_000
+        const dateNow = vi.spyOn(Date, "now").mockImplementation(() => currentTime)
+
+        try {
+            await store.readProjectGitSummary({ repoId: "repo-1" })
+            await store.readTaskGitSummary({ repoId: "repo-1", taskId: "task-1" })
+
+            currentTime += 10_000
+            await store.readProjectGitSummary({ repoId: "repo-1" })
+            await store.readTaskGitSummary({ repoId: "repo-1", taskId: "task-1" })
+
+            expect(projectGitSummaryRequestCount()).toBe(1)
+            expect(taskGitSummaryRequestCount()).toBe(1)
+
+            await store.readTaskGitSummary({ repoId: "repo-1", taskId: "task-1" }, { bypassCache: true })
+            expect(taskGitSummaryRequestCount()).toBe(2)
+
+            currentTime += 5_001
+            await store.readProjectGitSummary({ repoId: "repo-1" })
+            await store.readTaskGitSummary({ repoId: "repo-1", taskId: "task-1" })
+
+            expect(projectGitSummaryRequestCount()).toBe(2)
+            expect(taskGitSummaryRequestCount()).toBe(2)
+
+            currentTime += 10_001
+            await store.readTaskGitSummary({ repoId: "repo-1", taskId: "task-1" })
+
+            expect(taskGitSummaryRequestCount()).toBe(3)
+        } finally {
+            dateNow.mockRestore()
             store.destroy()
             await runtime.close()
         }

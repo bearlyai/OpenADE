@@ -18,6 +18,7 @@ import { Z_INDEX } from "../constants"
 import type { Comment, CommentSelectedText, CommentSource } from "../types"
 import { useCommentAnnotations } from "./comments/hooks/useCommentAnnotations"
 import type { CommentAnnotationMeta } from "./comments/types"
+import { DiffsWorkerProvider } from "./DiffsWorkerProvider"
 import { extractSelectedText, extractSelectedTextFromDiff, getFileDiffCopyContent, isLineInDiffHunks } from "./comments/utils"
 import { formatMarkdownTables, shouldFormatAsMarkdown } from "./utils/markdownTableFormatter"
 
@@ -132,6 +133,30 @@ interface FileViewerProps {
 }
 
 export const FileViewer = observer(function FileViewer({
+    file,
+    className,
+    disableFileHeader,
+    disableLineNumbers,
+    commentHandlers,
+    highlightLines,
+    copyContent,
+}: FileViewerProps) {
+    return (
+        <DiffsWorkerProvider>
+            <FileViewerInner
+                file={file}
+                className={className}
+                disableFileHeader={disableFileHeader}
+                disableLineNumbers={disableLineNumbers}
+                commentHandlers={commentHandlers}
+                highlightLines={highlightLines}
+                copyContent={copyContent}
+            />
+        </DiffsWorkerProvider>
+    )
+})
+
+const FileViewerInner = observer(function FileViewerInner({
     file,
     className,
     disableFileHeader,
@@ -288,6 +313,30 @@ export const FileDiffViewer = observer(function FileDiffViewer({
     options,
     commentHandlers,
 }: FileDiffViewerProps) {
+    return (
+        <DiffsWorkerProvider>
+            <FileDiffViewerInner
+                fileDiff={fileDiff}
+                className={className}
+                diffStyle={diffStyle}
+                disableFileHeader={disableFileHeader}
+                disableWorkerPool={disableWorkerPool}
+                options={options}
+                commentHandlers={commentHandlers}
+            />
+        </DiffsWorkerProvider>
+    )
+})
+
+const FileDiffViewerInner = observer(function FileDiffViewerInner({
+    fileDiff,
+    className,
+    diffStyle = "split",
+    disableFileHeader,
+    disableWorkerPool,
+    options,
+    commentHandlers,
+}: FileDiffViewerProps) {
     const wrapperRef = useRef<HTMLDivElement>(null)
     const theme = useEditorTheme(wrapperRef)
 
@@ -425,6 +474,32 @@ interface MultiFileDiffViewerProps {
 }
 
 export const MultiFileDiffViewer = observer(function MultiFileDiffViewer({
+    oldFile,
+    newFile,
+    className,
+    diffStyle = "split",
+    expandUnchanged,
+    expansionLineCount,
+    disableFileHeader,
+    commentHandlers,
+}: MultiFileDiffViewerProps) {
+    return (
+        <DiffsWorkerProvider>
+            <MultiFileDiffViewerInner
+                oldFile={oldFile}
+                newFile={newFile}
+                className={className}
+                diffStyle={diffStyle}
+                expandUnchanged={expandUnchanged}
+                expansionLineCount={expansionLineCount}
+                disableFileHeader={disableFileHeader}
+                commentHandlers={commentHandlers}
+            />
+        </DiffsWorkerProvider>
+    )
+})
+
+const MultiFileDiffViewerInner = observer(function MultiFileDiffViewerInner({
     oldFile,
     newFile,
     className,

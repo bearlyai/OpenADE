@@ -15,6 +15,7 @@ import type {
     OpenADECoreRolloutState,
     OpenADECoreRuntimeEndpoint,
 } from "./preload-api"
+import { envFlag } from "./modules/envFlag"
 
 // Helper to create event listener with cleanup
 const createListener = (channel: string, callback: (...args: unknown[]) => void) => {
@@ -23,17 +24,13 @@ const createListener = (channel: string, callback: (...args: unknown[]) => void)
     return () => ipcRenderer.removeListener(channel, handler)
 }
 
-function envFlag(value: string | undefined): boolean {
-    return value === "1" || value === "true" || value === "yes" || value === "on"
-}
-
 const activeWorkUnloadBlockerDisabled = envFlag(process.env.OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER) || envFlag(process.env.OPENADE_SMOKE_TEST)
 const smokeTest = envFlag(process.env.OPENADE_SMOKE_TEST)
 
-function coreRuntimeEndpointFromEnv(): OpenADECoreRuntimeEndpoint | undefined {
+function coreRuntimeEndpointFromEnv(prefix: "OPENADE_CORE" | "OPENADE_CORE_MIGRATION" = "OPENADE_CORE"): OpenADECoreRuntimeEndpoint | undefined {
     if (envFlag(process.env.OPENADE_DISABLE_OPENADE_CORE)) return undefined
 
-    const rawUrl = process.env.OPENADE_CORE_RUNTIME_URL?.trim()
+    const rawUrl = process.env[`${prefix}_RUNTIME_URL`]?.trim()
     if (!rawUrl) return undefined
 
     let url: URL
@@ -46,7 +43,7 @@ function coreRuntimeEndpointFromEnv(): OpenADECoreRuntimeEndpoint | undefined {
 
     return {
         url: url.toString(),
-        token: process.env.OPENADE_CORE_TOKEN?.trim() ?? "",
+        token: process.env[`${prefix}_TOKEN`]?.trim() ?? "",
     }
 }
 
@@ -60,6 +57,7 @@ function isCoreRolloutReason(value: string): value is OpenADECoreRolloutReason {
         value === "development-default-off" ||
         value === "missing-core-binary" ||
         value === "invalid-managed-command" ||
+        value === "invalid-external-endpoint" ||
         value === "unconfigured"
     )
 }
@@ -88,6 +86,7 @@ function coreRolloutStateFromEnv(endpoint: OpenADECoreRuntimeEndpoint | undefine
 }
 
 const coreRuntimeEndpoint = coreRuntimeEndpointFromEnv()
+const coreMigrationRuntimeEndpoint = coreRuntimeEndpointFromEnv("OPENADE_CORE_MIGRATION")
 
 const openadeAPI = {
     // ========================================================================
@@ -97,6 +96,7 @@ const openadeAPI = {
         activeWorkUnloadBlockerDisabled,
         smokeTest,
         quit: () => ipcRenderer.invoke("quit-app"),
+        restart: () => ipcRenderer.invoke("restart-app"),
         openUrl: (url: string) => ipcRenderer.invoke("open-url", url),
         applyUpdate: () => ipcRenderer.invoke("apply-update"),
         forceEnableDevTools: () => ipcRenderer.invoke("force-enable-dev-tools"),
@@ -169,6 +169,7 @@ const openadeAPI = {
     // ========================================================================
     core: {
         runtimeEndpoint: coreRuntimeEndpoint,
+        migrationRuntimeEndpoint: coreMigrationRuntimeEndpoint,
         rolloutState: coreRolloutStateFromEnv(coreRuntimeEndpoint),
     },
 

@@ -52,7 +52,7 @@ function renderEventLog(events: CodeEvent[], onRequestFullHistory?: () => void) 
 }
 
 describe("EventLog", () => {
-    it("renders recent task events first and keeps earlier events available", () => {
+    it("renders recent task events first and reveals cached earlier events without hydrating full history", () => {
         const events = Array.from({ length: 100 }, (_, index) => actionEvent(index))
         let fullHistoryRequests = 0
         const { container, cleanup } = renderEventLog(events, () => {
@@ -71,7 +71,7 @@ describe("EventLog", () => {
                 showEarlier.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }))
             })
 
-            expect(fullHistoryRequests).toBe(1)
+            expect(fullHistoryRequests).toBe(0)
             expect(container.textContent).toContain("prompt-0")
             expect(container.textContent).toContain("prompt-99")
         } finally {

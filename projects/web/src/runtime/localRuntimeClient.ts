@@ -7,7 +7,7 @@ const localRuntimeTransport: RuntimeLocalTransport = {
         return window.openadeAPI.runtime.connect()
     },
     disconnect() {
-        return window.openadeAPI?.runtime.disconnect()
+        return window.openadeAPI?.runtime?.disconnect()
     },
     request(request) {
         if (!window.openadeAPI?.runtime) throw new Error("Local runtime IPC is not available")

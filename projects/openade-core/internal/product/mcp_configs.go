@@ -38,6 +38,7 @@ type mcpServerSettingsRow struct {
 type mcpOAuthTokens struct {
 	AccessToken  string `json:"accessToken"`
 	RefreshToken string `json:"refreshToken,omitempty"`
+	ClientID     string `json:"clientId,omitempty"`
 	ExpiresAt    string `json:"expiresAt,omitempty"`
 	TokenType    string `json:"tokenType"`
 }
@@ -150,7 +151,7 @@ func (service *Service) agentMCPServerConfigs(ctx context.Context, enabledServer
 	return result, nil
 }
 
-func (service *Service) handleMCPServersRead(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
+func (service *Service) handleMCPServersRead(ctx context.Context, conn *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
 	if runtimeErr := decodeObject(raw, &struct{}{}); runtimeErr != nil {
 		return nil, runtimeErr
 	}
@@ -158,11 +159,41 @@ func (service *Service) handleMCPServersRead(ctx context.Context, _ *core.Connec
 	if runtimeErr != nil {
 		return nil, runtimeErr
 	}
+	if !canReadFullMCPServerSettings(conn) {
+		rows = sanitizeMCPServerSettingsRows(rows)
+	}
 	return mcpServersReadDTO{Servers: rows}, nil
 }
 
+func canReadFullMCPServerSettings(conn *core.Connection) bool {
+	if conn == nil {
+		return true
+	}
+	return conn.CanInvoke(openADEMethodSettingsMcpServersReplace) ||
+		conn.CanInvoke(openADEMethodSettingsMcpServersUpsert) ||
+		conn.CanInvoke(openADEMethodSettingsMcpServersDelete)
+}
+
+func sanitizeMCPServerSettingsRows(rows []mcpServerSettingsRow) []mcpServerSettingsRow {
+	sanitizedRows := make([]mcpServerSettingsRow, 0, len(rows))
+	for _, row := range rows {
+		sanitizedRows = append(sanitizedRows, mcpServerSettingsRow{
+			ID:            row.ID,
+			Name:          row.Name,
+			Enabled:       row.Enabled,
+			TransportType: row.TransportType,
+			PresetID:      row.PresetID,
+			LastTested:    row.LastTested,
+			HealthStatus:  row.HealthStatus,
+			CreatedAt:     row.CreatedAt,
+			UpdatedAt:     row.UpdatedAt,
+		})
+	}
+	return sanitizedRows
+}
+
 func (service *Service) handleMCPServersReplace(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/settings/mcpServers/replace", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodSettingsMcpServersReplace, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			Servers []mcpServerSettingsRow `json:"servers"`
 		}
@@ -185,7 +216,7 @@ func (service *Service) handleMCPServersReplace(ctx context.Context, _ *core.Con
 }
 
 func (service *Service) handleMCPServerUpsert(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/settings/mcpServers/upsert", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodSettingsMcpServersUpsert, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			Server mcpServerSettingsRow `json:"server"`
 		}
@@ -224,7 +255,7 @@ func (service *Service) handleMCPServerUpsert(ctx context.Context, _ *core.Conne
 }
 
 func (service *Service) handleMCPServerDelete(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/settings/mcpServers/delete", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodSettingsMcpServersDelete, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			ServerID string `json:"serverId"`
 		}
@@ -452,16 +483,20 @@ func normalizeMCPOAuthTokens(tokens *mcpOAuthTokens) (*mcpOAuthTokens, *core.Run
 	normalized := &mcpOAuthTokens{
 		AccessToken:  strings.TrimSpace(tokens.AccessToken),
 		RefreshToken: strings.TrimSpace(tokens.RefreshToken),
+		ClientID:     strings.TrimSpace(tokens.ClientID),
 		ExpiresAt:    strings.TrimSpace(tokens.ExpiresAt),
 		TokenType:    strings.TrimSpace(tokens.TokenType),
 	}
-	if normalized.AccessToken == "" && normalized.RefreshToken == "" && normalized.ExpiresAt == "" && normalized.TokenType == "" {
+	if normalized.AccessToken == "" && normalized.RefreshToken == "" && normalized.ClientID == "" && normalized.ExpiresAt == "" && normalized.TokenType == "" {
 		return nil, nil
 	}
 	if normalized.TokenType == "" {
 		normalized.TokenType = "Bearer"
 	}
 	if runtimeErr := validateMCPText("oauthTokens.tokenType", normalized.TokenType, 64, true); runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	if runtimeErr := validateMCPText("oauthTokens.clientId", normalized.ClientID, 512, false); runtimeErr != nil {
 		return nil, runtimeErr
 	}
 	if normalized.ExpiresAt != "" {

@@ -50,6 +50,9 @@ export interface ProcessInstance {
 }
 
 export interface ProductProjectProcessAccess {
+    canStartProjectProcess: boolean
+    canReconnectProjectProcess: boolean
+    canStopProjectProcess: boolean
     startProjectProcess(args: { definitionId: string }): Promise<OpenADEProjectProcessStartResult>
     reconnectProjectProcess(args: { processId: string }): Promise<OpenADEProjectProcessReconnectResult>
     stopProjectProcess(args: { processId: string }): Promise<OpenADEProjectProcessStopResult>
@@ -127,6 +130,8 @@ export class RepoProcessesManager {
     }
 
     async startProductProcess(process: ProcessDef, config: ProcsConfig, context: RunContext, access: ProductProjectProcessAccess): Promise<boolean> {
+        if (!access.canStartProjectProcess) return false
+
         const processId = process.id
         const existing = this.runningProcesses.get(processId)
         if (existing?.productProcessId && existing.status === "running") return true
@@ -152,16 +157,25 @@ export class RepoProcessesManager {
 
         try {
             const started = await access.startProjectProcess({ definitionId: process.id })
-            const reconnected = await access.reconnectProjectProcess({ processId: started.processId }).catch(
-                (): OpenADEProjectProcessReconnectResult => ({
-                    repoId: started.repoId,
-                    taskId: started.taskId,
-                    processId: started.processId,
-                    found: true,
-                    completed: false,
-                    output: [],
-                })
-            )
+            const reconnected: OpenADEProjectProcessReconnectResult = access.canReconnectProjectProcess
+                ? await access.reconnectProjectProcess({ processId: started.processId }).catch(
+                      (): OpenADEProjectProcessReconnectResult => ({
+                          repoId: started.repoId,
+                          taskId: started.taskId,
+                          processId: started.processId,
+                          found: true,
+                          completed: false,
+                          output: [],
+                      })
+                  )
+                : {
+                      repoId: started.repoId,
+                      taskId: started.taskId,
+                      processId: started.processId,
+                      found: true,
+                      completed: false,
+                      output: [],
+                  }
 
             runInAction(() => {
                 const current = this.runningProcesses.get(processId)
@@ -187,6 +201,8 @@ export class RepoProcessesManager {
     }
 
     async refreshProductProcessOutput(definitionId: string, access: ProductProjectProcessAccess): Promise<void> {
+        if (!access.canReconnectProjectProcess) return
+
         const instance = this.runningProcesses.get(definitionId)
         if (!instance?.productProcessId) return
 
@@ -201,9 +217,11 @@ export class RepoProcessesManager {
         })
     }
 
-    async stopProductProcess(definitionId: string, access: ProductProjectProcessAccess): Promise<void> {
+    async stopProductProcess(definitionId: string, access: ProductProjectProcessAccess): Promise<boolean> {
+        if (!access.canStopProjectProcess) return false
+
         const instance = this.runningProcesses.get(definitionId)
-        if (!instance?.productProcessId) return
+        if (!instance?.productProcessId) return false
 
         runInAction(() => {
             instance.output += "\n[Process] Stopping...\n"
@@ -217,12 +235,16 @@ export class RepoProcessesManager {
             current.error = result.error
             current.output += result.ok ? "[Process] Stopped.\n" : `[Process] Failed to stop: ${result.error ?? "Unknown error"}\n`
         })
+        return result.ok
     }
 
     async restartProductProcess(processId: string, access: ProductProjectProcessAccess): Promise<boolean> {
+        if (!access.canStartProjectProcess) return false
+
         const instance = this.runningProcesses.get(processId)
         if (!instance) return false
-        await this.stopProductProcess(processId, access)
+        if (instance.productProcessId && instance.status === "running" && !access.canStopProjectProcess) return false
+        if (access.canStopProjectProcess) await this.stopProductProcess(processId, access)
         runInAction(() => {
             const current = this.runningProcesses.get(processId)
             if (current) current.output = ""
@@ -492,6 +514,16 @@ export class RepoProcessesManager {
         })
     }
 
+    private async stopProcessForCleanup(instance: ProcessInstance, productAccess?: ProductProjectProcessAccess | null): Promise<boolean> {
+        if (instance.productProcessId) {
+            if (!productAccess) return false
+            return this.stopProductProcess(instance.id, productAccess)
+        }
+
+        await this.stopProcess(instance.id)
+        return true
+    }
+
     async restartProcess(processId: string, procsResult: ReadProcsResult): Promise<boolean> {
         const instance = this.runningProcesses.get(processId)
         if (!instance) return false
@@ -552,14 +584,17 @@ export class RepoProcessesManager {
 
     async stopAllForContext(context: RunContext, productAccess?: ProductProjectProcessAccess): Promise<void> {
         const processes = this.getProcessesForContext(context)
-        await Promise.all(processes.map((p) => (productAccess && p.productProcessId ? this.stopProductProcess(p.id, productAccess) : this.stopProcess(p.id))))
+        const stopped = await Promise.all(processes.map(async (p) => ({ id: p.id, stopped: await this.stopProcessForCleanup(p, productAccess) })))
+        const stoppedIds = new Set(stopped.filter((result) => result.stopped).map((result) => result.id))
 
         runInAction(() => {
             for (const p of processes) {
-                this.runningProcesses.delete(p.id)
+                if (stoppedIds.has(p.id)) {
+                    this.runningProcesses.delete(p.id)
+                }
             }
 
-            if (this.expandedProcessId && processes.some((p) => p.id === this.expandedProcessId)) {
+            if (this.expandedProcessId && stoppedIds.has(this.expandedProcessId)) {
                 this.expandedProcessId = null
             }
         })
@@ -571,18 +606,19 @@ export class RepoProcessesManager {
         productAccess?: ProductProjectProcessAccess | null
     }): Promise<void> {
         const stale = this.getProcessesForContext(args.context).filter((instance) => !args.validProcessIds.has(instance.id))
-        await Promise.all(
-            stale.map((instance) =>
-                args.productAccess && instance.productProcessId ? this.stopProductProcess(instance.id, args.productAccess) : this.stopProcess(instance.id)
-            )
+        const stopped = await Promise.all(
+            stale.map(async (instance) => ({ id: instance.id, stopped: await this.stopProcessForCleanup(instance, args.productAccess) }))
         )
+        const stoppedIds = new Set(stopped.filter((result) => result.stopped).map((result) => result.id))
 
         runInAction(() => {
             for (const instance of stale) {
-                this.runningProcesses.delete(instance.id)
+                if (stoppedIds.has(instance.id)) {
+                    this.runningProcesses.delete(instance.id)
+                }
             }
 
-            if (this.expandedProcessId && stale.some((instance) => instance.id === this.expandedProcessId)) {
+            if (this.expandedProcessId && stoppedIds.has(this.expandedProcessId)) {
                 this.expandedProcessId = null
             }
         })

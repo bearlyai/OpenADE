@@ -1,8 +1,9 @@
 import { parsePatchFiles } from "@pierre/diffs"
 import { RefreshCw } from "lucide-react"
 import { observer } from "mobx-react"
-import { type ReactNode, useEffect, useMemo, useState } from "react"
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { twMerge } from "tailwind-merge"
+import { OPENADE_METHOD, type OpenADEMethod } from "../../../openade-client/src"
 import type { OpenADETaskGitChangedFile, OpenADETaskGitCommitFilePatchResult, OpenADETaskGitLogEntry, OpenADETaskGitScope } from "../../../openade-module/src"
 import { type WorkTreeInfo, gitApi } from "../electronAPI/git"
 import { useCodeStore } from "../store/context"
@@ -151,6 +152,7 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
     const [hasMore, setHasMore] = useState(false)
     const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null)
     const [logError, setLogError] = useState<string | null>(null)
+    const logScopeGenerationRef = useRef(0)
 
     const [commitFiles, setCommitFiles] = useState<OpenADETaskGitChangedFile[]>([])
     const [commitFilesLoading, setCommitFilesLoading] = useState(false)
@@ -168,9 +170,17 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
     const patchContextLines = getPatchContextLines(diffContext)
     const patchDiffStyle = viewMode === "split" ? "split" : "unified"
     const shouldLoadFilePair = viewMode === "current"
-    const useRuntimeProductGit = codeStore.shouldUseRuntimeProductAPI()
+    const useRuntimeProductGit = codeStore.shouldUseRuntimeProductTaskRoute()
     const productGitRepoId = useRuntimeProductGit ? codeStore.findProductRepoIdForTask(taskId) : null
     const productGitContext = useMemo(() => (productGitRepoId ? { repoId: productGitRepoId, taskId } : null), [productGitRepoId, taskId])
+    const canUseProductGitMethodAfterConnect = useCallback(
+        async (method: OpenADEMethod) => {
+            if (!useRuntimeProductGit) return false
+            if (codeStore.usesCoreOwnedProductRuntime()) return codeStore.canUseProductMethodAfterConnect(method)
+            return codeStore.canUseProductMethod(method)
+        },
+        [codeStore, useRuntimeProductGit]
+    )
     const setDiffContext = (context: typeof diffContext) => {
         if (viewMode !== "current") {
             setPatchLoading(true)
@@ -263,28 +273,42 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
 
         async function loadScopes() {
             try {
-                const options = useRuntimeProductGit
-                    ? productGitContext
-                        ? buildProductScopeOptions(
-                              workDir,
-                              (
-                                  await codeStore.readProductTaskGitScopes({
-                                      ...productGitContext,
-                                      includeRemote: true,
-                                  })
-                              ).scopes
-                          )
-                        : []
-                    : buildScopeOptions(
-                          workDir,
-                          (await gitApi.listBranches({ repoDir: workDir, includeRemote: true })).branches,
-                          (await gitApi.listWorkTrees({ repoDir: workDir })).worktrees
-                      )
+                let options: ScopeOption[]
+                let scopesUnavailable = false
+                if (useRuntimeProductGit) {
+                    if (!productGitContext) {
+                        options = []
+                    } else if (!(await canUseProductGitMethodAfterConnect(OPENADE_METHOD.taskGitScopesRead))) {
+                        scopesUnavailable = true
+                        options = []
+                    } else {
+                        options = buildProductScopeOptions(
+                            workDir,
+                            (
+                                await codeStore.readProductTaskGitScopes({
+                                    ...productGitContext,
+                                    includeRemote: true,
+                                })
+                            ).scopes
+                        )
+                    }
+                } else {
+                    options = buildScopeOptions(
+                        workDir,
+                        (await gitApi.listBranches({ repoDir: workDir, includeRemote: true })).branches,
+                        (await gitApi.listWorkTrees({ repoDir: workDir })).worktrees
+                    )
+                }
                 if (cancelled) return
 
                 setScopeOptions(options)
                 if (useRuntimeProductGit && !productGitContext) {
                     setLogError("Task git context unavailable")
+                    setSelectedScopeId("branch:HEAD")
+                    return
+                }
+                if (useRuntimeProductGit && scopesUnavailable) {
+                    setLogError("Task git scopes unavailable")
                     setSelectedScopeId("branch:HEAD")
                     return
                 }
@@ -318,9 +342,19 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         return () => {
             cancelled = true
         }
-    }, [codeStore, productGitContext, useRuntimeProductGit, taskId, workDir, currentBranch, scopeRefreshToken])
+    }, [codeStore, productGitContext, useRuntimeProductGit, canUseProductGitMethodAfterConnect, taskId, workDir, currentBranch, scopeRefreshToken])
 
     useEffect(() => {
+        logScopeGenerationRef.current++
+        if (useRuntimeProductGit && !productGitContext) {
+            setLogLoading(false)
+            setLoadingMore(false)
+            setCommits([])
+            setHasMore(false)
+            setSelectedCommitSha(null)
+            setLogError("Task git context unavailable")
+            return
+        }
         const scope = selectedScope
         if (!scope) {
             setCommits([])
@@ -331,6 +365,7 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
 
         let cancelled = false
         setLogLoading(true)
+        setLoadingMore(false)
         setLogError(null)
         setCommits([])
         setHasMore(false)
@@ -340,6 +375,9 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
             try {
                 if (useRuntimeProductGit && (!productGitContext || (!scopeValue.productRef && !scopeValue.productScopeId))) {
                     throw new Error("Task git context unavailable")
+                }
+                if (useRuntimeProductGit && !(await canUseProductGitMethodAfterConnect(OPENADE_METHOD.taskGitLog))) {
+                    throw new Error("Task git log unavailable")
                 }
                 const result =
                     useRuntimeProductGit && productGitContext
@@ -383,7 +421,7 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         return () => {
             cancelled = true
         }
-    }, [codeStore, productGitContext, useRuntimeProductGit, selectedScope, workDir])
+    }, [codeStore, productGitContext, useRuntimeProductGit, canUseProductGitMethodAfterConnect, selectedScope, workDir])
 
     useEffect(() => {
         const scope = selectedScope
@@ -406,6 +444,9 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
             try {
                 if (useRuntimeProductGit && !productGitContext) {
                     throw new Error("Task git context unavailable")
+                }
+                if (useRuntimeProductGit && !(await canUseProductGitMethodAfterConnect(OPENADE_METHOD.taskGitCommitFilesRead))) {
+                    throw new Error("Task git commit files unavailable")
                 }
                 const result =
                     useRuntimeProductGit && productGitContext
@@ -435,7 +476,7 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         return () => {
             cancelled = true
         }
-    }, [codeStore, productGitContext, useRuntimeProductGit, selectedScope, selectedCommit, workDir])
+    }, [codeStore, productGitContext, useRuntimeProductGit, canUseProductGitMethodAfterConnect, selectedScope, selectedCommit, workDir])
 
     useEffect(() => {
         setSelectedFilePath((previousPath) => {
@@ -474,6 +515,9 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
                 const beforePath = fileValue.oldPath ?? fileValue.path
                 if (useRuntimeProductGit && !productGitContext) {
                     throw new Error("Task git context unavailable")
+                }
+                if (useRuntimeProductGit && !(await canUseProductGitMethodAfterConnect(OPENADE_METHOD.taskGitFileAtTreeishRead))) {
+                    throw new Error("Task git file content unavailable")
                 }
 
                 const [beforeResult, afterResult] = await Promise.all([
@@ -546,7 +590,17 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         return () => {
             cancelled = true
         }
-    }, [codeStore, productGitContext, useRuntimeProductGit, selectedScope, selectedCommit, selectedFile, shouldLoadFilePair, workDir])
+    }, [
+        codeStore,
+        productGitContext,
+        useRuntimeProductGit,
+        canUseProductGitMethodAfterConnect,
+        selectedScope,
+        selectedCommit,
+        selectedFile,
+        shouldLoadFilePair,
+        workDir,
+    ])
 
     useEffect(() => {
         const scope = selectedScope
@@ -567,6 +621,9 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
             try {
                 if (useRuntimeProductGit && !productGitContext) {
                     throw new Error("Task git context unavailable")
+                }
+                if (useRuntimeProductGit && !(await canUseProductGitMethodAfterConnect(OPENADE_METHOD.taskGitCommitFilePatchRead))) {
+                    throw new Error("Task git commit patch unavailable")
                 }
                 const result =
                     useRuntimeProductGit && productGitContext
@@ -611,7 +668,19 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
         return () => {
             cancelled = true
         }
-    }, [codeStore, productGitContext, useRuntimeProductGit, selectedScope, selectedCommit, selectedFile, usePatchDiff, patchContextLines, taskId, workDir])
+    }, [
+        codeStore,
+        productGitContext,
+        useRuntimeProductGit,
+        canUseProductGitMethodAfterConnect,
+        selectedScope,
+        selectedCommit,
+        selectedFile,
+        usePatchDiff,
+        patchContextLines,
+        taskId,
+        workDir,
+    ])
 
     const refresh = () => {
         setScopeRefreshToken((value) => value + 1)
@@ -622,10 +691,16 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
             return
         }
 
+        const requestGeneration = logScopeGenerationRef.current
+        const requestSkip = commits.length
+        const isCurrentLogScope = () => logScopeGenerationRef.current === requestGeneration
         setLoadingMore(true)
         try {
             if (useRuntimeProductGit && (!productGitContext || (!selectedScope.productRef && !selectedScope.productScopeId))) {
                 throw new Error("Task git context unavailable")
+            }
+            if (useRuntimeProductGit && !(await canUseProductGitMethodAfterConnect(OPENADE_METHOD.taskGitLog))) {
+                throw new Error("Task git log unavailable")
             }
             const result =
                 useRuntimeProductGit && productGitContext
@@ -634,21 +709,29 @@ export const GitLogTray = observer(function GitLogTray({ taskId, workDir, curren
                           ref: selectedScope.productRef,
                           scopeId: selectedScope.productScopeId,
                           limit: PAGE_SIZE,
-                          skip: commits.length,
+                          skip: requestSkip,
                       })
                     : await gitApi.getLog({
                           workDir: selectedScope.workDir,
                           ref: selectedScope.ref,
                           limit: PAGE_SIZE,
-                          skip: commits.length,
+                          skip: requestSkip,
                       })
+            if (!isCurrentLogScope()) {
+                return
+            }
             setCommits((previous) => [...previous, ...result.commits])
             setHasMore(result.hasMore)
         } catch (error) {
             console.error("[GitLogTray] Failed to load more commits:", error)
+            if (!isCurrentLogScope()) {
+                return
+            }
             setLogError("Failed to load more commits")
         } finally {
-            setLoadingMore(false)
+            if (isCurrentLogScope()) {
+                setLoadingMore(false)
+            }
         }
     }
 

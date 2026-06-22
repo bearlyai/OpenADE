@@ -1,5 +1,5 @@
 import type { AnnotationSide } from "@pierre/diffs"
-import type { OpenADETask, OpenADETaskPreview } from "../../../openade-module/src"
+import type { OpenADEHyperPlanStrategy, OpenADETask, OpenADETaskPreview } from "../../../openade-module/src"
 import type { HarnessStreamEvent, HarnessId } from "../electronAPI/harnessEventTypes"
 import type { HyperPlanSubExecution } from "../hyperplan/types"
 import type {
@@ -45,6 +45,39 @@ function booleanValue(value: unknown): boolean | undefined {
 
 function stringArray(value: unknown): string[] {
     return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
+}
+
+function toHyperPlanPrimitive(value: unknown): OpenADEHyperPlanStrategy["steps"][number]["primitive"] | null {
+    if (value === "plan" || value === "review" || value === "reconcile" || value === "revise") return value
+    return null
+}
+
+function toHyperPlanStrategy(value: unknown): OpenADEHyperPlanStrategy | undefined {
+    if (!isRecord(value) || !Array.isArray(value.steps)) return undefined
+    const id = stringValue(value.id)
+    const name = stringValue(value.name)
+    const description = stringValue(value.description)
+    const terminalStepId = stringValue(value.terminalStepId)
+    if (!id || !name || !description || !terminalStepId) return undefined
+    const steps: OpenADEHyperPlanStrategy["steps"] = []
+    for (const item of value.steps) {
+        if (!isRecord(item) || !isRecord(item.agent)) return undefined
+        const primitive = toHyperPlanPrimitive(item.primitive)
+        const stepId = stringValue(item.id)
+        const harnessId = stringValue(item.agent.harnessId)
+        const modelId = stringValue(item.agent.modelId)
+        if (!primitive || !stepId || !harnessId || !modelId) return undefined
+        const resumeStepId = optionalString(item.resumeStepId)
+        steps.push({
+            id: stepId,
+            primitive,
+            agent: { harnessId, modelId },
+            inputs: stringArray(item.inputs),
+            ...(resumeStepId ? { resumeStepId } : {}),
+        })
+    }
+    if (steps.length === 0) return undefined
+    return { id, name, description, steps, terminalStepId }
 }
 
 function stringRecord(value: unknown): Record<string, string> {
@@ -112,7 +145,7 @@ function toDeviceEnvironments(value: unknown): TaskDeviceEnvironment[] {
 
 function toQueuedTurn(value: unknown): QueuedTurn | null {
     if (!isRecord(value)) return null
-    if (value.type !== "do" && value.type !== "ask") return null
+    if (value.type !== "do" && value.type !== "ask" && value.type !== "hyperplan") return null
     const id = stringValue(value.id)
     const input = stringValue(value.input)
     const status = stringValue(value.status)
@@ -136,6 +169,7 @@ function toQueuedTurn(value: unknown): QueuedTurn | null {
         label: optionalString(value.label),
         includeComments: booleanValue(value.includeComments),
         images: Array.isArray(value.images) ? value.images : undefined,
+        hyperplanStrategy: toHyperPlanStrategy(value.hyperplanStrategy),
         thinking: value.thinking === "low" || value.thinking === "med" || value.thinking === "high" || value.thinking === "max" ? value.thinking : undefined,
         fastMode: booleanValue(value.fastMode),
     }
@@ -448,8 +482,9 @@ export function taskFromRuntimeProduct({
     preview?: OpenADETaskPreview
     currentUser: User
 }): Task {
-    const createdAt = task.createdAt ?? previewCreatedAt(preview)
-    const updatedAt = task.updatedAt ?? task.lastEventAt ?? preview?.lastEventAt ?? createdAt
+    const effectivePreview = preview ?? task.preview
+    const createdAt = task.createdAt ?? previewCreatedAt(effectivePreview)
+    const updatedAt = task.updatedAt ?? task.lastEventAt ?? effectivePreview?.lastEventAt ?? createdAt
     return {
         id: task.id,
         repoId: task.repoId,

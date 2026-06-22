@@ -59,7 +59,12 @@ func (service *Service) startClaimedQueuedTurn(ctx context.Context, repo storage
 	if eventID == "" {
 		eventID = "event-" + randomHexID()
 	}
+	hyperPlanStrategy, hyperPlanStrategyID, runtimeErr := compactTurnStartHyperPlanStrategy(turn.Type, payload.HyperPlanStrategy)
+	if runtimeErr != nil {
+		return runtimeErr
+	}
 	payload.EventID = eventID
+	payload.HyperPlanStrategy = hyperPlanStrategy
 	payloadJSON, runtimeErr := queuedTurnPayloadJSON(payload)
 	if runtimeErr != nil {
 		return runtimeErr
@@ -72,7 +77,7 @@ func (service *Service) startClaimedQueuedTurn(ctx context.Context, repo storage
 		return invalidParams("queued turn is not running")
 	}
 
-	source, runtimeErr := service.turnStartSource(ctx, task.ID, turn.Type, payload.Label)
+	source, runtimeErr := service.turnStartSource(ctx, task.ID, turn.Type, payload.Label, hyperPlanStrategyID)
 	if runtimeErr != nil {
 		return runtimeErr
 	}
@@ -89,6 +94,7 @@ func (service *Service) startClaimedQueuedTurn(ctx context.Context, repo storage
 		HarnessID:          harnessID,
 		Source:             source.Raw,
 		Images:             payload.Images,
+		HyperPlanStrategy:  hyperPlanStrategy,
 		IncludesCommentIDs: []string{},
 		ModelID:            strings.TrimSpace(payload.ModelID),
 		FastMode:           payload.FastMode,
@@ -134,8 +140,8 @@ func (service *Service) startClaimedQueuedTurn(ctx context.Context, repo storage
 	}
 	service.runtime.Notify("runtime/created", runtimeDTO)
 	notification := actionEventTaskUpdatedNotification(task.RepoID, task.ID, event.ID, "in_progress")
-	service.runtime.Notify("openade/task/updated", notification)
-	service.runtime.Notify("openade/queuedTurn/updated", queuedTurnUpdatedNotificationDTO{
+	service.runtime.Notify(openADENotificationTaskUpdated, notification)
+	service.runtime.Notify(openADENotificationQueuedTurnUpdated, queuedTurnUpdatedNotificationDTO{
 		RepoID: task.RepoID,
 		TaskID: task.ID,
 		Turn:   queuedTurnToDTO(turn),
@@ -169,6 +175,7 @@ func (service *Service) startClaimedQueuedTurn(ctx context.Context, repo storage
 		IncludeComments:     includeComments,
 		Thinking:            validThinking(payload.Thinking),
 		FastMode:            payload.FastMode,
+		HyperPlanStrategy:   hyperPlanStrategy,
 		Source:              append(json.RawMessage(nil), source.Raw...),
 		Images:              promptImages,
 	})
@@ -180,8 +187,8 @@ func (service *Service) completeQueuedTurn(ctx context.Context, task storage.Tas
 	if err != nil || !found || !changed {
 		return
 	}
-	service.runtime.Notify("openade/task/updated", map[string]string{"repoId": task.RepoID, "taskId": task.ID})
-	service.runtime.Notify("openade/queuedTurn/updated", queuedTurnUpdatedNotificationDTO{
+	service.runtime.Notify(openADENotificationTaskUpdated, map[string]string{"repoId": task.RepoID, "taskId": task.ID})
+	service.runtime.Notify(openADENotificationQueuedTurnUpdated, queuedTurnUpdatedNotificationDTO{
 		RepoID: task.RepoID,
 		TaskID: task.ID,
 		Turn:   queuedTurnToDTO(turn),

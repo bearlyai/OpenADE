@@ -64,7 +64,7 @@ type codexUsageSnapshot struct {
 }
 
 func (service *Service) handleTaskUsageRecalculate(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/usage/recalculate", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskUsageRecalculate, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			RepoID string `json:"repoId"`
 			TaskID string `json:"taskId"`
@@ -88,7 +88,7 @@ func (service *Service) handleTaskUsageRecalculate(ctx context.Context, _ *core.
 }
 
 func (service *Service) handleTaskUsageBackfill(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/usage/backfill", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskUsageBackfill, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			RepoID  string   `json:"repoId"`
 			TaskIDs []string `json:"taskIds"`
@@ -182,8 +182,8 @@ func (service *Service) recalculateTaskUsage(ctx context.Context, repoID string,
 	}
 
 	notification := map[string]string{"repoId": task.RepoID, "taskId": task.ID}
-	service.runtime.Notify("openade/task/updated", notification)
-	service.runtime.Notify("openade/task/previewChanged", notification)
+	service.runtime.Notify(openADENotificationTaskUpdated, notification)
+	service.runtime.Notify(openADENotificationTaskPreviewChanged, notification)
 	return usage, nil
 }
 

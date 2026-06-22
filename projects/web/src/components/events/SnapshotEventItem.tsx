@@ -1,6 +1,7 @@
 import { Camera, Check, Copy, Download, Loader2 } from "lucide-react"
 import { observer } from "mobx-react"
 import { useEffect, useState } from "react"
+import { OPENADE_METHOD } from "../../../../openade-client/src"
 import { snapshotsApi } from "../../electronAPI/snapshots"
 import { useCodeStore } from "../../store/context"
 import type { SnapshotEventModel } from "../../store/EventModel"
@@ -21,6 +22,10 @@ export const SnapshotEventItem = observer(({ event, expanded, onToggle, taskId }
 
     const { stats, referenceBranch, mergeBaseCommit } = event
     const hasChanges = stats.filesChanged > 0 || stats.insertions > 0 || stats.deletions > 0
+    const productRuntimeOwnsSnapshots = store.shouldUseRuntimeProductTaskRoute()
+    const canReadSnapshotPatch = !productRuntimeOwnsSnapshots || store.canUseProductMethod(OPENADE_METHOD.taskSnapshotPatchRead)
+    const displayPatch = canReadSnapshotPatch ? event.fullPatch : ""
+    const canReadFullPatch = canReadSnapshotPatch && (Boolean(displayPatch) || store.canUseProductMethod(OPENADE_METHOD.taskSnapshotPatchRead))
     const [copied, setCopied] = useState(false)
 
     // Load patch index from file when expanded (if stored externally)
@@ -34,7 +39,8 @@ export const SnapshotEventItem = observer(({ event, expanded, onToggle, taskId }
     const isLoading = eventModel?.isIndexLoading ?? false
 
     const readFullPatch = async (): Promise<string> => {
-        if (event.fullPatch) return event.fullPatch
+        if (!canReadSnapshotPatch) return ""
+        if (displayPatch) return displayPatch
 
         if (eventModel) {
             if (!eventModel.isPatchLoaded) {
@@ -43,7 +49,8 @@ export const SnapshotEventItem = observer(({ event, expanded, onToggle, taskId }
             return eventModel.fullPatch
         }
 
-        if (store.shouldUseRuntimeProductAPI()) {
+        if (productRuntimeOwnsSnapshots) {
+            if (!store.canUseProductMethod(OPENADE_METHOD.taskSnapshotPatchRead)) return ""
             const productRepoId = store.findProductRepoIdForTask(taskId)
             if (!productRepoId) return ""
             return (
@@ -118,7 +125,7 @@ export const SnapshotEventItem = observer(({ event, expanded, onToggle, taskId }
                     {stats.insertions > 0 && <span className="text-success">+{stats.insertions}</span>}
                     {stats.deletions > 0 && <span className="text-error">-{stats.deletions}</span>}
                     <div className="flex-1" />
-                    {hasChanges && (
+                    {hasChanges && canReadFullPatch && (
                         <>
                             <span className="text-muted text-xs">Git patch:</span>
                             <button
@@ -159,7 +166,7 @@ export const SnapshotEventItem = observer(({ event, expanded, onToggle, taskId }
                         </div>
                     ) : (
                         <ViewPatch
-                            patch={event.fullPatch}
+                            patch={displayPatch}
                             patchFileId={event.patchFileId}
                             patchIndex={patchIndex}
                             indexLoading={isLoading}

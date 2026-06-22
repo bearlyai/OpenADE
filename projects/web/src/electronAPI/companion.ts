@@ -7,7 +7,9 @@ import type {
     RemoteDeviceListResult,
     RemoteDeviceRevokeResult,
 } from "../../../shared/companion/src"
-import { localRuntimeClient } from "../runtime/localRuntimeClient"
+import { OPENADE_REMOTE_METHOD, type RuntimeClientLike } from "../../../openade-client/src"
+import { requestKernelRemoteMethod } from "../kernel/session"
+import { resolveCoreRuntimeEndpoint, selectedLocalProductRuntimeClient } from "../runtime/localProductRuntimeClient"
 
 function api() {
     return window.openadeAPI?.companion
@@ -90,12 +92,32 @@ function parseDeviceDropAllResult(value: unknown): RemoteDeviceDropAllResult {
     return { ok: true, devices: value.devices }
 }
 
+function publicCompanionBaseUrl(state: CompanionState): string {
+    return state.boundUrls.find((url) => url.includes("://100.")) ?? `http://127.0.0.1:${state.port}`
+}
+
+function companionRuntimeClient(): RuntimeClientLike {
+    return selectedLocalProductRuntimeClient()
+}
+
+function usesCoreCompanionRuntime(): boolean {
+    return resolveCoreRuntimeEndpoint() !== null
+}
+
 async function listDevicesFromRuntime(): Promise<RemoteDevice[]> {
-    return parseDeviceListResult(await localRuntimeClient.request("remote/device/list")).devices
+    return parseDeviceListResult(await requestKernelRemoteMethod(companionRuntimeClient(), OPENADE_REMOTE_METHOD.remoteDeviceList)).devices
 }
 
 async function stateWithRuntimeDevices(state: CompanionState): Promise<CompanionState> {
-    return { ...state, devices: await listDevicesFromRuntime() }
+    const devices = await listDevicesFromRuntime()
+    if (!usesCoreCompanionRuntime()) return { ...state, devices }
+    return {
+        enabled: state.enabled,
+        port: state.port,
+        boundUrls: state.boundUrls,
+        keepAwakeMode: state.keepAwakeMode,
+        devices,
+    }
 }
 
 export async function getCompanionState(): Promise<CompanionState> {
@@ -111,17 +133,27 @@ export async function setCompanionKeepAwakeMode(mode: KeepAwakeMode): Promise<Co
 }
 
 export async function startCompanionPairing(): Promise<PairingPayload> {
+    if (usesCoreCompanionRuntime()) {
+        const initialState = parseCompanionState(await requireApi().getState())
+        const state = initialState.enabled ? initialState : parseCompanionState(await requireApi().setEnabled(true))
+        const result = await requestKernelRemoteMethod(companionRuntimeClient(), OPENADE_REMOTE_METHOD.remotePairingStart, {
+            baseUrl: publicCompanionBaseUrl(state),
+        })
+        if (!isPairingPayload(result)) throw new Error("Companion pairing payload is invalid")
+        return result
+    }
+
     const result = await requireApi().startPairing()
     if (!isPairingPayload(result)) throw new Error("Companion pairing payload is invalid")
     return result
 }
 
 export async function revokeCompanionDevice(deviceId: string): Promise<CompanionState> {
-    parseDeviceRevokeResult(await localRuntimeClient.request("remote/device/revoke", { deviceId }))
+    parseDeviceRevokeResult(await requestKernelRemoteMethod(companionRuntimeClient(), OPENADE_REMOTE_METHOD.remoteDeviceRevoke, { deviceId }))
     return getCompanionState()
 }
 
 export async function dropAllCompanionDevices(): Promise<CompanionState> {
-    parseDeviceDropAllResult(await localRuntimeClient.request("remote/device/dropAll"))
+    parseDeviceDropAllResult(await requestKernelRemoteMethod(companionRuntimeClient(), OPENADE_REMOTE_METHOD.remoteDeviceDropAll))
     return getCompanionState()
 }

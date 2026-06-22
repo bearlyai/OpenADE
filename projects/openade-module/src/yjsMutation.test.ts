@@ -186,6 +186,77 @@ describe("createOpenADEYjsWriter", () => {
         expect(saveIds).toEqual(["code:repos"])
         const snapshot = await projection.readSnapshot()
         expect(snapshot.repos[0]?.tasks[0]?.lastViewedAt).toBe("2026-06-01T00:10:00.000Z")
+
+        readIds.length = 0
+        saveIds.length = 0
+        await writer.updateTaskMetadata({
+            taskId: "task-1",
+            lastViewedAt: "2026-06-01T00:10:00.000Z",
+        })
+
+        expect(readIds).toEqual(["code:repos"])
+        expect(saveIds).toEqual([])
+    })
+
+    it("updates preview usage without saving the task document", async () => {
+        const baseStorage = createOpenADENodeYjsStorage(storageDir, { legacyNestedRootDir: null })
+        const readIds: string[] = []
+        const saveIds: string[] = []
+        const storage: OpenADEYjsMutationStorageAdapter = {
+            ...baseStorage,
+            async readDocumentUpdate(id) {
+                readIds.push(id)
+                return baseStorage.readDocumentUpdate(id)
+            },
+            async saveDocumentUpdate(id, data) {
+                saveIds.push(id)
+                await baseStorage.saveDocumentUpdate(id, data)
+            },
+        }
+        const writer = createOpenADEYjsWriter(storage, {
+            createId: () => "generated-id",
+            createSlug: () => "generated-slug",
+            now: () => "2026-06-01T00:00:00.000Z",
+        })
+        const projection = createOpenADEYjsProjection(storage)
+
+        await writer.createRepo({
+            repoId: "repo-1",
+            name: "Mutation Repo",
+            path: "/tmp/mutation-repo",
+            createdBy: { id: "user-1", email: "user@example.com" },
+        })
+        await writer.createTask({
+            repoId: "repo-1",
+            taskId: "task-1",
+            slug: "task-1",
+            title: "Mutation Task",
+            input: "Exercise usage metadata",
+            createdBy: { id: "user-1", email: "user@example.com" },
+            deviceId: "device-1",
+            isolationStrategy: { type: "head" },
+        })
+
+        const usage = {
+            inputTokens: 12,
+            outputTokens: 34,
+            totalCostUsd: 0.056,
+            eventCount: 7,
+            costByModel: { "claude-sonnet": 0.056 },
+            durationMs: 890,
+        }
+
+        readIds.length = 0
+        saveIds.length = 0
+        await writer.updateTaskMetadata({
+            taskId: "task-1",
+            usage,
+        })
+
+        expect(readIds).toEqual(["code:task:task-1", "code:repos"])
+        expect(saveIds).toEqual(["code:repos"])
+        const snapshot = await projection.readSnapshot()
+        expect(snapshot.repos[0]?.tasks[0]?.usage).toEqual(usage)
     })
 
     it("round trips MCP server settings rows through real Yjs storage", async () => {

@@ -1,9 +1,11 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,16 +16,20 @@ import (
 type Handler func(context.Context, *Connection, json.RawMessage) (JSONPayload, *RuntimeError)
 
 type SlowRequestEvent struct {
-	Service    string
-	Method     string
-	RequestID  string
-	Duration   time.Duration
-	QueueWait  time.Duration
-	Handler    time.Duration
-	Connection string
-	Failed     bool
-	ErrorCode  string
+	Service       string
+	Method        string
+	RequestID     string
+	Duration      time.Duration
+	QueueWait     time.Duration
+	Handler       time.Duration
+	DominantPhase string
+	Connection    string
+	Failed        bool
+	ErrorCode     string
+	Scope         RuntimeRequestScope
 }
+
+type RuntimeRequestScope map[string]JSONPayload
 
 type NotificationBurstEvent struct {
 	Service string
@@ -196,7 +202,7 @@ func (rt *Runtime) HandleProtocolError(conn *Connection, request RuntimeRequest,
 }
 
 func (rt *Runtime) handleRequest(ctx context.Context, conn *Connection, request RuntimeRequest) runtimeResponse {
-	if request.Method != "initialize" && !conn.initialized {
+	if request.Method != "initialize" && !conn.IsInitialized() {
 		return runtimeResponse{ID: request.ID, Error: protocolError("not_initialized", "Call initialize before invoking runtime methods")}
 	}
 
@@ -215,7 +221,7 @@ func (rt *Runtime) handleRequest(ctx context.Context, conn *Connection, request 
 		return runtimeResponse{ID: request.ID, Error: err}
 	}
 	if request.Method == "initialize" {
-		conn.initialized = true
+		conn.SetInitialized(true)
 	}
 	return runtimeResponse{ID: request.ID, Result: result}
 }
@@ -442,18 +448,109 @@ func (rt *Runtime) recordSlowRequest(request RuntimeRequest, conn *Connection, q
 	if response.Error != nil {
 		errorCode = response.Error.Code
 	}
+	queueWait := startedAt.Sub(queuedAt)
+	handler := time.Since(startedAt)
 	event := SlowRequestEvent{
-		Service:    rt.serviceName(),
-		Method:     request.Method,
-		RequestID:  request.ID.LogValue(),
-		Duration:   duration,
-		QueueWait:  startedAt.Sub(queuedAt),
-		Handler:    time.Since(startedAt),
-		Connection: conn.ID,
-		Failed:     response.Error != nil,
-		ErrorCode:  errorCode,
+		Service:       rt.serviceName(),
+		Method:        request.Method,
+		RequestID:     request.ID.LogValue(),
+		Duration:      duration,
+		QueueWait:     queueWait,
+		Handler:       handler,
+		DominantPhase: slowRequestDominantPhase(queueWait, handler),
+		Connection:    conn.ID,
+		Failed:        response.Error != nil,
+		ErrorCode:     errorCode,
+		Scope:         runtimeRequestScope(request.Params),
 	}
 	rt.onSlowRequest(event)
+}
+
+func runtimeRequestScope(params json.RawMessage) RuntimeRequestScope {
+	if len(params) == 0 {
+		return nil
+	}
+	var record map[string]json.RawMessage
+	if err := json.Unmarshal(params, &record); err != nil || record == nil {
+		return nil
+	}
+
+	scope := RuntimeRequestScope{}
+	for _, key := range []string{"repoId", "taskId", "runtimeId", "processId", "terminalId", "provider", "harnessId", "clientRequestId"} {
+		raw, ok := record[key]
+		if !ok {
+			continue
+		}
+		value, ok := sanitizedRuntimeScopeValue(raw)
+		if ok {
+			scope[key] = value
+		}
+	}
+	if raw, ok := record["query"]; ok {
+		var query string
+		if err := json.Unmarshal(raw, &query); err == nil {
+			scope["queryLength"] = len(query)
+		}
+	}
+	if raw, ok := record["path"]; ok {
+		var path string
+		if err := json.Unmarshal(raw, &path); err == nil {
+			scope["pathDepth"] = runtimeScopePathDepth(path)
+		}
+	}
+	if len(scope) == 0 {
+		return nil
+	}
+	return scope
+}
+
+func sanitizedRuntimeScopeValue(raw json.RawMessage) (JSONPayload, bool) {
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return sanitizedLogValue(text, 80), true
+	}
+
+	var flag bool
+	if err := json.Unmarshal(raw, &flag); err == nil {
+		return flag, true
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var number json.Number
+	if err := decoder.Decode(&number); err != nil {
+		return nil, false
+	}
+	parsed, err := strconv.ParseFloat(string(number), 64)
+	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return nil, false
+	}
+	if math.Trunc(parsed) == parsed {
+		if integer, err := strconv.ParseInt(string(number), 10, 64); err == nil {
+			return integer, true
+		}
+	}
+	return parsed, true
+}
+
+func runtimeScopePathDepth(value string) int {
+	depth := 0
+	for _, segment := range strings.Split(value, "/") {
+		if segment != "" {
+			depth++
+		}
+	}
+	return depth
+}
+
+func slowRequestDominantPhase(queueWait time.Duration, handler time.Duration) string {
+	if queueWait > handler {
+		return "queue_wait"
+	}
+	if handler > queueWait {
+		return "handler"
+	}
+	return "mixed"
 }
 
 func (rt *Runtime) serviceName() string {
@@ -467,17 +564,26 @@ func (rt *Runtime) logSlowRequest(event SlowRequestEvent) {
 	if rt.logger == nil {
 		return
 	}
-	rt.logger.Warn(
+	attrs := []slog.Attr{
+		slog.String("service", event.Service),
+		slog.String("method", event.Method),
+		slog.String("requestId", event.RequestID),
+		slog.Int64("durationMs", event.Duration.Milliseconds()),
+		slog.Int64("queueWaitMs", event.QueueWait.Milliseconds()),
+		slog.Int64("handlerMs", event.Handler.Milliseconds()),
+		slog.String("dominantPhase", event.DominantPhase),
+		slog.String("connectionId", event.Connection),
+		slog.Bool("failed", event.Failed),
+		slog.String("errorCode", event.ErrorCode),
+	}
+	if len(event.Scope) > 0 {
+		attrs = append(attrs, slog.Any("scope", event.Scope))
+	}
+	rt.logger.LogAttrs(
+		context.Background(),
+		slog.LevelWarn,
 		"runtime request slow",
-		"service", event.Service,
-		"method", event.Method,
-		"requestId", event.RequestID,
-		"durationMs", event.Duration.Milliseconds(),
-		"queueWaitMs", event.QueueWait.Milliseconds(),
-		"handlerMs", event.Handler.Milliseconds(),
-		"connectionId", event.Connection,
-		"failed", event.Failed,
-		"errorCode", event.ErrorCode,
+		attrs...,
 	)
 }
 
@@ -526,6 +632,18 @@ func (conn *Connection) SetCloser(close func(string)) {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 	conn.close = close
+}
+
+func (conn *Connection) IsInitialized() bool {
+	conn.mu.RLock()
+	defer conn.mu.RUnlock()
+	return conn.initialized
+}
+
+func (conn *Connection) SetInitialized(initialized bool) {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	conn.initialized = initialized
 }
 
 func (conn *Connection) Close(reason string) {

@@ -4,7 +4,7 @@ import { Readable, Writable } from "node:stream"
 import { tmpdir } from "node:os"
 import { describe, expect, it } from "vitest"
 import { runCommandAgentWorker, type WorkerHarness } from "./agent-worker.js"
-import type { HarnessEvent, HarnessQuery } from "./types.js"
+import type { HarnessEvent, HarnessQuery, SlashCommand } from "./types.js"
 
 class MemoryWritable extends Writable {
     chunks: string[] = []
@@ -67,8 +67,11 @@ function parseLines(output: MemoryWritable): Record<string, unknown>[] {
         .map((line) => JSON.parse(line) as Record<string, unknown>)
 }
 
-function fakeHarness(events: HarnessEvent<unknown>[], capture?: (query: HarnessQuery) => void): WorkerHarness {
+function fakeHarness(events: HarnessEvent<unknown>[], capture?: (query: HarnessQuery) => void, slashCommands: SlashCommand[] = []): WorkerHarness {
     return {
+        async discoverSlashCommands(): Promise<SlashCommand[]> {
+            return slashCommands
+        },
         async *query(query: HarnessQuery): AsyncGenerator<HarnessEvent<unknown>> {
             capture?.(query)
             for (const event of events) {
@@ -79,6 +82,49 @@ function fakeHarness(events: HarnessEvent<unknown>[], capture?: (query: HarnessQ
 }
 
 describe("runCommandAgentWorker", () => {
+    it("maps SDK capability discovery to the Core worker protocol", async () => {
+        const output = new MemoryWritable()
+
+        const exitCode = await runCommandAgentWorker({
+            input: Readable.from([
+                `${JSON.stringify({
+                    type: "sdkCapabilities",
+                    protocolVersion: 1,
+                    request: {
+                        repoId: "repo-1",
+                        repoPath: "/tmp/repo",
+                        cwd: "/tmp/repo/worktree",
+                        taskId: "task-1",
+                        harnessId: "claude-code",
+                    },
+                })}\n`,
+            ]),
+            output,
+            now: () => new Date("2026-06-07T09:00:00.000Z"),
+            harnesses: {
+                "claude-code": fakeHarness(
+                    [],
+                    undefined,
+                    [
+                        { name: "project-command", type: "slash_command" },
+                        { name: "project-skill", type: "skill" },
+                    ]
+                ),
+            },
+        })
+
+        expect(exitCode).toBe(0)
+        expect(parseLines(output)).toEqual([
+            {
+                type: "sdkCapabilities",
+                slash_commands: ["project-command"],
+                skills: ["project-skill"],
+                plugins: [],
+                cachedAt: Date.parse("2026-06-07T09:00:00.000Z"),
+            },
+        ])
+    })
+
     it("maps a real harness stream to the Core worker protocol", async () => {
         const output = new MemoryWritable()
         const capturedQueries: HarnessQuery[] = []

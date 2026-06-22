@@ -1,11 +1,13 @@
 import { AlertTriangle, ChevronRight, FileText, FolderOpen, GitBranch, Loader2, Save } from "lucide-react"
 import { observer } from "mobx-react"
 import { useEffect, useState } from "react"
+import { OPENADE_METHOD, type OpenADEMethod } from "../../../openade-client/src"
 import { ScrollArea } from "../components/ui"
 import { type IsGitDirectoryResponse, type ResolvePathResponse, initGit, isGitApiAvailable, isGitDirectory, resolvePath } from "../electronAPI/git"
-import { selectDirectory } from "../electronAPI/shell"
+import { isDirectorySelectionAvailable, selectDirectory } from "../electronAPI/shell"
 import { useCodeNavigate } from "../routing"
 import { useCodeStore } from "../store/context"
+import type { CodeStore } from "../store/store"
 import type { Repo } from "../types"
 
 interface WorkspaceSettingsPageProps {
@@ -13,9 +15,55 @@ interface WorkspaceSettingsPageProps {
     repo: Repo
 }
 
+interface RepoPathInspectionLike {
+    resolvedPath: string
+    exists: boolean
+    isDirectory: boolean
+    isGitRepo: boolean
+    repoRoot?: string
+    relativePath?: string
+    mainBranch?: string
+    hasGhCli?: boolean
+    error?: string
+}
+
+const CORE_REPO_CONFIG_METHODS = [OPENADE_METHOD.repoUpdate, OPENADE_METHOD.repoPathInspect] as const
+
+export async function syncLegacyRepoStoreBeforeWorkspaceReload(
+    codeStore: Pick<CodeStore, "syncRepoStore">,
+    options: { coreOwnsRepoHostConfig: boolean }
+): Promise<void> {
+    if (options.coreOwnsRepoHostConfig) return
+    await codeStore.syncRepoStore()
+}
+
+function pathInfoFromInspection(inspected: RepoPathInspectionLike): ResolvePathResponse {
+    return {
+        resolvedPath: inspected.resolvedPath,
+        exists: inspected.exists,
+        isDirectory: inspected.isDirectory,
+    }
+}
+
+function gitInfoFromInspection(inspected: RepoPathInspectionLike): IsGitDirectoryResponse {
+    return inspected.isGitRepo
+        ? {
+              isGitDirectory: true,
+              repoRoot: inspected.repoRoot ?? inspected.resolvedPath,
+              relativePath: inspected.relativePath ?? "",
+              mainBranch: inspected.mainBranch ?? "main",
+              hasGhCli: inspected.hasGhCli ?? false,
+          }
+        : {
+              isGitDirectory: false,
+              error: inspected.error,
+          }
+}
+
 export const WorkspaceSettingsPage = observer(({ workspaceId, repo }: WorkspaceSettingsPageProps) => {
     const codeStore = useCodeStore()
     const navigate = useCodeNavigate()
+    const [, bumpCoreRepoCapabilityRevision] = useState(0)
 
     // Form state - initialize from repo
     const [name, setName] = useState(repo.name)
@@ -33,6 +81,32 @@ export const WorkspaceSettingsPage = observer(({ workspaceId, repo }: WorkspaceS
     // Save state
     const [isSaving, setIsSaving] = useState(false)
 
+    const useRuntimeProductAPI = codeStore.shouldUseRuntimeProductAPI()
+    const coreOwnsRepoHostConfig = codeStore.usesCoreOwnedProductRuntime()
+    const canUpdateRepo = codeStore.canUseProductMethod(OPENADE_METHOD.repoUpdate)
+
+    const canUseRepoMethodAfterConnect = async (method: OpenADEMethod): Promise<boolean> => {
+        if (coreOwnsRepoHostConfig) return codeStore.canUseProductMethodAfterConnect(method)
+        return codeStore.canUseProductMethod(method)
+    }
+
+    useEffect(() => {
+        if (!coreOwnsRepoHostConfig || useRuntimeProductAPI) return
+        let cancelled = false
+        void codeStore
+            .ensureCoreOwnedProductMethodsAvailable(CORE_REPO_CONFIG_METHODS)
+            .catch((err: unknown) => {
+                console.warn("[WorkspaceSettingsPage] Failed to load Core repo settings capabilities:", err)
+            })
+            .finally(() => {
+                if (!cancelled) bumpCoreRepoCapabilityRevision((revision) => revision + 1)
+            })
+
+        return () => {
+            cancelled = true
+        }
+    }, [codeStore, coreOwnsRepoHostConfig, useRuntimeProductAPI])
+
     // Reset form state when repo changes (e.g., navigating to different workspace)
     useEffect(() => {
         setName(repo.name)
@@ -44,38 +118,63 @@ export const WorkspaceSettingsPage = observer(({ workspaceId, repo }: WorkspaceS
         if (!inputValue.trim()) {
             setPathInfo(null)
             setGitInfo(null)
+            setIsValidating(false)
             return
         }
 
+        let cancelled = false
+        const candidatePath = inputValue.trim()
         const timer = setTimeout(async () => {
-            if (!isGitApiAvailable()) return
-
             setIsValidating(true)
             setInitGitError(null)
 
             try {
-                // Resolve the path first
-                const resolved = await resolvePath({ path: inputValue.trim() })
+                if (coreOwnsRepoHostConfig) {
+                    const canInspect = await codeStore.canUseProductMethodAfterConnect(OPENADE_METHOD.repoPathInspect)
+                    if (cancelled) return
+                    if (!canInspect) {
+                        setPathInfo(null)
+                        setGitInfo(null)
+                        return
+                    }
+                    const inspected = await codeStore.inspectProductRepoPath({ path: candidatePath })
+                    if (cancelled) return
+                    setPathInfo(pathInfoFromInspection(inspected))
+                    setGitInfo(gitInfoFromInspection(inspected))
+                    return
+                }
+
+                if (!isGitApiAvailable()) {
+                    setPathInfo(null)
+                    setGitInfo(null)
+                    return
+                }
+                const resolved = await resolvePath({ path: candidatePath })
+                if (cancelled) return
                 setPathInfo(resolved)
 
-                // If it's a valid directory, check if it's a git repo
                 if (resolved.exists && resolved.isDirectory) {
                     const git = await isGitDirectory({ directory: resolved.resolvedPath })
+                    if (cancelled) return
                     setGitInfo(git)
                 } else {
                     setGitInfo(null)
                 }
             } catch (error) {
+                if (cancelled) return
                 console.error("[WorkspaceSettingsPage] Error validating path:", error)
                 setPathInfo(null)
                 setGitInfo(null)
             } finally {
-                setIsValidating(false)
+                if (!cancelled) setIsValidating(false)
             }
         }, 300)
 
-        return () => clearTimeout(timer)
-    }, [inputValue])
+        return () => {
+            cancelled = true
+            clearTimeout(timer)
+        }
+    }, [codeStore, coreOwnsRepoHostConfig, inputValue])
 
     const handleBrowse = async () => {
         const selected = await selectDirectory()
@@ -86,6 +185,7 @@ export const WorkspaceSettingsPage = observer(({ workspaceId, repo }: WorkspaceS
 
     const handleInitGit = async () => {
         if (!pathInfo?.resolvedPath) return
+        if (coreOwnsRepoHostConfig) return
 
         setIsInitializingGit(true)
         setInitGitError(null)
@@ -108,10 +208,13 @@ export const WorkspaceSettingsPage = observer(({ workspaceId, repo }: WorkspaceS
 
     const handleSave = async () => {
         if (!canSave) return
+        if (!(await canUseRepoMethodAfterConnect(OPENADE_METHOD.repoUpdate))) return
+        const canInspectPath = await canUseRepoMethodAfterConnect(OPENADE_METHOD.repoPathInspect)
+        if (coreOwnsRepoHostConfig && !canInspectPath) return
 
         setIsSaving(true)
         try {
-            const updates: { name?: string; path?: string } = {}
+            const updates: { name?: string; path?: string; initializeGit?: boolean } = {}
 
             if (name.trim() !== repo.name) {
                 updates.name = name.trim()
@@ -119,17 +222,24 @@ export const WorkspaceSettingsPage = observer(({ workspaceId, repo }: WorkspaceS
 
             const resolvedPath = pathInfo?.resolvedPath || inputValue.trim()
             const isPathChanging = resolvedPath !== repo.path
-            if (isPathChanging) {
+            const shouldInitializeGit = coreOwnsRepoHostConfig && Boolean(showGitWarning)
+            if (isPathChanging || shouldInitializeGit) {
                 updates.path = resolvedPath
             }
+            if (shouldInitializeGit) updates.initializeGit = true
 
             if (Object.keys(updates).length > 0) {
                 await codeStore.repos.updateRepo(workspaceId, updates)
 
+                if (shouldInitializeGit && !isPathChanging && canInspectPath) {
+                    const inspected = await codeStore.inspectProductRepoPath({ path: resolvedPath })
+                    setPathInfo(pathInfoFromInspection(inspected))
+                    setGitInfo(gitInfoFromInspection(inspected))
+                }
+
                 // Reload the page if path changed to reset repo environment and processes
                 if (isPathChanging) {
-                    // Sync to disk before reloading to avoid losing changes (storage uses debounced saves)
-                    await codeStore.syncRepoStore()
+                    await syncLegacyRepoStoreBeforeWorkspaceReload(codeStore, { coreOwnsRepoHostConfig })
                     window.location.reload()
                 }
             }
@@ -139,20 +249,21 @@ export const WorkspaceSettingsPage = observer(({ workspaceId, repo }: WorkspaceS
     }
 
     // Derived state
-    const hasCodeModules = isGitApiAvailable()
+    const canBrowseDirectories = isDirectorySelectionAvailable()
     const hasValidDirectory = pathInfo?.exists && pathInfo?.isDirectory
     const isGitRepo = gitInfo && "isGitDirectory" in gitInfo && gitInfo.isGitDirectory
     const showGitWarning = hasValidDirectory && !isGitRepo && !isValidating
+    const shouldInitializeGitOnSave = coreOwnsRepoHostConfig && Boolean(showGitWarning)
 
     // Check if there are changes
     const resolvedPath = pathInfo?.resolvedPath || inputValue.trim()
     const nameChanged = name.trim() !== repo.name
     const pathChanged = resolvedPath !== repo.path
-    const hasChanges = nameChanged || pathChanged
+    const hasChanges = nameChanged || pathChanged || shouldInitializeGitOnSave
 
     // Can save if: has changes, name is not empty, path is valid (or unchanged)
     const pathIsValid = !pathChanged || (hasValidDirectory && !isValidating)
-    const canSave = hasChanges && name.trim().length > 0 && pathIsValid && !isSaving
+    const canSave = canUpdateRepo && hasChanges && name.trim().length > 0 && pathIsValid && !isSaving
 
     return (
         <ScrollArea className="h-full" viewportClassName="p-0">
@@ -205,7 +316,7 @@ export const WorkspaceSettingsPage = observer(({ workspaceId, repo }: WorkspaceS
                                     placeholder="~/Projects/my-app or /path/to/directory"
                                     className="flex-1 px-4 py-3 bg-input text-base-content border border-border focus:outline-none focus:border-primary transition-all placeholder:text-muted/50"
                                 />
-                                {hasCodeModules && (
+                                {canBrowseDirectories && (
                                     <button
                                         type="button"
                                         onClick={handleBrowse}
@@ -237,31 +348,34 @@ export const WorkspaceSettingsPage = observer(({ workspaceId, repo }: WorkspaceS
                                     <div className="flex-1">
                                         <h3 className="text-sm font-semibold text-base-content mb-1">Not a Git Repository</h3>
                                         <p className="text-sm text-muted mb-3">
-                                            This directory is not under git version control. The agent may make changes that cannot be recovered. We recommend
-                                            initializing a git repository first.
+                                            {coreOwnsRepoHostConfig
+                                                ? "This directory is not under git version control. OpenADE Core will initialize one when you save these settings."
+                                                : "This directory is not under git version control. The agent may make changes that cannot be recovered. We recommend initializing a git repository first."}
                                         </p>
-                                        <button
-                                            type="button"
-                                            onClick={handleInitGit}
-                                            disabled={isInitializingGit}
-                                            className={`px-4 py-2 text-sm font-medium transition-all ${
-                                                isInitializingGit
-                                                    ? "bg-base-200/40 text-base-content/50 cursor-not-allowed"
-                                                    : "bg-base-200 text-base-content hover:bg-base-300 cursor-pointer"
-                                            }`}
-                                        >
-                                            {isInitializingGit ? (
-                                                <>
-                                                    <Loader2 size="1em" className="inline animate-spin mr-2" />
-                                                    Initializing...
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <GitBranch size="1em" className="inline mr-2" />
-                                                    Initialize Git Repository
-                                                </>
-                                            )}
-                                        </button>
+                                        {!coreOwnsRepoHostConfig && (
+                                            <button
+                                                type="button"
+                                                onClick={handleInitGit}
+                                                disabled={isInitializingGit}
+                                                className={`px-4 py-2 text-sm font-medium transition-all ${
+                                                    isInitializingGit
+                                                        ? "bg-base-200/40 text-base-content/50 cursor-not-allowed"
+                                                        : "bg-base-200 text-base-content hover:bg-base-300 cursor-pointer"
+                                                }`}
+                                            >
+                                                {isInitializingGit ? (
+                                                    <>
+                                                        <Loader2 size="1em" className="inline animate-spin mr-2" />
+                                                        Initializing...
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <GitBranch size="1em" className="inline mr-2" />
+                                                        Initialize Git Repository
+                                                    </>
+                                                )}
+                                            </button>
+                                        )}
                                         {initGitError && <p className="mt-2 text-sm text-error">{initGitError}</p>}
                                     </div>
                                 </div>

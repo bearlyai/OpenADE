@@ -37,9 +37,11 @@ export const hasElectronIpc = () => typeof window !== "undefined" && "openadeAPI
 // ============================================================================
 
 let cachedCapabilities: CodeModuleCapabilities | null = null
+let capabilitiesRequestInFlight: Promise<CodeModuleCapabilities> | null = null
 
 export function resetCodeModuleCapabilitiesForTests(): void {
     cachedCapabilities = null
+    capabilitiesRequestInFlight = null
 }
 
 /**
@@ -49,21 +51,28 @@ export function resetCodeModuleCapabilitiesForTests(): void {
  */
 export async function initCodeModuleCapabilities(): Promise<CodeModuleCapabilities> {
     if (cachedCapabilities) return cachedCapabilities
+    if (capabilitiesRequestInFlight) return capabilitiesRequestInFlight
 
     if (!window.openadeAPI) {
         cachedCapabilities = { enabled: false, version: "" }
         return cachedCapabilities
     }
 
-    try {
-        const response = await localRuntimeClient.request<CodeModuleCapabilities>("host/capabilities/read")
-        cachedCapabilities = response
-        return response
-    } catch (error) {
-        console.error("[CapabilitiesAPI] Failed to fetch capabilities:", error)
-        cachedCapabilities = { enabled: false, version: "" }
-        return cachedCapabilities
-    }
+    capabilitiesRequestInFlight = localRuntimeClient
+        .request<CodeModuleCapabilities>("host/capabilities/read")
+        .then((response) => {
+            cachedCapabilities = response
+            return response
+        })
+        .catch((error) => {
+            console.error("[CapabilitiesAPI] Failed to fetch capabilities:", error)
+            cachedCapabilities = { enabled: false, version: "" }
+            return cachedCapabilities
+        })
+        .finally(() => {
+            capabilitiesRequestInFlight = null
+        })
+    return capabilitiesRequestInFlight
 }
 
 /**

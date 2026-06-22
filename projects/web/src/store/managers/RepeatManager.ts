@@ -1,4 +1,6 @@
 import { makeAutoObservable } from "mobx"
+import { OPENADE_METHOD, type OpenADEMethod } from "../../../../openade-client/src"
+import type { OpenADETurnStartRequest } from "../../../../openade-module/src"
 import { extractRawMessageEvents } from "../../electronAPI/harnessEventTypes"
 import type { ActionEvent } from "../../types"
 import type { CodeStore } from "../store"
@@ -112,43 +114,71 @@ export class RepeatManager {
         }
     }
 
+    private shouldUseLegacyTaskStore(): boolean {
+        return !this.store.shouldUseRuntimeProductTaskRoute()
+    }
+
+    private productRuntimeOwnsRepeat(): boolean {
+        return this.store.shouldUseRuntimeProductTaskRoute()
+    }
+
+    private async canUseProductMethodAfterConnect(method: OpenADEMethod): Promise<boolean> {
+        if (!this.productRuntimeOwnsRepeat()) return this.store.canUseProductMethod(method)
+        if (this.store.usesCoreOwnedProductRuntime()) return this.store.canUseProductMethodAfterConnect(method)
+        if (this.store.shouldUseRuntimeProductAPI()) return this.store.canUseProductMethod(method)
+        return this.store.canUseProductMethodAfterConnect(method)
+    }
+
+    private async canReadMcpServersAfterConnect(): Promise<boolean> {
+        if (this.shouldUseLegacyTaskStore()) return true
+        return this.canUseProductMethodAfterConnect(OPENADE_METHOD.settingsMcpServersRead)
+    }
+
     private runNextIteration(): void {
         if (!this.activeTaskId) return
-        this.iterationCount++
-
-        const taskModel = this.store.tasks.getTaskModel(this.activeTaskId)
-        if (!taskModel) {
-            this.cleanup()
-            return
-        }
-
-        const prompt = taskModel.input.value.trim()
-        if (!prompt) {
-            this.cleanup()
-            return
-        }
-
         const taskId = this.activeTaskId
         void (async () => {
             try {
-                if (!this.store.shouldUseRuntimeProductAPI()) {
+                if (!(await this.canUseProductMethodAfterConnect(OPENADE_METHOD.turnStart))) {
+                    if (this.activeTaskId === taskId) this.cleanup()
+                    return
+                }
+                if (this.activeTaskId !== taskId) return
+                this.iterationCount++
+
+                const taskModel = this.store.tasks.getTaskModel(taskId)
+                if (!taskModel) {
+                    if (this.activeTaskId === taskId) this.cleanup()
+                    return
+                }
+
+                const prompt = taskModel.input.value.trim()
+                if (!prompt) {
+                    if (this.activeTaskId === taskId) this.cleanup()
+                    return
+                }
+
+                if (this.shouldUseLegacyTaskStore()) {
                     await this.store.getTaskStore(taskModel.repoId, taskId)
                 }
-                await this.store.startProductTurn({
+                const request: OpenADETurnStartRequest = {
                     repoId: taskModel.repoId,
                     type: "do",
                     input: prompt,
                     images: [],
                     inTaskId: taskId,
-                    enabledMcpServerIds: taskModel.enabledMcpServerIds,
                     harnessId: taskModel.harnessId,
                     modelId: taskModel.model,
                     thinking: taskModel.thinking,
                     fastMode: taskModel.fastMode,
                     label: REPEAT_LABEL,
                     includeComments: false,
-                })
-                if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(taskId)
+                }
+                if ((await this.canReadMcpServersAfterConnect()) && taskModel.enabledMcpServerIds.length > 0) {
+                    request.enabledMcpServerIds = taskModel.enabledMcpServerIds
+                }
+                await this.store.startProductTurn(request)
+                if (this.shouldUseLegacyTaskStore()) await this.store.refreshProductStateAfterTaskMutation(taskId)
             } catch (err) {
                 console.error("[RepeatManager] Failed to start repeat turn:", err)
                 if (this.activeTaskId === taskId) this.cleanup()

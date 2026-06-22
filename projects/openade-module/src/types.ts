@@ -9,7 +9,12 @@ export type OpenADEActionEventSource =
     | { type: "do"; userLabel: string }
     | { type: "ask"; userLabel: string; origin?: "review_follow_up" }
     | { type: "hyperplan"; userLabel: string; strategyId: string }
-    | { type: "review"; userLabel: string; reviewType: "plan" | "work"; userInstructions?: string }
+    | {
+          type: "review"
+          userLabel: string
+          reviewType: "plan" | "work"
+          userInstructions?: string
+      }
 
 export interface OpenADEGitRefs {
     sha: string
@@ -60,7 +65,7 @@ export type OpenADEQueuedTurnStatus = "queued" | "running" | "completed" | "erro
 export interface OpenADEQueuedTurn {
     id: string
     clientRequestId?: string
-    type: "do" | "ask"
+    type: "do" | "ask" | "hyperplan"
     input: string
     status: OpenADEQueuedTurnStatus
     createdAt: string
@@ -73,6 +78,7 @@ export interface OpenADEQueuedTurn {
     label?: string
     includeComments?: boolean
     images?: unknown[]
+    hyperplanStrategy?: OpenADEHyperPlanStrategy
     thinking?: "low" | "med" | "high" | "max"
     fastMode?: boolean
 }
@@ -92,7 +98,7 @@ export interface OpenADEQueuedTurnCancelResult {
 export interface OpenADEQueuedTurnEnqueueRequest extends OpenADEClientRequest {
     repoId: string
     taskId: string
-    type: "do" | "ask"
+    type: "do" | "ask" | "hyperplan"
     input: string
     queuedTurnId?: string
     createdAt?: string
@@ -104,6 +110,7 @@ export interface OpenADEQueuedTurnEnqueueRequest extends OpenADEClientRequest {
     label?: string
     includeComments?: boolean
     images?: unknown[]
+    hyperplanStrategy?: OpenADEHyperPlanStrategy
     thinking?: "low" | "med" | "high" | "max"
     fastMode?: boolean
 }
@@ -144,6 +151,7 @@ export interface OpenADEQueuedTurnReorderResult {
 
 export interface OpenADETaskReadOptions {
     hydrateSessionEvents?: boolean
+    eventLimit?: number
 }
 
 export interface OpenADETaskReadRequest extends OpenADETaskReadOptions {
@@ -161,6 +169,24 @@ export interface OpenADETaskTitleGenerateResult {
     repoId: string
     taskId: string
     title: string
+}
+
+export interface OpenADEProjectSdkCapabilitiesReadRequest {
+    repoId: string
+    taskId?: string
+    harnessId?: string
+}
+
+export interface OpenADESdkPluginCapability {
+    name: string
+    path: string
+}
+
+export interface OpenADESdkCapabilities {
+    slash_commands: string[]
+    skills: string[]
+    plugins: OpenADESdkPluginCapability[]
+    cachedAt?: number
 }
 
 export interface OpenADEReviewStartRequest extends OpenADEClientRequest {
@@ -230,11 +256,30 @@ export interface OpenADERepoCreateRequest extends OpenADEClientRequest {
     path: string
     createdBy: OpenADEUser
     createdAt?: string
+    createDirectory?: boolean
+    initializeGit?: boolean
 }
 
 export interface OpenADERepoCreateResult {
     repoId: string
     createdAt: string
+}
+
+export interface OpenADERepoPathInspectRequest {
+    path: string
+}
+
+export interface OpenADERepoPathInspectResult {
+    path: string
+    resolvedPath: string
+    exists: boolean
+    isDirectory: boolean
+    isGitRepo: boolean
+    repoRoot?: string
+    relativePath?: string
+    mainBranch?: string
+    hasGhCli?: boolean
+    error?: string
 }
 
 export interface OpenADERepoUpdateRequest extends OpenADEClientRequest {
@@ -243,6 +288,7 @@ export interface OpenADERepoUpdateRequest extends OpenADEClientRequest {
     path?: string
     archived?: boolean
     updatedAt?: string
+    initializeGit?: boolean
 }
 
 export interface OpenADERepoDeleteRequest extends OpenADEClientRequest {
@@ -699,6 +745,10 @@ export interface OpenADECronInstallStateReadResult {
     installations: Record<string, OpenADECronInstallState>
 }
 
+export interface OpenADECronInstallStateListResult {
+    repoIds: string[]
+}
+
 export interface OpenADECronInstallStateReplaceRequest extends OpenADEClientRequest {
     repoId: string
     installations: Record<string, OpenADECronInstallState>
@@ -708,6 +758,18 @@ export interface OpenADECronInstallStateReplaceResult {
     repoId: string
     installations: Record<string, OpenADECronInstallState>
     replacedInstallations: number
+}
+
+export interface OpenADECronRunRequest extends OpenADEClientRequest {
+    repoId: string
+    cronId: string
+}
+
+export interface OpenADECronRunResult {
+    repoId: string
+    cronId: string
+    taskId: string
+    installation?: OpenADECronInstallState
 }
 
 export interface OpenADECronDefinitionsConfig {
@@ -1081,6 +1143,7 @@ export type OpenADEMCPHealthStatus = "unknown" | "healthy" | "unhealthy" | "need
 export interface OpenADEMCPOAuthTokens {
     accessToken: string
     refreshToken?: string
+    clientId?: string
     expiresAt?: string
     tokenType: string
 }
@@ -1438,7 +1501,10 @@ export interface OpenADESnapshotPatchIndex {
     files: OpenADESnapshotPatchFile[]
 }
 
-export type OpenADESnapshotEventRecord = Record<string, unknown> & { id: string; type: "snapshot" }
+export type OpenADESnapshotEventRecord = Record<string, unknown> & {
+    id: string
+    type: "snapshot"
+}
 
 export interface OpenADETaskSnapshotPatchReadRequest {
     repoId: string
@@ -1527,6 +1593,7 @@ export interface OpenADETaskResourceInventory {
 export type OpenADETaskResourceInventoryReadResult = OpenADETaskResourceInventory
 
 export interface OpenADETaskMetadataUpdateRequest extends OpenADEClientRequest {
+    repoId?: string
     taskId: string
     title?: string
     closed?: boolean
@@ -1595,6 +1662,12 @@ export interface OpenADETaskPreview {
     lastEventAt?: string
 }
 
+export interface OpenADETaskRuntimeState {
+    isRunning: boolean
+    runtimeIds?: string[]
+    updatedAt?: string
+}
+
 export interface OpenADEProject {
     id: string
     name: string
@@ -1635,8 +1708,14 @@ export interface OpenADETask {
     lastViewedAt?: string
     lastEventAt?: string
     closed?: boolean
-    pullRequest?: { url: string; number?: number; provider: "github" | "gitlab" | "other" }
+    pullRequest?: {
+        url: string
+        number?: number
+        provider: "github" | "gitlab" | "other"
+    }
     unavailableReason?: string
+    preview?: OpenADETaskPreview
+    runtimeState?: OpenADETaskRuntimeState
     events: unknown[]
     comments: unknown[]
 }

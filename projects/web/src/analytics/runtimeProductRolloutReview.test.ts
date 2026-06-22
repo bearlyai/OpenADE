@@ -10,6 +10,17 @@ const readyAppOpened = {
         runtimeProductStoreEnabled: true,
         runtimeProductStoreStatus: "ready",
         runtimeProductStoreHasSnapshot: true,
+        runtimeProductStoreHasProjectProjection: true,
+        runtimeProductStoreRepoCount: 1,
+        runtimeProductStoreTaskPreviewCount: 1,
+        runtimeProductStoreCachedTaskCount: 1,
+        runtimeProductTransport: "core-websocket",
+        coreRolloutStatus: "connected",
+        coreRolloutSource: "managed",
+        coreRolloutReason: "managed-core",
+        coreRolloutAutomatic: true,
+        coreLegacyYjsDocumentsPresent: false,
+        coreLegacyYjsMigrationAccepted: false,
     },
 }
 
@@ -76,6 +87,68 @@ describe("runtime product rollout review", () => {
         expect(result.failures.map((failure) => failure.code)).toEqual(["runtime_product_store_fallback", "runtime_product_store_error"])
     })
 
+    it("passes project-list-only Core projection telemetry without requiring a full snapshot", () => {
+        const result = reviewRuntimeProductRollout(
+            parseTelemetryEvents(
+                JSON.stringify([
+                    {
+                        event: "app_opened",
+                        properties: {
+                            ...readyAppOpened.event_properties,
+                            runtimeProductStoreHasSnapshot: false,
+                            runtimeProductStoreHasProjectProjection: true,
+                            runtimeProductStoreRepoCount: 0,
+                            runtimeProductStoreTaskPreviewCount: 0,
+                            runtimeProductStoreCachedTaskCount: 0,
+                        },
+                    },
+                ])
+            )
+        )
+
+        expect(result.passed).toBe(true)
+        expect(result.summary.readyDefaultOnAppOpenedEvents).toBe(1)
+    })
+
+    it("fails when project projection count telemetry is missing or malformed", () => {
+        const result = reviewRuntimeProductRollout(
+            parseTelemetryEvents(
+                JSON.stringify([
+                    {
+                        event: "app_opened",
+                        properties: {
+                            ...readyAppOpened.event_properties,
+                            runtimeProductStoreRepoCount: -1,
+                            runtimeProductStoreTaskPreviewCount: 1.5,
+                            runtimeProductStoreCachedTaskCount: "1",
+                        },
+                    },
+                    {
+                        event: "app_opened",
+                        properties: {
+                            ...readyAppOpened.event_properties,
+                            runtimeProductStoreRepoCount: 1,
+                            runtimeProductStoreTaskPreviewCount: 1,
+                            runtimeProductStoreCachedTaskCount: undefined,
+                        },
+                    },
+                ])
+            )
+        )
+
+        expect(result.passed).toBe(false)
+        expect(result.summary.readyDefaultOnAppOpenedEvents).toBe(0)
+        expect(result.failures.map((failure) => failure.code)).toEqual([
+            "runtime_product_projection_counts_invalid",
+            "runtime_product_projection_counts_invalid",
+            "missing_ready_default_on_app_opened",
+        ])
+        expect(result.failures[0]?.message).toContain("runtimeProductStoreRepoCount")
+        expect(result.failures[0]?.message).toContain("runtimeProductStoreTaskPreviewCount")
+        expect(result.failures[0]?.message).toContain("runtimeProductStoreCachedTaskCount")
+        expect(result.failures[1]?.message).toContain("runtimeProductStoreCachedTaskCount")
+    })
+
     it("fails when app_opened does not prove the default runtime product path", () => {
         const result = reviewRuntimeProductRollout(
             parseTelemetryEvents(
@@ -89,6 +162,7 @@ describe("runtime product rollout review", () => {
                             runtimeProductStoreEnabled: true,
                             runtimeProductStoreStatus: "loading",
                             runtimeProductStoreHasSnapshot: false,
+                            runtimeProductStoreHasProjectProjection: false,
                         },
                     },
                 ])
@@ -98,9 +172,86 @@ describe("runtime product rollout review", () => {
         expect(result.passed).toBe(false)
         expect(result.failures.map((failure) => failure.code)).toEqual([
             "runtime_product_store_not_ready",
-            "runtime_product_store_missing_snapshot",
+            "runtime_product_store_missing_projection",
+            "runtime_product_transport_not_core",
+            "core_rollout_not_connected",
+            "core_rollout_reason_not_product_core",
             "missing_ready_default_on_app_opened",
         ])
+    })
+
+    it("fails when app_opened is ready through the legacy Electron product runtime instead of Core", () => {
+        const result = reviewRuntimeProductRollout(
+            parseTelemetryEvents(
+                JSON.stringify([
+                    {
+                        event: "app_opened",
+                        properties: {
+                            ...readyAppOpened.event_properties,
+                            runtimeProductTransport: "electron-ipc",
+                            coreRolloutStatus: "legacy-ipc",
+                            coreRolloutSource: "legacy-ipc",
+                            coreRolloutReason: "legacy-yjs-documents",
+                            coreLegacyYjsDocumentsPresent: true,
+                            coreLegacyYjsMigrationAccepted: false,
+                        },
+                    },
+                ])
+            )
+        )
+
+        expect(result.passed).toBe(false)
+        expect(result.failures.map((failure) => failure.code)).toEqual([
+            "runtime_product_transport_not_core",
+            "core_rollout_not_connected",
+            "core_rollout_reason_not_product_core",
+            "missing_ready_default_on_app_opened",
+        ])
+    })
+
+    it("fails when accepted-migration rollout telemetry has inconsistent legacy state", () => {
+        const result = reviewRuntimeProductRollout(
+            parseTelemetryEvents(
+                JSON.stringify([
+                    {
+                        event: "app_opened",
+                        properties: {
+                            ...readyAppOpened.event_properties,
+                            coreRolloutReason: "legacy-yjs-migration-accepted",
+                            coreLegacyYjsDocumentsPresent: false,
+                            coreLegacyYjsMigrationAccepted: false,
+                        },
+                    },
+                ])
+            )
+        )
+
+        expect(result.passed).toBe(false)
+        expect(result.failures.map((failure) => failure.code)).toEqual([
+            "core_rollout_legacy_state_mismatch",
+            "missing_ready_default_on_app_opened",
+        ])
+    })
+
+    it("passes accepted-migration rollout telemetry when Core is connected through managed source", () => {
+        const result = reviewRuntimeProductRollout(
+            parseTelemetryEvents(
+                JSON.stringify([
+                    {
+                        event: "app_opened",
+                        properties: {
+                            ...readyAppOpened.event_properties,
+                            coreRolloutReason: "legacy-yjs-migration-accepted",
+                            coreLegacyYjsDocumentsPresent: true,
+                            coreLegacyYjsMigrationAccepted: true,
+                        },
+                    },
+                ])
+            )
+        )
+
+        expect(result.passed).toBe(true)
+        expect(result.summary.readyDefaultOnAppOpenedEvents).toBe(1)
     })
 
     it("rejects stale desktop shared-screen rollout properties", () => {
@@ -170,5 +321,8 @@ describe("runtime product rollout review", () => {
 
         expect(formatRuntimeProductRolloutReview(result)).toContain("Runtime product rollout review: FAIL")
         expect(formatRuntimeProductRolloutReview(result)).toContain("[missing_app_opened]")
+        expect(formatRuntimeProductRolloutReview(reviewRuntimeProductRollout(parseTelemetryEvents(JSON.stringify([readyAppOpened]))))).toContain(
+            "Ready Core-backed app_opened events: 1"
+        )
     })
 })

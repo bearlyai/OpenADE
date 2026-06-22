@@ -45,6 +45,7 @@ function installRuntimeBackedOpenADEApi(server: RuntimeServer): () => void {
     window.openadeAPI = {
         app: {
             quit: async () => undefined,
+            restart: async () => undefined,
             openUrl: async () => undefined,
             applyUpdate: async () => undefined,
             forceEnableDevTools: async () => undefined,

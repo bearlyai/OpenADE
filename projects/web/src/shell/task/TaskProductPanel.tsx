@@ -1,4 +1,4 @@
-import { Archive, ArrowDown, ArrowUp, CheckCircle2, Loader2, Star, TerminalSquare, Trash2, Wand2 } from "lucide-react"
+import { Archive, ArrowDown, ArrowUp, CheckCircle2, Loader2, Star, TerminalSquare, Trash2, Wand2, X } from "lucide-react"
 import { useEffect, useState } from "react"
 import type {
     OpenADETask,
@@ -17,22 +17,17 @@ import type {
 } from "../../../../openade-module/src"
 import { Terminal } from "../../components/Terminal"
 import type { TaskTerminalProductAccess } from "../../components/terminalSession"
+import { ShortcutBadge } from "../../components/ui/ShortcutBadge"
+import { useMetaKeyPressed } from "../../hooks/useMetaKeyPressed"
+import { getMetaDigitShortcutIndex } from "../../utils/keyboardShortcuts"
 import { type TaskGitCapabilities, TaskGitPanel } from "./TaskGitPanel"
 import { taskCommandLabel } from "./taskCommands"
+import { latestActivePlanEventId } from "./taskPlanState"
+
+const TASK_CANCEL_PLAN_SHORTCUT_LABEL = "8"
+const TASK_CLOSE_SHORTCUT_LABEL = "9"
 
 export type TaskReviewType = "plan" | "work"
-
-export interface TaskProductCapabilities {
-    canUpdateMetadata: boolean
-    canGenerateTitle: boolean
-    canPrepareEnvironment: boolean
-    canStartReview: boolean
-    canCreateComment: boolean
-    canEditComment: boolean
-    canDeleteComment: boolean
-    canCancelQueuedTurn: boolean
-    canReorderQueuedTurns: boolean
-}
 
 export interface OpenADETaskCommentView {
     id: string
@@ -101,9 +96,7 @@ export function TaskProductPanel({
     taskResourcesLoading,
     taskTerminalProductAccess,
     taskGitCapabilities,
-    taskProductCapabilities,
-    canReadTaskResources,
-    canDeleteTask,
+    isRunning,
     isSubmitting,
     onTitleChange,
     onSaveTitle,
@@ -111,6 +104,7 @@ export function TaskProductPanel({
     onPrepareEnvironment,
     onToggleClosed,
     onDeleteTask,
+    onCancelPlan,
     onCommentDraftChange,
     onCreateComment,
     onStartEditComment,
@@ -157,51 +151,105 @@ export function TaskProductPanel({
     taskResourcesLoading: boolean
     taskTerminalProductAccess: TaskTerminalProductAccess | null
     taskGitCapabilities: TaskGitCapabilities
-    taskProductCapabilities: TaskProductCapabilities
-    canReadTaskResources: boolean
-    canDeleteTask: boolean
+    isRunning: boolean
     isSubmitting: boolean
-    onTitleChange: (value: string) => void
-    onSaveTitle: () => void
-    onGenerateTitle: () => void
-    onPrepareEnvironment: () => void
-    onToggleClosed: () => void
-    onDeleteTask: () => void
-    onCommentDraftChange: (value: string) => void
-    onCreateComment: () => void
-    onStartEditComment: (comment: OpenADETaskCommentView) => void
-    onEditingCommentDraftChange: (value: string) => void
-    onSaveComment: (commentId: string) => void
+    onTitleChange?: (value: string) => void
+    onSaveTitle?: () => void
+    onGenerateTitle?: () => void
+    onPrepareEnvironment?: () => void
+    onToggleClosed?: () => void
+    onDeleteTask?: () => void
+    onCancelPlan?: (planEventId: string) => void
+    onCommentDraftChange?: (value: string) => void
+    onCreateComment?: () => void
+    onStartEditComment?: (comment: OpenADETaskCommentView) => void
+    onEditingCommentDraftChange?: (value: string) => void
+    onSaveComment?: (commentId: string) => void
     onCancelEditComment: () => void
-    onDeleteComment: (commentId: string) => void
-    onCancelQueuedTurn: (queuedTurnId: string) => void
-    onReorderQueuedTurns: (queuedTurnIds: string[]) => void
-    onReviewInstructionsChange: (value: string) => void
-    onStartReview: (reviewType: TaskReviewType) => void
-    onRefreshTaskGit: () => void
-    onReadTaskDiff: (file: OpenADETaskGitChangedFile) => void
-    onReadTaskFilePair: (file: OpenADETaskGitChangedFile) => void
-    onReadTaskCommitFiles: (commit: OpenADETaskGitLogEntry) => void
-    onReadTaskCommitFilePatch: (file: OpenADETaskGitChangedFile) => void
-    onReadTaskCommitFileAtTreeish: (file: OpenADETaskGitChangedFile) => void
-    onCommitTaskGit: (message: string) => void
-    onRefreshTaskResources: () => void
+    onDeleteComment?: (commentId: string) => void
+    onCancelQueuedTurn?: (queuedTurnId: string) => void
+    onReorderQueuedTurns?: (queuedTurnIds: string[]) => void
+    onReviewInstructionsChange?: (value: string) => void
+    onStartReview?: (reviewType: TaskReviewType) => void
+    onRefreshTaskGit?: () => void
+    onReadTaskDiff?: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskFilePair?: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskCommitFiles?: (commit: OpenADETaskGitLogEntry) => void
+    onReadTaskCommitFilePatch?: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskCommitFileAtTreeish?: (file: OpenADETaskGitChangedFile) => void
+    onCommitTaskGit?: (message: string) => void
+    onRefreshTaskResources?: () => void
 }) {
     const queuedTurns = task.queuedTurns ?? []
     const hasQueuedTurns = queuedTurns.length > 0
     const activeQueuedTurnIds = queuedTurns.filter((turn) => turn.status === "queued").map((turn) => turn.id)
     const titleChanged = titleDraft.trim().length > 0 && titleDraft.trim() !== task.title
     const [terminalOpen, setTerminalOpen] = useState(false)
-    const showTaskActions = taskProductCapabilities.canUpdateMetadata || canDeleteTask
-    const taskActionColumnCount = taskProductCapabilities.canUpdateMetadata && canDeleteTask ? "grid-cols-2" : "grid-cols-1"
     const hasTaskDeviceEnvironments = task.deviceEnvironments.length > 0
-    const showResourcesSection = canReadTaskResources || taskProductCapabilities.canPrepareEnvironment || hasTaskDeviceEnvironments
+    const canUpdateTitle = Boolean(onTitleChange)
+    const canSaveTitle = Boolean(onSaveTitle)
+    const canGenerateTitle = Boolean(onGenerateTitle)
+    const canPrepareEnvironment = Boolean(onPrepareEnvironment)
+    const canToggleClosed = Boolean(onToggleClosed)
+    const canCancelPlan = Boolean(onCancelPlan)
+    const canStartReview = Boolean(onReviewInstructionsChange && onStartReview)
+    const canCreateComment = Boolean(onCommentDraftChange && onCreateComment)
+    const canEditComment = Boolean(onStartEditComment && onEditingCommentDraftChange && onSaveComment)
+    const canDeleteComment = Boolean(onDeleteComment)
+    const canCancelQueuedTurn = Boolean(onCancelQueuedTurn)
+    const canReorderQueuedTurns = Boolean(onReorderQueuedTurns)
+    const canReadTaskResources = Boolean(onRefreshTaskResources)
+    const visibleTaskResources = canReadTaskResources ? taskResources : null
+    const showResourcesSection = canReadTaskResources || canPrepareEnvironment || hasTaskDeviceEnvironments
+    const activePlanEventId = latestActivePlanEventId(task)
+    const shortcutHintsVisible = useMetaKeyPressed()
+    const showCloseToggle = canToggleClosed && !isRunning
+    const canDeleteTask = Boolean(onDeleteTask)
+    const showTaskActions = showCloseToggle || canDeleteTask
+    const taskActionColumnCount = showCloseToggle && canDeleteTask ? "grid-cols-2" : "grid-cols-1"
+    const showCancelPlan = canCancelPlan && !isRunning && Boolean(activePlanEventId)
 
     useEffect(() => {
         setTerminalOpen(false)
     }, [task.id])
 
+    useEffect(() => {
+        if (!taskTerminalProductAccess) setTerminalOpen(false)
+    }, [taskTerminalProductAccess])
+
+    useEffect(() => {
+        if (editingCommentId && !canEditComment) onCancelEditComment()
+    }, [canEditComment, editingCommentId, onCancelEditComment])
+
+    useEffect(() => {
+        const handleActionShortcut = (event: KeyboardEvent) => {
+            if (isSubmitting) return
+            const shortcutIndex = getMetaDigitShortcutIndex(event)
+            if (shortcutIndex === null) return
+
+            const shortcutNumber = shortcutIndex + 1
+            if (shortcutNumber === Number.parseInt(TASK_CANCEL_PLAN_SHORTCUT_LABEL, 10)) {
+                if (showCancelPlan && activePlanEventId) {
+                    event.preventDefault()
+                    onCancelPlan?.(activePlanEventId)
+                }
+                return
+            }
+
+            if (shortcutNumber === Number.parseInt(TASK_CLOSE_SHORTCUT_LABEL, 10)) {
+                if (showCloseToggle) {
+                    event.preventDefault()
+                    onToggleClosed?.()
+                }
+            }
+        }
+
+        window.addEventListener("keydown", handleActionShortcut, true)
+        return () => window.removeEventListener("keydown", handleActionShortcut, true)
+    }, [activePlanEventId, isSubmitting, onCancelPlan, onToggleClosed, showCancelPlan, showCloseToggle])
+
     const moveQueuedTurn = (queuedTurnId: string, direction: -1 | 1) => {
+        if (!canReorderQueuedTurns) return
         const index = activeQueuedTurnIds.indexOf(queuedTurnId)
         const nextIndex = index + direction
         if (index < 0 || nextIndex < 0 || nextIndex >= activeQueuedTurnIds.length) return
@@ -210,7 +258,7 @@ export function TaskProductPanel({
         if (!turnId) return
         nextIds.splice(index, 1)
         nextIds.splice(nextIndex, 0, turnId)
-        onReorderQueuedTurns(nextIds)
+        onReorderQueuedTurns?.(nextIds)
     }
 
     return (
@@ -221,11 +269,11 @@ export function TaskProductPanel({
                     <input
                         value={titleDraft}
                         aria-label="Task title"
-                        onChange={(event) => onTitleChange(event.target.value)}
-                        disabled={!taskProductCapabilities.canUpdateMetadata}
+                        onChange={(event) => onTitleChange?.(event.target.value)}
+                        disabled={!canUpdateTitle}
                         className="input h-10 min-w-0 flex-1 border border-border bg-base-100 px-2 text-sm"
                     />
-                    {taskProductCapabilities.canUpdateMetadata && (
+                    {canSaveTitle && (
                         <button
                             type="button"
                             onClick={onSaveTitle}
@@ -235,7 +283,7 @@ export function TaskProductPanel({
                             Save
                         </button>
                     )}
-                    {taskProductCapabilities.canGenerateTitle && (
+                    {canGenerateTitle && (
                         <button
                             type="button"
                             onClick={onGenerateTitle}
@@ -249,15 +297,17 @@ export function TaskProductPanel({
                 </div>
                 {showTaskActions && (
                     <div className={`grid gap-2 ${taskActionColumnCount}`}>
-                        {taskProductCapabilities.canUpdateMetadata && (
+                        {showCloseToggle && (
                             <button
                                 type="button"
                                 onClick={onToggleClosed}
                                 disabled={isSubmitting}
-                                className="btn flex h-10 items-center justify-center gap-2 bg-base-300 px-3 text-xs disabled:opacity-50"
+                                aria-keyshortcuts={`Meta+${TASK_CLOSE_SHORTCUT_LABEL}`}
+                                className="btn relative flex h-10 items-center justify-center gap-2 bg-base-300 px-3 text-xs disabled:opacity-50"
                             >
                                 <CheckCircle2 size={14} />
                                 {task.closed ? "Reopen" : "Close"}
+                                <ShortcutBadge label={TASK_CLOSE_SHORTCUT_LABEL} visible={shortcutHintsVisible} variant="corner" />
                             </button>
                         )}
                         {canDeleteTask && (
@@ -275,20 +325,38 @@ export function TaskProductPanel({
                 )}
             </div>
 
-            {taskProductCapabilities.canStartReview && (
+            {showCancelPlan && activePlanEventId && (
+                <div className="flex flex-col gap-2">
+                    <div className="text-xs font-medium uppercase tracking-wide text-muted">Plan</div>
+                    <button
+                        type="button"
+                        onClick={() => onCancelPlan?.(activePlanEventId)}
+                        disabled={isSubmitting}
+                        aria-label="Cancel active plan"
+                        aria-keyshortcuts={`Meta+${TASK_CANCEL_PLAN_SHORTCUT_LABEL}`}
+                        className="btn relative flex h-10 items-center justify-center gap-2 bg-error/10 px-3 text-xs text-error disabled:opacity-50"
+                    >
+                        <X size={14} />
+                        Cancel Plan
+                        <ShortcutBadge label={TASK_CANCEL_PLAN_SHORTCUT_LABEL} visible={shortcutHintsVisible} variant="corner" />
+                    </button>
+                </div>
+            )}
+
+            {canStartReview && (
                 <div className="flex flex-col gap-2">
                     <div className="text-xs font-medium uppercase tracking-wide text-muted">Review</div>
                     <textarea
                         value={reviewInstructions}
                         aria-label="Review instructions"
-                        onChange={(event) => onReviewInstructionsChange(event.target.value)}
+                        onChange={(event) => onReviewInstructionsChange?.(event.target.value)}
                         placeholder="Optional review notes"
                         className="input min-h-16 w-full resize-none border border-border bg-base-100 p-2 text-sm"
                     />
                     <div className="grid grid-cols-2 gap-2">
                         <button
                             type="button"
-                            onClick={() => onStartReview("plan")}
+                            onClick={() => onStartReview?.("plan")}
                             disabled={isSubmitting}
                             className="btn flex h-10 items-center justify-center gap-2 bg-base-300 px-3 text-xs disabled:opacity-50"
                         >
@@ -297,7 +365,7 @@ export function TaskProductPanel({
                         </button>
                         <button
                             type="button"
-                            onClick={() => onStartReview("work")}
+                            onClick={() => onStartReview?.("work")}
                             disabled={isSubmitting}
                             className="btn flex h-10 items-center justify-center gap-2 bg-base-300 px-3 text-xs disabled:opacity-50"
                         >
@@ -339,7 +407,7 @@ export function TaskProductPanel({
                     <div className="flex min-w-0 items-center justify-between gap-2">
                         <div className="text-xs font-medium uppercase tracking-wide text-muted">Resources</div>
                         <div className="flex shrink-0 gap-2">
-                            {taskProductCapabilities.canPrepareEnvironment && (
+                            {canPrepareEnvironment && (
                                 <button
                                     type="button"
                                     onClick={onPrepareEnvironment}
@@ -365,7 +433,7 @@ export function TaskProductPanel({
                             )}
                         </div>
                     </div>
-                    {(taskResources || hasTaskDeviceEnvironments) && (
+                    {(visibleTaskResources || hasTaskDeviceEnvironments) && (
                         <div className="grid grid-cols-2 gap-2">
                             {hasTaskDeviceEnvironments && (
                                 <div className="border border-border bg-base-100/60 p-2">
@@ -373,30 +441,32 @@ export function TaskProductPanel({
                                     <div className="mt-1 text-sm font-medium">{countLabel(task.deviceEnvironments.length, "environment")}</div>
                                 </div>
                             )}
-                            {taskResources && (
+                            {visibleTaskResources && (
                                 <>
                                     <div className="border border-border bg-base-100/60 p-2">
                                         <div className="text-[11px] uppercase text-muted">Snapshots</div>
-                                        <div className="mt-1 text-sm font-medium">{countLabel(taskResources.snapshotIds.length, "patch", "patches")}</div>
+                                        <div className="mt-1 text-sm font-medium">
+                                            {countLabel(visibleTaskResources.snapshotIds.length, "patch", "patches")}
+                                        </div>
                                     </div>
                                     <div className="border border-border bg-base-100/60 p-2">
                                         <div className="text-[11px] uppercase text-muted">Images</div>
-                                        <div className="mt-1 text-sm font-medium">{countLabel(taskResources.images.length, "image")}</div>
+                                        <div className="mt-1 text-sm font-medium">{countLabel(visibleTaskResources.images.length, "image")}</div>
                                     </div>
                                     <div className="border border-border bg-base-100/60 p-2">
                                         <div className="text-[11px] uppercase text-muted">Sessions</div>
-                                        <div className="mt-1 text-sm font-medium">{countLabel(taskResources.sessions.length, "session")}</div>
+                                        <div className="mt-1 text-sm font-medium">{countLabel(visibleTaskResources.sessions.length, "session")}</div>
                                     </div>
                                     <div className="border border-border bg-base-100/60 p-2">
                                         <div className="text-[11px] uppercase text-muted">Runtime</div>
-                                        <div className="mt-1 text-sm font-medium">{taskResources.isRunning ? "Running" : "Idle"}</div>
+                                        <div className="mt-1 text-sm font-medium">{visibleTaskResources.isRunning ? "Running" : "Idle"}</div>
                                     </div>
-                                    {taskResources.worktree && (
+                                    {visibleTaskResources.worktree && (
                                         <div className="col-span-2 min-w-0 border border-border bg-base-100/60 p-2">
                                             <div className="text-[11px] uppercase text-muted">Worktree</div>
-                                            <div className="mt-1 min-w-0 truncate text-sm font-medium">{taskResources.worktree.branchName}</div>
+                                            <div className="mt-1 min-w-0 truncate text-sm font-medium">{visibleTaskResources.worktree.branchName}</div>
                                             <div className="mt-1 min-w-0 truncate text-xs text-muted">
-                                                {taskResources.worktree.sourceBranch} - {branchMergedLabel(taskResources.worktree.branchMerged)}
+                                                {visibleTaskResources.worktree.sourceBranch} - {branchMergedLabel(visibleTaskResources.worktree.branchMerged)}
                                             </div>
                                         </div>
                                     )}
@@ -447,9 +517,9 @@ export function TaskProductPanel({
                                     </div>
                                     <div className="mt-1 line-clamp-2 text-xs text-muted">{turn.input}</div>
                                 </div>
-                                {turn.status === "queued" && (taskProductCapabilities.canReorderQueuedTurns || taskProductCapabilities.canCancelQueuedTurn) && (
+                                {turn.status === "queued" && (canReorderQueuedTurns || canCancelQueuedTurn) && (
                                     <div className="flex shrink-0 gap-1">
-                                        {taskProductCapabilities.canReorderQueuedTurns && (
+                                        {canReorderQueuedTurns && (
                                             <>
                                                 <button
                                                     type="button"
@@ -473,10 +543,10 @@ export function TaskProductPanel({
                                                 </button>
                                             </>
                                         )}
-                                        {taskProductCapabilities.canCancelQueuedTurn && (
+                                        {canCancelQueuedTurn && (
                                             <button
                                                 type="button"
-                                                onClick={() => onCancelQueuedTurn(turn.id)}
+                                                onClick={() => onCancelQueuedTurn?.(turn.id)}
                                                 className="btn h-8 bg-error/10 px-2 text-xs text-error"
                                             >
                                                 Cancel
@@ -492,12 +562,12 @@ export function TaskProductPanel({
 
             <div className="flex flex-col gap-2">
                 <div className="text-xs font-medium uppercase tracking-wide text-muted">Comments</div>
-                {taskProductCapabilities.canCreateComment && (
+                {canCreateComment && (
                     <div className="flex min-w-0 gap-2">
                         <input
                             value={commentDraft}
                             aria-label="New comment"
-                            onChange={(event) => onCommentDraftChange(event.target.value)}
+                            onChange={(event) => onCommentDraftChange?.(event.target.value)}
                             placeholder="Add a comment"
                             className="input h-10 min-w-0 flex-1 border border-border bg-base-100 px-2 text-sm"
                         />
@@ -515,18 +585,18 @@ export function TaskProductPanel({
                     {comments.length === 0 && <div className="border border-border bg-base-100/50 p-2 text-xs text-muted">No comments.</div>}
                     {comments.map((comment) => (
                         <div key={comment.id} className="border border-border bg-base-100/60 p-2">
-                            {editingCommentId === comment.id && taskProductCapabilities.canEditComment ? (
+                            {editingCommentId === comment.id && canEditComment ? (
                                 <div className="flex flex-col gap-2">
                                     <textarea
                                         value={editingCommentDraft}
                                         aria-label="Edit comment"
-                                        onChange={(event) => onEditingCommentDraftChange(event.target.value)}
+                                        onChange={(event) => onEditingCommentDraftChange?.(event.target.value)}
                                         className="input min-h-20 w-full resize-none border border-border bg-base-200 p-2 text-sm"
                                     />
                                     <div className="flex gap-2">
                                         <button
                                             type="button"
-                                            onClick={() => onSaveComment(comment.id)}
+                                            onClick={() => onSaveComment?.(comment.id)}
                                             disabled={!editingCommentDraft.trim()}
                                             className="btn h-8 bg-primary px-3 text-xs text-primary-content disabled:opacity-50"
                                         >
@@ -544,21 +614,21 @@ export function TaskProductPanel({
                                         <div className="min-w-0 truncate text-[11px] text-muted">
                                             {comment.authorLabel ?? comment.updatedAt ?? comment.createdAt ?? "Comment"}
                                         </div>
-                                        {(taskProductCapabilities.canEditComment || taskProductCapabilities.canDeleteComment) && (
+                                        {(canEditComment || canDeleteComment) && (
                                             <div className="flex shrink-0 gap-1">
-                                                {taskProductCapabilities.canEditComment && (
+                                                {canEditComment && (
                                                     <button
                                                         type="button"
-                                                        onClick={() => onStartEditComment(comment)}
+                                                        onClick={() => onStartEditComment?.(comment)}
                                                         className="btn h-7 bg-base-300 px-2 text-[11px]"
                                                     >
                                                         Edit
                                                     </button>
                                                 )}
-                                                {taskProductCapabilities.canDeleteComment && (
+                                                {canDeleteComment && (
                                                     <button
                                                         type="button"
-                                                        onClick={() => onDeleteComment(comment.id)}
+                                                        onClick={() => onDeleteComment?.(comment.id)}
                                                         className="btn h-7 bg-error/10 px-2 text-[11px] text-error"
                                                     >
                                                         Delete

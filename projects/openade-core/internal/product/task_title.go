@@ -27,7 +27,7 @@ type taskTitleAgentEmitter struct {
 }
 
 func (service *Service) handleTaskTitleGenerate(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/title/generate", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskTitleGenerate, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.generateTaskTitle(ctx, raw)
 	})
 }
@@ -87,8 +87,8 @@ func (service *Service) generateTaskTitle(ctx context.Context, raw json.RawMessa
 		return nil, &core.RuntimeError{Code: "not_found", Message: "Task not found"}
 	}
 	notification := map[string]string{"repoId": task.RepoID, "taskId": task.ID}
-	service.runtime.Notify("openade/task/updated", notification)
-	service.runtime.Notify("openade/task/previewChanged", notification)
+	service.runtime.Notify(openADENotificationTaskUpdated, notification)
+	service.runtime.Notify(openADENotificationTaskPreviewChanged, notification)
 	return taskTitleGenerateResultDTO{RepoID: task.RepoID, TaskID: task.ID, Title: title}, nil
 }
 

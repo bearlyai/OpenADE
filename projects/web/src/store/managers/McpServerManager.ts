@@ -10,6 +10,7 @@
  */
 
 import { computed, makeAutoObservable, runInAction } from "mobx"
+import { OPENADE_METHOD, type OpenADEMethod } from "../../../../openade-client/src"
 import type { OpenADEMCPServer } from "../../../../openade-module/src"
 import { track } from "../../analytics"
 import {
@@ -146,6 +147,7 @@ class McpServerRepository {
 class McpOAuthManager {
     private oauthCleanup: (() => void) | null = null
     private tokenRefreshInterval: ReturnType<typeof setInterval> | null = null
+    private initialRefreshTimeout: ReturnType<typeof setTimeout> | null = null
 
     private readonly TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000 // Refresh 5 minutes before expiry
     private readonly TOKEN_REFRESH_INTERVAL_MS = 5 * 60 * 1000 // Check every 5 minutes
@@ -156,7 +158,9 @@ class McpOAuthManager {
         private repo: McpServerRepository,
         private onPendingChange: (serverId: string | null) => void,
         private onTokensReceived: (serverId: string, tokens: McpOAuthTokens) => void,
-        private onServerChanged: (serverId: string) => void
+        private onServerChanged: (serverId: string) => void,
+        private canMutateTokens: () => boolean | Promise<boolean>,
+        private canRunBackgroundRefresh: () => boolean
     ) {}
 
     /**
@@ -193,6 +197,7 @@ class McpOAuthManager {
      * Returns true if flow was started successfully.
      */
     async initiateOAuth(id: string): Promise<boolean> {
+        if (!(await this.canMutateTokens())) return false
         const server = this.repo.getServer(id)
         if (!server || server.transportType !== "http" || !server.url) return false
 
@@ -221,6 +226,10 @@ class McpOAuthManager {
      * Cancel a pending OAuth flow.
      */
     async cancelOAuth(serverId: string | null): Promise<void> {
+        if (!(await this.canMutateTokens())) {
+            this.onPendingChange(null)
+            return
+        }
         if (serverId && isMcpApiAvailable()) {
             await cancelMcpOAuth({ serverId })
         }
@@ -248,6 +257,7 @@ class McpOAuthManager {
      * Returns true if token is valid (refreshed or not expired).
      */
     async refreshTokenIfNeeded(id: string): Promise<boolean> {
+        if (!(await this.canMutateTokens())) return false
         const server = this.repo.getServer(id)
         if (!server || server.transportType !== "http") return false
         if (!server.oauthTokens?.accessToken) return false
@@ -258,14 +268,18 @@ class McpOAuthManager {
             const expiresAt = new Date(server.oauthTokens.expiresAt)
             const bufferTime = new Date(Date.now() + this.TOKEN_REFRESH_BUFFER_MS)
             if (expiresAt > bufferTime) return true // Still valid
+        } else {
+            return true
         }
 
+        if (!server.oauthTokens.clientId) return false
         if (!isMcpApiAvailable()) return false
 
         const result = await refreshMcpOAuthToken({
             serverId: id,
             serverUrl: server.url,
             refreshToken: server.oauthTokens.refreshToken,
+            clientId: server.oauthTokens.clientId,
         })
 
         if (result.success && result.tokens) {
@@ -285,10 +299,17 @@ class McpOAuthManager {
         }, this.TOKEN_REFRESH_INTERVAL_MS)
 
         // Run initial refresh after store sync delay
-        setTimeout(() => this.refreshAllTokens(), this.INITIAL_REFRESH_DELAY_MS)
+        this.initialRefreshTimeout = setTimeout(() => {
+            this.initialRefreshTimeout = null
+            this.refreshAllTokens()
+        }, this.INITIAL_REFRESH_DELAY_MS)
     }
 
     private stopTokenRefreshInterval(): void {
+        if (this.initialRefreshTimeout) {
+            clearTimeout(this.initialRefreshTimeout)
+            this.initialRefreshTimeout = null
+        }
         if (this.tokenRefreshInterval) {
             clearInterval(this.tokenRefreshInterval)
             this.tokenRefreshInterval = null
@@ -296,9 +317,12 @@ class McpOAuthManager {
     }
 
     private async refreshAllTokens(): Promise<void> {
+        if (!this.canRunBackgroundRefresh()) return
         if (!isMcpApiAvailable()) return
 
-        const httpServersWithTokens = this.repo.getAllServers().filter((s) => s.transportType === "http" && s.oauthTokens?.refreshToken)
+        const httpServersWithTokens = this.repo
+            .getAllServers()
+            .filter((s) => s.transportType === "http" && s.oauthTokens?.refreshToken && s.oauthTokens.clientId && s.oauthTokens.expiresAt)
 
         if (httpServersWithTokens.length === 0) return
 
@@ -322,6 +346,7 @@ class McpHealthChecker {
     constructor(
         private repo: McpServerRepository,
         private getStore: () => McpServerStore | null,
+        private canTestConnection: () => boolean | Promise<boolean>,
         private onTestingChange: (serverId: string | null) => void
     ) {}
 
@@ -330,6 +355,8 @@ class McpHealthChecker {
      * Updates health status and returns result.
      */
     async testConnection(id: string): Promise<{ success: boolean; requiresAuth?: boolean }> {
+        if (!(await this.canTestConnection())) return { success: false }
+
         const server = this.repo.getServer(id)
         const store = this.getStore()
         if (!server || !store) return { success: false }
@@ -420,6 +447,8 @@ export class McpServerManager {
     private readonly repo: McpServerRepository
     private readonly oauth: McpOAuthManager
     private readonly health: McpHealthChecker
+    private productSettingsProjectionLoaded = false
+    private productSettingsProjectionInFlight: Promise<void> | null = null
 
     constructor(private store: CodeStore) {
         // Create components with callbacks for state updates
@@ -434,12 +463,15 @@ export class McpServerManager {
             (serverId, tokens) => this.completeOAuth(serverId, tokens),
             (serverId) => {
                 this.persistServerToProductStore(serverId).catch((err) => this.recordProductSettingsError("persist refreshed OAuth tokens", err))
-            }
+            },
+            () => this.canMutateOAuthTokensAfterConnect(),
+            () => this.canRunBackgroundOAuthRefresh()
         )
 
         this.health = new McpHealthChecker(
             this.repo,
             () => this.store.mcpServerStore,
+            () => this.canTestServersAfterConnect(),
             (serverId) =>
                 runInAction(() => {
                     this.testingServerId = serverId
@@ -472,10 +504,70 @@ export class McpServerManager {
         return this.servers.filter((s) => s.enabled)
     }
 
+    get canUpsertServers(): boolean {
+        return this.store.canUseProductMethod(OPENADE_METHOD.settingsMcpServersUpsert)
+    }
+
+    get canDeleteServers(): boolean {
+        return this.store.canUseProductMethod(OPENADE_METHOD.settingsMcpServersDelete)
+    }
+
+    get canTestServers(): boolean {
+        if (!this.productRuntimeOwnsSettings()) return true
+        return this.canReadProductSettings() && this.canUpsertServers
+    }
+
     // ==================== Runtime Product Settings Projection ====================
+
+    private productRuntimeOwnsSettings(): boolean {
+        return this.store.shouldUseRuntimeProductAPI() || this.store.usesCoreOwnedProductRuntime()
+    }
 
     private canUseProductSettings(): boolean {
         return this.store.shouldUseRuntimeProductAPI()
+    }
+
+    private async canUseProductSettingsMethodAfterConnect(method: OpenADEMethod): Promise<boolean> {
+        if (!this.productRuntimeOwnsSettings()) return this.store.canUseProductMethod(method)
+        if (this.store.usesCoreOwnedProductRuntime()) return this.store.canUseProductMethodAfterConnect(method)
+        if (this.store.shouldUseRuntimeProductAPI()) return this.store.canUseProductMethod(method)
+        return this.store.canUseProductMethodAfterConnect(method)
+    }
+
+    private canReadProductSettings(): boolean {
+        return this.canUseProductSettings() && this.store.canUseProductMethod(OPENADE_METHOD.settingsMcpServersRead)
+    }
+
+    private canMutateOAuthTokens(): boolean {
+        if (!this.productRuntimeOwnsSettings()) return true
+        return this.canReadProductSettings() && this.canUpsertServers
+    }
+
+    private async canReadProductSettingsAfterConnect(): Promise<boolean> {
+        if (!this.productRuntimeOwnsSettings()) return true
+        return this.canUseProductSettingsMethodAfterConnect(OPENADE_METHOD.settingsMcpServersRead)
+    }
+
+    private async canMutateOAuthTokensAfterConnect(): Promise<boolean> {
+        if (!this.productRuntimeOwnsSettings()) return true
+        const [canRead, canUpsert] = await Promise.all([
+            this.canUseProductSettingsMethodAfterConnect(OPENADE_METHOD.settingsMcpServersRead),
+            this.canUseProductSettingsMethodAfterConnect(OPENADE_METHOD.settingsMcpServersUpsert),
+        ])
+        return canRead && canUpsert
+    }
+
+    private async canTestServersAfterConnect(): Promise<boolean> {
+        if (!this.productRuntimeOwnsSettings()) return true
+        const [canRead, canUpsert] = await Promise.all([
+            this.canReadProductSettingsAfterConnect(),
+            this.canUseProductSettingsMethodAfterConnect(OPENADE_METHOD.settingsMcpServersUpsert),
+        ])
+        return canRead && canUpsert
+    }
+
+    private canRunBackgroundOAuthRefresh(): boolean {
+        return !this.productRuntimeOwnsSettings()
     }
 
     private recordProductSettingsError(action: string, err: unknown): void {
@@ -487,7 +579,8 @@ export class McpServerManager {
     }
 
     private async persistServerToProductStore(serverId: string): Promise<void> {
-        if (!this.canUseProductSettings()) return
+        if (!this.productRuntimeOwnsSettings()) return
+        if (!(await this.canUseProductSettingsMethodAfterConnect(OPENADE_METHOD.settingsMcpServersUpsert))) return
         const server = this.repo.getServer(serverId)
         if (!server) return
         await this.store.upsertProductMcpServer({ server: localMcpServerToProduct(server) })
@@ -497,7 +590,28 @@ export class McpServerManager {
     }
 
     async initializeProductSettingsProjection(): Promise<void> {
-        if (!this.canUseProductSettings()) return
+        if (this.productSettingsProjectionLoaded) return
+        if (this.productSettingsProjectionInFlight) return this.productSettingsProjectionInFlight
+        const projection = this.loadProductSettingsProjection()
+        this.productSettingsProjectionInFlight = projection
+        try {
+            await projection
+        } finally {
+            runInAction(() => {
+                this.productSettingsProjectionInFlight = null
+            })
+        }
+    }
+
+    private async loadProductSettingsProjection(): Promise<void> {
+        if (!this.productRuntimeOwnsSettings()) return
+        if (!(await this.canUseProductSettingsMethodAfterConnect(OPENADE_METHOD.settingsMcpServersRead))) {
+            runInAction(() => {
+                this.productSettingsProjectionLoaded = true
+            })
+            return
+        }
+        await this.store.ensureRuntimeMcpServerProjectionStore()
 
         runInAction(() => {
             this.serversLoading = true
@@ -507,14 +621,16 @@ export class McpServerManager {
         try {
             const productServers = await this.store.readProductMcpServers()
             const localServers = this.repo.getAllServers()
+            const canReplace = await this.canUseProductSettingsMethodAfterConnect(OPENADE_METHOD.settingsMcpServersReplace)
             const projectedServers =
-                productServers.servers.length === 0 && localServers.length > 0
+                productServers.servers.length === 0 && localServers.length > 0 && canReplace
                     ? (await this.store.replaceProductMcpServers({ servers: localServers.map(localMcpServerToProduct) })).servers
                     : productServers.servers
 
             this.repo.replaceServers(projectedServers.map(productMcpServerToLocal))
             runInAction(() => {
                 this.productSettingsError = null
+                this.productSettingsProjectionLoaded = true
             })
         } catch (err) {
             this.recordProductSettingsError("initialize product settings projection", err)
@@ -536,6 +652,7 @@ export class McpServerManager {
     }
 
     async addHttpServer(input: AddHttpMcpServerInput): Promise<string | null> {
+        if (!(await this.canUseProductSettingsMethodAfterConnect(OPENADE_METHOD.settingsMcpServersUpsert))) return null
         const id = this.repo.addHttpServer(input)
         if (id) {
             track("mcp_server_added", { transportType: "http", isPreset: !!input.presetId })
@@ -545,6 +662,7 @@ export class McpServerManager {
     }
 
     async addStdioServer(input: AddStdioMcpServerInput): Promise<string | null> {
+        if (!(await this.canUseProductSettingsMethodAfterConnect(OPENADE_METHOD.settingsMcpServersUpsert))) return null
         const id = this.repo.addStdioServer(input)
         if (id) {
             track("mcp_server_added", { transportType: "stdio", isPreset: !!input.presetId })
@@ -554,18 +672,20 @@ export class McpServerManager {
     }
 
     async updateServer(id: string, updates: McpServerUpdate): Promise<void> {
+        if (!(await this.canUseProductSettingsMethodAfterConnect(OPENADE_METHOD.settingsMcpServersUpsert))) return
         this.repo.updateServer(id, updates)
         await this.persistServerToProductStore(id)
     }
 
     async deleteServer(id: string): Promise<void> {
-        this.repo.deleteServer(id)
-        if (this.canUseProductSettings()) {
+        if (!(await this.canUseProductSettingsMethodAfterConnect(OPENADE_METHOD.settingsMcpServersDelete))) return
+        if (this.productRuntimeOwnsSettings()) {
             await this.store.deleteProductMcpServer({ serverId: id })
             runInAction(() => {
                 this.productSettingsError = null
             })
         }
+        this.repo.deleteServer(id)
         track("mcp_server_removed")
     }
 
@@ -591,6 +711,14 @@ export class McpServerManager {
     }
 
     private completeOAuth(id: string, tokens: McpOAuthTokens): void {
+        if (!this.canMutateOAuthTokens()) {
+            runInAction(() => {
+                if (this.oauthPendingServerId === id) {
+                    this.oauthPendingServerId = null
+                }
+            })
+            return
+        }
         this.updateServer(id, {
             oauthTokens: tokens,
             healthStatus: "unknown", // Reset so user can re-test
@@ -619,9 +747,7 @@ export class McpServerManager {
     }
 
     async refreshTokenIfNeeded(id: string): Promise<boolean> {
-        const refreshed = await this.oauth.refreshTokenIfNeeded(id)
-        if (refreshed) await this.persistServerToProductStore(id)
-        return refreshed
+        return this.oauth.refreshTokenIfNeeded(id)
     }
 
     isOAuthPending(id: string): boolean {

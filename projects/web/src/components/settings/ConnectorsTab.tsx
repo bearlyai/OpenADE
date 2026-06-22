@@ -8,6 +8,7 @@
 import { useModal } from "@ebay/nice-modal-react"
 import { Plus, Trash2, X } from "lucide-react"
 import { observer } from "mobx-react"
+import { useEffect } from "react"
 import { MCP_PRESETS, MCP_PRESET_IDS, type McpPreset } from "../../constants"
 import type { McpServerItem } from "../../persistence/mcpServerStore"
 import type { CodeStore } from "../../store/store"
@@ -49,11 +50,15 @@ const InstalledRow = observer(
         onRemove,
         onConnect,
         isConnecting,
+        canConnect,
+        canRemove,
     }: {
         server: McpServerItem
         onRemove: () => void
         onConnect: () => void
         isConnecting: boolean
+        canConnect: boolean
+        canRemove: boolean
     }) => {
         const preset = server.presetId ? MCP_PRESETS[server.presetId] : null
         const isHttp = server.transportType === "http"
@@ -75,7 +80,7 @@ const InstalledRow = observer(
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                     {/* Connect/Cancel button for HTTP */}
-                    {isHttp && !isConnected && (
+                    {isHttp && !isConnected && canConnect && (
                         <button
                             type="button"
                             onClick={onConnect}
@@ -93,14 +98,16 @@ const InstalledRow = observer(
                     )}
 
                     {/* Remove button */}
-                    <button
-                        type="button"
-                        onClick={onRemove}
-                        className="btn btn-xs btn-ghost btn-square text-muted hover:text-error hover:bg-error/10 opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="Remove"
-                    >
-                        <Trash2 size={12} />
-                    </button>
+                    {canRemove && (
+                        <button
+                            type="button"
+                            onClick={onRemove}
+                            className="btn btn-xs btn-ghost btn-square text-muted hover:text-error hover:bg-error/10 opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Remove"
+                        >
+                            <Trash2 size={12} />
+                        </button>
+                    )}
                 </div>
             </div>
         )
@@ -172,21 +179,29 @@ const SectionLabel = ({ title, count }: { title: string; count?: number }) => (
 export const ConnectorsTab = observer(({ store }: ConnectorsTabProps) => {
     const addModal = useModal(AddMcpServerModal)
     const deleteConfirmModal = useModal(ModalConfirm)
+    const mcpServers = store.mcpServers
 
-    const installedServers = store.mcpServers.servers
+    useEffect(() => {
+        void mcpServers.initializeProductSettingsProjection()
+    }, [mcpServers])
+
+    const installedServers = mcpServers.servers
     const installedPresetIds = new Set(installedServers.filter((s) => s.presetId).map((s) => s.presetId))
     const availablePresets = MCP_PRESET_IDS.filter((id) => !installedPresetIds.has(id)).map((id) => MCP_PRESETS[id])
+    const canUpsertServers = mcpServers.canUpsertServers
+    const canDeleteServers = mcpServers.canDeleteServers
 
     const handleInstall = async (preset: McpPreset) => {
+        if (!canUpsertServers) return
         try {
             if (preset.transportType === "http") {
-                await store.mcpServers.addHttpServer({
+                await mcpServers.addHttpServer({
                     name: preset.name,
                     url: preset.url ?? "",
                     presetId: preset.id,
                 })
             } else {
-                await store.mcpServers.addStdioServer({
+                await mcpServers.addStdioServer({
                     name: preset.name,
                     command: preset.command ?? "",
                     args: preset.args,
@@ -199,11 +214,12 @@ export const ConnectorsTab = observer(({ store }: ConnectorsTabProps) => {
     }
 
     const handleRemove = (server: McpServerItem) => {
+        if (!canDeleteServers) return
         deleteConfirmModal.show({
             title: "Remove Connector",
             description: `Are you sure you want to remove "${server.name}"? This will disconnect any active sessions.`,
             onConfirm: () => {
-                store.mcpServers.deleteServer(server.id).catch((err) => {
+                mcpServers.deleteServer(server.id).catch((err) => {
                     console.error("[ConnectorsTab] Failed to remove MCP server:", err)
                 })
             },
@@ -212,15 +228,17 @@ export const ConnectorsTab = observer(({ store }: ConnectorsTabProps) => {
     }
 
     const handleConnect = async (server: McpServerItem) => {
-        if (store.mcpServers.isOAuthPending(server.id)) {
-            await store.mcpServers.cancelOAuth(server.id)
+        if (!canUpsertServers) return
+        if (mcpServers.isOAuthPending(server.id)) {
+            await mcpServers.cancelOAuth(server.id)
         } else {
-            await store.mcpServers.initiateOAuth(server.id)
+            await mcpServers.initiateOAuth(server.id)
         }
     }
 
     const handleAddCustom = () => {
-        addModal.show({ manager: store.mcpServers })
+        if (!canUpsertServers) return
+        addModal.show({ manager: mcpServers })
     }
 
     return (
@@ -242,7 +260,9 @@ export const ConnectorsTab = observer(({ store }: ConnectorsTabProps) => {
                                 server={server}
                                 onRemove={() => handleRemove(server)}
                                 onConnect={() => handleConnect(server)}
-                                isConnecting={store.mcpServers.isOAuthPending(server.id)}
+                                isConnecting={mcpServers.isOAuthPending(server.id)}
+                                canConnect={canUpsertServers}
+                                canRemove={canDeleteServers}
                             />
                         ))}
                     </div>
@@ -250,7 +270,7 @@ export const ConnectorsTab = observer(({ store }: ConnectorsTabProps) => {
             )}
 
             {/* Available connectors */}
-            {availablePresets.length > 0 && (
+            {availablePresets.length > 0 && canUpsertServers && (
                 <section>
                     <SectionLabel title={installedServers.length > 0 ? "Available" : "Get Started"} />
                     <div className="grid grid-cols-1 gap-2">
@@ -262,10 +282,12 @@ export const ConnectorsTab = observer(({ store }: ConnectorsTabProps) => {
             )}
 
             {/* Custom server */}
-            <section>
-                <SectionLabel title="Custom" />
-                <AddCustomButton onClick={handleAddCustom} />
-            </section>
+            {canUpsertServers && (
+                <section>
+                    <SectionLabel title="Custom" />
+                    <AddCustomButton onClick={handleAddCustom} />
+                </section>
+            )}
         </div>
     )
 })

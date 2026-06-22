@@ -108,7 +108,7 @@ type taskTerminalState struct {
 }
 
 func (service *Service) handleTaskTerminalStart(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/terminal/start", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskTerminalStart, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			RepoID string `json:"repoId"`
 			TaskID string `json:"taskId"`
@@ -154,7 +154,7 @@ func (service *Service) handleTaskTerminalReconnect(ctx context.Context, _ *core
 }
 
 func (service *Service) handleTaskTerminalWrite(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/terminal/write", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskTerminalWrite, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			RepoID     string `json:"repoId"`
 			TaskID     string `json:"taskId"`
@@ -176,7 +176,7 @@ func (service *Service) handleTaskTerminalWrite(ctx context.Context, _ *core.Con
 }
 
 func (service *Service) handleTaskTerminalResize(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/terminal/resize", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskTerminalResize, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			RepoID     string `json:"repoId"`
 			TaskID     string `json:"taskId"`
@@ -199,7 +199,7 @@ func (service *Service) handleTaskTerminalResize(ctx context.Context, _ *core.Co
 }
 
 func (service *Service) handleTaskTerminalStop(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/terminal/stop", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskTerminalStop, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			RepoID     string `json:"repoId"`
 			TaskID     string `json:"taskId"`

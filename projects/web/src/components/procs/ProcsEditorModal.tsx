@@ -4,8 +4,9 @@ import { Cron } from "croner"
 import { AlertTriangle, Clock3, FileText, Loader2, Plus, Server, Sparkles, Trash2, Wand2 } from "lucide-react"
 import { observer } from "mobx-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { OPENADE_METHOD } from "../../../../openade-client/src"
 import { parseEditableProcsFile, serializeProcsFile } from "../../../../openade-module/src/procs"
-import { runStructuredHarnessQuery } from "../../electronAPI/harnessQuery"
+import { type HarnessId, runStructuredHarnessQuery } from "../../electronAPI/harnessQuery"
 import {
     type CronInput,
     type EditableProcsFile,
@@ -24,7 +25,7 @@ import type { ProductProjectScope } from "../../store/productProjectProcessAcces
 import { readProcsResultFromProductProcesses } from "../../store/projectProcessReadResult"
 import type { CodeStore } from "../../store/store"
 import { Modal } from "../ui/Modal"
-import { CronAssistSchema, type ProcsRecommendations, ProcsRecommendationsSchema } from "./procsAssistSchemas"
+import { CronAssistSchema, type CronAssistResult, type ProcsRecommendations, ProcsRecommendationsSchema } from "./procsAssistSchemas"
 
 type EditorTab = "processes" | "crons" | "suggestions" | "raw"
 
@@ -72,6 +73,8 @@ const TAB_CONFIG: Array<{ id: EditorTab; label: string; icon: typeof Server }> =
     { id: "raw", label: "Raw", icon: FileText },
 ]
 
+const LOCAL_ASSIST_UNAVAILABLE_MESSAGE = "Process config suggestions are not available from this runtime"
+
 function normalizeRelativePath(value: string): string {
     return value.replace(/\\/g, "/").replace(/^\.\/+/, "")
 }
@@ -88,6 +91,16 @@ function toFileOptions(result: ReadProcsResult): ConfigFileOption[] {
         filePath: joinFsPath(result.repoRoot, config.relativePath),
         relativePath: normalizeRelativePath(config.relativePath),
     }))
+}
+
+function emptyProcsReadResult(searchPath: string): ReadProcsResult {
+    return {
+        repoRoot: searchPath,
+        searchRoot: searchPath,
+        isWorktree: false,
+        configs: [],
+        errors: [],
+    }
 }
 
 function getDraftLabel(value: string, kind: "process" | "cron", index: number): string {
@@ -136,15 +149,19 @@ function validateDraft(processes: ProcessInput[], crons: CronInput[]): string[] 
 }
 
 export async function saveProcsEditorFile(args: {
-    codeStore: Pick<CodeStore, "listProductProjectProcesses" | "writeProductProjectFile">
+    codeStore: Pick<CodeStore, "canUseProductMethod" | "listProductProjectProcesses" | "writeProductProjectFile">
     selectedFilePath: string
     relativePath: string
     processes: ProcessInput[]
     crons: CronInput[]
     searchPath: string
     productScope?: ProductProjectScope | null
+    productRuntimeOwnsProjectConfig?: boolean
 }): Promise<ReadProcsResult | null> {
     if (args.productScope) {
+        if (!args.codeStore.canUseProductMethod(OPENADE_METHOD.projectFileWrite)) {
+            throw new Error("Project file writes are not available from this runtime")
+        }
         const rawContentToSave = serializeProcsFile({ processes: args.processes, crons: args.crons })
         await args.codeStore.writeProductProjectFile({
             repoId: args.productScope.repoId,
@@ -154,11 +171,16 @@ export async function saveProcsEditorFile(args: {
             content: rawContentToSave,
             createDirs: true,
         })
+        if (!args.codeStore.canUseProductMethod(OPENADE_METHOD.projectProcessList)) return null
         const processesResult = await args.codeStore.listProductProjectProcesses({
             repoId: args.productScope.repoId,
             taskId: args.productScope.taskId,
         })
         return readProcsResultFromProductProcesses(processesResult)
+    }
+
+    if (args.productRuntimeOwnsProjectConfig) {
+        throw new Error("Project process config scope is not available from this runtime")
     }
 
     const saveResult = await saveEditableProcsFile({
@@ -189,11 +211,13 @@ function parseEditableResult(content: string, relativePath: string): { processes
 }
 
 export async function readProcsEditorConfigs(args: {
-    codeStore: Pick<CodeStore, "listProductProjectProcesses">
+    codeStore: Pick<CodeStore, "canUseProductMethod" | "listProductProjectProcesses">
     searchPath: string
     productScope?: ProductProjectScope | null
+    productRuntimeOwnsProjectConfig?: boolean
 }): Promise<ReadProcsResult> {
     if (args.productScope) {
+        if (!args.codeStore.canUseProductMethod(OPENADE_METHOD.projectProcessList)) return emptyProcsReadResult(args.searchPath)
         const result = await args.codeStore.listProductProjectProcesses({
             repoId: args.productScope.repoId,
             taskId: args.productScope.taskId,
@@ -201,17 +225,23 @@ export async function readProcsEditorConfigs(args: {
         return readProcsResultFromProductProcesses(result)
     }
 
+    if (args.productRuntimeOwnsProjectConfig) return emptyProcsReadResult(args.searchPath)
+
     return readProcs(args.searchPath)
 }
 
 export async function loadProcsEditorFile(args: {
-    codeStore: Pick<CodeStore, "readProductProjectFile">
+    codeStore: Pick<CodeStore, "canUseProductMethod" | "readProductProjectFile">
     filePath: string
     repoRoot: string
     searchPath: string
     productScope?: ProductProjectScope | null
+    productRuntimeOwnsProjectConfig?: boolean
 }): Promise<EditableProcsFile> {
     if (args.productScope) {
+        if (!args.codeStore.canUseProductMethod(OPENADE_METHOD.projectFileRead)) {
+            throw new Error("Project file reads are not available from this runtime")
+        }
         const relativePath = relativePathFromFilePath(args.repoRoot, args.filePath)
         const file = await args.codeStore.readProductProjectFile({
             repoId: args.productScope.repoId,
@@ -229,6 +259,10 @@ export async function loadProcsEditorFile(args: {
             crons: parsed.crons,
             rawContent,
         }
+    }
+
+    if (args.productRuntimeOwnsProjectConfig) {
+        throw new Error("Project process config scope is not available from this runtime")
     }
 
     return loadEditableProcsFile(args.filePath, args.searchPath)
@@ -250,6 +284,96 @@ export async function serializeProcsEditorRaw(args: {
 }): Promise<string> {
     if (args.productScope) return serializeProcsFile({ processes: args.processes, crons: args.crons })
     return serializeEditableProcs({ processes: args.processes, crons: args.crons })
+}
+
+export function canUseLocalProcsEditorAssist(args: { productRuntimeOwnsProjectConfig?: boolean }): boolean {
+    return args.productRuntimeOwnsProjectConfig !== true
+}
+
+export async function runProcsEditorCronAssist(args: {
+    canUseLocalAssist: boolean
+    schedule: string
+    harnessId: HarnessId
+    searchPath: string
+}): Promise<CronAssistResult> {
+    if (!args.canUseLocalAssist) throw new Error(LOCAL_ASSIST_UNAVAILABLE_MESSAGE)
+
+    return runStructuredHarnessQuery({
+        prompt: `Convert this schedule request to a 5-field cron expression:\n\n${args.schedule}\n\nReturn a concise summary and any assumptions.`,
+        options: {
+            harnessId: args.harnessId,
+            cwd: args.searchPath,
+            mode: "read-only",
+            model: "haiku",
+            disablePlanningTools: true,
+        },
+        schema: {
+            type: "object",
+            properties: {
+                schedule: { type: "string" },
+                summary: { type: "string" },
+                assumptions: { type: "array", items: { type: "string" } },
+            },
+            required: ["schedule", "summary"],
+        },
+        parse: (value) => CronAssistSchema.parse(value),
+    })
+}
+
+export async function runProcsEditorRecommendations(args: {
+    canUseLocalAssist: boolean
+    currentToml: string
+    harnessId: HarnessId
+    searchPath: string
+}): Promise<ProcsRecommendations> {
+    if (!args.canUseLocalAssist) throw new Error(LOCAL_ASSIST_UNAVAILABLE_MESSAGE)
+
+    return runStructuredHarnessQuery({
+        prompt: `Analyze this repository and suggest practical openade processes and cron jobs.\n\nCurrent config:\n${args.currentToml || "(empty)"}`,
+        options: {
+            harnessId: args.harnessId,
+            cwd: args.searchPath,
+            mode: "read-only",
+            model: "haiku",
+            disablePlanningTools: true,
+        },
+        schema: {
+            type: "object",
+            properties: {
+                processes: {
+                    type: "array",
+                    items: {
+                        type: "object",
+                        properties: {
+                            name: { type: "string" },
+                            type: { type: "string", enum: ["setup", "daemon", "task", "check"] },
+                            command: { type: "string" },
+                            workDir: { type: "string" },
+                            url: { type: "string" },
+                            reason: { type: "string" },
+                        },
+                        required: ["name", "type", "command", "reason"],
+                    },
+                },
+                crons: {
+                    type: "array",
+                    items: {
+                        type: "object",
+                        properties: {
+                            name: { type: "string" },
+                            schedule: { type: "string" },
+                            type: { type: "string", enum: ["plan", "do", "ask", "hyperplan"] },
+                            prompt: { type: "string" },
+                            reason: { type: "string" },
+                        },
+                        required: ["name", "schedule", "type", "prompt", "reason"],
+                    },
+                },
+            },
+            required: ["processes", "crons"],
+        },
+        parse: (value) => ProcsRecommendationsSchema.parse(value),
+    })
 }
 
 export const ProcsEditorModal = NiceModal.create(
@@ -292,13 +416,26 @@ export const ProcsEditorModal = NiceModal.create(
             const repoRoot = discoverResult?.repoRoot ?? searchPath
             const hasMultipleConfigs = configOptions.length > 1
             const validationErrors = useMemo(() => validateDraft(processes, crons), [processes, crons])
+            const productRuntimeOwnsProjectConfig = codeStore.shouldUseRuntimeProductTaskRoute()
+            const canSaveProductFile = productScope
+                ? codeStore.canUseProductMethod(OPENADE_METHOD.projectFileWrite)
+                : !productRuntimeOwnsProjectConfig
+            const canUseLocalAssist = canUseLocalProcsEditorAssist({ productRuntimeOwnsProjectConfig })
+            const visibleTabs = useMemo(() => TAB_CONFIG.filter((tab) => tab.id !== "suggestions" || canUseLocalAssist), [canUseLocalAssist])
 
             const loadFile = useCallback(
                 async (filePath: string, discoveredRepoRoot = repoRoot) => {
                     setLoadingFile(true)
                     setError(null)
                     try {
-                        const editable = await loadProcsEditorFile({ codeStore, filePath, repoRoot: discoveredRepoRoot, searchPath, productScope })
+                        const editable = await loadProcsEditorFile({
+                            codeStore,
+                            filePath,
+                            repoRoot: discoveredRepoRoot,
+                            searchPath,
+                            productScope,
+                            productRuntimeOwnsProjectConfig,
+                        })
                         setSelectedFilePath(filePath)
                         setRelativePath(normalizeRelativePath(editable.relativePath))
                         setProcesses(editable.processes)
@@ -314,7 +451,7 @@ export const ProcsEditorModal = NiceModal.create(
                         setLoadingFile(false)
                     }
                 },
-                [codeStore, repoRoot, searchPath, productScope]
+                [codeStore, repoRoot, searchPath, productScope, productRuntimeOwnsProjectConfig]
             )
 
             useEffect(() => {
@@ -324,7 +461,7 @@ export const ProcsEditorModal = NiceModal.create(
                     setDiscovering(true)
                     setError(null)
                     try {
-                        const result = await readProcsEditorConfigs({ codeStore, searchPath, productScope })
+                        const result = await readProcsEditorConfigs({ codeStore, searchPath, productScope, productRuntimeOwnsProjectConfig })
                         if (cancelled) return
 
                         const options = toFileOptions(result)
@@ -365,7 +502,7 @@ export const ProcsEditorModal = NiceModal.create(
                 return () => {
                     cancelled = true
                 }
-            }, [codeStore, searchPath, productScope, initialFilePath, loadFile])
+            }, [codeStore, searchPath, productScope, productRuntimeOwnsProjectConfig, initialFilePath, loadFile])
 
             const selectedOption = useMemo(
                 () => configOptions.find((option) => option.filePath === selectedFilePath) ?? null,
@@ -428,6 +565,7 @@ export const ProcsEditorModal = NiceModal.create(
             const switchTab = useCallback(
                 async (nextTab: EditorTab) => {
                     if (nextTab === activeTab) return
+                    if (nextTab === "suggestions" && !canUseLocalAssist) return
 
                     if (activeTab === "raw" && rawMode === "edit") {
                         const ok = await parseRawAndApply()
@@ -447,8 +585,12 @@ export const ProcsEditorModal = NiceModal.create(
 
                     setActiveTab(nextTab)
                 },
-                [activeTab, rawMode, parseRawAndApply, processes, crons, productScope]
+                [activeTab, rawMode, parseRawAndApply, processes, crons, productScope, canUseLocalAssist]
             )
+
+            useEffect(() => {
+                if (activeTab === "suggestions" && !canUseLocalAssist) setActiveTab("processes")
+            }, [activeTab, canUseLocalAssist])
 
             const handleCreateNewFile = useCallback(() => {
                 const dir = normalizeRelativePath(newFileDir.trim()).replace(/\/+$/, "")
@@ -482,6 +624,10 @@ export const ProcsEditorModal = NiceModal.create(
                     setError("Choose a config file first")
                     return
                 }
+                if (!canSaveProductFile) {
+                    setError("Project file writes are not available from this runtime")
+                    return
+                }
 
                 setSaving(true)
                 setError(null)
@@ -511,6 +657,7 @@ export const ProcsEditorModal = NiceModal.create(
                         crons: nextCrons,
                         searchPath,
                         productScope,
+                        productRuntimeOwnsProjectConfig,
                     })
 
                     if (nextReadResult) {
@@ -555,6 +702,7 @@ export const ProcsEditorModal = NiceModal.create(
                 context,
                 productScope,
                 productAccess,
+                canSaveProductFile,
                 onSaved,
                 modal,
             ])
@@ -567,25 +715,11 @@ export const ProcsEditorModal = NiceModal.create(
                     setCronAssistLoadingIndex(index)
                     setCronAssistError(null)
                     try {
-                        const response = await runStructuredHarnessQuery({
-                            prompt: `Convert this schedule request to a 5-field cron expression:\n\n${current.schedule}\n\nReturn a concise summary and any assumptions.`,
-                            options: {
-                                harnessId: codeStore.defaultHarnessId,
-                                cwd: searchPath,
-                                mode: "read-only",
-                                model: "haiku",
-                                disablePlanningTools: true,
-                            },
-                            schema: {
-                                type: "object",
-                                properties: {
-                                    schedule: { type: "string" },
-                                    summary: { type: "string" },
-                                    assumptions: { type: "array", items: { type: "string" } },
-                                },
-                                required: ["schedule", "summary"],
-                            },
-                            parse: (value) => CronAssistSchema.parse(value),
+                        const response = await runProcsEditorCronAssist({
+                            canUseLocalAssist,
+                            schedule: current.schedule,
+                            harnessId: codeStore.defaultHarnessId,
+                            searchPath,
                         })
 
                         setCrons((prev) => prev.map((cron, i) => (i === index ? { ...cron, schedule: response.schedule } : cron)))
@@ -597,7 +731,7 @@ export const ProcsEditorModal = NiceModal.create(
                         setCronAssistLoadingIndex(null)
                     }
                 },
-                [crons, codeStore.defaultHarnessId, searchPath]
+                [crons, canUseLocalAssist, codeStore.defaultHarnessId, searchPath]
             )
 
             const runRecommendations = useCallback(async () => {
@@ -605,51 +739,11 @@ export const ProcsEditorModal = NiceModal.create(
                 setRecommendationsError(null)
                 try {
                     const currentToml = await serializeProcsEditorRaw({ processes, crons, productScope })
-                    const response = await runStructuredHarnessQuery({
-                        prompt: `Analyze this repository and suggest practical openade processes and cron jobs.\n\nCurrent config:\n${currentToml || "(empty)"}`,
-                        options: {
-                            harnessId: codeStore.defaultHarnessId,
-                            cwd: searchPath,
-                            mode: "read-only",
-                            model: "haiku",
-                            disablePlanningTools: true,
-                        },
-                        schema: {
-                            type: "object",
-                            properties: {
-                                processes: {
-                                    type: "array",
-                                    items: {
-                                        type: "object",
-                                        properties: {
-                                            name: { type: "string" },
-                                            type: { type: "string", enum: ["setup", "daemon", "task", "check"] },
-                                            command: { type: "string" },
-                                            workDir: { type: "string" },
-                                            url: { type: "string" },
-                                            reason: { type: "string" },
-                                        },
-                                        required: ["name", "type", "command", "reason"],
-                                    },
-                                },
-                                crons: {
-                                    type: "array",
-                                    items: {
-                                        type: "object",
-                                        properties: {
-                                            name: { type: "string" },
-                                            schedule: { type: "string" },
-                                            type: { type: "string", enum: ["plan", "do", "ask", "hyperplan"] },
-                                            prompt: { type: "string" },
-                                            reason: { type: "string" },
-                                        },
-                                        required: ["name", "schedule", "type", "prompt", "reason"],
-                                    },
-                                },
-                            },
-                            required: ["processes", "crons"],
-                        },
-                        parse: (value) => ProcsRecommendationsSchema.parse(value),
+                    const response = await runProcsEditorRecommendations({
+                        canUseLocalAssist,
+                        currentToml,
+                        harnessId: codeStore.defaultHarnessId,
+                        searchPath,
                     })
 
                     setRecommendations(response)
@@ -658,7 +752,7 @@ export const ProcsEditorModal = NiceModal.create(
                 } finally {
                     setRecommendationsLoading(false)
                 }
-            }, [processes, crons, productScope, codeStore.defaultHarnessId, searchPath])
+            }, [processes, crons, productScope, canUseLocalAssist, codeStore.defaultHarnessId, searchPath])
 
             const footer = (
                 <div className="flex items-center justify-between gap-3">
@@ -683,7 +777,7 @@ export const ProcsEditorModal = NiceModal.create(
                             type="button"
                             className="btn px-3 py-1.5 text-sm bg-primary text-primary-content hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             onClick={handleSave}
-                            disabled={saving || loadingFile || discovering || !selectedFilePath || validationErrors.length > 0}
+                            disabled={saving || loadingFile || discovering || !selectedFilePath || validationErrors.length > 0 || !canSaveProductFile}
                         >
                             {saving ? "Saving..." : "Save"}
                         </button>
@@ -911,7 +1005,7 @@ export const ProcsEditorModal = NiceModal.create(
                                 )}
 
                                 <div className="flex items-center gap-1 border-b border-border pb-2 flex-wrap">
-                                    {TAB_CONFIG.map((tab) => (
+                                    {visibleTabs.map((tab) => (
                                         <button
                                             key={tab.id}
                                             type="button"
@@ -1120,8 +1214,8 @@ export const ProcsEditorModal = NiceModal.create(
                                                                 type="button"
                                                                 className="btn h-9 w-9 text-muted hover:text-primary hover:bg-primary/10"
                                                                 onClick={() => void runCronAssist(index)}
-                                                                title="Generate schedule"
-                                                                disabled={cronAssistLoadingIndex === index}
+                                                                title={canUseLocalAssist ? "Generate schedule" : LOCAL_ASSIST_UNAVAILABLE_MESSAGE}
+                                                                disabled={!canUseLocalAssist || cronAssistLoadingIndex === index}
                                                             >
                                                                 {cronAssistLoadingIndex === index ? (
                                                                     <Loader2 size={13} className="animate-spin" />

@@ -1,8 +1,10 @@
 import type http from "node:http"
 import { randomUUID } from "node:crypto"
 import { URL } from "node:url"
+import { COMPANION_RUNTIME_NOTIFICATION_PERMISSIONS, COMPANION_RUNTIME_PERMISSIONS } from "../../../../shared/companion/src"
 import { WebSocket, WebSocketServer, type RawData } from "ws"
 import { authenticateDevice } from "./auth"
+import { attachCoreRuntimeSocketProxy, isCoreRuntimeBridgeEnabled } from "./coreBridge"
 import { getRuntimeServer } from "./runtimeGateway"
 import { registerRemoteDeviceStreamCloser } from "./runtimeDeviceStreams"
 
@@ -29,12 +31,15 @@ function rawText(data: RawData): string {
 export function attachRuntimeSocketServer(server: http.Server): RuntimeSocketServer {
     const socketServer = new WebSocketServer({ noServer: true })
     const socketsByDeviceId = new Map<string, Set<WebSocket>>()
+    const coreProxySockets = new Set<WebSocket>()
     const closeFromThisServer = (deviceId?: string) => {
         if (deviceId) {
             closeDeviceSockets(socketsByDeviceId, deviceId)
             return
         }
         closeAllDeviceSockets(socketsByDeviceId)
+        closeSockets(coreProxySockets)
+        coreProxySockets.clear()
     }
     const unregisterStreamCloser = registerRemoteDeviceStreamCloser(closeFromThisServer)
 
@@ -48,6 +53,16 @@ export function attachRuntimeSocketServer(server: http.Server): RuntimeSocketSer
     server.on("upgrade", (request, socket, head) => {
         const url = new URL(request.url ?? "/", "http://127.0.0.1")
         if (url.pathname !== "/v1/runtime") return
+
+        if (isCoreRuntimeBridgeEnabled()) {
+            socketServer.handleUpgrade(request, socket, head, (webSocket) => {
+                coreProxySockets.add(webSocket)
+                webSocket.once("close", () => coreProxySockets.delete(webSocket))
+                webSocket.once("error", () => coreProxySockets.delete(webSocket))
+                attachCoreRuntimeSocketProxy(webSocket, request)
+            })
+            return
+        }
 
         const device = authenticateDevice(socketToken(request))
         if (!device) {
@@ -84,53 +99,6 @@ export function attachRuntimeSocketServer(server: http.Server): RuntimeSocketSer
 const MAX_BUFFERED_BYTES = 16 * 1024 * 1024
 const HEARTBEAT_MS = 30_000
 type DeviceSocketMap = Map<string, Set<WebSocket>>
-export const COMPANION_RUNTIME_PERMISSIONS = [
-    "initialize",
-    "server/status/read",
-    "subscription/update",
-    "remote/device/selfRevoke",
-    "openade/snapshot/read",
-    "openade/project/list",
-    "openade/project/files/tree",
-    "openade/project/files/fuzzySearch",
-    "openade/project/file/read",
-    "openade/project/search",
-    "openade/project/git/info/read",
-    "openade/project/git/branches/read",
-    "openade/project/git/summary/read",
-    "openade/project/process/list",
-    "openade/project/process/reconnect",
-    "openade/cron/definitions/read",
-    "openade/task/list",
-    "openade/task/read",
-    "openade/task/create",
-    "openade/task/changes/read",
-    "openade/task/diff/read",
-    "openade/task/filePair/read",
-    "openade/task/git/summary/read",
-    "openade/task/git/log",
-    "openade/task/git/scopes/read",
-    "openade/task/git/commit/files/read",
-    "openade/task/git/fileAtTreeish/read",
-    "openade/task/git/commit/filePatch/read",
-    "openade/task/image/read",
-    "openade/task/resourceInventory/read",
-    "openade/task/snapshot/patch/read",
-    "openade/task/snapshot/index/read",
-    "openade/task/snapshot/patch/readSlice",
-    "openade/turn/start",
-    "openade/review/start",
-    "openade/turn/interrupt",
-    "openade/queued-turn/enqueue",
-    "openade/queued-turn/reorder",
-    "openade/queued-turn/cancel",
-    "openade/comment/create",
-    "openade/comment/edit",
-    "openade/comment/delete",
-    "openade/task/metadata/update",
-    "openade/task/delete",
-]
-export const COMPANION_RUNTIME_NOTIFICATION_PERMISSIONS = ["connection/*", "remote/device/changed", "openade/*"]
 
 function closeSockets(sockets: Iterable<WebSocket>) {
     for (const socket of sockets) {
@@ -159,8 +127,8 @@ function attachRuntimeSocket(webSocket: WebSocket, deviceId: string): void {
     const connection = {
         id: connectionId,
         metadata: { deviceId },
-        permissions: COMPANION_RUNTIME_PERMISSIONS,
-        notificationPermissions: COMPANION_RUNTIME_NOTIFICATION_PERMISSIONS,
+        permissions: [...COMPANION_RUNTIME_PERMISSIONS],
+        notificationPermissions: [...COMPANION_RUNTIME_NOTIFICATION_PERMISSIONS],
         send(message: unknown) {
             if (webSocket.readyState === WebSocket.OPEN) {
                 if (webSocket.bufferedAmount > MAX_BUFFERED_BYTES) {

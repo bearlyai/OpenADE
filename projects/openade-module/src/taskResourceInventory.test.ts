@@ -28,6 +28,20 @@ describe("buildOpenADETaskResourceInventory", () => {
                 { id: "snapshot-2", type: "snapshot", patchFileId: "patch-1" },
             ],
             comments: [],
+            queuedTurns: [
+                {
+                    id: "queued-1",
+                    type: "do",
+                    input: "Use queued image later",
+                    status: "queued",
+                    createdAt: "2026-06-01T00:00:00.000Z",
+                    updatedAt: "2026-06-01T00:00:00.000Z",
+                    images: [
+                        { id: "image-queued", ext: "webp" },
+                        { id: "image-1", ext: "png" },
+                    ],
+                },
+            ],
         }
 
         expect(buildOpenADETaskResourceInventory({ task, isRunning: true, branchMerged: false })).toEqual({
@@ -36,7 +50,10 @@ describe("buildOpenADETaskResourceInventory", () => {
             taskTitle: "Inventory task",
             isRunning: true,
             snapshotIds: ["patch-1"],
-            images: [{ id: "image-1", ext: "png" }],
+            images: [
+                { id: "image-1", ext: "png" },
+                { id: "image-queued", ext: "webp" },
+            ],
             sessions: [
                 { sessionId: "session-from-event", harnessId: "codex" },
                 { sessionId: "session-from-sub-execution", harnessId: "claude-code" },

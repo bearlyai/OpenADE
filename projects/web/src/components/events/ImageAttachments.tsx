@@ -6,7 +6,8 @@
  */
 
 import { observer } from "mobx-react"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { OPENADE_METHOD } from "../../../../openade-client/src"
 import { dataFolderApi } from "../../electronAPI/dataFolder"
 import { useCodeStore } from "../../store/context"
 import type { ImageAttachment } from "../../types"
@@ -29,15 +30,63 @@ function objectUrlFromBase64(data: string, mediaType: string): string {
 function ImageThumbnail({ image, taskId }: { image: ImageAttachment; taskId: string }) {
     const codeStore = useCodeStore()
     const [objectUrl, setObjectUrl] = useState<string | null>(null)
+    const objectUrlRef = useRef<string | null>(null)
+    const thumbnailRef = useRef<HTMLDivElement>(null)
+    const [shouldLoad, setShouldLoad] = useState(false)
     const [lightboxOpen, setLightboxOpen] = useState(false)
+    const productRuntimeOwnsImages = codeStore.shouldUseRuntimeProductTaskRoute()
+    const canReadProductImage = !productRuntimeOwnsImages || codeStore.canUseProductMethod(OPENADE_METHOD.taskImageRead)
+
+    const replaceObjectUrl = useCallback((nextUrl: string | null) => {
+        const currentUrl = objectUrlRef.current
+        if (currentUrl && currentUrl !== nextUrl) URL.revokeObjectURL(currentUrl)
+        objectUrlRef.current = nextUrl
+        setObjectUrl(nextUrl)
+        if (!nextUrl) setLightboxOpen(false)
+    }, [])
 
     useEffect(() => {
+        return () => {
+            const currentUrl = objectUrlRef.current
+            if (currentUrl) URL.revokeObjectURL(currentUrl)
+            objectUrlRef.current = null
+        }
+    }, [])
+
+    useEffect(() => {
+        if (shouldLoad) return
+        const node = thumbnailRef.current
+        if (!node) return
+        if (typeof IntersectionObserver === "undefined") {
+            setShouldLoad(true)
+            return
+        }
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (!entries.some((entry) => entry.isIntersecting || entry.intersectionRatio > 0)) return
+                setShouldLoad(true)
+                observer.disconnect()
+            },
+            { rootMargin: "200px" }
+        )
+        observer.observe(node)
+        return () => observer.disconnect()
+    }, [shouldLoad])
+
+    useEffect(() => {
+        if (!shouldLoad) return
         let cancelled = false
-        let url: string | null = null
+        replaceObjectUrl(null)
 
         async function loadImage() {
             try {
-                if (codeStore.shouldUseRuntimeProductAPI()) {
+                if (productRuntimeOwnsImages) {
+                    if (codeStore.shouldUseRuntimeProductAPI() && !canReadProductImage) return
+                    const canReadImage = codeStore.shouldUseRuntimeProductAPI()
+                        ? canReadProductImage
+                        : await codeStore.canUseProductMethodAfterConnect(OPENADE_METHOD.taskImageRead)
+                    if (cancelled || !canReadImage) return
                     const repoId = codeStore.findProductRepoIdForTask(taskId)
                     if (!repoId) return
                     const result = await codeStore.readProductTaskImage({
@@ -47,16 +96,14 @@ function ImageThumbnail({ image, taskId }: { image: ImageAttachment; taskId: str
                         ext: image.ext,
                     })
                     if (cancelled || !result.data) return
-                    url = objectUrlFromBase64(result.data, result.mediaType ?? image.mediaType)
-                    setObjectUrl(url)
+                    replaceObjectUrl(objectUrlFromBase64(result.data, result.mediaType ?? image.mediaType))
                     return
                 }
 
                 const data = await dataFolderApi.load("images", image.id, image.ext)
                 if (cancelled || !data) return
                 const blob = new Blob([data], { type: image.mediaType })
-                url = URL.createObjectURL(blob)
-                setObjectUrl(url)
+                replaceObjectUrl(URL.createObjectURL(blob))
             } catch (err) {
                 console.error("[ImageAttachments] Failed to load image:", image.id, err)
             }
@@ -66,9 +113,8 @@ function ImageThumbnail({ image, taskId }: { image: ImageAttachment; taskId: str
 
         return () => {
             cancelled = true
-            if (url) URL.revokeObjectURL(url)
         }
-    }, [codeStore, image.id, image.ext, image.mediaType, taskId])
+    }, [canReadProductImage, codeStore, image.id, image.ext, image.mediaType, productRuntimeOwnsImages, replaceObjectUrl, shouldLoad, taskId])
 
     const handleClick = useCallback(() => {
         if (objectUrl) setLightboxOpen(true)
@@ -77,6 +123,7 @@ function ImageThumbnail({ image, taskId }: { image: ImageAttachment; taskId: str
     return (
         <>
             <div
+                ref={thumbnailRef}
                 className="shrink-0 bg-base-200 cursor-pointer overflow-hidden"
                 style={{
                     height: 80,

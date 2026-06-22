@@ -1,7 +1,8 @@
 import cx from "classnames"
 import { Check, Copy, Loader2, RefreshCw } from "lucide-react"
 import { observer } from "mobx-react"
-import { useCallback, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { OPENADE_METHOD } from "../../../../openade-client/src"
 import type { OpenADETaskPreviewUsage } from "../../../../openade-module/src"
 import { normalizeModelClass } from "../../constants"
 import { formatDuration, needsTaskUsageBackfill } from "../../persistence/taskStatsUtils"
@@ -175,7 +176,29 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     const [copyState, setCopyState] = useState<"idle" | "copying" | "copied" | "error">("idle")
     const [copyRecapState, setCopyRecapState] = useState<"idle" | "copying" | "copied" | "error">("idle")
     const [selectedPeriod, setSelectedPeriod] = useState<string | null>(null)
+    const [, bumpCoreUsageCapabilityRevision] = useState(0)
     const repos = store.getTaskPreviewReposForStats()
+    const coreOwnsUsageBackfill = store.usesCoreOwnedProductRuntime()
+    const canBackfillUsage = coreOwnsUsageBackfill
+        ? store.canUseProductMethod(OPENADE_METHOD.taskUsageBackfill)
+        : store.canUseProductMethod(OPENADE_METHOD.taskMetadataUpdate)
+
+    useEffect(() => {
+        if (!coreOwnsUsageBackfill || store.shouldUseRuntimeProductAPI()) return
+        let cancelled = false
+        void store
+            .canUseProductMethodAfterConnect(OPENADE_METHOD.taskUsageBackfill)
+            .catch((err: unknown) => {
+                console.warn("[StatsTab] Failed to load Core usage backfill capability:", err)
+            })
+            .finally(() => {
+                if (!cancelled) bumpCoreUsageCapabilityRevision((revision) => revision + 1)
+            })
+
+        return () => {
+            cancelled = true
+        }
+    }, [coreOwnsUsageBackfill, store])
     const tasksNeedingBackfill = useMemo(() => {
         const tasksToBackfill: Array<{ repoId: string; taskId: string }> = []
         for (const repo of repos) {
@@ -189,13 +212,14 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
     }, [repos])
 
     const handleBackfillUsage = useCallback(async () => {
-        if (backfillProgress || tasksNeedingBackfill.length === 0) return
+        if (!canBackfillUsage || backfillProgress || tasksNeedingBackfill.length === 0) return
 
         const tasksToBackfill = [...tasksNeedingBackfill]
         setBackfillProgress({ loaded: 0, total: tasksToBackfill.length })
 
         try {
-            if (store.shouldUseRuntimeProductAPI() && store.usesCleanManagedCoreRuntime()) {
+            if (coreOwnsUsageBackfill) {
+                if (!(await store.canUseProductMethodAfterConnect(OPENADE_METHOD.taskUsageBackfill))) return
                 await store.backfillTaskUsagePreviews(tasksToBackfill)
                 setBackfillProgress({ loaded: tasksToBackfill.length, total: tasksToBackfill.length })
                 return
@@ -222,7 +246,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
         } finally {
             setBackfillProgress(null)
         }
-    }, [backfillProgress, store, tasksNeedingBackfill])
+    }, [backfillProgress, canBackfillUsage, coreOwnsUsageBackfill, store, tasksNeedingBackfill])
 
     const handleCopy = useCallback(async () => {
         if (!cardRef.current || copyState === "copying") return
@@ -339,7 +363,7 @@ export const StatsTab = observer(({ store }: { store: CodeStore }) => {
 
     return (
         <div className="flex flex-col gap-4">
-            {tasksNeedingBackfill.length > 0 && (
+            {tasksNeedingBackfill.length > 0 && canBackfillUsage && (
                 <div className="flex items-center justify-between gap-3 text-xs text-muted">
                     <span>
                         {backfillProgress

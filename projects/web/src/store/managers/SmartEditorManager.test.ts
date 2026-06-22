@@ -252,11 +252,13 @@ describe("SmartEditorManager.validateFiles", () => {
         expect(paths).not.toContain("src/deleted.ts")
     })
 
-    it("does not validate tracked files through raw files API when product context is unresolved", async () => {
+    it("does not validate tracked files through raw files API when Core-owned product context is unresolved", async () => {
         seedStats({
             "src/existing.ts": { count: 5, lastUsed: Date.now() },
         })
         const productAccess: SmartEditorProductFileAccess = {
+            usesRuntimeProductAPI: vi.fn(() => false),
+            productRuntimeOwnsFiles: vi.fn(() => true),
             getContext: vi.fn(() => null),
             fuzzySearchProjectFiles: vi.fn(),
         }
@@ -267,6 +269,31 @@ describe("SmartEditorManager.validateFiles", () => {
 
         expect(productAccess.fuzzySearchProjectFiles).not.toHaveBeenCalled()
         expect(filesApi.describePath).not.toHaveBeenCalled()
+        expect(manager.favorites.map((file) => file.path)).toEqual(["src/existing.ts"])
+    })
+
+    it("keeps legacy tracked-file validation when CodeStore product access does not own files", async () => {
+        seedStats({
+            "src/existing.ts": { count: 5, lastUsed: Date.now() },
+            "src/deleted.ts": { count: 4, lastUsed: Date.now() },
+        })
+        const productAccess: SmartEditorProductFileAccess = {
+            usesRuntimeProductAPI: vi.fn(() => false),
+            productRuntimeOwnsFiles: vi.fn(() => false),
+            getContext: vi.fn(() => null),
+            fuzzySearchProjectFiles: vi.fn(),
+        }
+        vi.mocked(filesApi.describePath).mockImplementation(async (params) => {
+            const path = (params as { path: string }).path
+            if (path.endsWith("deleted.ts")) return { type: "not_found", path }
+            return { type: "file", path, size: 10, mode: 0o644, content: null, tooLarge: false, isReadable: true }
+        })
+
+        const manager = new SmartEditorManager("task-task-1", WORKSPACE, productAccess)
+        await manager.validateFiles("/repo")
+
+        expect(productAccess.fuzzySearchProjectFiles).not.toHaveBeenCalled()
+        expect(filesApi.describePath).toHaveBeenCalled()
         expect(manager.favorites.map((file) => file.path)).toEqual(["src/existing.ts"])
     })
 })
@@ -355,6 +382,25 @@ describe("SmartEditorManager.searchFileMentions", () => {
         expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
     })
 
+    it("uses local favorites for one-character mention queries without fuzzy search", async () => {
+        seedStats({
+            "src/favorite.ts": { count: 10, lastUsed: Date.now() },
+            "docs/readme.md": { count: 9, lastUsed: Date.now() },
+            "test/example.ts": { count: 1, lastUsed: Date.now() },
+        })
+        const productAccess: SmartEditorProductFileAccess = {
+            getContext: vi.fn(() => ({ repoId: "repo-1", taskId: "task-1" })),
+            fuzzySearchProjectFiles: vi.fn(),
+        }
+
+        const manager = new SmartEditorManager("task-task-1", WORKSPACE, productAccess)
+        const result = await manager.searchFileMentions("/repo", "s", 20)
+
+        expect(result).toEqual({ results: ["src/favorite.ts", "docs/readme.md", "test/example.ts"], treeMatch: null })
+        expect(productAccess.fuzzySearchProjectFiles).not.toHaveBeenCalled()
+        expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
+    })
+
     it("does not run legacy fuzzy search for empty mention queries", async () => {
         vi.mocked(filesApi.fuzzySearch).mockRejectedValue(new Error("legacy fuzzy search should not run for empty query"))
 
@@ -365,8 +411,10 @@ describe("SmartEditorManager.searchFileMentions", () => {
         expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
     })
 
-    it("does not run legacy fuzzy search when product context is unresolved", async () => {
+    it("does not run legacy fuzzy search when Core-owned product context is unresolved", async () => {
         const productAccess: SmartEditorProductFileAccess = {
+            usesRuntimeProductAPI: vi.fn(() => false),
+            productRuntimeOwnsFiles: vi.fn(() => true),
             getContext: vi.fn(() => null),
             fuzzySearchProjectFiles: vi.fn(),
         }
@@ -378,6 +426,32 @@ describe("SmartEditorManager.searchFileMentions", () => {
         expect(result).toEqual({ results: [], treeMatch: null })
         expect(productAccess.fuzzySearchProjectFiles).not.toHaveBeenCalled()
         expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
+    })
+
+    it("keeps legacy fuzzy search when CodeStore product access does not own files", async () => {
+        const productAccess: SmartEditorProductFileAccess = {
+            usesRuntimeProductAPI: vi.fn(() => false),
+            productRuntimeOwnsFiles: vi.fn(() => false),
+            getContext: vi.fn(() => null),
+            fuzzySearchProjectFiles: vi.fn(),
+        }
+        vi.mocked(filesApi.fuzzySearch).mockResolvedValue({
+            results: ["src/legacy-from-adapter.ts"],
+            truncated: false,
+            source: "fs",
+        })
+
+        const manager = new SmartEditorManager("task-task-1", WORKSPACE, productAccess)
+        const result = await manager.searchFileMentions("/repo", "legacy", 10)
+
+        expect(result).toEqual({ results: ["src/legacy-from-adapter.ts"], treeMatch: null })
+        expect(productAccess.fuzzySearchProjectFiles).not.toHaveBeenCalled()
+        expect(filesApi.fuzzySearch).toHaveBeenCalledWith({
+            dir: "/repo",
+            query: "legacy",
+            matchDirs: false,
+            limit: 10,
+        })
     })
 
     it("keeps legacy file search when no product access is configured", async () => {
@@ -530,11 +604,102 @@ describe("SmartEditorManager stashed drafts", () => {
         const reloadedManager = new SmartEditorManager("test", WORKSPACE)
         await waitForCondition(() => reloadedManager.stashedDrafts.length === 1)
 
-        expect(vi.mocked(dataFolderApi.load)).toHaveBeenCalledWith("images", "img-1", "png")
-        expect(URL.createObjectURL).toHaveBeenCalledTimes(1)
+        expect(dataFolderApi.load).not.toHaveBeenCalled()
+        expect(URL.createObjectURL).not.toHaveBeenCalled()
         expect(reloadedManager.stashedDrafts).toHaveLength(1)
         expect(reloadedManager.stashedDrafts[0].snapshot.value).toBe("Draft alpha")
-        expect(reloadedManager.stashedDrafts[0].snapshot.pendingImageDataUrls.get("img-1")).toBe("blob:restored-preview")
+        expect(reloadedManager.stashedDrafts[0].snapshot.pendingImageDataUrls.size).toBe(0)
+
+        expect(reloadedManager.popStash(reloadedManager.stashedDrafts[0].id)).toBe(true)
+        await waitForCondition(() => reloadedManager.pendingImageDataUrls.get("img-1") === "blob:restored-preview")
+
+        expect(vi.mocked(dataFolderApi.load)).toHaveBeenCalledWith("images", "img-1", "png")
+        expect(URL.createObjectURL).toHaveBeenCalledTimes(1)
+    })
+
+    it("does not load runtime stashed image previews until the draft is restored", async () => {
+        const image = createImage("img-runtime-missing")
+        localStorage.setItem(
+            STASH_STORAGE_KEY,
+            JSON.stringify([
+                {
+                    id: "draft-runtime",
+                    createdAt: "2026-06-10T12:00:00.000Z",
+                    snapshot: {
+                        value: "Runtime draft",
+                        files: [],
+                        editorContent: null,
+                        pendingImages: [image],
+                    },
+                },
+            ])
+        )
+        const readStagedTaskImage = vi.fn(async () => ({ imageId: image.id, ext: image.ext, mediaType: image.mediaType, data: null }))
+        const productAccess: SmartEditorProductFileAccess = {
+            usesRuntimeProductAPI: vi.fn(() => true),
+            getContext: vi.fn(() => ({ repoId: "repo-1" })),
+            fuzzySearchProjectFiles: vi.fn(),
+            readStagedTaskImage,
+        }
+
+        const manager = new SmartEditorManager("test", WORKSPACE, productAccess)
+        await waitForCondition(() => manager.stashedDrafts.length === 1)
+
+        expect(readStagedTaskImage).not.toHaveBeenCalled()
+        expect(dataFolderApi.load).not.toHaveBeenCalled()
+        expect(URL.createObjectURL).not.toHaveBeenCalled()
+        expect(manager.stashedDrafts[0].snapshot.pendingImageDataUrls.size).toBe(0)
+
+        expect(manager.popStash("draft-runtime")).toBe(true)
+        await waitForCondition(() => readStagedTaskImage.mock.calls.length === 1)
+
+        expect(readStagedTaskImage).toHaveBeenCalledWith({ imageId: image.id, ext: image.ext })
+        expect(dataFolderApi.load).not.toHaveBeenCalled()
+        expect(URL.createObjectURL).not.toHaveBeenCalled()
+        expect(manager.pendingImageDataUrls.size).toBe(0)
+    })
+
+    it("does not load Core-owned stashed image previews from legacy image files before the runtime API is ready", async () => {
+        const image = createImage("img-core-gap")
+        localStorage.setItem(
+            STASH_STORAGE_KEY,
+            JSON.stringify([
+                {
+                    id: "draft-core-gap",
+                    createdAt: "2026-06-12T12:00:00.000Z",
+                    snapshot: {
+                        value: "Core-owned draft",
+                        files: [],
+                        editorContent: null,
+                        pendingImages: [image],
+                    },
+                },
+            ])
+        )
+        const readStagedTaskImage = vi.fn(async () => null)
+        const productAccess: SmartEditorProductFileAccess = {
+            usesRuntimeProductAPI: vi.fn(() => false),
+            productRuntimeOwnsFiles: vi.fn(() => true),
+            getContext: vi.fn(() => null),
+            fuzzySearchProjectFiles: vi.fn(),
+            readStagedTaskImage,
+        }
+
+        const manager = new SmartEditorManager("test", WORKSPACE, productAccess)
+        await waitForCondition(() => manager.stashedDrafts.length === 1)
+
+        expect(readStagedTaskImage).not.toHaveBeenCalled()
+        expect(dataFolderApi.load).not.toHaveBeenCalled()
+        expect(URL.createObjectURL).not.toHaveBeenCalled()
+        expect(manager.stashedDrafts[0].snapshot.pendingImageDataUrls.size).toBe(0)
+
+        expect(manager.popStash("draft-core-gap")).toBe(true)
+        await waitForCondition(() => readStagedTaskImage.mock.calls.length === 1)
+
+        expect(readStagedTaskImage).toHaveBeenCalledWith({ imageId: image.id, ext: image.ext })
+        expect(dataFolderApi.load).not.toHaveBeenCalled()
+        expect(URL.createObjectURL).not.toHaveBeenCalled()
+        expect(manager.pendingImageDataUrls.size).toBe(0)
     })
 
     it("clear can preserve preview URLs during stash transfer", () => {

@@ -38,13 +38,13 @@ type gitRefsDTO struct {
 }
 
 func (service *Service) handleActionCreate(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/action/create", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodActionCreate, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.createActionEvent(ctx, raw)
 	})
 }
 
 func (service *Service) handleActionStreamAppend(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/action/stream/append", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodActionStreamAppend, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		runtimeErr := service.appendActionStreamEvent(ctx, raw)
 		if runtimeErr != nil {
 			return nil, runtimeErr
@@ -54,7 +54,7 @@ func (service *Service) handleActionStreamAppend(ctx context.Context, _ *core.Co
 }
 
 func (service *Service) handleActionComplete(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/action/complete", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodActionComplete, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		runtimeErr := service.terminalActionEvent(ctx, raw, "completed")
 		if runtimeErr != nil {
 			return nil, runtimeErr
@@ -64,7 +64,7 @@ func (service *Service) handleActionComplete(ctx context.Context, _ *core.Connec
 }
 
 func (service *Service) handleActionError(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/action/error", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodActionError, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		runtimeErr := service.terminalActionEvent(ctx, raw, "error")
 		if runtimeErr != nil {
 			return nil, runtimeErr
@@ -74,7 +74,7 @@ func (service *Service) handleActionError(ctx context.Context, _ *core.Connectio
 }
 
 func (service *Service) handleActionStopped(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/action/stopped", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodActionStopped, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		runtimeErr := service.terminalActionEvent(ctx, raw, "stopped")
 		if runtimeErr != nil {
 			return nil, runtimeErr
@@ -84,13 +84,13 @@ func (service *Service) handleActionStopped(ctx context.Context, _ *core.Connect
 }
 
 func (service *Service) handleActionReconcileRuntime(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/action/reconcileRuntime", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodActionReconcileRuntime, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.reconcileActionRuntime(ctx, raw)
 	})
 }
 
 func (service *Service) handleActionExecutionUpdate(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/action/execution/update", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodActionExecutionUpdate, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		runtimeErr := service.updateActionExecution(ctx, raw)
 		if runtimeErr != nil {
 			return nil, runtimeErr
@@ -183,7 +183,7 @@ func (service *Service) createActionEvent(ctx context.Context, raw json.RawMessa
 		return nil, taskEventWriteRuntimeError(err)
 	}
 	if created {
-		service.runtime.Notify("openade/task/updated", actionEventTaskUpdatedNotification(task.RepoID, task.ID, event.ID, "in_progress"))
+		service.runtime.Notify(openADENotificationTaskUpdated, actionEventTaskUpdatedNotification(task.RepoID, task.ID, event.ID, "in_progress"))
 	}
 	return actionEventCreateResultDTO{EventID: event.ID, CreatedAt: formatTime(event.CreatedAt)}, nil
 }
@@ -207,6 +207,7 @@ type actionPayloadCreateInput struct {
 	HarnessID          string
 	Source             json.RawMessage
 	Images             *json.RawMessage
+	HyperPlanStrategy  json.RawMessage
 	IncludesCommentIDs []string
 	ModelID            string
 	FastMode           *bool
@@ -251,6 +252,9 @@ func createActionPayload(input actionPayloadCreateInput) (json.RawMessage, *core
 	payload["includesCommentIds"] = included
 	if input.Images != nil {
 		payload["images"] = *input.Images
+	}
+	if len(input.HyperPlanStrategy) > 0 {
+		payload["hyperplanStrategy"] = append(json.RawMessage(nil), input.HyperPlanStrategy...)
 	}
 	payloadRaw, err := json.Marshal(payload)
 	if err != nil {
@@ -317,7 +321,7 @@ func (service *Service) appendActionStreamEventValue(ctx context.Context, taskID
 	}); err != nil {
 		return taskEventWriteRuntimeError(err)
 	}
-	service.runtime.Notify("openade/task/updated", actionEventTaskUpdatedNotification(task.RepoID, task.ID, event.ID, "in_progress"))
+	service.runtime.Notify(openADENotificationTaskUpdated, actionEventTaskUpdatedNotification(task.RepoID, task.ID, event.ID, "in_progress"))
 	return nil
 }
 
@@ -431,8 +435,8 @@ func (service *Service) updateActionTerminalState(ctx context.Context, update ac
 		notification["eventId"] = update.EventID
 	}
 	notification["eventStatus"] = nextStatus
-	service.runtime.Notify("openade/task/updated", notification)
-	service.runtime.Notify("openade/task/previewChanged", notification)
+	service.runtime.Notify(openADENotificationTaskUpdated, notification)
+	service.runtime.Notify(openADENotificationTaskPreviewChanged, notification)
 	return nil
 }
 
@@ -552,7 +556,7 @@ func (service *Service) updateActionExecutionState(ctx context.Context, taskID s
 	}); err != nil {
 		return taskEventWriteRuntimeError(err)
 	}
-	service.runtime.Notify("openade/task/updated", actionEventTaskUpdatedNotification(task.RepoID, task.ID, event.ID, "in_progress"))
+	service.runtime.Notify(openADENotificationTaskUpdated, actionEventTaskUpdatedNotification(task.RepoID, task.ID, event.ID, "in_progress"))
 	return nil
 }
 

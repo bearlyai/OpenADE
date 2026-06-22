@@ -6,6 +6,51 @@ Build and ship OpenADE Core: a standalone Go product kernel that becomes the sin
 
 OpenADE Core replaces the current Electron-main and Yjs hybrid as the owner of durable product state, runtime routing, task execution, git/files/search/process/PTY operations, permissions, subscriptions, and observability. All clients attach to it through one typed OpenADE runtime API.
 
+## Current 90% Process-Reduction Dogfood Mode
+
+The destination above is unchanged, but the active migration should optimize for a coherent local dogfood path before production completeness. Do not treat every incremental edit as a release candidate.
+
+Fast dogfood means:
+
+- make the classic desktop UI run through the shared shell and typed runtime/Core path first
+- cut over complete product workflows vertically instead of cleaning every adjacent abstraction horizontally
+- prioritize task open, turn start/streaming, git summary/diff, file search/read/write, processes/terminal, and settings
+- remove or ignore the old compact companion product UI rather than preserving it as a second product surface
+- keep legacy Yjs/Electron behavior only as import, compatibility, or explicit fallback while dogfooding the Core path
+- verify each slice with narrow real-path proof, then run broad gates only at push, default flips, fallback removal, storage/import changes, host-authority expansion, and release readiness checkpoints
+
+Process rules for this mode:
+
+- target 90-95% less process overhead while building dogfood slices
+- remove nine out of ten process loops by default: no repeated orientation, no routine test reruns, no routine doc churn, no interim cleanup passes, and no small-commit cadence while a slice is still incomplete
+- treat this mode as the active operating model until local Core dogfood is usable or the user explicitly asks for release hardening
+- optimize for roughly 90% implementation and 10% process during active slice work
+- batch edits into coherent slices instead of stopping after every small patch
+- aim for two or three bulk implementation commits for a dogfood milestone, not a trail of tiny cleanup commits
+- do not run tests, typechecks, React Doctor, mobile/web smoke, packaged Electron smoke, or production migration gates while coding unless the next edit depends on the result
+- run at most one focused verification command at a normal slice checkpoint; run broad package/release checks before push, default flips, fallback removal, storage/import changes, host-authority expansion, or release readiness
+- do not update durable docs unless explicitly requested or the change alters architecture, gates, active vertical slices, or handoff state
+- do not use plan updates, repeated status reporting, broad repo scans, implementation-journal notes, or repeated guidance rereads for routine edits
+- do not expand React Doctor warning work, broad capability cleanup, mobile/web smoke, production import parity, packaged Electron smoke, or performance budgets unless the current slice actually touches that risk
+- default to one short orientation, one bulk implementation pass, one focused checkpoint proof, and one compact handoff per dogfood slice
+- defer unrun broad checks as known release work instead of letting them interrupt local dogfood implementation
+- keep type safety non-negotiable: no loose `any`, Go `interface{}` escape hatches, or untyped boundary shortcuts outside reviewed exceptions
+- if an extra check, scan, doc edit, or intermediate cleanup pass feels useful but not blocking, skip it and keep moving toward the dogfood checkpoint
+
+Expected savings:
+
+| Work category | Prior migration cadence | Current dogfood cadence | Estimated reduction |
+| --- | --- | --- | ---: |
+| Verification while coding | Tests/typechecks after many small edits | One focused proof per vertical slice | 90-95% |
+| Broad gates | Repeated package/repo gates during implementation | Batched at push, default, fallback, storage, host-authority, and release checkpoints | 90-95% |
+| Planning and docs | Patch-level journals, repeated plan churn | Durable docs only for explicit requests, architecture, gates, active slice, or handoff state | 90-95% |
+| Exploration | Broad repo scans and rereads | One targeted read of active files and only newly entered local guidance | 90-95% |
+| Adjacent cleanup | Warning/capability/type cleanup around the slice | Only cleanup blocking the active dogfood workflow | 90-95% |
+
+Overall process target: 90-95% less migration overhead during local dogfood slices, with full release rigor deferred to explicit checkpoints.
+
+Practical budget for a normal local dogfood slice: one targeted source/guidance read, one bulk edit pass, zero routine verification commands while coding, zero durable-doc updates unless the slice changes durable direction, zero intermediate cleanup commits, one focused proof at the checkpoint, and one compact handoff. If a process step is useful but not required for the next implementation decision, skip it and carry the risk as deferred release work.
+
 ## Target Shape
 
 ```text

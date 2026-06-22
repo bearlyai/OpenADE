@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -79,6 +80,125 @@ func TestOpenAppliesMigrationsIdempotently(t *testing.T) {
 	}
 	if len(reopenedMigrations) != len(Migrations) {
 		t.Fatalf("reopened migration count = %d", len(reopenedMigrations))
+	}
+}
+
+func TestOpenUsesPooledFileConnectionsWithPragmas(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	if maxOpen := store.db.Stats().MaxOpenConnections; maxOpen != sqliteFileMaxOpenConns {
+		t.Fatalf("max open connections = %d, want %d", maxOpen, sqliteFileMaxOpenConns)
+	}
+
+	conns := make([]*sql.Conn, 0, sqliteFileMaxOpenConns)
+	for index := 0; index < sqliteFileMaxOpenConns; index++ {
+		conn, err := store.db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("open pooled sqlite connection %d: %v", index, err)
+		}
+		conns = append(conns, conn)
+	}
+	t.Cleanup(func() {
+		for _, conn := range conns {
+			if err := conn.Close(); err != nil {
+				t.Fatalf("close pooled sqlite connection: %v", err)
+			}
+		}
+	})
+
+	for index, conn := range conns {
+		assertSQLiteConnectionPragmas(t, ctx, conn, index)
+	}
+}
+
+func TestOpenKeepsInMemoryStoresSingleConnection(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open in-memory store: %v", err)
+	}
+	defer store.Close()
+
+	if maxOpen := store.db.Stats().MaxOpenConnections; maxOpen != 1 {
+		t.Fatalf("in-memory max open connections = %d, want 1", maxOpen)
+	}
+	value := json.RawMessage(`{"ok":true}`)
+	if err := store.PutSetting(ctx, "memory-check", value, time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("write in-memory setting: %v", err)
+	}
+	loaded, ok, err := store.GetSetting(ctx, "memory-check")
+	if err != nil {
+		t.Fatalf("read in-memory setting: %v", err)
+	}
+	if !ok || string(loaded) != string(value) {
+		t.Fatalf("in-memory setting = %s, ok %v", loaded, ok)
+	}
+}
+
+func TestFileStoreReadUsesAvailablePooledConnection(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	value := json.RawMessage(`{"source":"pooled"}`)
+	if err := store.PutSetting(ctx, "pooled-read-check", value, time.Date(2026, 6, 17, 10, 30, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("write pooled setting: %v", err)
+	}
+
+	conn, err := store.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("borrow sqlite connection: %v", err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatalf("begin held read transaction: %v", err)
+	}
+	defer tx.Rollback()
+
+	var migrationCount int
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
+		t.Fatalf("read through held transaction: %v", err)
+	}
+	if migrationCount == 0 {
+		t.Fatal("held transaction did not see migrations")
+	}
+
+	readCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	loaded, ok, err := store.GetSetting(readCtx, "pooled-read-check")
+	if err != nil {
+		t.Fatalf("pooled read while another connection is held: %v", err)
+	}
+	if !ok || string(loaded) != string(value) {
+		t.Fatalf("pooled read = %s, ok %v", loaded, ok)
+	}
+}
+
+func assertSQLiteConnectionPragmas(t *testing.T, ctx context.Context, conn *sql.Conn, index int) {
+	t.Helper()
+
+	var foreignKeys int
+	if err := conn.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
+		t.Fatalf("read foreign_keys pragma for connection %d: %v", index, err)
+	}
+	if foreignKeys != 1 {
+		t.Fatalf("foreign_keys pragma for connection %d = %d, want 1", index, foreignKeys)
+	}
+
+	var busyTimeout int
+	if err := conn.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+		t.Fatalf("read busy_timeout pragma for connection %d: %v", index, err)
+	}
+	if busyTimeout != 5000 {
+		t.Fatalf("busy_timeout pragma for connection %d = %d, want 5000", index, busyTimeout)
+	}
+
+	var journalMode string
+	if err := conn.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatalf("read journal_mode pragma for connection %d: %v", index, err)
+	}
+	if !strings.EqualFold(journalMode, "wal") {
+		t.Fatalf("journal_mode pragma for connection %d = %q, want wal", index, journalMode)
 	}
 }
 
@@ -315,6 +435,179 @@ func TestCreateTaskWithEnvironmentAndSetupEventDoesNotOverwriteExistingTask(t *t
 	}
 }
 
+func TestListTaskEventsLightweightOmitsOlderPayloadJSON(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	if err := store.UpsertRepo(ctx, Repo{
+		ID:        "repo-lightweight-events",
+		Name:      "Lightweight Events",
+		Path:      "/tmp/lightweight-events",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("upsert repo: %v", err)
+	}
+	if err := store.UpsertTask(ctx, Task{
+		ID:        "task-lightweight-events",
+		RepoID:    "repo-lightweight-events",
+		Slug:      "lightweight-events",
+		Title:     "Lightweight events",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("upsert task: %v", err)
+	}
+
+	eventCount := LightweightTaskEventPayloadTailLimit + 3
+	for seq := 1; seq <= eventCount; seq++ {
+		eventID := fmt.Sprintf("event-%02d", seq)
+		payload := sql.NullString{
+			String: fmt.Sprintf(`{"id":%q,"type":"action","execution":{"events":[{"id":"stream-%02d"}]}}`, eventID, seq),
+			Valid:  true,
+		}
+		if err := store.UpsertTaskEvent(ctx, TaskEvent{
+			ID:          eventID,
+			TaskID:      "task-lightweight-events",
+			Seq:         int64(seq),
+			Type:        "action",
+			Status:      sql.NullString{String: "completed", Valid: true},
+			SourceType:  sql.NullString{String: "do", Valid: true},
+			SourceLabel: sql.NullString{String: "Do", Valid: true},
+			CreatedAt:   now.Add(time.Duration(seq) * time.Second),
+			PayloadJSON: payload,
+		}); err != nil {
+			t.Fatalf("upsert task event %d: %v", seq, err)
+		}
+	}
+
+	lightweight, err := store.ListTaskEvents(ctx, "task-lightweight-events", false)
+	if err != nil {
+		t.Fatalf("list lightweight events: %v", err)
+	}
+	if len(lightweight) != eventCount {
+		t.Fatalf("lightweight event count = %d", len(lightweight))
+	}
+	payloadTailStart := eventCount - LightweightTaskEventPayloadTailLimit
+	for index, event := range lightweight {
+		if index < payloadTailStart && event.PayloadJSON.Valid {
+			t.Fatalf("older lightweight event loaded payload: %#v", event)
+		}
+		if index >= payloadTailStart && !event.PayloadJSON.Valid {
+			t.Fatalf("tail lightweight event omitted payload: %#v", event)
+		}
+	}
+
+	limited, err := store.ListTaskEventsWithLimit(ctx, "task-lightweight-events", false, 5)
+	if err != nil {
+		t.Fatalf("list limited lightweight events: %v", err)
+	}
+	if len(limited) != 5 {
+		t.Fatalf("limited lightweight event count = %d", len(limited))
+	}
+	if limited[0].ID != "event-19" || limited[4].ID != "event-23" {
+		t.Fatalf("limited lightweight event window = %#v", limited)
+	}
+	for _, event := range limited {
+		if !event.PayloadJSON.Valid {
+			t.Fatalf("limited lightweight event omitted payload: %#v", event)
+		}
+	}
+
+	hydrated, err := store.ListTaskEvents(ctx, "task-lightweight-events", true)
+	if err != nil {
+		t.Fatalf("list hydrated events: %v", err)
+	}
+	for _, event := range hydrated {
+		if !event.PayloadJSON.Valid {
+			t.Fatalf("hydrated event omitted payload: %#v", event)
+		}
+	}
+}
+
+func TestListTaskEventsWithLimitUsesIndexedTailQuery(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	rows, err := store.db.QueryContext(
+		ctx,
+		"EXPLAIN QUERY PLAN "+lightweightTaskEventsQuery,
+		"task-indexed-events",
+		30,
+		"task-indexed-events",
+		LightweightTaskEventPayloadTailLimit,
+	)
+	if err != nil {
+		t.Fatalf("explain lightweight task events query: %v", err)
+	}
+	defer rows.Close()
+
+	details := []string{}
+	for rows.Next() {
+		var id int
+		var parent int
+		var unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatalf("scan query plan: %v", err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate query plan: %v", err)
+	}
+
+	plan := strings.Join(details, "\n")
+	if !strings.Contains(plan, "SEARCH task_events USING") || !strings.Contains(plan, "(task_id=?)") {
+		t.Fatalf("lightweight task events query is not using an indexed task lookup:\n%s", plan)
+	}
+	if strings.Contains(plan, "SCAN task_events") {
+		t.Fatalf("lightweight task events query scans task_events:\n%s", plan)
+	}
+}
+
+func TestGetTaskEventUsesIndexedPointLookup(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	rows, err := store.db.QueryContext(
+		ctx,
+		`EXPLAIN QUERY PLAN SELECT id, task_id, seq, type, status, source_type, source_label, created_at, payload_json, payload_blob_id
+FROM task_events
+WHERE task_id = ? AND id = ?`,
+		"task-indexed-events",
+		"event-indexed",
+	)
+	if err != nil {
+		t.Fatalf("explain task event point lookup: %v", err)
+	}
+	defer rows.Close()
+
+	details := []string{}
+	for rows.Next() {
+		var id int
+		var parent int
+		var unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatalf("scan query plan: %v", err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate query plan: %v", err)
+	}
+
+	plan := strings.Join(details, "\n")
+	if !strings.Contains(plan, "SEARCH task_events USING") {
+		t.Fatalf("task event point lookup is not using an indexed lookup:\n%s", plan)
+	}
+	if strings.Contains(plan, "SCAN task_events") {
+		t.Fatalf("task event point lookup scans task_events:\n%s", plan)
+	}
+}
+
 func TestTaskMetadataUpdateRefreshesPreview(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
@@ -396,6 +689,116 @@ func TestTaskMetadataUpdateRefreshesPreview(t *testing.T) {
 	}
 	if !preview.UsageJSON.Valid || preview.UsageJSON.String != `{"usageVersion":2,"inputTokens":10}` {
 		t.Fatalf("preview usage = %#v", preview.UsageJSON)
+	}
+
+	noOpTask, ok, changed, err := store.UpdateTaskMetadataIfChanged(ctx, TaskMetadataUpdate{
+		TaskID:          "task-1",
+		Title:           &title,
+		Closed:          &closed,
+		LastViewedAtSet: true,
+		LastViewedAt:    viewedAt,
+		LastEventAtSet:  true,
+		LastEventAt:     lastEventAt,
+		MetadataJSONSet: true,
+		MetadataJSON:    task.MetadataJSON,
+		UsageJSONSet:    true,
+		UsageJSON:       sql.NullString{String: `{"usageVersion":2,"inputTokens":10}`, Valid: true},
+		UpdatedAt:       createdAt.Add(30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("no-op update metadata: %v", err)
+	}
+	if !ok {
+		t.Fatal("task not found for no-op metadata update")
+	}
+	if changed {
+		t.Fatalf("unchanged metadata update reported changed task = %#v", noOpTask)
+	}
+	if !noOpTask.UpdatedAt.Equal(createdAt.Add(7 * time.Minute)) {
+		t.Fatalf("no-op metadata update changed updatedAt = %#v", noOpTask.UpdatedAt)
+	}
+
+	restoredAt := createdAt.Add(8 * time.Minute)
+	restoredTask, ok, restoredChanged, err := store.UpdateTaskMetadataIfChanged(ctx, TaskMetadataUpdate{
+		TaskID:       "task-1",
+		UpdatedAtSet: true,
+		UpdatedAt:    restoredAt,
+	})
+	if err != nil {
+		t.Fatalf("restore updatedAt metadata: %v", err)
+	}
+	if !ok {
+		t.Fatal("task not found for updatedAt restore")
+	}
+	if !restoredChanged {
+		t.Fatal("explicit updatedAt restore did not report a change")
+	}
+	if !restoredTask.UpdatedAt.Equal(restoredAt) {
+		t.Fatalf("restored updatedAt = %#v", restoredTask.UpdatedAt)
+	}
+
+	viewedOnlyAt := sql.NullTime{Time: createdAt.Add(9 * time.Minute), Valid: true}
+	viewedOnlyUpdatedAt := createdAt.Add(10 * time.Minute)
+	viewedOnlyTask, ok, viewedOnlyChanged, err := store.UpdateTaskMetadataIfChanged(ctx, TaskMetadataUpdate{
+		TaskID:          "task-1",
+		LastViewedAtSet: true,
+		LastViewedAt:    viewedOnlyAt,
+		UpdatedAt:       viewedOnlyUpdatedAt,
+	})
+	if err != nil {
+		t.Fatalf("update viewed metadata: %v", err)
+	}
+	if !ok {
+		t.Fatal("task not found for viewed metadata update")
+	}
+	if !viewedOnlyChanged {
+		t.Fatal("viewed metadata update did not report a change")
+	}
+	if !viewedOnlyTask.LastViewedAt.Valid || !viewedOnlyTask.LastViewedAt.Time.Equal(viewedOnlyAt.Time) {
+		t.Fatalf("viewed-only task last viewed = %#v", viewedOnlyTask.LastViewedAt)
+	}
+	if !viewedOnlyTask.UpdatedAt.Equal(viewedOnlyUpdatedAt) {
+		t.Fatalf("viewed-only task updatedAt = %#v", viewedOnlyTask.UpdatedAt)
+	}
+
+	previews, err = store.ListTaskPreviews(ctx, "repo-1")
+	if err != nil {
+		t.Fatalf("list previews after viewed update: %v", err)
+	}
+	preview = previews[0]
+	if !preview.LastViewedAt.Valid || !preview.LastViewedAt.Time.Equal(viewedOnlyAt.Time) {
+		t.Fatalf("viewed-only preview last viewed = %#v", preview.LastViewedAt)
+	}
+	if !preview.UpdatedAt.Equal(viewedOnlyUpdatedAt) {
+		t.Fatalf("viewed-only preview updatedAt = %#v", preview.UpdatedAt)
+	}
+	if preview.Title != "Updated title" || !preview.Closed {
+		t.Fatalf("viewed-only preview rewrote stable metadata = %#v", preview)
+	}
+	if !preview.LastEventAt.Valid || !preview.LastEventAt.Time.Equal(lastEventAt.Time) {
+		t.Fatalf("viewed-only preview last event = %#v", preview.LastEventAt)
+	}
+	if !preview.UsageJSON.Valid || preview.UsageJSON.String != `{"usageVersion":2,"inputTokens":10}` {
+		t.Fatalf("viewed-only preview usage = %#v", preview.UsageJSON)
+	}
+
+	noOpViewedTask, ok, noOpViewedChanged, err := store.UpdateTaskMetadataIfChanged(ctx, TaskMetadataUpdate{
+		TaskID:          "task-1",
+		LastViewedAtSet: true,
+		LastViewedAt:    viewedOnlyAt,
+		UpdatedAt:       createdAt.Add(11 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("no-op viewed metadata: %v", err)
+	}
+	if !ok {
+		t.Fatal("task not found for no-op viewed metadata update")
+	}
+	if noOpViewedChanged {
+		t.Fatalf("unchanged viewed metadata update reported changed task = %#v", noOpViewedTask)
+	}
+	if !noOpViewedTask.UpdatedAt.Equal(viewedOnlyUpdatedAt) {
+		t.Fatalf("no-op viewed metadata changed updatedAt = %#v", noOpViewedTask.UpdatedAt)
 	}
 }
 
@@ -543,6 +946,17 @@ WHERE `+runtimeScopeValidSQL+`
   AND status IN ('starting', 'running')`+runtimeRecordOrderSQL, "openade-task")
 	if !strings.Contains(activeTaskStatusListPlan, "idx_runtimes_scope_type_status_activity") {
 		t.Fatalf("active task runtime status-list filter did not use ownerType/status index: %s", activeTaskStatusListPlan)
+	}
+	singleTaskActiveRuntimePlan := runtimeListQueryPlan(t, store, `EXPLAIN QUERY PLAN `+runtimeRecordSelectSQL+`
+WHERE `+runtimeScopeValidSQL+`
+  AND json_extract(scope_json, '$.ownerType') = ?
+  AND json_extract(scope_json, '$.ownerId') = ?
+  AND status IN ('running', 'starting')`+runtimeRecordOrderSQL, "openade-task", "task-1")
+	if !strings.Contains(singleTaskActiveRuntimePlan, "idx_runtimes_scope_status_activity") {
+		t.Fatalf("single task active runtime filter did not use ownerType/ownerId/status index: %s", singleTaskActiveRuntimePlan)
+	}
+	if strings.Contains(singleTaskActiveRuntimePlan, "SCAN runtimes") {
+		t.Fatalf("single task active runtime filter scans runtime history: %s", singleTaskActiveRuntimePlan)
 	}
 
 	orphanedAt := updatedAt.Add(5 * time.Minute)
@@ -830,6 +1244,109 @@ func TestQueuedTurnRoundTripAndCancel(t *testing.T) {
 	}
 }
 
+func TestListCommentsUsesTaskCreatedIndex(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	rows, err := store.db.QueryContext(ctx, "EXPLAIN QUERY PLAN "+listCommentsQuery, "task-indexed-comments")
+	if err != nil {
+		t.Fatalf("explain comments query: %v", err)
+	}
+	defer rows.Close()
+
+	details := []string{}
+	for rows.Next() {
+		var id int
+		var parent int
+		var unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatalf("scan comments query plan: %v", err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate comments query plan: %v", err)
+	}
+
+	plan := strings.Join(details, "\n")
+	if !strings.Contains(plan, "SEARCH comments USING INDEX idx_comments_task_created") || !strings.Contains(plan, "(task_id=?)") {
+		t.Fatalf("comments query is not using the task-created index:\n%s", plan)
+	}
+	if strings.Contains(plan, "SCAN comments") || strings.Contains(plan, "USE TEMP B-TREE") {
+		t.Fatalf("comments query is scanning or sorting instead of using the task-created index:\n%s", plan)
+	}
+}
+
+func TestListTaskDeviceEnvironmentsUsesTaskLastUsedIndex(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	rows, err := store.db.QueryContext(ctx, "EXPLAIN QUERY PLAN "+listTaskDeviceEnvironmentsQuery, "task-indexed-device-env")
+	if err != nil {
+		t.Fatalf("explain task device environments query: %v", err)
+	}
+	defer rows.Close()
+
+	details := []string{}
+	for rows.Next() {
+		var id int
+		var parent int
+		var unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatalf("scan task device environments query plan: %v", err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate task device environments query plan: %v", err)
+	}
+
+	plan := strings.Join(details, "\n")
+	if !strings.Contains(plan, "SEARCH task_device_environments USING INDEX idx_task_device_environments_task_last_used_created_id") ||
+		!strings.Contains(plan, "(task_id=?)") {
+		t.Fatalf("task device environments query is not using the task-last-used index:\n%s", plan)
+	}
+	if strings.Contains(plan, "SCAN task_device_environments") || strings.Contains(plan, "USE TEMP B-TREE") {
+		t.Fatalf("task device environments query is scanning or sorting instead of using the task-last-used index:\n%s", plan)
+	}
+}
+
+func TestListQueuedTurnsUsesTaskPositionIndex(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	rows, err := store.db.QueryContext(ctx, "EXPLAIN QUERY PLAN "+listQueuedTurnsQuery, "task-indexed-queued-turns")
+	if err != nil {
+		t.Fatalf("explain queued turns query: %v", err)
+	}
+	defer rows.Close()
+
+	details := []string{}
+	for rows.Next() {
+		var id int
+		var parent int
+		var unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatalf("scan queued turns query plan: %v", err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate queued turns query plan: %v", err)
+	}
+
+	plan := strings.Join(details, "\n")
+	if !strings.Contains(plan, "SEARCH queued_turns USING INDEX idx_queued_turns_task_position_created_id") || !strings.Contains(plan, "(task_id=?)") {
+		t.Fatalf("queued turns query is not using the task-position index:\n%s", plan)
+	}
+	if strings.Contains(plan, "SCAN queued_turns") || strings.Contains(plan, "USE TEMP B-TREE") {
+		t.Fatalf("queued turns query is scanning or sorting instead of using the task-position index:\n%s", plan)
+	}
+}
+
 func TestQueuedTurnCreateAndReorder(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
@@ -873,7 +1390,7 @@ func TestQueuedTurnCreateAndReorder(t *testing.T) {
 	second, created, err := store.CreateQueuedTurn(ctx, QueuedTurn{
 		ID:        "queued-second",
 		TaskID:    "task-queue",
-		Type:      "do",
+		Type:      "hyperplan",
 		Input:     "Second",
 		Status:    "queued",
 		CreatedAt: createdAt.Add(time.Second),
@@ -882,7 +1399,7 @@ func TestQueuedTurnCreateAndReorder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create second queued turn: %v", err)
 	}
-	if !created || second.Position != 2 {
+	if !created || second.Position != 2 || second.Type != "hyperplan" {
 		t.Fatalf("second queued turn = %#v created=%v", second, created)
 	}
 	existing, created, err := store.CreateQueuedTurn(ctx, QueuedTurn{

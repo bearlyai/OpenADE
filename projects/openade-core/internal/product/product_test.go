@@ -30,6 +30,7 @@ import (
 const (
 	runtimeHarnessReadLimit = 4 << 20
 	snapshotReadBudget      = 250 * time.Millisecond
+	projectListReadBudget   = 100 * time.Millisecond
 	boundedTaskReadBudget   = 200 * time.Millisecond
 	gitSummaryReadBudget    = 750 * time.Millisecond
 	processListReadBudget   = 500 * time.Millisecond
@@ -173,6 +174,7 @@ func newRuntimeHarnessWithConfigStoreSetupAndOptions(t *testing.T, configureConf
 		"openade/project/process/reconnect",
 		"openade/project/process/stop",
 		"openade/cron/definitions/read",
+		"openade/cron/run",
 		"openade/cron/installState/read",
 		"openade/cron/installState/replace",
 		"openade/task/terminal/start",
@@ -250,6 +252,8 @@ func TestProductPairedPermissionProfile(t *testing.T) {
 		"remote/device/selfRevoke",
 		"openade/task/read",
 		"openade/task/delete",
+		"openade/task/image/write",
+		"openade/settings/mcpServers/read",
 		"openade/turn/start",
 		"openade/queued-turn/enqueue",
 		"openade/queued-turn/reorder",
@@ -272,9 +276,9 @@ func TestProductPairedPermissionProfile(t *testing.T) {
 		"openade/queued-turn/importLegacy",
 		"openade/action/create",
 		"openade/import/legacyResources",
+		"openade/cron/run",
 		"openade/cron/installState/read",
 		"openade/cron/installState/replace",
-		"openade/settings/mcpServers/read",
 		"openade/settings/mcpServers/replace",
 		"openade/settings/mcpServers/upsert",
 		"openade/settings/mcpServers/delete",
@@ -369,6 +373,86 @@ func TestProductRemoteDeviceAdminOverRuntime(t *testing.T) {
 	invalid := harness.request(t, "remote/device/revoke", map[string]any{})
 	if runtimeErrorCode(t, invalid) != "invalid_params" {
 		t.Fatalf("invalid revoke = %#v", invalid)
+	}
+}
+
+func TestProductContractRequestBoundaryValidationOverRuntime(t *testing.T) {
+	harness := newRuntimeHarness(t)
+
+	emptySettings := resultObject(t, harness.request(t, "openade/settings/personal/read", nil))
+	if _, ok := emptySettings["settings"]; !ok {
+		t.Fatalf("nil empty-object params should normalize to settings result: %#v", emptySettings)
+	}
+
+	snapshotWithParams := harness.request(t, "openade/snapshot/read", map[string]any{"repoId": "ignored"})
+	if runtimeErrorCode(t, snapshotWithParams) != "invalid_params" {
+		t.Fatalf("undefined request accepted non-empty params: %#v", snapshotWithParams)
+	}
+
+	settingsWithKeys := harness.request(t, "openade/settings/personal/read", map[string]any{"unexpected": true})
+	if runtimeErrorCode(t, settingsWithKeys) != "invalid_params" {
+		t.Fatalf("empty-object request accepted keys: %#v", settingsWithKeys)
+	}
+
+	taskListWithArray := harness.request(t, "openade/task/list", []string{"repo-1"})
+	if runtimeErrorCode(t, taskListWithArray) != "invalid_params" {
+		t.Fatalf("object request accepted array params: %#v", taskListWithArray)
+	}
+
+	taskListWithNull := harness.request(t, "openade/task/list", nil)
+	if runtimeErrorCode(t, taskListWithNull) != "invalid_params" {
+		t.Fatalf("object request accepted null params: %#v", taskListWithNull)
+	}
+
+	taskReadMissingTaskID := harness.request(t, "openade/task/read", map[string]any{"repoId": "repo-1"})
+	if runtimeErrorCode(t, taskReadMissingTaskID) != "invalid_params" {
+		t.Fatalf("required local-type field was not enforced: %#v", taskReadMissingTaskID)
+	}
+
+	taskListWrongRepoType := harness.request(t, "openade/task/list", map[string]any{"repoId": 123})
+	if runtimeErrorCode(t, taskListWrongRepoType) != "invalid_params" {
+		t.Fatalf("required string field accepted number: %#v", taskListWrongRepoType)
+	}
+	if !strings.Contains(runtimeErrorMessage(t, taskListWrongRepoType), "params.repoId has the wrong type") {
+		t.Fatalf("required string field error did not come from contract validator: %#v", taskListWrongRepoType)
+	}
+
+	taskReadWrongOptionalType := harness.request(t, "openade/task/read", map[string]any{
+		"repoId":               "repo-1",
+		"taskId":               "task-1",
+		"hydrateSessionEvents": "yes",
+	})
+	if runtimeErrorCode(t, taskReadWrongOptionalType) != "invalid_params" {
+		t.Fatalf("optional boolean field accepted string: %#v", taskReadWrongOptionalType)
+	}
+	if !strings.Contains(runtimeErrorMessage(t, taskReadWrongOptionalType), "params.hydrateSessionEvents has the wrong type") {
+		t.Fatalf("optional field error did not come from contract validator: %#v", taskReadWrongOptionalType)
+	}
+
+	repoCreateWrongUserType := harness.request(t, "openade/repo/create", map[string]any{
+		"name":      "Repo",
+		"path":      t.TempDir(),
+		"createdBy": "user",
+	})
+	if runtimeErrorCode(t, repoCreateWrongUserType) != "invalid_params" {
+		t.Fatalf("required object field accepted string: %#v", repoCreateWrongUserType)
+	}
+
+	turnStartBadType := harness.request(t, "openade/turn/start", map[string]any{
+		"repoId": "repo-1",
+		"type":   "launch",
+		"input":  "do the work",
+	})
+	if runtimeErrorCode(t, turnStartBadType) != "invalid_params" {
+		t.Fatalf("literal-union field accepted unsupported value: %#v", turnStartBadType)
+	}
+	if !strings.Contains(runtimeErrorMessage(t, turnStartBadType), "params.type has an unsupported value") {
+		t.Fatalf("literal-union error did not come from contract validator: %#v", turnStartBadType)
+	}
+
+	pairingMissingBaseURL := harness.request(t, "remote/pairing/start", map[string]any{})
+	if runtimeErrorCode(t, pairingMissingBaseURL) != "invalid_params" {
+		t.Fatalf("remote method required field was not enforced: %#v", pairingMissingBaseURL)
 	}
 }
 
@@ -625,9 +709,11 @@ func TestProductPairedPermissionProfileFiltersCapabilitiesOverRuntime(t *testing
 		"openade/project/file/read",
 		"openade/project/process/reconnect",
 		"openade/cron/definitions/read",
+		"openade/settings/mcpServers/read",
 		"openade/task/read",
 		"openade/task/create",
 		"openade/task/delete",
+		"openade/task/image/write",
 		"openade/turn/start",
 		"openade/queued-turn/enqueue",
 		"openade/queued-turn/reorder",
@@ -646,16 +732,15 @@ func TestProductPairedPermissionProfileFiltersCapabilitiesOverRuntime(t *testing
 		"openade/task/usage/backfill",
 		"openade/task/terminal/start",
 		"openade/task/image/staged/read",
-		"openade/task/image/write",
 		"openade/task/image/importLegacy",
 		"openade/task/images/importLegacy",
 		"openade/task/images/gcStaged",
-		"openade/settings/mcpServers/read",
 		"openade/settings/mcpServers/replace",
 		"openade/settings/mcpServers/upsert",
 		"openade/settings/mcpServers/delete",
 		"openade/settings/personal/read",
 		"openade/settings/personal/replace",
+		"openade/cron/run",
 		"openade/cron/installState/read",
 		"openade/cron/installState/replace",
 		"openade/snapshot/create",
@@ -698,6 +783,24 @@ func TestProductPairedPermissionProfileFiltersCapabilitiesOverRuntime(t *testing
 	denied := harness.request(t, "openade/project/file/write", map[string]any{})
 	if runtimeErrorCode(t, denied) != "permission_denied" {
 		t.Fatalf("file write should be permission denied: %#v", denied)
+	}
+	imageBytes := []byte("paired core upload")
+	writtenImage := resultObject(t, harness.request(t, "openade/task/image/write", map[string]any{
+		"imageId":         "paired-core-upload",
+		"ext":             "png",
+		"mediaType":       "image/png",
+		"data":            base64.StdEncoding.EncodeToString(imageBytes),
+		"clientRequestId": "paired-core-image-upload",
+	}))
+	if writtenImage["imageId"] != "paired-core-upload" || writtenImage["size"] != float64(len(imageBytes)) {
+		t.Fatalf("paired image write = %#v", writtenImage)
+	}
+	stagedDenied := harness.request(t, "openade/task/image/staged/read", map[string]any{
+		"imageId": "paired-core-upload",
+		"ext":     "png",
+	})
+	if runtimeErrorCode(t, stagedDenied) != "permission_denied" {
+		t.Fatalf("staged image read should be permission denied: %#v", stagedDenied)
 	}
 
 	harness.runtime.Notify("openade/task/updated", map[string]string{"repoId": "repo-paired", "taskId": "task-paired"})
@@ -776,6 +879,7 @@ func TestProductPersonalSettingsReadReplace(t *testing.T) {
 		t.Fatalf("initial env vars should be empty: %#v", initial)
 	}
 
+	notificationStart := len(harness.notifications)
 	replaced := objectField(t, resultObject(t, harness.request(t, "openade/settings/personal/replace", map[string]any{
 		"settings": map[string]any{
 			"envVars": map[string]any{
@@ -798,6 +902,11 @@ func TestProductPersonalSettingsReadReplace(t *testing.T) {
 		},
 		"clientRequestId": "personal-settings-replace",
 	})), "settings")
+	notification := harness.waitForNotification(t, notificationStart, "openade/snapshotChanged")
+	notificationParams := objectField(t, notification, "params")
+	if notificationParams["clientRequestId"] != "personal-settings-replace" {
+		t.Fatalf("personal settings notification params = %#v", notificationParams)
+	}
 	if replaced["theme"] != "code-theme-black" || replaced["renderMarkdownMessages"] != false || replaced["telemetryDisabled"] != false {
 		t.Fatalf("replaced personal settings lost explicit false values: %#v", replaced)
 	}
@@ -848,6 +957,21 @@ func (harness *runtimeHarness) request(t *testing.T, method string, params any) 
 			t.Fatalf("unexpected response while waiting for %s: %#v", method, message)
 		}
 		harness.notifications = append(harness.notifications, message)
+	}
+}
+
+func writeRuntimeRequest(t *testing.T, conn *websocket.Conn, id string, method string, params any) {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"id":     id,
+		"method": method,
+		"params": params,
+	})
+	if err != nil {
+		t.Fatalf("encode request %s: %v", id, err)
+	}
+	if err := conn.Write(context.Background(), websocket.MessageText, payload); err != nil {
+		t.Fatalf("write request %s: %v", id, err)
 	}
 }
 
@@ -1253,12 +1377,104 @@ work_dir = "src"
 func TestProductSnapshotAndProjectMethodsOverRuntime(t *testing.T) {
 	harness := newRuntimeHarness(t)
 	seedProductData(t, harness.store)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	previewBase := time.Date(2026, 6, 5, 13, 0, 0, 0, time.UTC)
+	upsertPreviewTask := func(taskID string, title string, closed bool, eventAt time.Time) {
+		t.Helper()
+		if err := harness.store.UpsertTask(ctx, storage.Task{
+			ID:            taskID,
+			RepoID:        "repo-1",
+			Slug:          taskID,
+			Title:         title,
+			Description:   title,
+			IsolationJSON: sql.NullString{String: `{"type":"head"}`, Valid: true},
+			Closed:        closed,
+			CreatedAt:     previewBase,
+			UpdatedAt:     eventAt,
+			LastEventAt:   sql.NullTime{Time: eventAt, Valid: true},
+		}); err != nil {
+			t.Fatalf("upsert task %s: %v", taskID, err)
+		}
+		if err := harness.store.UpsertTaskPreview(ctx, storage.TaskPreview{
+			TaskID:        taskID,
+			RepoID:        "repo-1",
+			Slug:          taskID,
+			Title:         title,
+			Closed:        closed,
+			CreatedAt:     previewBase,
+			UpdatedAt:     eventAt,
+			LastEventAt:   sql.NullTime{Time: eventAt, Valid: true},
+			LastEventJSON: sql.NullString{String: `{"type":"assistant_message","summary":"preview"}`, Valid: true},
+		}); err != nil {
+			t.Fatalf("upsert task preview %s: %v", taskID, err)
+		}
+	}
+	upsertPreviewTask("task-pinned-running", "Pinned running", false, previewBase.Add(10*time.Second))
+	upsertPreviewTask("task-pinned-new", "Pinned newer", false, previewBase.Add(500*time.Second))
+	upsertPreviewTask("task-open-new", "Open newer", false, previewBase.Add(400*time.Second))
+	upsertPreviewTask("task-closed-pinned", "Closed pinned", true, previewBase.Add(600*time.Second))
+	upsertPreviewTask("task-closed-other", "Closed other", true, previewBase.Add(700*time.Second))
+	resultObject(t, harness.request(t, "openade/settings/personal/replace", map[string]any{
+		"settings": map[string]any{
+			"theme":         "code-theme-clean",
+			"pinnedTaskIds": []any{"task-pinned-new", "task-pinned-running", "task-closed-pinned"},
+		},
+		"clientRequestId": "snapshot-project-list-settings",
+	}))
+	for _, runtimeRecord := range []storage.RuntimeRecord{
+		{
+			RuntimeID:      "agent:snapshot-active-task",
+			Kind:           "agent",
+			Status:         "running",
+			ScopeJSON:      sql.NullString{String: `{"ownerType":"openade-task","ownerId":"task-1"}`, Valid: true},
+			StartedAt:      now,
+			UpdatedAt:      now,
+			LastActivityAt: now,
+		},
+		{
+			RuntimeID:      "agent:snapshot-completed-task",
+			Kind:           "agent",
+			Status:         "completed",
+			ScopeJSON:      sql.NullString{String: `{"ownerType":"openade-task","ownerId":"task-1"}`, Valid: true},
+			StartedAt:      now,
+			UpdatedAt:      now,
+			LastActivityAt: now,
+		},
+		{
+			RuntimeID:      "agent:snapshot-active-pinned",
+			Kind:           "agent",
+			Status:         "running",
+			ScopeJSON:      sql.NullString{String: `{"ownerType":"openade-task","ownerId":"task-pinned-running"}`, Valid: true},
+			StartedAt:      now,
+			UpdatedAt:      now,
+			LastActivityAt: now,
+		},
+		{
+			RuntimeID:      "process:snapshot-active-process",
+			Kind:           "process",
+			Status:         "running",
+			ScopeJSON:      sql.NullString{String: `{"ownerType":"process","ownerId":"process-1"}`, Valid: true},
+			StartedAt:      now,
+			UpdatedAt:      now,
+			LastActivityAt: now,
+		},
+	} {
+		if err := harness.store.UpsertRuntime(ctx, runtimeRecord); err != nil {
+			t.Fatalf("upsert snapshot runtime %s: %v", runtimeRecord.RuntimeID, err)
+		}
+	}
 
 	snapshot := resultObject(t, harness.request(t, "openade/snapshot/read", map[string]any{}))
 	server := objectField(t, snapshot, "server")
 	if server["version"] != "test-version" || server["hostName"] != "test-host" {
 		t.Fatalf("server = %#v", server)
 	}
+	theme := objectField(t, server, "theme")
+	if theme["setting"] != "code-theme-clean" || theme["className"] != "code-theme-clean" || theme["label"] != "Clean" {
+		t.Fatalf("theme = %#v", theme)
+	}
+	assertStringSetEquals(t, stringsFromAny(arrayField(t, snapshot, "workingTaskIds")), []string{"task-1", "task-pinned-running"})
 	repos := arrayField(t, snapshot, "repos")
 	if len(repos) != 1 {
 		t.Fatalf("snapshot repos = %#v", repos)
@@ -1268,26 +1484,60 @@ func TestProductSnapshotAndProjectMethodsOverRuntime(t *testing.T) {
 		t.Fatalf("snapshot repo = %#v", repo)
 	}
 	tasks := arrayField(t, repo, "tasks")
-	if len(tasks) != 1 {
+	if len(tasks) != 6 {
 		t.Fatalf("snapshot tasks = %#v", tasks)
 	}
-	preview := objectValue(t, tasks[0])
-	if preview["id"] != "task-1" || preview["title"] != "Move state to core" {
-		t.Fatalf("task preview = %#v", preview)
+	taskIDs := []string{}
+	var moveStatePreview map[string]any
+	for _, taskValue := range tasks {
+		preview := objectValue(t, taskValue)
+		if id, ok := preview["id"].(string); ok {
+			taskIDs = append(taskIDs, id)
+		}
+		if preview["id"] == "task-1" {
+			moveStatePreview = preview
+		}
 	}
-	if objectField(t, preview, "usage")["inputTokens"] != float64(123) {
-		t.Fatalf("usage = %#v", preview["usage"])
+	expectedTaskIDs := []string{"task-pinned-running", "task-pinned-new", "task-1", "task-open-new", "task-closed-pinned", "task-closed-other"}
+	if strings.Join(taskIDs, ",") != strings.Join(expectedTaskIDs, ",") {
+		t.Fatalf("task order = %#v, want %#v", taskIDs, expectedTaskIDs)
+	}
+	if moveStatePreview == nil || moveStatePreview["title"] != "Move state to core" {
+		t.Fatalf("task preview = %#v", moveStatePreview)
+	}
+	if objectField(t, moveStatePreview, "usage")["inputTokens"] != float64(123) {
+		t.Fatalf("usage = %#v", moveStatePreview["usage"])
 	}
 
 	projects := resultArray(t, harness.request(t, "openade/project/list", map[string]any{}))
 	if len(projects) != 1 {
 		t.Fatalf("projects = %#v", projects)
 	}
+	projectTasks := arrayField(t, objectValue(t, projects[0]), "tasks")
+	projectTaskIDs := []string{}
+	for _, taskValue := range projectTasks {
+		projectTaskIDs = append(projectTaskIDs, objectValue(t, taskValue)["id"].(string))
+	}
+	if strings.Join(projectTaskIDs, ",") != strings.Join(expectedTaskIDs, ",") {
+		t.Fatalf("project-list task order = %#v, want %#v", projectTaskIDs, expectedTaskIDs)
+	}
 }
 
 func TestProductTaskReadBoundsEventsUnlessHydrated(t *testing.T) {
 	harness := newRuntimeHarness(t)
 	seedProductData(t, harness.store)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if err := harness.store.UpsertRuntime(context.Background(), storage.RuntimeRecord{
+		RuntimeID:      "runtime-task-read",
+		Kind:           "agent",
+		Status:         "running",
+		ScopeJSON:      sql.NullString{String: `{"ownerType":"openade-task","ownerId":"task-1"}`, Valid: true},
+		StartedAt:      now,
+		UpdatedAt:      now,
+		LastActivityAt: now,
+	}); err != nil {
+		t.Fatalf("seed active task runtime: %v", err)
+	}
 
 	task := resultObject(t, harness.request(t, "openade/task/read", map[string]any{
 		"repoId":               "repo-1",
@@ -1299,6 +1549,21 @@ func TestProductTaskReadBoundsEventsUnlessHydrated(t *testing.T) {
 	}
 	if objectField(t, task, "isolationStrategy")["type"] != "head" {
 		t.Fatalf("isolation strategy = %#v", task["isolationStrategy"])
+	}
+	preview := objectField(t, task, "preview")
+	if preview["id"] != "task-1" || preview["title"] != "Move state to core" {
+		t.Fatalf("task preview = %#v", preview)
+	}
+	previewUsage := objectField(t, preview, "usage")
+	if previewUsage["inputTokens"] != float64(123) || previewUsage["outputTokens"] != float64(456) {
+		t.Fatalf("task preview usage = %#v", previewUsage)
+	}
+	if objectField(t, preview, "lastEvent")["summary"] != "done" {
+		t.Fatalf("task preview last event = %#v", preview["lastEvent"])
+	}
+	runtimeState := objectField(t, task, "runtimeState")
+	if runtimeState["isRunning"] != true || strings.Join(stringsFromAny(arrayField(t, runtimeState, "runtimeIds")), ",") != "runtime-task-read" {
+		t.Fatalf("runtime state = %#v", runtimeState)
 	}
 	createdBy := objectField(t, task, "createdBy")
 	if createdBy["id"] != "user-1" || createdBy["email"] != "user@example.com" {
@@ -1318,6 +1583,33 @@ func TestProductTaskReadBoundsEventsUnlessHydrated(t *testing.T) {
 	if firstEvent["id"] != "event-021" || lastEvent["id"] != "event-100" {
 		t.Fatalf("bounded event window = first %#v last %#v", firstEvent, lastEvent)
 	}
+
+	limitedTask := resultObject(t, harness.request(t, "openade/task/read", map[string]any{
+		"repoId":               "repo-1",
+		"taskId":               "task-1",
+		"hydrateSessionEvents": false,
+		"eventLimit":           12,
+	}))
+	limitedEvents := arrayField(t, limitedTask, "events")
+	if len(limitedEvents) != 12 {
+		t.Fatalf("limited events length = %d", len(limitedEvents))
+	}
+	limitedFirstEvent := objectValue(t, limitedEvents[0])
+	limitedLastEvent := objectValue(t, limitedEvents[len(limitedEvents)-1])
+	if limitedFirstEvent["id"] != "event-089" || limitedLastEvent["id"] != "event-100" {
+		t.Fatalf("limited event window = first %#v last %#v", limitedFirstEvent, limitedLastEvent)
+	}
+
+	invalidLimit := harness.request(t, "openade/task/read", map[string]any{
+		"repoId":               "repo-1",
+		"taskId":               "task-1",
+		"hydrateSessionEvents": false,
+		"eventLimit":           12.5,
+	})
+	if runtimeErrorCode(t, invalidLimit) != "invalid_params" {
+		t.Fatalf("decimal eventLimit accepted: %#v", invalidLimit)
+	}
+
 	comments := arrayField(t, task, "comments")
 	if len(comments) != 1 || objectValue(t, comments[0])["body"] != "Use the runtime envelope." || objectValue(t, comments[0])["content"] != "Use the runtime envelope." {
 		t.Fatalf("comments = %#v", comments)
@@ -1352,6 +1644,170 @@ func TestProductTaskReadBoundsEventsUnlessHydrated(t *testing.T) {
 	}
 }
 
+func TestProductTaskReadBoundsActionStreamPayloadsUnlessHydrated(t *testing.T) {
+	harness := newRuntimeHarness(t)
+	ctx := context.Background()
+	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	if err := harness.store.UpsertRepo(ctx, storage.Repo{
+		ID:        "repo-stream-bound",
+		Name:      "Stream Bound Repo",
+		Path:      t.TempDir(),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("upsert repo: %v", err)
+	}
+	if err := harness.store.UpsertTask(ctx, storage.Task{
+		ID:            "task-stream-bound",
+		RepoID:        "repo-stream-bound",
+		Slug:          "task-stream-bound",
+		Title:         "Bound stream payloads",
+		IsolationJSON: sql.NullString{String: `{"type":"head"}`, Valid: true},
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("upsert task: %v", err)
+	}
+	if err := harness.store.UpsertTaskPreview(ctx, storage.TaskPreview{
+		TaskID:    "task-stream-bound",
+		RepoID:    "repo-stream-bound",
+		Slug:      "task-stream-bound",
+		Title:     "Bound stream payloads",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("upsert task preview: %v", err)
+	}
+	olderPayload, err := json.Marshal(map[string]any{
+		"id":        "event-stream-older",
+		"type":      "action",
+		"status":    "completed",
+		"createdAt": "2026-06-08T12:00:00Z",
+		"execution": map[string]any{
+			"harnessId":   "codex",
+			"executionId": "exec-stream-older",
+			"events":      streamEventFixtures("older-stream", 3),
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal older stream payload: %v", err)
+	}
+	if err := harness.store.UpsertTaskEvent(ctx, storage.TaskEvent{
+		ID:          "event-stream-older",
+		TaskID:      "task-stream-bound",
+		Seq:         1,
+		Type:        "action",
+		Status:      sql.NullString{String: "completed", Valid: true},
+		SourceType:  sql.NullString{String: "do", Valid: true},
+		SourceLabel: sql.NullString{String: "Do", Valid: true},
+		CreatedAt:   now,
+		PayloadJSON: sql.NullString{String: string(olderPayload), Valid: true},
+	}); err != nil {
+		t.Fatalf("upsert older task event: %v", err)
+	}
+	for seq := 2; seq <= 24; seq++ {
+		if err := harness.store.UpsertTaskEvent(ctx, storage.TaskEvent{
+			ID:        fmt.Sprintf("event-stream-filler-%02d", seq),
+			TaskID:    "task-stream-bound",
+			Seq:       int64(seq),
+			Type:      "message",
+			CreatedAt: now.Add(time.Duration(seq) * time.Millisecond),
+		}); err != nil {
+			t.Fatalf("upsert filler task event %d: %v", seq, err)
+		}
+	}
+	payload, err := json.Marshal(map[string]any{
+		"id":        "event-stream-bound",
+		"type":      "action",
+		"status":    "completed",
+		"createdAt": "2026-06-08T12:00:00Z",
+		"execution": map[string]any{
+			"harnessId":   "codex",
+			"executionId": "exec-stream-bound",
+			"events":      streamEventFixtures("exec-stream", 365),
+		},
+		"hyperplanSubExecutions": []map[string]any{
+			{
+				"stepId":      "step-a",
+				"primitive":   "plan",
+				"harnessId":   "codex",
+				"executionId": "sub-exec-stream-bound",
+				"events":      streamEventFixtures("sub-stream", 365),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal stream payload: %v", err)
+	}
+	if err := harness.store.UpsertTaskEvent(ctx, storage.TaskEvent{
+		ID:          "event-stream-bound",
+		TaskID:      "task-stream-bound",
+		Seq:         25,
+		Type:        "action",
+		Status:      sql.NullString{String: "completed", Valid: true},
+		SourceType:  sql.NullString{String: "do", Valid: true},
+		SourceLabel: sql.NullString{String: "Do", Valid: true},
+		CreatedAt:   now.Add(25 * time.Millisecond),
+		PayloadJSON: sql.NullString{String: string(payload), Valid: true},
+	}); err != nil {
+		t.Fatalf("upsert task event: %v", err)
+	}
+
+	lightweight := resultObject(t, harness.request(t, "openade/task/read", map[string]any{
+		"repoId":               "repo-stream-bound",
+		"taskId":               "task-stream-bound",
+		"hydrateSessionEvents": false,
+	}))
+	olderLightweightEvent := actionEventFromTask(t, lightweight, "event-stream-older")
+	if olderLightweightEvent["status"] != "completed" || olderLightweightEvent["sourceType"] != "do" || olderLightweightEvent["sourceLabel"] != "Do" {
+		t.Fatalf("older lightweight fallback event = %#v", olderLightweightEvent)
+	}
+	if _, ok := olderLightweightEvent["execution"]; ok {
+		t.Fatalf("older lightweight event should not hydrate payload: %#v", olderLightweightEvent)
+	}
+	lightweightEvent := actionEventFromTask(t, lightweight, "event-stream-bound")
+	lightweightExecution := objectField(t, lightweightEvent, "execution")
+	lightweightEvents := arrayField(t, lightweightExecution, "events")
+	if len(lightweightEvents) != 120 || objectValue(t, lightweightEvents[0])["id"] != "exec-stream-246" || objectValue(t, lightweightEvents[119])["id"] != "exec-stream-365" {
+		t.Fatalf("lightweight execution event tail = %#v", lightweightEvents)
+	}
+	if lightweightExecution["omittedEventCount"] != float64(245) {
+		t.Fatalf("lightweight execution omitted count = %#v", lightweightExecution)
+	}
+	lightweightSubExecution := objectValue(t, arrayField(t, lightweightEvent, "hyperplanSubExecutions")[0])
+	lightweightSubEvents := arrayField(t, lightweightSubExecution, "events")
+	if len(lightweightSubEvents) != 120 || objectValue(t, lightweightSubEvents[0])["id"] != "sub-stream-246" || objectValue(t, lightweightSubEvents[119])["id"] != "sub-stream-365" {
+		t.Fatalf("lightweight sub-execution event tail = %#v", lightweightSubEvents)
+	}
+	if lightweightSubExecution["omittedEventCount"] != float64(245) {
+		t.Fatalf("lightweight sub-execution omitted count = %#v", lightweightSubExecution)
+	}
+
+	hydrated := resultObject(t, harness.request(t, "openade/task/read", map[string]any{
+		"repoId":               "repo-stream-bound",
+		"taskId":               "task-stream-bound",
+		"hydrateSessionEvents": true,
+	}))
+	olderHydratedEvent := actionEventFromTask(t, hydrated, "event-stream-older")
+	olderHydratedExecution := objectField(t, olderHydratedEvent, "execution")
+	olderHydratedEvents := arrayField(t, olderHydratedExecution, "events")
+	if len(olderHydratedEvents) != 3 || objectValue(t, olderHydratedEvents[0])["id"] != "older-stream-001" {
+		t.Fatalf("older hydrated execution events = %#v", olderHydratedEvents)
+	}
+	if _, ok := olderHydratedExecution["omittedEventCount"]; ok {
+		t.Fatalf("older hydrated execution should not report omitted events: %#v", olderHydratedExecution)
+	}
+	hydratedEvent := actionEventFromTask(t, hydrated, "event-stream-bound")
+	hydratedExecution := objectField(t, hydratedEvent, "execution")
+	hydratedEvents := arrayField(t, hydratedExecution, "events")
+	if len(hydratedEvents) != 365 || objectValue(t, hydratedEvents[0])["id"] != "exec-stream-001" || objectValue(t, hydratedEvents[364])["id"] != "exec-stream-365" {
+		t.Fatalf("hydrated execution events = %#v", hydratedEvents)
+	}
+	if _, ok := hydratedExecution["omittedEventCount"]; ok {
+		t.Fatalf("hydrated execution should not report omitted events: %#v", hydratedExecution)
+	}
+}
+
 func TestProductReadPerformanceBudgetsOverRuntime(t *testing.T) {
 	harness := newRuntimeHarness(t)
 	seedProductPerformanceData(t, harness.store, 180, 1500)
@@ -1365,6 +1821,24 @@ func TestProductReadPerformanceBudgetsOverRuntime(t *testing.T) {
 	})
 	if snapshotDuration > snapshotReadBudget {
 		t.Fatalf("openade/snapshot/read exceeded hard gate: %s > %s", snapshotDuration, snapshotReadBudget)
+	}
+
+	projectListDuration := measureRuntimeRequest(t, func() {
+		projects := resultArray(t, harness.request(t, "openade/project/list", map[string]any{}))
+		if len(projects) != 3 {
+			t.Fatalf("performance project list length = %d", len(projects))
+		}
+		firstProject := objectValue(t, projects[0])
+		if firstProject["id"] != "repo-perf-0" {
+			t.Fatalf("performance project list first project = %#v", firstProject)
+		}
+		tasks := arrayField(t, firstProject, "tasks")
+		if len(tasks) == 0 {
+			t.Fatalf("performance project list first project has no tasks: %#v", firstProject)
+		}
+	})
+	if projectListDuration > projectListReadBudget {
+		t.Fatalf("openade/project/list exceeded hard gate: %s > %s", projectListDuration, projectListReadBudget)
 	}
 
 	taskDuration := measureRuntimeRequest(t, func() {
@@ -1383,6 +1857,102 @@ func TestProductReadPerformanceBudgetsOverRuntime(t *testing.T) {
 	})
 	if taskDuration > boundedTaskReadBudget {
 		t.Fatalf("openade/task/read bounded events exceeded hard gate: %s > %s", taskDuration, boundedTaskReadBudget)
+	}
+}
+
+func TestProductTaskReadDoesNotWaitBehindUnrelatedTrustedRequest(t *testing.T) {
+	harness := newRuntimeHarness(t)
+	seedProductData(t, harness.store)
+	harness.runtime.Register("test/slow-unrelated-host-read", func(_ context.Context, _ *core.Connection, _ json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
+		time.Sleep(200 * time.Millisecond)
+		return map[string]bool{"ok": true}, nil
+	})
+
+	writeRuntimeRequest(t, harness.conn, "slow-unrelated", "test/slow-unrelated-host-read", map[string]any{})
+	writeRuntimeRequest(t, harness.conn, "task-read", "openade/task/read", map[string]any{
+		"repoId":               "repo-1",
+		"taskId":               "task-1",
+		"hydrateSessionEvents": false,
+	})
+
+	first := harness.readMessage(t, time.Second)
+	if first["id"] != "task-read" {
+		t.Fatalf("task read waited behind unrelated slow request: first response = %#v", first)
+	}
+	task := resultObject(t, first)
+	if task["id"] != "task-1" {
+		t.Fatalf("task read response = %#v", task)
+	}
+
+	second := harness.readMessage(t, time.Second)
+	if second["id"] != "slow-unrelated" || second["error"] != nil {
+		t.Fatalf("slow unrelated response = %#v", second)
+	}
+}
+
+func TestProductHostReadsDoNotWaitBehindUnrelatedTrustedRequest(t *testing.T) {
+	requireGit(t)
+	harness := newRuntimeHarness(t)
+	fixture := seedProductHostPerformanceData(t, harness.store)
+
+	warmFuzzy := resultObject(t, harness.request(t, "openade/project/files/fuzzySearch", map[string]any{
+		"repoId": fixture.repoID,
+		"query":  "needle-hook",
+		"limit":  5,
+	}))
+	if results := stringsFromAny(arrayField(t, warmFuzzy, "results")); len(results) == 0 || results[0] != fixture.targetPath {
+		t.Fatalf("warm fuzzy setup results = %#v, want first %s", results, fixture.targetPath)
+	}
+
+	harness.runtime.Register("test/slow-unrelated-projection", func(_ context.Context, _ *core.Connection, _ json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
+		time.Sleep(1200 * time.Millisecond)
+		return map[string]bool{"ok": true}, nil
+	})
+
+	writeRuntimeRequest(t, harness.conn, "slow-unrelated", "test/slow-unrelated-projection", map[string]any{})
+	writeRuntimeRequest(t, harness.conn, "git-summary", "openade/project/git/summary/read", map[string]any{
+		"repoId": fixture.repoID,
+	})
+	writeRuntimeRequest(t, harness.conn, "process-list", "openade/project/process/list", map[string]any{
+		"repoId": fixture.repoID,
+	})
+	writeRuntimeRequest(t, harness.conn, "fuzzy-search", "openade/project/files/fuzzySearch", map[string]any{
+		"repoId": fixture.repoID,
+		"query":  "needle-hook",
+		"limit":  5,
+	})
+
+	hotResponses := map[string]map[string]any{}
+	for len(hotResponses) < 3 {
+		response := harness.readMessage(t, 2*time.Second)
+		responseID, ok := response["id"].(string)
+		if !ok {
+			t.Fatalf("hot host read response id = %#v", response)
+		}
+		if responseID == "slow-unrelated" {
+			t.Fatalf("hot host reads waited behind unrelated slow request: %#v", response)
+		}
+		hotResponses[responseID] = response
+	}
+
+	gitSummary := resultObject(t, hotResponses["git-summary"])
+	if gitSummary["branch"] != "main" || gitSummary["hasChanges"] != true {
+		t.Fatalf("concurrent git summary = %#v", gitSummary)
+	}
+
+	processList := resultObject(t, hotResponses["process-list"])
+	if configs := arrayField(t, processList, "configs"); len(configs) != fixture.processConfigCount {
+		t.Fatalf("concurrent process configs = %#v, want %d", configs, fixture.processConfigCount)
+	}
+
+	fuzzySearch := resultObject(t, hotResponses["fuzzy-search"])
+	if results := stringsFromAny(arrayField(t, fuzzySearch, "results")); len(results) == 0 || results[0] != fixture.targetPath {
+		t.Fatalf("concurrent fuzzy results = %#v, want first %s", results, fixture.targetPath)
+	}
+
+	slowResponse := harness.readMessage(t, 2*time.Second)
+	if slowResponse["id"] != "slow-unrelated" || slowResponse["error"] != nil {
+		t.Fatalf("slow unrelated response = %#v", slowResponse)
 	}
 }
 
@@ -1681,6 +2251,18 @@ func TestProductTaskResourceInventoryOverRuntime(t *testing.T) {
 			t.Fatalf("upsert inventory event %s: %v", event.ID, err)
 		}
 	}
+	if err := harness.store.UpsertQueuedTurn(ctx, storage.QueuedTurn{
+		ID:          "queued-inventory-image",
+		TaskID:      "task-inventory",
+		Type:        "do",
+		Input:       "queued image",
+		Status:      "queued",
+		PayloadJSON: sql.NullString{String: `{"images":[{"id":"image-queued","ext":"webp","mediaType":"image/webp"},{"id":"image-1","ext":"png","mediaType":"image/png"}]}`, Valid: true},
+		CreatedAt:   now.Add(3 * time.Second),
+		UpdatedAt:   now.Add(3 * time.Second),
+	}); err != nil {
+		t.Fatalf("upsert inventory queued turn: %v", err)
+	}
 
 	inventory := resultObject(t, harness.request(t, "openade/task/resourceInventory/read", map[string]any{
 		"repoId": "repo-inventory",
@@ -1691,12 +2273,16 @@ func TestProductTaskResourceInventoryOverRuntime(t *testing.T) {
 	}
 	assertStringSetEquals(t, stringsFromAny(arrayField(t, inventory, "snapshotIds")), []string{"patch-1"})
 	images := arrayField(t, inventory, "images")
-	if len(images) != 1 {
+	if len(images) != 2 {
 		t.Fatalf("inventory images = %#v", images)
 	}
-	image := objectValue(t, images[0])
-	if image["id"] != "image-1" || image["ext"] != "png" {
-		t.Fatalf("inventory image = %#v", image)
+	imageKeys := map[string]bool{}
+	for _, rawImage := range images {
+		image := objectValue(t, rawImage)
+		imageKeys[fmt.Sprintf("%s.%s", image["id"], image["ext"])] = true
+	}
+	if !imageKeys["image-1.png"] || !imageKeys["image-queued.webp"] {
+		t.Fatalf("inventory images = %#v", images)
 	}
 	sessions := arrayField(t, inventory, "sessions")
 	if len(sessions) != 3 {
@@ -2752,6 +3338,26 @@ func TestProductTaskSnapshotPatchReadsOverRuntime(t *testing.T) {
 	if inlineRead["patch"] != inlinePatch || inlineRead["patchFileId"] != nil {
 		t.Fatalf("inline patch read = %#v", inlineRead)
 	}
+
+	lightweightTask := resultObject(t, harness.request(t, "openade/task/read", map[string]any{
+		"repoId":               "repo-snapshot",
+		"taskId":               "task-snapshot",
+		"hydrateSessionEvents": false,
+	}))
+	lightweightSnapshot := objectValue(t, arrayField(t, lightweightTask, "events")[0])
+	if lightweightSnapshot["id"] != "snapshot-inline" || lightweightSnapshot["fullPatch"] != "" {
+		t.Fatalf("lightweight snapshot event leaked inline patch: %#v", lightweightSnapshot)
+	}
+	hydratedTask := resultObject(t, harness.request(t, "openade/task/read", map[string]any{
+		"repoId":               "repo-snapshot",
+		"taskId":               "task-snapshot",
+		"hydrateSessionEvents": true,
+	}))
+	hydratedSnapshot := objectValue(t, arrayField(t, hydratedTask, "events")[0])
+	if hydratedSnapshot["id"] != "snapshot-inline" || hydratedSnapshot["fullPatch"] != inlinePatch {
+		t.Fatalf("hydrated snapshot event did not retain inline patch: %#v", hydratedSnapshot)
+	}
+
 	externalRead := resultObject(t, harness.request(t, "openade/task/snapshot/patch/read", map[string]any{
 		"repoId":  "repo-snapshot",
 		"taskId":  "task-snapshot",
@@ -3578,7 +4184,7 @@ func TestProductTaskMetadataUpdateOverRuntime(t *testing.T) {
 	updatedAt := "2026-06-05T12:07:00Z"
 	notificationStart := len(harness.notifications)
 
-	result := resultObject(t, harness.request(t, "openade/task/metadata/update", map[string]any{
+	metadataUpdate := map[string]any{
 		"taskId":               "task-1",
 		"title":                "  Updated core title  ",
 		"closed":               true,
@@ -3586,6 +4192,7 @@ func TestProductTaskMetadataUpdateOverRuntime(t *testing.T) {
 		"lastEventAt":          lastEventAt,
 		"updatedAt":            updatedAt,
 		"cancelledPlanEventId": " event-plan-cancelled ",
+		"enabledMcpServerIds":  []string{" server-2 ", "server-3"},
 		"sessionIds": map[string]string{
 			"codex":       "session-1-updated",
 			"claude-code": "session-2",
@@ -3601,7 +4208,8 @@ func TestProductTaskMetadataUpdateOverRuntime(t *testing.T) {
 			"durationMs":   890,
 		},
 		"clientRequestId": "metadata-update-1",
-	}))
+	}
+	result := resultObject(t, harness.request(t, "openade/task/metadata/update", metadataUpdate))
 	if result["ok"] != true {
 		t.Fatalf("metadata update result = %#v", result)
 	}
@@ -3635,6 +4243,7 @@ func TestProductTaskMetadataUpdateOverRuntime(t *testing.T) {
 	if task["cancelledPlanEventId"] != "event-plan-cancelled" {
 		t.Fatalf("updated cancelled plan event = %#v", task)
 	}
+	assertStringSetEquals(t, stringsFromAny(arrayField(t, task, "enabledMcpServerIds")), []string{"server-2", "server-3"})
 	sessionIDs := objectField(t, task, "sessionIds")
 	if sessionIDs["codex"] != "session-1-updated" || sessionIDs["claude-code"] != "session-2" {
 		t.Fatalf("updated session ids = %#v", sessionIDs)
@@ -3653,6 +4262,16 @@ func TestProductTaskMetadataUpdateOverRuntime(t *testing.T) {
 		t.Fatalf("updated usage = %#v", usage)
 	}
 
+	noOpNotificationStart := len(harness.notifications)
+	metadataUpdate["clientRequestId"] = "metadata-update-no-op"
+	noOp := resultObject(t, harness.request(t, "openade/task/metadata/update", metadataUpdate))
+	if noOp["ok"] != true {
+		t.Fatalf("metadata no-op result = %#v", noOp)
+	}
+	if len(harness.notifications) != noOpNotificationStart {
+		t.Fatalf("metadata no-op emitted notifications: before=%d after=%d notifications=%#v", noOpNotificationStart, len(harness.notifications), harness.notifications[noOpNotificationStart:])
+	}
+
 	unsupported := harness.request(t, "openade/task/metadata/update", map[string]any{
 		"taskId":      "task-1",
 		"queuedTurns": []any{},
@@ -3660,12 +4279,89 @@ func TestProductTaskMetadataUpdateOverRuntime(t *testing.T) {
 	if runtimeErrorCode(t, unsupported) != "invalid_params" {
 		t.Fatalf("unsupported metadata response = %#v", unsupported)
 	}
+	invalidMCPIDs := harness.request(t, "openade/task/metadata/update", map[string]any{
+		"taskId":              "task-1",
+		"enabledMcpServerIds": []any{"server-1", ""},
+	})
+	if runtimeErrorCode(t, invalidMCPIDs) != "invalid_params" {
+		t.Fatalf("invalid enabled MCP ids metadata response = %#v", invalidMCPIDs)
+	}
 	invalidSessionIDs := harness.request(t, "openade/task/metadata/update", map[string]any{
 		"taskId":     "task-1",
 		"sessionIds": []any{"not-an-object"},
 	})
 	if runtimeErrorCode(t, invalidSessionIDs) != "invalid_params" {
 		t.Fatalf("invalid session ids metadata response = %#v", invalidSessionIDs)
+	}
+}
+
+func TestProductTaskViewedMetadataUpdateOverRuntime(t *testing.T) {
+	harness := newRuntimeHarness(t)
+	seedProductData(t, harness.store)
+	viewedAt := "2026-06-05T12:08:00Z"
+	notificationStart := len(harness.notifications)
+
+	result := resultObject(t, harness.request(t, "openade/task/metadata/update", map[string]any{
+		"taskId":          "task-1",
+		"lastViewedAt":    viewedAt,
+		"clientRequestId": "metadata-viewed-1",
+	}))
+	if result["ok"] != true {
+		t.Fatalf("viewed metadata update result = %#v", result)
+	}
+
+	notifications := harness.waitForNotifications(t, notificationStart, 2)
+	seen := map[string]bool{}
+	for _, notification := range notifications {
+		seen[notification["method"].(string)] = true
+		params := objectField(t, notification, "params")
+		if params["repoId"] != "repo-1" || params["taskId"] != "task-1" {
+			t.Fatalf("viewed metadata notification params = %#v", params)
+		}
+		if params["clientRequestId"] != "metadata-viewed-1" {
+			t.Fatalf("viewed metadata notification client request id = %#v", params)
+		}
+	}
+	if !seen["openade/task/updated"] || !seen["openade/task/previewChanged"] {
+		t.Fatalf("viewed metadata notifications = %#v", notifications)
+	}
+
+	task := resultObject(t, harness.request(t, "openade/task/read", map[string]any{
+		"repoId": "repo-1",
+		"taskId": "task-1",
+	}))
+	if task["title"] != "Move state to core" {
+		t.Fatalf("viewed metadata rewrote stable task fields = %#v", task)
+	}
+	if task["lastViewedAt"] != viewedAt || task["lastEventAt"] != "2026-06-05T12:01:40Z" {
+		t.Fatalf("viewed metadata task times = %#v", task)
+	}
+	sessionIDs := objectField(t, task, "sessionIds")
+	if sessionIDs["codex"] != "session-1" {
+		t.Fatalf("viewed metadata rewrote session ids = %#v", sessionIDs)
+	}
+
+	previews := resultArray(t, harness.request(t, "openade/task/list", map[string]any{"repoId": "repo-1"}))
+	preview := objectValue(t, previews[0])
+	if preview["lastViewedAt"] != viewedAt || preview["title"] != "Move state to core" {
+		t.Fatalf("viewed metadata preview = %#v", preview)
+	}
+	usage := objectField(t, preview, "usage")
+	if usage["inputTokens"] != float64(123) || usage["outputTokens"] != float64(456) {
+		t.Fatalf("viewed metadata preview usage = %#v", usage)
+	}
+
+	noOpNotificationStart := len(harness.notifications)
+	noOp := resultObject(t, harness.request(t, "openade/task/metadata/update", map[string]any{
+		"taskId":          "task-1",
+		"lastViewedAt":    viewedAt,
+		"clientRequestId": "metadata-viewed-no-op",
+	}))
+	if noOp["ok"] != true {
+		t.Fatalf("viewed metadata no-op result = %#v", noOp)
+	}
+	if len(harness.notifications) != noOpNotificationStart {
+		t.Fatalf("viewed metadata no-op emitted notifications: before=%d after=%d notifications=%#v", noOpNotificationStart, len(harness.notifications), harness.notifications[noOpNotificationStart:])
 	}
 }
 
@@ -4462,6 +5158,35 @@ func TestProductProjectGitReadsOverRuntime(t *testing.T) {
 	if objectField(t, unstaged, "stats")["insertions"] != float64(1) {
 		t.Fatalf("unstaged stats = %#v", unstaged["stats"])
 	}
+}
+
+func TestProductProjectGitSummaryUsesShortCacheOverRuntime(t *testing.T) {
+	requireGit(t)
+	harness := newRuntimeHarness(t)
+	ctx := context.Background()
+	repoRoot := createGitRepo(t)
+	now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	if err := harness.store.UpsertRepo(ctx, storage.Repo{
+		ID:        "repo-git-summary-cache",
+		Name:      "Git Summary Cache Repo",
+		Path:      repoRoot,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("upsert git summary cache repo: %v", err)
+	}
+
+	first := resultObject(t, harness.request(t, "openade/project/git/summary/read", map[string]any{
+		"repoId": "repo-git-summary-cache",
+	}))
+	assertChangedFile(t, arrayField(t, first, "untracked"), "untracked.txt", "added")
+
+	writeFile(t, filepath.Join(repoRoot, "cache-only.txt"), []byte("cache only\n"))
+	second := resultObject(t, harness.request(t, "openade/project/git/summary/read", map[string]any{
+		"repoId": "repo-git-summary-cache",
+	}))
+	assertChangedFile(t, arrayField(t, second, "untracked"), "untracked.txt", "added")
+	assertChangedFileMissing(t, arrayField(t, second, "untracked"), "cache-only.txt")
 }
 
 func TestProductProjectGitReadsForNonGitRepoOverRuntime(t *testing.T) {
@@ -5457,7 +6182,10 @@ func TestProductTaskTerminalOverRuntime(t *testing.T) {
 	}
 	resultObject(t, harness.request(t, "openade/settings/personal/replace", map[string]any{
 		"settings": map[string]any{
-			"envVars": map[string]any{"OPENADE_CORE_TERMINAL_ENV_TEST": "terminal-env-from-core"},
+			"envVars": map[string]any{
+				"OPENADE_CORE_TERMINAL_ENV_TEST": "terminal-env-from-core",
+				"SHELL":                          "/bin/sh",
+			},
 		},
 		"clientRequestId": "terminal-env-settings",
 	}))
@@ -5918,6 +6646,96 @@ func (executor completingAgentExecutor) Run(ctx context.Context, request product
 	}
 }
 
+type sdkCapabilitiesExecutor struct {
+	requests chan product.SDKCapabilitiesRequest
+}
+
+func (executor sdkCapabilitiesExecutor) DiscoverSDKCapabilities(_ context.Context, request product.SDKCapabilitiesRequest) (product.SDKCapabilitiesResult, *core.RuntimeError) {
+	executor.requests <- request
+	return product.SDKCapabilitiesResult{
+		SlashCommands: []string{"project-command"},
+		Skills:        []string{"project-skill"},
+		Plugins:       []product.SDKPluginCapability{{Name: "project-plugin", Path: "/tmp/project-plugin"}},
+		CachedAt:      time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
+	}, nil
+}
+
+func TestProductProjectSdkCapabilitiesReadOverRuntime(t *testing.T) {
+	requests := make(chan product.SDKCapabilitiesRequest, 1)
+	harness := newRuntimeHarnessWithProductOptions(t, func(options *product.Options) {
+		options.SDKCapabilitiesExecutor = sdkCapabilitiesExecutor{requests: requests}
+	})
+	ctx := context.Background()
+	projectDir := t.TempDir()
+	now := time.Date(2026, 6, 8, 9, 0, 0, 0, time.UTC)
+	if err := harness.store.UpsertRepo(ctx, storage.Repo{
+		ID:        "repo-sdk-capabilities",
+		Name:      "SDK Capabilities Repo",
+		Path:      projectDir,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("upsert SDK capabilities repo: %v", err)
+	}
+	if err := harness.store.UpsertTask(ctx, storage.Task{
+		ID:            "task-sdk-capabilities",
+		RepoID:        "repo-sdk-capabilities",
+		Slug:          "task-sdk-capabilities",
+		Title:         "SDK capabilities",
+		Description:   "",
+		IsolationJSON: sql.NullString{String: `{"type":"head"}`, Valid: true},
+		MetadataJSON:  sql.NullString{String: `{"createdBy":{"id":"user-1","email":"user@example.com"}}`, Valid: true},
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("upsert SDK capabilities task: %v", err)
+	}
+	resultObject(t, harness.request(t, "openade/settings/personal/replace", map[string]any{
+		"settings": map[string]any{
+			"envVars": map[string]any{"OPENADE_CORE_SDK_CAPABILITIES_ENV_TEST": "from-settings"},
+		},
+		"clientRequestId": "sdk-capabilities-settings",
+	}))
+
+	result := resultObject(t, harness.request(t, "openade/project/sdkCapabilities/read", map[string]any{
+		"repoId":    "repo-sdk-capabilities",
+		"taskId":    "task-sdk-capabilities",
+		"harnessId": "codex",
+	}))
+	if commands := arrayField(t, result, "slash_commands"); len(commands) != 1 || commands[0] != "project-command" {
+		t.Fatalf("slash commands = %#v", commands)
+	}
+	if skills := arrayField(t, result, "skills"); len(skills) != 1 || skills[0] != "project-skill" {
+		t.Fatalf("skills = %#v", skills)
+	}
+	plugins := arrayField(t, result, "plugins")
+	if len(plugins) != 1 || objectValue(t, plugins[0])["name"] != "project-plugin" {
+		t.Fatalf("plugins = %#v", plugins)
+	}
+	if result["cachedAt"] != float64(time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC).UnixNano()/int64(time.Millisecond)) {
+		t.Fatalf("cachedAt = %#v", result["cachedAt"])
+	}
+
+	request := <-requests
+	if request.RepoID != "repo-sdk-capabilities" || request.TaskID != "task-sdk-capabilities" || request.RepoPath != projectDir || request.Cwd != projectDir {
+		t.Fatalf("SDK capabilities request scope = %#v", request)
+	}
+	if request.HarnessID != "codex" {
+		t.Fatalf("SDK capabilities harness = %#v", request.HarnessID)
+	}
+	if request.EnvVars["OPENADE_CORE_SDK_CAPABILITIES_ENV_TEST"] != "from-settings" {
+		t.Fatalf("SDK capabilities env vars = %#v", request.EnvVars)
+	}
+
+	invalid := harness.request(t, "openade/project/sdkCapabilities/read", map[string]any{
+		"repoId":    "repo-sdk-capabilities",
+		"harnessId": "unknown",
+	})
+	if runtimeErrorCode(t, invalid) != "invalid_params" {
+		t.Fatalf("unsupported harness should be rejected: %#v", invalid)
+	}
+}
+
 func TestProductMCPServerSettingsOverRuntime(t *testing.T) {
 	requests := make(chan product.AgentExecutionRequest, 1)
 	harness := newRuntimeHarnessWithProductOptions(t, func(options *product.Options) {
@@ -5958,6 +6776,7 @@ func TestProductMCPServerSettingsOverRuntime(t *testing.T) {
 				"oauthTokens": map[string]any{
 					"accessToken":  "access-token",
 					"refreshToken": "refresh-token",
+					"clientId":     "registered-client",
 					"expiresAt":    "2026-06-08T13:00:00Z",
 					"tokenType":    "Bearer",
 				},
@@ -5996,7 +6815,7 @@ func TestProductMCPServerSettingsOverRuntime(t *testing.T) {
 	}
 	httpServer := objectValue(t, servers[0])
 	oauthTokens := objectField(t, httpServer, "oauthTokens")
-	if httpServer["id"] != "mcp-http" || httpServer["presetId"] != "github" || httpServer["healthStatus"] != "healthy" || oauthTokens["refreshToken"] != "refresh-token" {
+	if httpServer["id"] != "mcp-http" || httpServer["presetId"] != "github" || httpServer["healthStatus"] != "healthy" || oauthTokens["refreshToken"] != "refresh-token" || oauthTokens["clientId"] != "registered-client" {
 		t.Fatalf("mcp http server read model = %#v", httpServer)
 	}
 
@@ -6084,6 +6903,60 @@ func TestProductMCPServerSettingsOverRuntime(t *testing.T) {
 	}
 }
 
+func TestProductMCPServerSettingsReadRedactsForPairedRuntime(t *testing.T) {
+	seededAt := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	harness := newRuntimeHarnessWithConfigStoreSetupAndOptions(t, func(cfg *core.Config) {
+		cfg.PermissionProfile = product.PermissionProfilePaired
+		applied, err := product.ApplyPermissionProfile(*cfg)
+		if err != nil {
+			t.Fatalf("apply paired profile: %v", err)
+		}
+		*cfg = applied
+	}, func(ctx context.Context, store *storage.Store) {
+		raw := json.RawMessage(`{"mcp_servers":[{"id":"mcp-http","name":"runtime-http","enabled":true,"transportType":"http","presetId":"github","healthStatus":"healthy","createdAt":"2026-06-08T12:00:00Z","updatedAt":"2026-06-08T12:01:00Z","url":"https://mcp.example.test","headers":{"X-Test":"yes"},"oauthTokens":{"accessToken":"access-token","refreshToken":"refresh-token","expiresAt":"2026-06-08T13:00:00Z","tokenType":"Bearer"}},{"id":"mcp-stdio","name":"runtime-stdio","enabled":true,"transportType":"stdio","healthStatus":"unknown","createdAt":"2026-06-08T12:02:00Z","updatedAt":"2026-06-08T12:03:00Z","command":"node","args":["server.js"],"envVars":{"MCP_MODE":"test"},"cwd":"/tmp/runtime-mcp"}]}`)
+		if err := store.PutSetting(ctx, "mcp_servers", raw, seededAt); err != nil {
+			t.Fatalf("seed mcp settings: %v", err)
+		}
+	}, nil)
+
+	result := resultObject(t, harness.request(t, "openade/settings/mcpServers/read", map[string]any{}))
+	servers := arrayField(t, result, "servers")
+	if len(servers) != 2 {
+		t.Fatalf("paired mcp server summaries = %#v", servers)
+	}
+	httpServer := objectValue(t, servers[0])
+	if httpServer["id"] != "mcp-http" || httpServer["name"] != "runtime-http" || httpServer["transportType"] != "http" || httpServer["presetId"] != "github" || httpServer["healthStatus"] != "healthy" {
+		t.Fatalf("paired http mcp summary = %#v", httpServer)
+	}
+	for _, field := range []string{"url", "headers", "oauthTokens"} {
+		if _, ok := httpServer[field]; ok {
+			t.Fatalf("paired http mcp summary leaked %s: %#v", field, httpServer)
+		}
+	}
+	stdioServer := objectValue(t, servers[1])
+	if stdioServer["id"] != "mcp-stdio" || stdioServer["name"] != "runtime-stdio" || stdioServer["transportType"] != "stdio" {
+		t.Fatalf("paired stdio mcp summary = %#v", stdioServer)
+	}
+	for _, field := range []string{"command", "args", "envVars", "cwd"} {
+		if _, ok := stdioServer[field]; ok {
+			t.Fatalf("paired stdio mcp summary leaked %s: %#v", field, stdioServer)
+		}
+	}
+
+	denied := harness.request(t, "openade/settings/mcpServers/upsert", map[string]any{
+		"server": map[string]any{
+			"id":            "mcp-new",
+			"name":          "new",
+			"enabled":       true,
+			"transportType": "http",
+			"url":           "https://new.example.test",
+		},
+	})
+	if runtimeErrorCode(t, denied) != "permission_denied" {
+		t.Fatalf("paired mcp upsert should be denied: %#v", denied)
+	}
+}
+
 func TestProductCronInstallStateOverRuntime(t *testing.T) {
 	harness := newRuntimeHarness(t)
 	seedProductData(t, harness.store)
@@ -6096,6 +6969,10 @@ func TestProductCronInstallStateOverRuntime(t *testing.T) {
 	}
 	if installations := objectField(t, empty, "installations"); len(installations) != 0 {
 		t.Fatalf("initial cron install-state = %#v", installations)
+	}
+	initialList := resultObject(t, harness.request(t, "openade/cron/installState/list", nil))
+	if repoIDs := stringSliceField(t, initialList, "repoIds"); len(repoIDs) != 0 {
+		t.Fatalf("initial cron install-state list = %#v", initialList)
 	}
 
 	params := map[string]any{
@@ -6136,6 +7013,23 @@ func TestProductCronInstallStateOverRuntime(t *testing.T) {
 	readInstallations := objectField(t, readBack, "installations")
 	if len(readInstallations) != 2 || objectField(t, readInstallations, "openade.toml::Full Cron")["lastRunAt"] != "2026-06-09T14:05:00Z" {
 		t.Fatalf("read cron install-state = %#v", readBack)
+	}
+	populatedList := resultObject(t, harness.request(t, "openade/cron/installState/list", nil))
+	if repoIDs := stringSliceField(t, populatedList, "repoIds"); len(repoIDs) != 1 || repoIDs[0] != "repo-1" {
+		t.Fatalf("populated cron install-state list = %#v", populatedList)
+	}
+
+	cleared := resultObject(t, harness.request(t, "openade/cron/installState/replace", map[string]any{
+		"repoId":          "repo-1",
+		"clientRequestId": "cron-install-state-clear",
+		"installations":   map[string]any{},
+	}))
+	if cleared["replacedInstallations"] != float64(0) {
+		t.Fatalf("cleared cron install-state = %#v", cleared)
+	}
+	clearedList := resultObject(t, harness.request(t, "openade/cron/installState/list", nil))
+	if repoIDs := stringSliceField(t, clearedList, "repoIds"); len(repoIDs) != 0 {
+		t.Fatalf("cleared cron install-state list = %#v", clearedList)
 	}
 
 	invalidTimestamp := harness.request(t, "openade/cron/installState/replace", map[string]any{
@@ -6181,7 +7075,6 @@ func TestProductCronDefinitionsReadOverRuntime(t *testing.T) {
 	now := time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
 	writeFile(t, filepath.Join(projectDir, "openade.toml"), []byte(`[[process]]
 name = "Dev"
-command = "npm run dev"
 type = "daemon"
 
 [[cron]]
@@ -6255,6 +7148,98 @@ type = "nope"
 	}
 }
 
+func TestProductCronRunStartsTurnOverRuntime(t *testing.T) {
+	requests := make(chan product.AgentExecutionRequest, 1)
+	harness := newRuntimeHarnessWithProductOptions(t, func(options *product.Options) {
+		options.AgentExecutor = completingAgentExecutor{requests: requests}
+	})
+	ctx := context.Background()
+	projectDir := t.TempDir()
+	now := time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
+	writeFile(t, filepath.Join(projectDir, "openade.toml"), []byte(`[[process]]
+name = "Incomplete process that cron run should ignore"
+type = "daemon"
+
+[[cron]]
+name = "Manual"
+schedule = "0 1 * * *"
+type = "do"
+prompt = "Run manual maintenance"
+harness = "codex"
+isolation = "head"
+`))
+	if err := harness.store.UpsertRepo(ctx, storage.Repo{
+		ID:        "repo-cron-run",
+		Name:      "Cron Run Repo",
+		Path:      projectDir,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("upsert cron run repo: %v", err)
+	}
+	resultObject(t, harness.request(t, "openade/cron/installState/replace", map[string]any{
+		"repoId":          "repo-cron-run",
+		"clientRequestId": "cron-run-install-state",
+		"installations": map[string]any{
+			"openade.toml::Manual": map[string]any{
+				"cronId":      "openade.toml::Manual",
+				"enabled":     false,
+				"installedAt": "2026-06-09T09:00:00Z",
+			},
+		},
+	}))
+
+	notificationStart := len(harness.notifications)
+	params := map[string]any{
+		"repoId":          "repo-cron-run",
+		"cronId":          "openade.toml::Manual",
+		"clientRequestId": "cron-run-now",
+	}
+	run := resultObject(t, harness.request(t, "openade/cron/run", params))
+	request := receiveAgentExecutionRequest(t, requests)
+	if run["repoId"] != "repo-cron-run" || run["cronId"] != "openade.toml::Manual" || run["taskId"] != request.TaskID {
+		t.Fatalf("cron run result = %#v request=%#v", run, request)
+	}
+	if request.RepoID != "repo-cron-run" || request.Input != "Run manual maintenance" || request.HarnessID != "codex" {
+		t.Fatalf("cron run executor request = %#v", request)
+	}
+	harness.waitForRuntimeNotification(t, notificationStart, "runtime/completed", request.RuntimeID)
+
+	installation := objectField(t, run, "installation")
+	if installation["enabled"] != false || installation["lastTaskId"] != request.TaskID {
+		t.Fatalf("cron run installation = %#v", installation)
+	}
+	if _, err := time.Parse(time.RFC3339, installation["lastRunAt"].(string)); err != nil {
+		t.Fatalf("cron run lastRunAt is not RFC3339: %#v", installation)
+	}
+
+	retried := resultObject(t, harness.request(t, "openade/cron/run", params))
+	if retried["taskId"] != request.TaskID {
+		t.Fatalf("retried cron run = %#v", retried)
+	}
+	select {
+	case duplicate := <-requests:
+		t.Fatalf("cron run retry started duplicate turn: %#v", duplicate)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	readBack := resultObject(t, harness.request(t, "openade/cron/installState/read", map[string]any{
+		"repoId": "repo-cron-run",
+	}))
+	state := objectField(t, objectField(t, readBack, "installations"), "openade.toml::Manual")
+	if state["lastTaskId"] != request.TaskID {
+		t.Fatalf("cron install-state after run = %#v", state)
+	}
+
+	missingCron := harness.request(t, "openade/cron/run", map[string]any{
+		"repoId": "repo-cron-run",
+		"cronId": "openade.toml::Missing",
+	})
+	if runtimeErrorCode(t, missingCron) != "not_found" {
+		t.Fatalf("missing cron run response = %#v", missingCron)
+	}
+}
+
 func TestProductCronSchedulerStartsDueTurnOverRuntime(t *testing.T) {
 	requests := make(chan product.AgentExecutionRequest, 1)
 	harness := newRuntimeHarnessWithProductOptions(t, func(options *product.Options) {
@@ -6263,7 +7248,11 @@ func TestProductCronSchedulerStartsDueTurnOverRuntime(t *testing.T) {
 	ctx := context.Background()
 	projectDir := t.TempDir()
 	now := time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
-	writeFile(t, filepath.Join(projectDir, "openade.toml"), []byte(`[[cron]]
+	writeFile(t, filepath.Join(projectDir, "openade.toml"), []byte(`[[process]]
+name = "Incomplete process that scheduler should ignore"
+type = "daemon"
+
+[[cron]]
 name = "Morning"
 schedule = "* * * * *"
 type = "do"
@@ -6331,6 +7320,20 @@ isolation = "head"
 		t.Fatalf("cron scheduler started duplicate turn: %#v", request)
 	case <-time.After(100 * time.Millisecond):
 	}
+
+	nextNotificationStart := len(harness.notifications)
+	nextResult, runtimeErr := harness.productService.RunDueCrons(ctx, now.Add(time.Minute))
+	if runtimeErr != nil {
+		t.Fatalf("rerun due crons at next slot: %#v", runtimeErr)
+	}
+	if nextResult.DueCrons != 1 || nextResult.StartedTurns != 1 || nextResult.FailedCrons != 0 {
+		t.Fatalf("cron scheduler next-slot result = %#v", nextResult)
+	}
+	nextRequest := receiveAgentExecutionRequest(t, requests)
+	if nextRequest.TaskID != state["lastTaskId"] {
+		t.Fatalf("cron scheduler reused task id = %#v previous=%#v", nextRequest, state)
+	}
+	harness.waitForRuntimeNotification(t, nextNotificationStart, "runtime/completed", nextRequest.RuntimeID)
 }
 
 func TestProductTurnStartRunsAgentExecutorOverRuntime(t *testing.T) {
@@ -6439,6 +7442,110 @@ func TestProductTurnStartRunsAgentExecutorOverRuntime(t *testing.T) {
 	streamEvents := arrayField(t, execution, "events")
 	if len(streamEvents) != 1 || objectValue(t, streamEvents[0])["id"] != "stream-complete-1" {
 		t.Fatalf("executor-completed stream events = %#v", streamEvents)
+	}
+}
+
+func TestProductTurnStartPersistsAndForwardsHyperPlanStrategyOverRuntime(t *testing.T) {
+	requests := make(chan product.AgentExecutionRequest, 1)
+	harness := newRuntimeHarnessWithProductOptions(t, func(options *product.Options) {
+		options.AgentExecutor = completingAgentExecutor{requests: requests}
+	})
+	ctx := context.Background()
+	projectDir := t.TempDir()
+	now := time.Date(2026, 6, 6, 15, 5, 0, 0, time.UTC)
+	if err := harness.store.UpsertRepo(ctx, storage.Repo{
+		ID:        "repo-hyperplan-turn",
+		Name:      "HyperPlan Turn Repo",
+		Path:      projectDir,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("upsert hyperplan turn repo: %v", err)
+	}
+
+	strategy := map[string]any{
+		"id":             "peer-review",
+		"name":           "Peer Review",
+		"description":    "One agent plans, another reviews, then the planner revises based on feedback",
+		"terminalStepId": "revise_a",
+		"steps": []any{
+			map[string]any{
+				"id":        "plan_a",
+				"primitive": "plan",
+				"agent":     map[string]any{"harnessId": "codex", "modelId": "gpt-test"},
+				"inputs":    []any{},
+			},
+			map[string]any{
+				"id":        "review_b",
+				"primitive": "review",
+				"agent":     map[string]any{"harnessId": "claude-code", "modelId": "opus-test"},
+				"inputs":    []any{"plan_a"},
+			},
+			map[string]any{
+				"id":           "revise_a",
+				"primitive":    "revise",
+				"agent":        map[string]any{"harnessId": "codex", "modelId": "gpt-test"},
+				"inputs":       []any{"review_b"},
+				"resumeStepId": "plan_a",
+			},
+		},
+	}
+	notificationStart := len(harness.notifications)
+	started := resultObject(t, harness.request(t, "openade/turn/start", map[string]any{
+		"repoId":            "repo-hyperplan-turn",
+		"type":              "hyperplan",
+		"input":             "Plan through HyperPlan",
+		"harnessId":         "codex",
+		"modelId":           "gpt-test",
+		"label":             "HyperPlan",
+		"hyperplanStrategy": strategy,
+		"clientRequestId":   "hyperplan-turn-start",
+	}))
+	taskID := started["taskId"].(string)
+	eventID := started["eventId"].(string)
+	request := receiveAgentExecutionRequest(t, requests)
+	if request.TurnType != "hyperplan" || request.TaskID != taskID || request.EventID != eventID {
+		t.Fatalf("hyperplan executor request scope = %#v", request)
+	}
+	var forwardedStrategy struct {
+		ID             string `json:"id"`
+		TerminalStepID string `json:"terminalStepId"`
+		Steps          []struct {
+			ID        string `json:"id"`
+			Primitive string `json:"primitive"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(request.HyperPlanStrategy, &forwardedStrategy); err != nil {
+		t.Fatalf("decode forwarded hyperplan strategy %s: %v", request.HyperPlanStrategy, err)
+	}
+	if forwardedStrategy.ID != "peer-review" || forwardedStrategy.TerminalStepID != "revise_a" || len(forwardedStrategy.Steps) != 3 {
+		t.Fatalf("forwarded hyperplan strategy = %#v", forwardedStrategy)
+	}
+	harness.waitForRuntimeNotification(t, notificationStart, "runtime/completed", "openade-turn:"+eventID)
+
+	task := resultObject(t, harness.request(t, "openade/task/read", map[string]any{
+		"repoId":               "repo-hyperplan-turn",
+		"taskId":               taskID,
+		"hydrateSessionEvents": true,
+	}))
+	action := actionEventFromTask(t, task, eventID)
+	source := objectField(t, action, "source")
+	if source["type"] != "hyperplan" || source["userLabel"] != "HyperPlan" || source["strategyId"] != "peer-review" {
+		t.Fatalf("hyperplan action source = %#v", source)
+	}
+	persistedStrategy := objectField(t, action, "hyperplanStrategy")
+	if persistedStrategy["id"] != "peer-review" || persistedStrategy["terminalStepId"] != "revise_a" {
+		t.Fatalf("persisted hyperplan strategy = %#v", persistedStrategy)
+	}
+
+	missingStrategy := harness.request(t, "openade/turn/start", map[string]any{
+		"repoId":          "repo-hyperplan-turn",
+		"type":            "hyperplan",
+		"input":           "Missing strategy",
+		"clientRequestId": "missing-hyperplan-strategy",
+	})
+	if runtimeErrorCode(t, missingStrategy) != "invalid_params" {
+		t.Fatalf("missing hyperplan strategy response = %#v", missingStrategy)
 	}
 }
 
@@ -6624,6 +7731,28 @@ func TestCommandAgentExecutorSendsReadOnly(t *testing.T) {
 	}
 }
 
+func TestCommandAgentExecutorSendsHyperPlanStrategy(t *testing.T) {
+	executor := product.CommandAgentExecutor{
+		Command: []string{os.Args[0], "-test.run=^TestCommandAgentWorkerHelper$"},
+		Env:     []string{"OPENADE_TEST_AGENT_WORKER=expect-hyperplan"},
+	}
+	result := executor.Run(context.Background(), product.AgentExecutionRequest{
+		RuntimeID:         "runtime-hyperplan",
+		RepoID:            "repo-hyperplan",
+		RepoPath:          t.TempDir(),
+		TaskID:            "task-hyperplan",
+		EventID:           "event-hyperplan",
+		ExecutionID:       "execution-hyperplan",
+		HarnessID:         "codex",
+		TurnType:          "hyperplan",
+		Input:             "Plan with strategy",
+		HyperPlanStrategy: json.RawMessage(`{"id":"peer-review","name":"Peer Review","description":"Review plan","steps":[{"id":"plan_a","primitive":"plan","agent":{"harnessId":"codex","modelId":"gpt-test"},"inputs":[]}],"terminalStepId":"plan_a"}`),
+	}, noopAgentExecutionEmitter{})
+	if result.Status != product.AgentExecutionCompleted || result.Success == nil || *result.Success != true {
+		t.Fatalf("command executor hyperplan result = %#v", result)
+	}
+}
+
 func TestCommandAgentWorkerHelper(t *testing.T) {
 	mode := os.Getenv("OPENADE_TEST_AGENT_WORKER")
 	if mode == "" {
@@ -6642,6 +7771,10 @@ func TestCommandAgentWorkerHelper(t *testing.T) {
 			Thinking            string                    `json:"thinking"`
 			Cwd                 string                    `json:"cwd"`
 			MCPServerConfigs    map[string]map[string]any `json:"mcpServerConfigs"`
+			HyperPlanStrategy   struct {
+				ID             string `json:"id"`
+				TerminalStepID string `json:"terminalStepId"`
+			} `json:"hyperplanStrategy"`
 		} `json:"request"`
 	}
 	if err := json.NewDecoder(os.Stdin).Decode(&envelope); err != nil {
@@ -6685,6 +7818,18 @@ func TestCommandAgentWorkerHelper(t *testing.T) {
 			"status":      "completed",
 			"success":     true,
 			"completedAt": "2026-06-06T15:14:00Z",
+		})
+		os.Exit(0)
+	}
+	if mode == "expect-hyperplan" {
+		if envelope.Request.HyperPlanStrategy.ID != "peer-review" || envelope.Request.HyperPlanStrategy.TerminalStepID != "plan_a" {
+			os.Exit(8)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"type":        "result",
+			"status":      "completed",
+			"success":     true,
+			"completedAt": "2026-06-06T15:16:00Z",
 		})
 		os.Exit(0)
 	}
@@ -7075,6 +8220,155 @@ func TestProductQueuedTurnDrainsThroughAgentExecutor(t *testing.T) {
 	if events := arrayField(t, objectField(t, queuedAction, "execution"), "events"); len(events) != 1 {
 		t.Fatalf("queued action stream events = %#v", events)
 	}
+}
+
+func TestProductQueuedHyperPlanDrainsThroughAgentExecutor(t *testing.T) {
+	requests := make(chan product.AgentExecutionRequest, 4)
+	results := make(chan product.AgentExecutionResult, 4)
+	harness := newRuntimeHarnessWithProductOptions(t, func(options *product.Options) {
+		options.AgentExecutor = queuedDrainAgentExecutor{requests: requests, results: results}
+	})
+	ctx := context.Background()
+	now := time.Date(2026, 6, 6, 16, 30, 0, 0, time.UTC)
+	repoDir := t.TempDir()
+	if err := harness.store.UpsertRepo(ctx, storage.Repo{
+		ID:        "repo-queue-hyperplan",
+		Name:      "Queue HyperPlan Repo",
+		Path:      repoDir,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("upsert queue hyperplan repo: %v", err)
+	}
+	if err := harness.store.UpsertTask(ctx, storage.Task{
+		ID:            "task-queue-hyperplan",
+		RepoID:        "repo-queue-hyperplan",
+		Slug:          "task-queue-hyperplan",
+		Title:         "Queue HyperPlan",
+		IsolationJSON: sql.NullString{String: `{"type":"head"}`, Valid: true},
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("upsert queue hyperplan task: %v", err)
+	}
+
+	strategy := map[string]any{
+		"id":             "queued-peer-review",
+		"name":           "Queued Peer Review",
+		"description":    "Queue a HyperPlan strategy while the task is busy",
+		"terminalStepId": "revise_a",
+		"steps": []any{
+			map[string]any{
+				"id":        "plan_a",
+				"primitive": "plan",
+				"agent":     map[string]any{"harnessId": "codex", "modelId": "gpt-test"},
+				"inputs":    []any{},
+			},
+			map[string]any{
+				"id":        "review_b",
+				"primitive": "review",
+				"agent":     map[string]any{"harnessId": "claude-code", "modelId": "opus-test"},
+				"inputs":    []any{"plan_a"},
+			},
+			map[string]any{
+				"id":           "revise_a",
+				"primitive":    "revise",
+				"agent":        map[string]any{"harnessId": "codex", "modelId": "gpt-test"},
+				"inputs":       []any{"review_b"},
+				"resumeStepId": "plan_a",
+			},
+		},
+	}
+	started := resultObject(t, harness.request(t, "openade/turn/start", map[string]any{
+		"repoId":          "repo-queue-hyperplan",
+		"inTaskId":        "task-queue-hyperplan",
+		"type":            "do",
+		"input":           "First turn",
+		"clientRequestId": "queue-hyperplan-start",
+	}))
+	firstEventID := started["eventId"].(string)
+	firstRequest := receiveAgentExecutionRequest(t, requests)
+	if firstRequest.EventID != firstEventID || firstRequest.QueuedTurnID != "" || firstRequest.Input != "First turn" {
+		t.Fatalf("first executor request = %#v", firstRequest)
+	}
+
+	missingStrategy := harness.request(t, "openade/queued-turn/enqueue", map[string]any{
+		"repoId": "repo-queue-hyperplan",
+		"taskId": "task-queue-hyperplan",
+		"type":   "hyperplan",
+		"input":  "Queue without strategy",
+	})
+	if runtimeErrorCode(t, missingStrategy) != "invalid_params" {
+		t.Fatalf("missing queued hyperplan strategy should be invalid: %#v", missingStrategy)
+	}
+
+	queued := resultObject(t, harness.request(t, "openade/queued-turn/enqueue", map[string]any{
+		"repoId":            "repo-queue-hyperplan",
+		"taskId":            "task-queue-hyperplan",
+		"queuedTurnId":      "queued-hyperplan",
+		"type":              "hyperplan",
+		"input":             "Queued HyperPlan",
+		"harnessId":         "codex",
+		"modelId":           "gpt-test",
+		"label":             "Queued HyperPlan",
+		"hyperplanStrategy": strategy,
+		"clientRequestId":   "queue-hyperplan",
+	}))
+	if queued["queuedTurnId"] != "queued-hyperplan" || queued["queued"] != true {
+		t.Fatalf("queued hyperplan result = %#v", queued)
+	}
+	queuedDTO := objectField(t, queued, "turn")
+	if queuedDTO["type"] != "hyperplan" || objectField(t, queuedDTO, "hyperplanStrategy")["id"] != "queued-peer-review" {
+		t.Fatalf("queued hyperplan dto = %#v", queuedDTO)
+	}
+
+	firstSuccess := true
+	results <- product.AgentExecutionResult{
+		Status:      product.AgentExecutionCompleted,
+		Success:     &firstSuccess,
+		CompletedAt: time.Date(2026, 6, 6, 16, 31, 0, 0, time.UTC),
+	}
+	queuedRequest := receiveAgentExecutionRequest(t, requests)
+	if queuedRequest.QueuedTurnID != "queued-hyperplan" || queuedRequest.Input != "Queued HyperPlan" || queuedRequest.TurnType != "hyperplan" {
+		t.Fatalf("queued hyperplan executor request = %#v", queuedRequest)
+	}
+	var forwardedStrategy struct {
+		ID             string `json:"id"`
+		TerminalStepID string `json:"terminalStepId"`
+	}
+	if err := json.Unmarshal(queuedRequest.HyperPlanStrategy, &forwardedStrategy); err != nil {
+		t.Fatalf("decode queued hyperplan strategy %s: %v", queuedRequest.HyperPlanStrategy, err)
+	}
+	if forwardedStrategy.ID != "queued-peer-review" || forwardedStrategy.TerminalStepID != "revise_a" {
+		t.Fatalf("forwarded queued hyperplan strategy = %#v", forwardedStrategy)
+	}
+
+	task := resultObject(t, harness.request(t, "openade/task/read", map[string]any{
+		"repoId":               "repo-queue-hyperplan",
+		"taskId":               "task-queue-hyperplan",
+		"hydrateSessionEvents": true,
+	}))
+	queuedTurn := objectValue(t, arrayField(t, task, "queuedTurns")[0])
+	if queuedTurn["status"] != "running" || queuedTurn["eventId"] != queuedRequest.EventID {
+		t.Fatalf("running queued hyperplan turn = %#v request=%#v", queuedTurn, queuedRequest)
+	}
+	queuedAction := actionEventFromTask(t, task, queuedRequest.EventID)
+	source := objectField(t, queuedAction, "source")
+	if source["type"] != "hyperplan" || source["userLabel"] != "Queued HyperPlan" || source["strategyId"] != "queued-peer-review" {
+		t.Fatalf("queued hyperplan source = %#v", source)
+	}
+	persistedStrategy := objectField(t, queuedAction, "hyperplanStrategy")
+	if persistedStrategy["id"] != "queued-peer-review" || persistedStrategy["terminalStepId"] != "revise_a" {
+		t.Fatalf("persisted queued hyperplan strategy = %#v", persistedStrategy)
+	}
+
+	queuedSuccess := true
+	results <- product.AgentExecutionResult{
+		Status:      product.AgentExecutionCompleted,
+		Success:     &queuedSuccess,
+		CompletedAt: time.Date(2026, 6, 6, 16, 32, 0, 0, time.UTC),
+	}
+	harness.waitForRuntimeNotification(t, 0, "runtime/completed", "openade-turn:"+queuedRequest.EventID)
 }
 
 func TestProductQueuedTurnImportLegacyDoesNotDrainOverRuntime(t *testing.T) {
@@ -7694,6 +8988,29 @@ func TestProductTurnStartCreatesTaskActionAndRuntimeOverRuntime(t *testing.T) {
 		t.Fatalf("existing-task turn source = %#v", existingAction)
 	}
 
+	existingWithIsolation := harness.request(t, "openade/turn/start", map[string]any{
+		"repoId":            "repo-turn-start",
+		"inTaskId":          taskID,
+		"type":              "do",
+		"input":             "Should not redefine task isolation",
+		"isolationStrategy": map[string]any{"type": "head"},
+		"clientRequestId":   "turn-existing-isolation",
+	})
+	if runtimeErrorCode(t, existingWithIsolation) != "invalid_params" {
+		t.Fatalf("existing-task turn with isolationStrategy = %#v", existingWithIsolation)
+	}
+	existingWithTitle := harness.request(t, "openade/turn/start", map[string]any{
+		"repoId":          "repo-turn-start",
+		"inTaskId":        taskID,
+		"type":            "do",
+		"input":           "Should not retitle task",
+		"title":           "Wrong title",
+		"clientRequestId": "turn-existing-title",
+	})
+	if runtimeErrorCode(t, existingWithTitle) != "invalid_params" {
+		t.Fatalf("existing-task turn with title = %#v", existingWithTitle)
+	}
+
 	runPlanMissing := harness.request(t, "openade/turn/start", map[string]any{
 		"repoId":          "repo-turn-start",
 		"inTaskId":        taskID,
@@ -7838,17 +9155,52 @@ func seedAgentRecoveryFixture(t *testing.T, store *storage.Store, ctx context.Co
 	}); err != nil {
 		t.Fatalf("upsert %s task: %v", input.TaskID, err)
 	}
-	actionPayload := fmt.Sprintf(`{"id":%q,"type":"action","status":"in_progress","createdAt":%q,"userInput":%q,"source":{"type":"do","userLabel":"Do"},"execution":{"harnessId":"codex","executionId":%q,"events":[]},"includesCommentIds":[]}`, input.EventID, input.StartedAt.Format(time.RFC3339Nano), input.UserInput, input.ExecutionID)
+	sourceType := input.SourceType
+	if sourceType == "" {
+		sourceType = "do"
+	}
+	sourceLabel := input.SourceLabel
+	if sourceLabel == "" {
+		sourceLabel = "Do"
+	}
+	sourcePayload := map[string]any{
+		"type":      sourceType,
+		"userLabel": sourceLabel,
+	}
+	if input.StrategyID != "" {
+		sourcePayload["strategyId"] = input.StrategyID
+	}
+	actionPayloadMap := map[string]any{
+		"id":        input.EventID,
+		"type":      "action",
+		"status":    "in_progress",
+		"createdAt": input.StartedAt.Format(time.RFC3339Nano),
+		"userInput": input.UserInput,
+		"source":    sourcePayload,
+		"execution": map[string]any{
+			"harnessId":   "codex",
+			"executionId": input.ExecutionID,
+			"events":      []any{},
+		},
+		"includesCommentIds": []any{},
+	}
+	if input.HyperPlanStrategyJSON != "" {
+		actionPayloadMap["hyperplanStrategy"] = json.RawMessage(input.HyperPlanStrategyJSON)
+	}
+	actionPayload, err := json.Marshal(actionPayloadMap)
+	if err != nil {
+		t.Fatalf("marshal %s action payload: %v", input.EventID, err)
+	}
 	if err := store.UpsertTaskEvent(ctx, storage.TaskEvent{
 		ID:          input.EventID,
 		TaskID:      input.TaskID,
 		Seq:         1,
 		Type:        "action",
 		Status:      sql.NullString{String: "in_progress", Valid: true},
-		SourceType:  sql.NullString{String: "do", Valid: true},
-		SourceLabel: sql.NullString{String: "Do", Valid: true},
+		SourceType:  sql.NullString{String: sourceType, Valid: true},
+		SourceLabel: sql.NullString{String: sourceLabel, Valid: true},
 		CreatedAt:   input.StartedAt,
-		PayloadJSON: sql.NullString{String: actionPayload, Valid: true},
+		PayloadJSON: sql.NullString{String: string(actionPayload), Valid: true},
 	}); err != nil {
 		t.Fatalf("upsert %s action event: %v", input.EventID, err)
 	}
@@ -7864,12 +9216,29 @@ func seedAgentRecoveryFixture(t *testing.T, store *storage.Store, ctx context.Co
 	if err != nil {
 		t.Fatalf("marshal %s runtime payload: %v", input.EventID, err)
 	}
-	scope := fmt.Sprintf(`{"ownerType":"openade-task","ownerId":%q,"repoPath":%q,"rootPath":%q,"labels":{"eventId":%q,"executionId":%q}}`, input.TaskID, "/tmp/"+input.RepoID, "/tmp/"+input.RepoID, input.EventID, input.ExecutionID)
+	labels := map[string]string{
+		"eventId":     input.EventID,
+		"executionId": input.ExecutionID,
+	}
+	if input.QueuedTurnID != "" {
+		labels["queuedTurnId"] = input.QueuedTurnID
+	}
+	scopePayload := map[string]any{
+		"ownerType": "openade-task",
+		"ownerId":   input.TaskID,
+		"repoPath":  "/tmp/" + input.RepoID,
+		"rootPath":  "/tmp/" + input.RepoID,
+		"labels":    labels,
+	}
+	scope, err := json.Marshal(scopePayload)
+	if err != nil {
+		t.Fatalf("marshal %s runtime scope: %v", input.EventID, err)
+	}
 	if err := store.UpsertRuntime(ctx, storage.RuntimeRecord{
 		RuntimeID:      "openade-turn:" + input.EventID,
 		Kind:           "agent",
 		Status:         "running",
-		ScopeJSON:      sql.NullString{String: scope, Valid: true},
+		ScopeJSON:      sql.NullString{String: string(scope), Valid: true},
 		StartedAt:      input.StartedAt,
 		UpdatedAt:      input.StartedAt,
 		LastActivityAt: input.StartedAt,
@@ -7880,16 +9249,21 @@ func seedAgentRecoveryFixture(t *testing.T, store *storage.Store, ctx context.Co
 }
 
 type agentRecoveryFixtureInput struct {
-	RepoID       string
-	TaskID       string
-	EventID      string
-	ExecutionID  string
-	Title        string
-	UserInput    string
-	StartedAt    time.Time
-	RecoveryFile string
-	PID          int
-	PGID         *int
+	RepoID                string
+	TaskID                string
+	EventID               string
+	ExecutionID           string
+	QueuedTurnID          string
+	Title                 string
+	UserInput             string
+	SourceType            string
+	SourceLabel           string
+	StrategyID            string
+	HyperPlanStrategyJSON string
+	StartedAt             time.Time
+	RecoveryFile          string
+	PID                   int
+	PGID                  *int
 }
 
 func TestProductRuntimeStartupRecoversCompletedAgentWorkerTranscript(t *testing.T) {
@@ -7957,6 +9331,95 @@ func TestProductRuntimeStartupRecoversCompletedAgentWorkerTranscript(t *testing.
 	result := objectField(t, action, "result")
 	if result["success"] != true {
 		t.Fatalf("startup recovered action result = %#v", result)
+	}
+}
+
+func TestProductRuntimeStartupRecoversQueuedHyperPlanAgentWorkerTranscript(t *testing.T) {
+	startedAt := time.Date(2026, 6, 8, 22, 15, 0, 0, time.UTC)
+	completedAt := startedAt.Add(3 * time.Minute)
+	completedAtString := completedAt.Format(time.RFC3339Nano)
+	strategyJSON := `{"id":"recovered-peer-review","name":"Recovered Peer Review","description":"Recover a queued HyperPlan worker after Core restart","terminalStepId":"revise-a","steps":[{"id":"plan-a","primitive":"plan","agent":{"harnessId":"codex","modelId":"gpt-test"},"inputs":[]},{"id":"review-b","primitive":"review","agent":{"harnessId":"claude-code","modelId":"opus-test"},"inputs":["plan-a"]},{"id":"revise-a","primitive":"revise","agent":{"harnessId":"codex","modelId":"gpt-test"},"inputs":["review-b"],"resumeStepId":"plan-a"}]}`
+	recoveryFile := filepath.Join(t.TempDir(), "openade-turn-event-recovered-queued-hyperplan.ndjson")
+	recoveryLines := []string{
+		`{"type":"stream","event":{"id":"stream-recovered-queued-hyperplan-1","direction":"execution","type":"session_started","executionId":"exec-recovered-queued-hyperplan","harnessId":"codex","sessionId":"session-recovered-queued-hyperplan"}}`,
+		`{"type":"stream","event":{"id":"stream-recovered-queued-hyperplan-2","direction":"execution","type":"raw_message","executionId":"exec-recovered-queued-hyperplan","harnessId":"codex","message":{"type":"item.completed","item":{"type":"agent_message","text":"Recovered queued HyperPlan."}}}}`,
+		`{"type":"execution","sessionId":"session-recovered-queued-hyperplan","gitRefsAfter":{"sha":"queuedabc","branch":"queued-hyperplan"}}`,
+		fmt.Sprintf(`{"type":"result","status":"completed","success":true,"completedAt":%q}`, completedAtString),
+	}
+	if err := os.WriteFile(recoveryFile, []byte(strings.Join(recoveryLines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("write queued hyperplan recovery transcript: %v", err)
+	}
+	harness := newRuntimeHarnessWithStoreSetup(t, func(ctx context.Context, store *storage.Store) {
+		seedAgentRecoveryFixture(t, store, ctx, agentRecoveryFixtureInput{
+			RepoID:                "repo-recovered-queued-hyperplan",
+			TaskID:                "task-recovered-queued-hyperplan",
+			EventID:               "event-recovered-queued-hyperplan",
+			ExecutionID:           "exec-recovered-queued-hyperplan",
+			QueuedTurnID:          "queued-recovered-hyperplan",
+			Title:                 "Recovered queued HyperPlan",
+			UserInput:             "recover queued HyperPlan worker",
+			SourceType:            "hyperplan",
+			SourceLabel:           "Recovered HyperPlan",
+			StrategyID:            "recovered-peer-review",
+			HyperPlanStrategyJSON: strategyJSON,
+			StartedAt:             startedAt,
+			RecoveryFile:          recoveryFile,
+			PID:                   deadProcessID(t),
+		})
+		if err := store.UpsertQueuedTurn(ctx, storage.QueuedTurn{
+			ID:          "queued-recovered-hyperplan",
+			TaskID:      "task-recovered-queued-hyperplan",
+			Type:        "hyperplan",
+			Input:       "recover queued HyperPlan worker",
+			Status:      "running",
+			Position:    1,
+			PayloadJSON: sql.NullString{String: `{"eventId":"event-recovered-queued-hyperplan","label":"Recovered HyperPlan","harnessId":"codex","modelId":"gpt-test","hyperplanStrategy":` + strategyJSON + `}`, Valid: true},
+			CreatedAt:   startedAt,
+			UpdatedAt:   startedAt,
+		}); err != nil {
+			t.Fatalf("upsert recovered queued hyperplan turn: %v", err)
+		}
+	})
+
+	runtimeDTO := resultObject(t, harness.request(t, "runtime/read", map[string]any{
+		"runtimeId": "openade-turn:event-recovered-queued-hyperplan",
+	}))
+	if runtimeDTO["status"] != "completed" || runtimeDTO["nativeId"] != "exec-recovered-queued-hyperplan" || runtimeDTO["exitedAt"] != completedAtString {
+		t.Fatalf("startup recovered queued hyperplan runtime = %#v", runtimeDTO)
+	}
+	task := resultObject(t, harness.request(t, "openade/task/read", map[string]any{
+		"repoId":               "repo-recovered-queued-hyperplan",
+		"taskId":               "task-recovered-queued-hyperplan",
+		"hydrateSessionEvents": true,
+	}))
+	queuedTurn := objectValue(t, arrayField(t, task, "queuedTurns")[0])
+	if queuedTurn["status"] != "completed" || queuedTurn["eventId"] != "event-recovered-queued-hyperplan" || queuedTurn["updatedAt"] != completedAtString {
+		t.Fatalf("startup recovered queued hyperplan turn = %#v", queuedTurn)
+	}
+	if objectField(t, queuedTurn, "hyperplanStrategy")["id"] != "recovered-peer-review" {
+		t.Fatalf("startup recovered queued hyperplan strategy = %#v", queuedTurn)
+	}
+	action := actionEventFromTask(t, task, "event-recovered-queued-hyperplan")
+	if action["status"] != "completed" || action["completedAt"] != completedAtString {
+		t.Fatalf("startup recovered queued hyperplan action = %#v", action)
+	}
+	source := objectField(t, action, "source")
+	if source["type"] != "hyperplan" || source["strategyId"] != "recovered-peer-review" {
+		t.Fatalf("startup recovered queued hyperplan source = %#v", source)
+	}
+	if objectField(t, action, "hyperplanStrategy")["id"] != "recovered-peer-review" {
+		t.Fatalf("startup recovered queued hyperplan action strategy = %#v", action)
+	}
+	execution := objectField(t, action, "execution")
+	if execution["sessionId"] != "session-recovered-queued-hyperplan" {
+		t.Fatalf("startup recovered queued hyperplan execution = %#v", execution)
+	}
+	if events := arrayField(t, execution, "events"); len(events) != 2 {
+		t.Fatalf("startup recovered queued hyperplan stream events = %#v", events)
+	}
+	result := objectField(t, action, "result")
+	if result["success"] != true {
+		t.Fatalf("startup recovered queued hyperplan result = %#v", result)
 	}
 }
 
@@ -9891,6 +11354,106 @@ func TestProductMutationsAreIdempotentByClientRequestID(t *testing.T) {
 	}
 }
 
+func TestProductRepoCreateCanPrepareCoreHostDirectory(t *testing.T) {
+	requireGit(t)
+	harness := newRuntimeHarness(t)
+	rootDir := t.TempDir()
+	repoDir := filepath.Join(rootDir, "core-created-repo")
+
+	missingInspect := resultObject(t, harness.request(t, "openade/repo/path/inspect", map[string]any{
+		"path": filepath.Join(rootDir, "missing-repo"),
+	}))
+	if missingInspect["exists"] != false || missingInspect["isDirectory"] != false || missingInspect["isGitRepo"] != false {
+		t.Fatalf("missing repo path inspection = %#v", missingInspect)
+	}
+
+	created := resultObject(t, harness.request(t, "openade/repo/create", map[string]any{
+		"repoId":          "repo-core-host-create",
+		"name":            "Core Host Created Repo",
+		"path":            repoDir,
+		"createdBy":       map[string]any{"id": "user-1", "email": "user@example.com"},
+		"createDirectory": true,
+		"initializeGit":   true,
+	}))
+	if created["repoId"] != "repo-core-host-create" {
+		t.Fatalf("created repo = %#v", created)
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, ".git")); err != nil {
+		t.Fatalf("expected initialized git repository: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, ".gitignore")); err != nil {
+		t.Fatalf("expected default .gitignore: %v", err)
+	}
+
+	gitInfo := resultObject(t, harness.request(t, "openade/project/git/info/read", map[string]any{
+		"repoId": "repo-core-host-create",
+	}))
+	expectedRepoRoot, err := filepath.EvalSymlinks(repoDir)
+	if err != nil {
+		t.Fatalf("resolve expected repo root: %v", err)
+	}
+	if gitInfo["isGitRepo"] != true || gitInfo["repoRoot"] != expectedRepoRoot {
+		t.Fatalf("git info after core-created repo = %#v", gitInfo)
+	}
+
+	existingDir := filepath.Join(rootDir, "existing-non-git-repo")
+	mkdirAll(t, existingDir)
+	existingInspect := resultObject(t, harness.request(t, "openade/repo/path/inspect", map[string]any{
+		"path": existingDir,
+	}))
+	if existingInspect["exists"] != true || existingInspect["isDirectory"] != true || existingInspect["isGitRepo"] != false {
+		t.Fatalf("existing non-git repo path inspection = %#v", existingInspect)
+	}
+	existingCreated := resultObject(t, harness.request(t, "openade/repo/create", map[string]any{
+		"repoId":        "repo-core-existing-host-init",
+		"name":          "Core Existing Host Init",
+		"path":          existingDir,
+		"createdBy":     map[string]any{"id": "user-1", "email": "user@example.com"},
+		"initializeGit": true,
+	}))
+	if existingCreated["repoId"] != "repo-core-existing-host-init" {
+		t.Fatalf("created existing repo = %#v", existingCreated)
+	}
+	if _, err := os.Stat(filepath.Join(existingDir, ".git")); err != nil {
+		t.Fatalf("expected initialized existing git repository: %v", err)
+	}
+	initializedInspect := resultObject(t, harness.request(t, "openade/repo/path/inspect", map[string]any{
+		"path": existingDir,
+	}))
+	if initializedInspect["exists"] != true || initializedInspect["isDirectory"] != true || initializedInspect["isGitRepo"] != true {
+		t.Fatalf("initialized repo path inspection = %#v", initializedInspect)
+	}
+
+	updateDir := filepath.Join(rootDir, "update-non-git-repo")
+	mkdirAll(t, updateDir)
+	updateCreated := resultObject(t, harness.request(t, "openade/repo/create", map[string]any{
+		"repoId":    "repo-core-update-host-init",
+		"name":      "Core Update Host Init",
+		"path":      updateDir,
+		"createdBy": map[string]any{"id": "user-1", "email": "user@example.com"},
+	}))
+	if updateCreated["repoId"] != "repo-core-update-host-init" {
+		t.Fatalf("created update repo = %#v", updateCreated)
+	}
+	updated := resultObject(t, harness.request(t, "openade/repo/update", map[string]any{
+		"repoId":        "repo-core-update-host-init",
+		"path":          updateDir,
+		"initializeGit": true,
+	}))
+	if updated["ok"] != true {
+		t.Fatalf("updated repo with host init = %#v", updated)
+	}
+	if _, err := os.Stat(filepath.Join(updateDir, ".git")); err != nil {
+		t.Fatalf("expected initialized updated git repository: %v", err)
+	}
+	updateInspect := resultObject(t, harness.request(t, "openade/repo/path/inspect", map[string]any{
+		"path": updateDir,
+	}))
+	if updateInspect["exists"] != true || updateInspect["isDirectory"] != true || updateInspect["isGitRepo"] != true {
+		t.Fatalf("updated repo path inspection = %#v", updateInspect)
+	}
+}
+
 func requireGit(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -10166,6 +11729,21 @@ func taskTerminalOutputText(output []any) string {
 	return builder.String()
 }
 
+func streamEventFixtures(prefix string, count int) []map[string]any {
+	events := make([]map[string]any, 0, count)
+	for index := 1; index <= count; index++ {
+		events = append(events, map[string]any{
+			"id":   fmt.Sprintf("%s-%03d", prefix, index),
+			"type": "raw_message",
+			"message": map[string]any{
+				"type": "text",
+				"text": fmt.Sprintf("stream event %d", index),
+			},
+		})
+	}
+	return events
+}
+
 func actionEventFromTask(t *testing.T, task map[string]any, eventID string) map[string]any {
 	t.Helper()
 	for _, item := range arrayField(t, task, "events") {
@@ -10264,6 +11842,16 @@ func assertChangedFile(t *testing.T, files []any, path string, status string) {
 	t.Fatalf("file %s not found in %#v", path, files)
 }
 
+func assertChangedFileMissing(t *testing.T, files []any, path string) {
+	t.Helper()
+	for _, item := range files {
+		file := objectValue(t, item)
+		if file["path"] == path {
+			t.Fatalf("file %s unexpectedly found in %#v", path, files)
+		}
+	}
+}
+
 func scopeByID(t *testing.T, scopes []any, id string) map[string]any {
 	t.Helper()
 	for _, item := range scopes {
@@ -10321,6 +11909,19 @@ func runtimeErrorCode(t *testing.T, response map[string]any) string {
 	return code
 }
 
+func runtimeErrorMessage(t *testing.T, response map[string]any) string {
+	t.Helper()
+	runtimeErr, ok := response["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing runtime error: %#v", response)
+	}
+	message, ok := runtimeErr["message"].(string)
+	if !ok {
+		t.Fatalf("missing runtime error message: %#v", runtimeErr)
+	}
+	return message
+}
+
 func objectField(t *testing.T, value map[string]any, field string) map[string]any {
 	t.Helper()
 	return objectValue(t, value[field])
@@ -10333,6 +11934,20 @@ func arrayField(t *testing.T, value map[string]any, field string) []any {
 		t.Fatalf("%s is not an array: %#v", field, value[field])
 	}
 	return items
+}
+
+func stringSliceField(t *testing.T, value map[string]any, field string) []string {
+	t.Helper()
+	items := arrayField(t, value, field)
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		text, ok := item.(string)
+		if !ok {
+			t.Fatalf("%s contains non-string item: %#v", field, item)
+		}
+		result = append(result, text)
+	}
+	return result
 }
 
 func objectValue(t *testing.T, value any) map[string]any {

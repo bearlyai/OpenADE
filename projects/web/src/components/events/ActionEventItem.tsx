@@ -1,6 +1,6 @@
 import { AlertTriangle, ArrowUpFromLine, ClipboardCheck, FileText, GitCommit, HelpCircle, Play, RefreshCw, Zap } from "lucide-react"
 import { observer } from "mobx-react"
-import { useEffect, useMemo, useState } from "react"
+import { useMemo } from "react"
 import { openUrlInNativeBrowser } from "../../electronAPI/shell"
 import { useCodeStore } from "../../store/context"
 import type { ActionEvent } from "../../types"
@@ -85,27 +85,7 @@ export const ActionEventItem = observer(({ event, expanded, onToggle, taskId, on
     const hasDefunctSessionError = codeStore.events.hasDefunctSessionError(event)
 
     const isPushEvent = PUSH_ACTION_LABELS.has(event.source.userLabel)
-    const cachedHasGhCli = codeStore.tasks.getTaskModel(taskId)?.hasGhCli ?? true
-    const [recheckedGhCli, setRecheckedGhCli] = useState<boolean | null>(null)
-
-    // Re-check gh CLI when a completed push-capable event shows the banner due to stale cache
-    useEffect(() => {
-        if (!isPushEvent || event.status !== "completed" || cachedHasGhCli) return
-        const repoId = codeStore.tasks.getTaskModel(taskId)?.repoId
-        if (!repoId) return
-
-        let cancelled = false
-        codeStore.repos.refreshGhCliStatus(repoId).then((result) => {
-            if (!cancelled) {
-                setRecheckedGhCli(result)
-            }
-        })
-        return () => {
-            cancelled = true
-        }
-    }, [isPushEvent, event.status, cachedHasGhCli, taskId])
-
-    const hasGhCli = recheckedGhCli ?? cachedHasGhCli
+    const hasGhCli = codeStore.tasks.getTaskModel(taskId)?.hasGhCli ?? true
     const showGhCliBanner = isPushEvent && !hasGhCli && event.status === "completed"
 
     return (

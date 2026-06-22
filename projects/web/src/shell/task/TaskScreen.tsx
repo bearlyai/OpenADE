@@ -1,6 +1,6 @@
-import { ArrowDown, Loader2, MessageSquarePlus } from "lucide-react"
+import { ArrowDown, ImagePlus, Loader2, MessageSquarePlus } from "lucide-react"
 import cx from "classnames"
-import { type ReactNode, useMemo } from "react"
+import { type DragEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type {
     OpenADESnapshotPatchFile,
     OpenADETask,
@@ -18,14 +18,57 @@ import type {
     OpenADETaskPreview,
     OpenADETaskResourceInventory,
 } from "../../../../openade-module/src"
-import { TaskComposer, type TaskComposerAgentControls } from "./TaskComposer"
+import {
+    TaskComposer,
+    type TaskComposerAction,
+    type TaskComposerAgentControls,
+    type TaskComposerImageAttachment,
+    type TaskComposerRepeatState,
+} from "./TaskComposer"
 import { TaskEventThread, type TaskImageLoader, type TaskSnapshotPatchView } from "./TaskEventThread"
-import { TaskProductPanel, openADETaskComments, type OpenADETaskCommentView, type TaskProductCapabilities, type TaskReviewType } from "./TaskProductPanel"
+import { TaskProductPanel, openADETaskComments, type OpenADETaskCommentView, type TaskReviewType } from "./TaskProductPanel"
 import type { TaskTerminalProductAccess } from "../../components/terminalSession"
+import type { TaskTurnCapabilities } from "../capabilities"
 import type { TaskGitCapabilities } from "./TaskGitPanel"
 import { taskEventBlocks, type TaskEventBlock, type TaskSnapshotBlock } from "./taskEventPresentation"
-import type { TaskCommandType } from "./taskCommands"
+import { canQueueTaskCommandWhileRunning, type TaskCommandType } from "./taskCommands"
+import { latestActivePlanEventId, taskHasRetryableLastAction } from "./taskPlanState"
 import { useTaskThreadScroll } from "./useTaskThreadScroll"
+import { useMetaKeyPressed } from "../../hooks/useMetaKeyPressed"
+import { getMetaDigitShortcutIndex } from "../../utils/keyboardShortcuts"
+import { buildTaskShellCommandDescriptors, type TaskShellCommandId } from "./taskCommandModel"
+
+const TASK_COMMAND_TYPE_BY_SHELL_COMMAND_ID: Partial<Record<TaskShellCommandId, TaskCommandType>> = {
+    do: "do",
+    plan: "plan",
+    ask: "ask",
+    revise: "revise",
+    runPlan: "run_plan",
+}
+
+const TASK_COMMAND_SHORTCUT_LABELS: Partial<Record<TaskCommandType, string>> = {
+    do: "1",
+    run_plan: "1",
+    plan: "2",
+    revise: "2",
+    ask: "3",
+    hyperplan: "4",
+}
+const TASK_COMMAND_SHORTCUT_LABELS_WITHOUT_HYPERPLAN: Partial<Record<TaskCommandType, string>> = {
+    do: "1",
+    run_plan: "1",
+    plan: "2",
+    revise: "2",
+    ask: "3",
+}
+const TASK_REVIEW_PLAN_SHORTCUT_LABEL = "4"
+const TASK_REVIEW_SHORTCUT_LABEL = "4"
+const TASK_RETRY_SHORTCUT_LABEL = "5"
+const TASK_REPEAT_SHORTCUT_LABEL = "6"
+const TASK_COMMIT_AND_PUSH_SHORTCUT_LABEL = "7"
+const TASK_CANCEL_PLAN_SHORTCUT_LABEL = "8"
+const TASK_ABORT_SHORTCUT_LABEL = "8"
+const TASK_CLOSE_SHORTCUT_LABEL = "9"
 
 export function TaskScreen({
     task,
@@ -57,16 +100,17 @@ export function TaskScreen({
     taskResourcesLoading,
     taskTerminalProductAccess,
     taskGitCapabilities,
-    taskProductCapabilities,
-    taskCanReadResources,
-    taskCanDelete,
-    taskCanStartTurn,
-    taskCanEnqueueQueuedTurn,
-    taskCanInterrupt,
+    taskTurnCapabilities,
     isLoading,
     isSubmitting,
     isOnline,
     agentControls,
+    hyperplanControl,
+    imageAttachments,
+    imageAttachLoading,
+    repeatState,
+    editor,
+    onFocusInputShortcut,
     composer,
     messageViewportClassName,
     loadImage,
@@ -74,12 +118,15 @@ export function TaskScreen({
     snapshotPatchActionId,
     onInputChange,
     onCommandTypeChange,
+    onAttachImage,
+    onRemoveImage,
     onTitleChange,
     onSaveTitle,
     onGenerateTitle,
     onPrepareEnvironment,
     onToggleClosed,
     onDeleteTask,
+    onCancelPlan,
     onCommentDraftChange,
     onCreateComment,
     onStartEditComment,
@@ -98,9 +145,13 @@ export function TaskScreen({
     onReadTaskCommitFilePatch,
     onReadTaskCommitFileAtTreeish,
     onCommitTaskGit,
+    onCommitAndPush,
+    onStartRepeat,
+    onStopRepeat,
     onRefreshTaskResources,
     onSend,
     onAbort,
+    onRetry,
     onLoadSnapshotPatch,
     onLoadSnapshotPatchSlice,
 }: {
@@ -133,16 +184,17 @@ export function TaskScreen({
     taskResourcesLoading: boolean
     taskTerminalProductAccess: TaskTerminalProductAccess | null
     taskGitCapabilities: TaskGitCapabilities
-    taskProductCapabilities: TaskProductCapabilities
-    taskCanReadResources: boolean
-    taskCanDelete: boolean
-    taskCanStartTurn: boolean
-    taskCanEnqueueQueuedTurn: boolean
-    taskCanInterrupt: boolean
+    taskTurnCapabilities: TaskTurnCapabilities
     isLoading: boolean
     isSubmitting: boolean
     isOnline: boolean
     agentControls?: TaskComposerAgentControls
+    hyperplanControl?: ReactNode
+    imageAttachments?: TaskComposerImageAttachment[]
+    imageAttachLoading?: boolean
+    repeatState?: TaskComposerRepeatState
+    editor?: ReactNode
+    onFocusInputShortcut?: () => void
     composer?: ReactNode
     messageViewportClassName?: string
     loadImage?: TaskImageLoader
@@ -150,40 +202,346 @@ export function TaskScreen({
     snapshotPatchActionId?: string | null
     onInputChange: (value: string) => void
     onCommandTypeChange: (value: TaskCommandType) => void
-    onTitleChange: (value: string) => void
-    onSaveTitle: () => void
-    onGenerateTitle: () => void
-    onPrepareEnvironment: () => void
-    onToggleClosed: () => void
-    onDeleteTask: () => void
-    onCommentDraftChange: (value: string) => void
-    onCreateComment: () => void
-    onStartEditComment: (comment: OpenADETaskCommentView) => void
-    onEditingCommentDraftChange: (value: string) => void
-    onSaveComment: (commentId: string) => void
+    onAttachImage?: (file: File) => void
+    onRemoveImage?: (imageId: string) => void
+    onTitleChange?: (value: string) => void
+    onSaveTitle?: () => void
+    onGenerateTitle?: () => void
+    onPrepareEnvironment?: () => void
+    onToggleClosed?: () => void
+    onDeleteTask?: () => void
+    onCancelPlan?: (planEventId: string) => void
+    onCommentDraftChange?: (value: string) => void
+    onCreateComment?: () => void
+    onStartEditComment?: (comment: OpenADETaskCommentView) => void
+    onEditingCommentDraftChange?: (value: string) => void
+    onSaveComment?: (commentId: string) => void
     onCancelEditComment: () => void
-    onDeleteComment: (commentId: string) => void
-    onCancelQueuedTurn: (queuedTurnId: string) => void
-    onReorderQueuedTurns: (queuedTurnIds: string[]) => void
-    onReviewInstructionsChange: (value: string) => void
-    onStartReview: (reviewType: TaskReviewType) => void
-    onRefreshTaskGit: () => void
-    onReadTaskDiff: (file: OpenADETaskGitChangedFile) => void
-    onReadTaskFilePair: (file: OpenADETaskGitChangedFile) => void
-    onReadTaskCommitFiles: (commit: OpenADETaskGitLogEntry) => void
-    onReadTaskCommitFilePatch: (file: OpenADETaskGitChangedFile) => void
-    onReadTaskCommitFileAtTreeish: (file: OpenADETaskGitChangedFile) => void
-    onCommitTaskGit: (message: string) => void
-    onRefreshTaskResources: () => void
-    onSend: () => void
-    onAbort: () => void
+    onDeleteComment?: (commentId: string) => void
+    onCancelQueuedTurn?: (queuedTurnId: string) => void
+    onReorderQueuedTurns?: (queuedTurnIds: string[]) => void
+    onReviewInstructionsChange?: (value: string) => void
+    onStartReview?: (reviewType: TaskReviewType) => void
+    onRefreshTaskGit?: () => void
+    onReadTaskDiff?: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskFilePair?: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskCommitFiles?: (commit: OpenADETaskGitLogEntry) => void
+    onReadTaskCommitFilePatch?: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskCommitFileAtTreeish?: (file: OpenADETaskGitChangedFile) => void
+    onCommitTaskGit?: (message: string) => void
+    onCommitAndPush?: () => void
+    onStartRepeat?: () => void
+    onStopRepeat?: () => void
+    onRefreshTaskResources?: () => void
+    onSend?: () => void
+    onAbort?: () => void
+    onRetry?: () => void
     onLoadSnapshotPatch?: (block: TaskSnapshotBlock) => void
     onLoadSnapshotPatchSlice?: (block: TaskSnapshotBlock, file: OpenADESnapshotPatchFile) => void
 }) {
     const blocks = useMemo(() => taskEventBlocks(task), [task])
     const comments = useMemo(() => openADETaskComments(task), [task])
+    const activePlanEventId = latestActivePlanEventId(task)
+    const activePlan = activePlanEventId !== null
+    const repeatActive = repeatState !== undefined
+    const canSubmitTurnInput = isRunning ? taskTurnCapabilities.canEnqueue : taskTurnCapabilities.canStart
+    const canAbortTask = isRunning && Boolean(onAbort)
+    const canRetryTask = !isRunning && Boolean(onRetry) && taskHasRetryableLastAction(task)
+    const canCommitAndPush =
+        Boolean(task && !task.unavailableReason && onCommitAndPush) &&
+        !isRunning &&
+        canSubmitTurnInput &&
+        (taskGitSummary === null || taskGitSummary.hasChanges || (taskGitSummary.ahead ?? 0) > 0)
+    const canAttachTaskImages = Boolean(onAttachImage)
+    const shortcutHintsVisible = useMetaKeyPressed()
+    const imageDragDepthRef = useRef(0)
+    const [isImageDragOver, setIsImageDragOver] = useState(false)
+    const desktopCommandDescriptors = useMemo(() => {
+        return buildTaskShellCommandDescriptors({
+            repeatActive,
+            closed: task?.closed ?? false,
+            working: isRunning,
+            activePlan,
+            feedback: canSubmitTurnInput,
+            input: input.trim().length > 0,
+            retryable: canRetryTask,
+            actionHistory: blocks.length > 0,
+            gitWorkingChanges: taskGitSummary?.hasChanges === true,
+            gitStateUnknown: taskGitSummary === null,
+            unpushedCommits: (taskGitSummary?.ahead ?? 0) > 0,
+            commitAndPushInProgress: false,
+        })
+    }, [activePlan, blocks.length, canRetryTask, canSubmitTurnInput, input, isRunning, repeatActive, task?.closed, taskGitSummary])
+    const composerCommands = useMemo(() => {
+        const desktopTurnCommands = desktopCommandDescriptors
+            .map((command) => TASK_COMMAND_TYPE_BY_SHELL_COMMAND_ID[command.id])
+            .filter((type): type is TaskCommandType => type !== undefined)
+
+        if (!activePlan) return [...desktopTurnCommands, "hyperplan"] satisfies TaskCommandType[]
+        return desktopTurnCommands
+    }, [activePlan, desktopCommandDescriptors])
+    const visibleComposerCommands = useMemo(() => {
+        if (!canSubmitTurnInput) return []
+        return isRunning ? composerCommands.filter(canQueueTaskCommandWhileRunning) : composerCommands
+    }, [canSubmitTurnInput, composerCommands, isRunning])
+    const canReviewPlan =
+        Boolean(task && !task.unavailableReason && onStartReview) &&
+        desktopCommandDescriptors.some((command) => command.id === "reviewPlan" && command.enabled)
+    const canReviewWork =
+        Boolean(task && !task.unavailableReason && onStartReview) &&
+        desktopCommandDescriptors.some((command) => command.id === "review" && command.enabled)
+    const canCancelPlan =
+        Boolean(task && !task.unavailableReason && activePlanEventId && onCancelPlan) &&
+        desktopCommandDescriptors.some((command) => command.id === "cancelPlan" && command.enabled)
+    const canStartRepeat =
+        Boolean(task && !task.unavailableReason && onStartRepeat) &&
+        desktopCommandDescriptors.some((command) => command.id === "repeat" && command.enabled)
+    const canStopRepeat =
+        Boolean(task && !task.unavailableReason && onStopRepeat) &&
+        desktopCommandDescriptors.some((command) => command.id === "repeatStop" && command.enabled)
+    const closeToggleDescriptor = desktopCommandDescriptors.find((command) => (command.id === "close" || command.id === "reopen") && command.enabled)
+    const canToggleClosedFromComposer = Boolean(task && !task.unavailableReason && onToggleClosed && closeToggleDescriptor)
+    const composerCommandShortcutLabels = canReviewWork ? TASK_COMMAND_SHORTCUT_LABELS_WITHOUT_HYPERPLAN : TASK_COMMAND_SHORTCUT_LABELS
+    const shortcutCommandTypes = useMemo(() => {
+        return new Map(
+            visibleComposerCommands.flatMap((type) => {
+                const label = composerCommandShortcutLabels[type]
+                if (!label) return []
+                const shortcutNumber = Number.parseInt(label, 10)
+                return Number.isInteger(shortcutNumber) ? ([[shortcutNumber, type]] satisfies [number, TaskCommandType][]) : []
+            })
+        )
+    }, [composerCommandShortcutLabels, visibleComposerCommands])
+    const visibleAgentControls = canSubmitTurnInput ? agentControls : agentControls?.mcpControl ? { mcpControl: agentControls.mcpControl } : undefined
+    const composerActions = useMemo<readonly TaskComposerAction[]>(() => {
+        const actions: TaskComposerAction[] = []
+        if (canCancelPlan && activePlanEventId && onCancelPlan) {
+            actions.push({
+                id: "cancelPlan",
+                label: "Cancel Plan",
+                ariaLabel: "Cancel active plan from composer",
+                shortcutLabel: TASK_CANCEL_PLAN_SHORTCUT_LABEL,
+                onClick: () => onCancelPlan(activePlanEventId),
+            })
+        }
+        if (canReviewPlan && onStartReview) {
+            actions.push({
+                id: "reviewPlan",
+                label: "Review Plan",
+                shortcutLabel: TASK_REVIEW_PLAN_SHORTCUT_LABEL,
+                onClick: () => onStartReview("plan"),
+            })
+        }
+        if (canReviewWork && onStartReview) {
+            actions.push({
+                id: "review",
+                label: "Review",
+                shortcutLabel: TASK_REVIEW_SHORTCUT_LABEL,
+                onClick: () => onStartReview("work"),
+            })
+        }
+        if (canStartRepeat && onStartRepeat) {
+            actions.push({
+                id: "repeat",
+                label: "Repeat",
+                shortcutLabel: TASK_REPEAT_SHORTCUT_LABEL,
+                onClick: onStartRepeat,
+            })
+        }
+        if (canStopRepeat && onStopRepeat) {
+            actions.push({
+                id: "repeatStop",
+                label: "Stop",
+                ariaLabel: "Stop repeat",
+                shortcutLabel: TASK_ABORT_SHORTCUT_LABEL,
+                onClick: onStopRepeat,
+            })
+        }
+        if (canCommitAndPush && onCommitAndPush) {
+            actions.push({
+                id: "commitAndPush",
+                label: "Commit & Push",
+                shortcutLabel: TASK_COMMIT_AND_PUSH_SHORTCUT_LABEL,
+                onClick: onCommitAndPush,
+            })
+        }
+        if (canToggleClosedFromComposer && closeToggleDescriptor && onToggleClosed) {
+            actions.push({
+                id: closeToggleDescriptor.id,
+                label: closeToggleDescriptor.label,
+                ariaLabel: `${closeToggleDescriptor.label} task from composer`,
+                shortcutLabel: TASK_CLOSE_SHORTCUT_LABEL,
+                onClick: onToggleClosed,
+            })
+        }
+        return actions
+    }, [
+        activePlanEventId,
+        canCancelPlan,
+        canCommitAndPush,
+        canReviewPlan,
+        canReviewWork,
+        canStartRepeat,
+        canStopRepeat,
+        canToggleClosedFromComposer,
+        closeToggleDescriptor,
+        onCancelPlan,
+        onCommitAndPush,
+        onStartRepeat,
+        onStartReview,
+        onStopRepeat,
+        onToggleClosed,
+    ])
+
+    useEffect(() => {
+        const handleCommandShortcut = (event: KeyboardEvent) => {
+            if (isLoading || isSubmitting || !isOnline) return
+
+            const shortcutIndex = getMetaDigitShortcutIndex(event)
+            if (shortcutIndex === null) return
+
+            const shortcutNumber = shortcutIndex + 1
+            if (shortcutNumber === Number.parseInt(TASK_ABORT_SHORTCUT_LABEL, 10) && canStopRepeat && onStopRepeat) {
+                event.preventDefault()
+                onStopRepeat()
+                return
+            }
+
+            if (shortcutNumber === Number.parseInt(TASK_ABORT_SHORTCUT_LABEL, 10)) {
+                if (canAbortTask && onAbort) {
+                    event.preventDefault()
+                    onAbort()
+                }
+                return
+            }
+
+            if (shortcutNumber === Number.parseInt(TASK_RETRY_SHORTCUT_LABEL, 10)) {
+                if (canRetryTask && onRetry) {
+                    event.preventDefault()
+                    onRetry()
+                }
+                return
+            }
+
+            if (shortcutNumber === Number.parseInt(TASK_REVIEW_PLAN_SHORTCUT_LABEL, 10) && canReviewPlan && onStartReview) {
+                event.preventDefault()
+                onStartReview("plan")
+                return
+            }
+
+            if (shortcutNumber === Number.parseInt(TASK_REVIEW_SHORTCUT_LABEL, 10) && canReviewWork && onStartReview) {
+                event.preventDefault()
+                onStartReview("work")
+                return
+            }
+
+            if (shortcutNumber === Number.parseInt(TASK_REPEAT_SHORTCUT_LABEL, 10) && canStartRepeat && onStartRepeat) {
+                event.preventDefault()
+                onStartRepeat()
+                return
+            }
+
+            if (shortcutNumber === Number.parseInt(TASK_COMMIT_AND_PUSH_SHORTCUT_LABEL, 10)) {
+                if (canCommitAndPush && onCommitAndPush) {
+                    event.preventDefault()
+                    onCommitAndPush()
+                }
+                return
+            }
+
+            const commandTypeForShortcut = shortcutCommandTypes.get(shortcutNumber)
+            if (!commandTypeForShortcut) return
+            if (isRunning && !canQueueTaskCommandWhileRunning(commandTypeForShortcut)) return
+
+            event.preventDefault()
+            onCommandTypeChange(commandTypeForShortcut)
+        }
+
+        window.addEventListener("keydown", handleCommandShortcut, true)
+        return () => window.removeEventListener("keydown", handleCommandShortcut, true)
+    }, [
+        canAbortTask,
+        canCommitAndPush,
+        canRetryTask,
+        canReviewPlan,
+        canReviewWork,
+        canStartRepeat,
+        canStopRepeat,
+        isLoading,
+        isOnline,
+        isRunning,
+        isSubmitting,
+        onAbort,
+        onCommandTypeChange,
+        onCommitAndPush,
+        onRetry,
+        onStartRepeat,
+        onStartReview,
+        onStopRepeat,
+        shortcutCommandTypes,
+    ])
+
+    const handleImageDragEnter = useCallback(
+        (event: DragEvent<HTMLDivElement>) => {
+            if (!canAttachTaskImages || !event.dataTransfer.types.includes("Files")) return
+            event.preventDefault()
+            imageDragDepthRef.current += 1
+            setIsImageDragOver(true)
+        },
+        [canAttachTaskImages]
+    )
+
+    const handleImageDragOver = useCallback(
+        (event: DragEvent<HTMLDivElement>) => {
+            if (!canAttachTaskImages || !event.dataTransfer.types.includes("Files")) return
+            event.preventDefault()
+        },
+        [canAttachTaskImages]
+    )
+
+    const handleImageDragLeave = useCallback(
+        (event: DragEvent<HTMLDivElement>) => {
+            if (!canAttachTaskImages) return
+            event.preventDefault()
+            imageDragDepthRef.current -= 1
+            if (imageDragDepthRef.current <= 0) {
+                imageDragDepthRef.current = 0
+                setIsImageDragOver(false)
+            }
+        },
+        [canAttachTaskImages]
+    )
+
+    const handleImageDrop = useCallback(
+        (event: DragEvent<HTMLDivElement>) => {
+            if (!canAttachTaskImages || !onAttachImage) return
+            event.preventDefault()
+            imageDragDepthRef.current = 0
+            setIsImageDragOver(false)
+            for (const file of Array.from(event.dataTransfer.files)) {
+                if (file.type.startsWith("image/")) onAttachImage(file)
+            }
+        },
+        [canAttachTaskImages, onAttachImage]
+    )
+
     return (
-        <div className="relative flex h-full w-full max-w-full flex-col overflow-hidden">
+        <div
+            className="relative flex h-full w-full max-w-full flex-col overflow-hidden"
+            onDragEnter={canAttachTaskImages ? handleImageDragEnter : undefined}
+            onDragOver={canAttachTaskImages ? handleImageDragOver : undefined}
+            onDragLeave={canAttachTaskImages ? handleImageDragLeave : undefined}
+            onDrop={canAttachTaskImages ? handleImageDrop : undefined}
+        >
+            {isImageDragOver && (
+                <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+                    <div className="border-2 border-dashed border-primary bg-base-100/95 px-10 py-8 text-center">
+                        <ImagePlus className="mx-auto mb-3 h-9 w-9 text-primary" />
+                        <div className="text-base font-medium text-base-content">Drop images here</div>
+                        <div className="mt-1 text-sm text-muted">PNG, JPG, GIF, WebP</div>
+                    </div>
+                </div>
+            )}
             <TaskMessages
                 task={task}
                 preview={preview}
@@ -214,9 +572,6 @@ export function TaskScreen({
                 taskResourcesLoading={taskResourcesLoading}
                 taskTerminalProductAccess={taskTerminalProductAccess}
                 taskGitCapabilities={taskGitCapabilities}
-                taskProductCapabilities={taskProductCapabilities}
-                taskCanReadResources={taskCanReadResources}
-                taskCanDelete={taskCanDelete}
                 isSubmitting={isSubmitting}
                 messageViewportClassName={messageViewportClassName}
                 loadImage={loadImage}
@@ -228,6 +583,7 @@ export function TaskScreen({
                 onPrepareEnvironment={onPrepareEnvironment}
                 onToggleClosed={onToggleClosed}
                 onDeleteTask={onDeleteTask}
+                onCancelPlan={onCancelPlan}
                 onCommentDraftChange={onCommentDraftChange}
                 onCreateComment={onCreateComment}
                 onStartEditComment={onStartEditComment}
@@ -258,13 +614,27 @@ export function TaskScreen({
                     isSubmitting={isSubmitting}
                     isOnline={isOnline}
                     isRunning={isRunning}
-                    canSend={isRunning ? taskCanEnqueueQueuedTurn : taskCanStartTurn}
-                    canAbort={taskCanInterrupt}
-                    agentControls={agentControls}
+                    commands={visibleComposerCommands}
+                    actions={composerActions}
+                    agentControls={visibleAgentControls}
+                    hyperplanControl={canSubmitTurnInput ? hyperplanControl : undefined}
+                    commandShortcutLabels={composerCommandShortcutLabels}
+                    abortShortcutLabel={canAbortTask ? TASK_ABORT_SHORTCUT_LABEL : undefined}
+                    retryShortcutLabel={canRetryTask ? TASK_RETRY_SHORTCUT_LABEL : undefined}
+                    shortcutHintsVisible={shortcutHintsVisible}
+                    imageAttachments={canAttachTaskImages ? imageAttachments : undefined}
+                    imageAttachLoading={canAttachTaskImages ? imageAttachLoading : false}
+                    repeatState={repeatState}
+                    editor={canSubmitTurnInput ? editor : undefined}
+                    inputDisabled={!canSubmitTurnInput}
                     onInputChange={onInputChange}
                     onCommandTypeChange={onCommandTypeChange}
+                    onAttachImage={canAttachTaskImages ? onAttachImage : undefined}
+                    onRemoveImage={onRemoveImage}
+                    onFocusInputShortcut={onFocusInputShortcut}
                     onSend={onSend}
-                    onAbort={onAbort}
+                    onAbort={canAbortTask ? onAbort : undefined}
+                    onRetry={canRetryTask ? onRetry : undefined}
                 />
             )}
         </div>
@@ -301,9 +671,6 @@ function TaskMessages({
     taskResourcesLoading,
     taskTerminalProductAccess,
     taskGitCapabilities,
-    taskProductCapabilities,
-    taskCanReadResources,
-    taskCanDelete,
     isSubmitting,
     messageViewportClassName,
     loadImage,
@@ -315,6 +682,7 @@ function TaskMessages({
     onPrepareEnvironment,
     onToggleClosed,
     onDeleteTask,
+    onCancelPlan,
     onCommentDraftChange,
     onCreateComment,
     onStartEditComment,
@@ -366,39 +734,37 @@ function TaskMessages({
     taskResourcesLoading: boolean
     taskTerminalProductAccess: TaskTerminalProductAccess | null
     taskGitCapabilities: TaskGitCapabilities
-    taskProductCapabilities: TaskProductCapabilities
-    taskCanReadResources: boolean
-    taskCanDelete: boolean
     isSubmitting: boolean
     messageViewportClassName?: string
     loadImage?: TaskImageLoader
     snapshotPatches?: Record<string, TaskSnapshotPatchView>
     snapshotPatchActionId?: string | null
-    onTitleChange: (value: string) => void
-    onSaveTitle: () => void
-    onGenerateTitle: () => void
-    onPrepareEnvironment: () => void
-    onToggleClosed: () => void
-    onDeleteTask: () => void
-    onCommentDraftChange: (value: string) => void
-    onCreateComment: () => void
-    onStartEditComment: (comment: OpenADETaskCommentView) => void
-    onEditingCommentDraftChange: (value: string) => void
-    onSaveComment: (commentId: string) => void
+    onTitleChange?: (value: string) => void
+    onSaveTitle?: () => void
+    onGenerateTitle?: () => void
+    onPrepareEnvironment?: () => void
+    onToggleClosed?: () => void
+    onDeleteTask?: () => void
+    onCancelPlan?: (planEventId: string) => void
+    onCommentDraftChange?: (value: string) => void
+    onCreateComment?: () => void
+    onStartEditComment?: (comment: OpenADETaskCommentView) => void
+    onEditingCommentDraftChange?: (value: string) => void
+    onSaveComment?: (commentId: string) => void
     onCancelEditComment: () => void
-    onDeleteComment: (commentId: string) => void
-    onCancelQueuedTurn: (queuedTurnId: string) => void
-    onReorderQueuedTurns: (queuedTurnIds: string[]) => void
-    onReviewInstructionsChange: (value: string) => void
-    onStartReview: (reviewType: TaskReviewType) => void
-    onRefreshTaskGit: () => void
-    onReadTaskDiff: (file: OpenADETaskGitChangedFile) => void
-    onReadTaskFilePair: (file: OpenADETaskGitChangedFile) => void
-    onReadTaskCommitFiles: (commit: OpenADETaskGitLogEntry) => void
-    onReadTaskCommitFilePatch: (file: OpenADETaskGitChangedFile) => void
-    onReadTaskCommitFileAtTreeish: (file: OpenADETaskGitChangedFile) => void
-    onCommitTaskGit: (message: string) => void
-    onRefreshTaskResources: () => void
+    onDeleteComment?: (commentId: string) => void
+    onCancelQueuedTurn?: (queuedTurnId: string) => void
+    onReorderQueuedTurns?: (queuedTurnIds: string[]) => void
+    onReviewInstructionsChange?: (value: string) => void
+    onStartReview?: (reviewType: TaskReviewType) => void
+    onRefreshTaskGit?: () => void
+    onReadTaskDiff?: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskFilePair?: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskCommitFiles?: (commit: OpenADETaskGitLogEntry) => void
+    onReadTaskCommitFilePatch?: (file: OpenADETaskGitChangedFile) => void
+    onReadTaskCommitFileAtTreeish?: (file: OpenADETaskGitChangedFile) => void
+    onCommitTaskGit?: (message: string) => void
+    onRefreshTaskResources?: () => void
     onLoadSnapshotPatch?: (block: TaskSnapshotBlock) => void
     onLoadSnapshotPatchSlice?: (block: TaskSnapshotBlock, file: OpenADESnapshotPatchFile) => void
 }) {
@@ -460,9 +826,7 @@ function TaskMessages({
                         taskResourcesLoading={taskResourcesLoading}
                         taskTerminalProductAccess={taskTerminalProductAccess}
                         taskGitCapabilities={taskGitCapabilities}
-                        taskProductCapabilities={taskProductCapabilities}
-                        canReadTaskResources={taskCanReadResources}
-                        canDeleteTask={taskCanDelete}
+                        isRunning={isRunning}
                         isSubmitting={isSubmitting}
                         onTitleChange={onTitleChange}
                         onSaveTitle={onSaveTitle}
@@ -470,6 +834,7 @@ function TaskMessages({
                         onPrepareEnvironment={onPrepareEnvironment}
                         onToggleClosed={onToggleClosed}
                         onDeleteTask={onDeleteTask}
+                        onCancelPlan={onCancelPlan}
                         onCommentDraftChange={onCommentDraftChange}
                         onCreateComment={onCreateComment}
                         onStartEditComment={onStartEditComment}

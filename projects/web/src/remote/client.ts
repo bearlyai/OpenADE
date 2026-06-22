@@ -1,11 +1,13 @@
 import type { RuntimeNotification } from "../../../runtime-protocol/src"
 import type { PairRequest, RemoteDeviceSelfRevokeResult } from "../../../shared/companion/src"
 import { RuntimeClientError } from "../../../runtime-client/src"
+import { OPENADE_REMOTE_METHOD } from "../../../openade-client/src"
 import {
     buildPairingTarget,
     defaultKernelSessionConstructors,
     KernelSessionManager,
     kernelSessionHasMethod,
+    requestKernelRemoteMethod,
     type KernelRealtimeConnectionStatus,
     type KernelRuntimeClientLike,
     type KernelSessionConfig,
@@ -14,6 +16,7 @@ import {
 } from "../kernel/session"
 import { KernelSessionConfigStore, type KernelSessionConfigInput } from "../kernel/sessionStore"
 import { OpenADEProductStore, type OpenADEProductClient } from "../kernel/productStore"
+import type { OpenADEShellRuntimeCapabilities } from "../shell/capabilities"
 
 export type { PairingTarget } from "../kernel/session"
 export { buildPairingTarget, parsePairingCode } from "../kernel/session"
@@ -24,6 +27,12 @@ export const REMOTE_CONFIG_STORAGE_KEY = "openade-companion-config"
 export type RemoteRealtimeConnectionStatus = KernelRealtimeConnectionStatus
 
 type RemoteClientConstructors = KernelSessionConstructors<KernelRuntimeClientLike, OpenADEProductClient>
+export type RemoteRuntimeCapabilities = OpenADEShellRuntimeCapabilities
+
+const emptyRemoteRuntimeCapabilities: RemoteRuntimeCapabilities = {
+    has: () => false,
+    hasAll: () => false,
+}
 
 const remoteSessionDefaults = {
     clientName: "OpenADE Companion",
@@ -124,13 +133,34 @@ export function getRemoteProductStore(config: RemoteConfig): OpenADEProductStore
     return store
 }
 
-export function remoteHasRuntimeMethods(config: RemoteConfig, methods: string[]): boolean {
+export function getRemoteRuntimeCapabilities(config: RemoteConfig | null): RemoteRuntimeCapabilities {
+    if (!config) return emptyRemoteRuntimeCapabilities
     const { entry } = runtimeEntry(config)
-    return methods.every((method) => kernelSessionHasMethod(entry, method))
+    return {
+        has(method) {
+            return kernelSessionHasMethod(entry, method)
+        },
+        hasAll(methods) {
+            return methods.every((method) => kernelSessionHasMethod(entry, method))
+        },
+    }
 }
 
-export async function pairRemote(baseUrl: string, token: string): Promise<RemoteConfig> {
-    const target = buildPairingTarget(baseUrl, token)
+export async function getRemoteRuntimeCapabilitiesAfterConnect(config: RemoteConfig): Promise<RemoteRuntimeCapabilities> {
+    const { entry } = runtimeEntry(config)
+    await entry.runtime.connect()
+    return {
+        has(method) {
+            return kernelSessionHasMethod(entry, method)
+        },
+        hasAll(methods) {
+            return methods.every((method) => kernelSessionHasMethod(entry, method))
+        },
+    }
+}
+
+export async function pairRemote(baseUrl: string, token: string, hostId?: string): Promise<RemoteConfig> {
+    const target = buildPairingTarget(baseUrl, token, hostId)
     const body: PairRequest = {
         token: target.token,
         deviceName: navigator.userAgent.includes("iPhone") ? "iPhone" : "Companion",
@@ -147,7 +177,7 @@ export async function pairRemote(baseUrl: string, token: string): Promise<Remote
 }
 
 export function selfRevokeRemoteDevice(config: RemoteConfig): Promise<RemoteDeviceSelfRevokeResult> {
-    return runtimeEntry(config).entry.runtime.request("remote/device/selfRevoke")
+    return requestKernelRemoteMethod(runtimeEntry(config).entry.runtime, OPENADE_REMOTE_METHOD.remoteDeviceSelfRevoke)
 }
 
 export function subscribeRemoteChanges(

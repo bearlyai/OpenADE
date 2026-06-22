@@ -32,6 +32,7 @@ Thin Capacitor shell for the OpenADE remote-control surface.
 - src/App.tsx performs the static OTA manifest check. Keep native Capgo autoUpdate disabled unless a real POST-capable update endpoint replaces the static R2 manifest.
 - The main app UI comes from `projects/web/src/remote/RemoteApp.tsx`, which delegates product screens to the shared `projects/web/src/shell/OpenADEShell.tsx`.
 - Do not duplicate companion state or remote API logic in projects/mobile if it can stay in projects/web/src/remote.
+- The mobile Vite build defines `VITE_OPENADE_ENABLE_DESKTOP_FALLBACK_CHUNKS=false`. Shared web helpers must honor that compile-time flag before importing desktop-only fallback chunks such as Electron shell helpers, raw PTY access, or legacy data-folder persistence.
 - Remote reads, OpenADE turn starts, interrupts, and live updates use the runtime WebSocket at /v1/runtime.
 - HTTP is only for initial pairing and health checks; do not add REST/SSE companion command paths.
 
@@ -68,7 +69,10 @@ Thin Capacitor shell for the OpenADE remote-control surface.
 
 ## Verification
 
+- Run npm run test from projects/mobile after changing `src/App.tsx` or native-host session/storage wiring. The test renders the real shared remote shell through the mobile host, covers saved-session attach, shared rich-composer turn start, and QR pairing attach through a real runtime-backed shared shell, stubs only native Capacitor plugins, and includes a source-boundary check that production mobile code does not import product/runtime clients or desktop renderer modules directly.
 - Run npm run typecheck from projects/mobile after changing the Capacitor host, remote UI imports, or shared companion/runtime clients. This includes the serious-error React Doctor gate from `doctor.config.json`.
-- Run npm run build from projects/mobile after UI or shell changes. Build runs the same typecheck gate first, including React Doctor and the non-test explicit-`any` scanner, so Mobile OTA/TestFlight workflows cannot bypass those checks.
+- Run npm run check from projects/mobile before handing off mobile host changes. It runs the React Doctor/type/no-`any` gate and the mobile shared-shell smoke.
+- Run npm run build from projects/mobile after UI or shell changes. Build runs `npm run check` first and then `npm run check:desktop-fallback`, so Mobile OTA/TestFlight workflows cannot bypass React Doctor, no-`any`, strict TS, the mobile shared-shell smoke, or the desktop-only bundle marker scan.
+- `npm run check:desktop-fallback` scans `projects/mobile/dist` for desktop-only chunks or strings: `electronAPI`, `dataFolder`, `rawPtyTerminalSession`, `CodeApp`, `store/managers`, `setTerminalKeyboardCapture`, and `PtyHandle` must not appear in built mobile assets.
 - Run npx cap sync ios after a successful build.
 - For iOS verification, build and run the App workspace/scheme in the simulator and capture a screenshot.

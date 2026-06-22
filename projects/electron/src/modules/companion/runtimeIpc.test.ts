@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-const { handle, removeHandler, connect, handleRequest } = vi.hoisted(() => ({
+const { handle, removeHandler, connect, handleRequest, handleMessage } = vi.hoisted(() => ({
     handle: vi.fn(),
     removeHandler: vi.fn(),
     connect: vi.fn(() => vi.fn()),
     handleRequest: vi.fn(),
+    handleMessage: vi.fn(),
 }))
 
 vi.mock("electron", () => ({
@@ -18,6 +19,7 @@ vi.mock("./runtimeGateway", () => ({
     getRuntimeServer: () => ({
         connect,
         handleRequest,
+        handleMessage,
     }),
 }))
 
@@ -31,6 +33,7 @@ beforeEach(() => {
     removeHandler.mockClear()
     connect.mockClear()
     handleRequest.mockClear()
+    handleMessage.mockClear()
 })
 
 afterEach(() => {
@@ -77,6 +80,38 @@ describe("runtime IPC lifecycle", () => {
             expect.objectContaining({ id: "renderer:1" }),
             { requireInitialized: true, queuedAtMs: 123_456 }
         )
+
+        cleanupRuntimeIpc()
+    })
+
+    it("routes invalid IPC envelopes through runtime protocol decode handling", async () => {
+        handleMessage.mockImplementation(async (connection, raw) => {
+            expect(raw).toBe(JSON.stringify({ id: "bad\nid", params: { prompt: "secret" } }))
+            connection.send({
+                id: "bad\nid",
+                error: {
+                    code: "invalid_message",
+                    message: "Runtime request method must be a non-empty string",
+                },
+            })
+        })
+        const { cleanupRuntimeIpc, loadRuntimeIpc } = await loadModule()
+
+        loadRuntimeIpc()
+        const requestHandler = handle.mock.calls.find(([channel]) => channel === "runtime:request")?.[1]
+        expect(requestHandler).toBeDefined()
+
+        const response = await requestHandler?.({ sender: sender() }, { id: "bad\nid", params: { prompt: "secret" } })
+
+        expect(handleRequest).not.toHaveBeenCalled()
+        expect(handleMessage).toHaveBeenCalledWith(expect.objectContaining({ id: "renderer:1" }), JSON.stringify({ id: "bad\nid", params: { prompt: "secret" } }))
+        expect(response).toEqual({
+            id: "bad\nid",
+            error: {
+                code: "invalid_message",
+                message: "Runtime request method must be a non-empty string",
+            },
+        })
 
         cleanupRuntimeIpc()
     })

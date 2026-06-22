@@ -7,6 +7,7 @@ import {
     isCoreLegacyResourceImportClean,
     isCoreLegacyYjsImportClean,
     markCoreLegacyYjsMigrationAccepted,
+    revokeCoreLegacyYjsMigrationAcceptance,
     shouldAcceptCoreLegacyYjsMigration,
 } from "./coreMigration"
 import { localRuntimeClient } from "./localRuntimeClient"
@@ -102,6 +103,8 @@ describe("Core migration runtime helpers", () => {
                 })
             )
         ).toBe(false)
+        expect(isCoreLegacyYjsImportClean(importReport({ imported: importResult({ scannedTasks: 2, importedTasks: 1 }) }))).toBe(false)
+        expect(isCoreLegacyYjsImportClean(importReport({ parity: { scannedRepos: 1, scannedTasks: 2, mismatches: [] } }))).toBe(false)
         expect(
             isCoreLegacyYjsImportClean(
                 importReport({
@@ -150,6 +153,24 @@ describe("Core migration runtime helpers", () => {
         })
         expect(coreLegacyResourceImportIssueCount(issues)).toBe(7)
         expect(isCoreLegacyResourceImportClean(issues)).toBe(false)
+        expect(
+            isCoreLegacyResourceImportClean(
+                resourceResult({
+                    images: {
+                        scannedTasks: 1,
+                        referencedImages: 2,
+                        importedImages: 1,
+                        alreadyImportedImages: 0,
+                        missingImages: [],
+                        conflictedImages: [],
+                        failedImages: [],
+                    },
+                })
+            )
+        ).toBe(false)
+        expect(isCoreLegacyResourceImportClean(resourceResult({ images: null }))).toBe(false)
+        expect(isCoreLegacyResourceImportClean(resourceResult({ snapshots: null }))).toBe(false)
+        expect(isCoreLegacyResourceImportClean(resourceResult({ sessions: null }))).toBe(false)
     })
 
     it("accepts Core launch only after clean Yjs and resource imports", () => {
@@ -163,6 +184,8 @@ describe("Core migration runtime helpers", () => {
             )
         ).toBe(false)
         expect(shouldAcceptCoreLegacyYjsMigration(importReport(), resourceResult({ skipped: [{ kind: "snapshots", code: "source_missing" }] }))).toBe(false)
+        expect(shouldAcceptCoreLegacyYjsMigration(importReport(), resourceResult({ images: null }))).toBe(false)
+        expect(shouldAcceptCoreLegacyYjsMigration(importReport(), resourceResult({ sessions: null }))).toBe(false)
     })
 
     it("builds a sanitized acceptance summary from clean import reports", () => {
@@ -276,5 +299,87 @@ describe("Core migration runtime helpers", () => {
         await expect(markCoreLegacyYjsMigrationAccepted(importReport(), resourceResult())).rejects.toThrow(
             "Core legacy Yjs migration marker response is invalid."
         )
+    })
+
+    it("rejects marker responses without clean migration evidence", async () => {
+        stubOpenADEAPI({
+            runtime: {
+                connect: () => Promise.resolve({ ok: true }),
+                disconnect: () => Promise.resolve({ ok: true }),
+                onMessage: () => () => undefined,
+                request: (request: unknown) => {
+                    const record = request as { method: string }
+                    if (record.method === "initialize") {
+                        return Promise.resolve({ id: record.method, result: { protocolVersion: 1, serverName: "test-runtime" } })
+                    }
+                    return Promise.resolve({
+                        id: record.method,
+                        result: {
+                            version: 1,
+                            acceptedAt: "2026-06-09T12:00:00.000Z",
+                            source: "desktop-settings-legacy-yjs-import",
+                        },
+                    })
+                },
+            },
+        })
+
+        await expect(markCoreLegacyYjsMigrationAccepted(importReport(), resourceResult())).rejects.toThrow(
+            "Core legacy Yjs migration marker response is invalid."
+        )
+    })
+
+    it("revokes legacy Yjs migration acceptance through the trusted local runtime", async () => {
+        const calls: Array<{ method: string; params: unknown }> = []
+        stubOpenADEAPI({
+            runtime: {
+                connect: () => Promise.resolve({ ok: true }),
+                disconnect: () => Promise.resolve({ ok: true }),
+                onMessage: () => () => undefined,
+                request(request: unknown) {
+                    const record = request as { method: string; params?: unknown }
+                    calls.push({ method: record.method, params: record.params })
+                    if (record.method === "initialize") {
+                        return Promise.resolve({ id: record.method, result: { protocolVersion: 1, serverName: "test-runtime" } })
+                    }
+                    return Promise.resolve({
+                        id: record.method,
+                        result: { revoked: true, requiresRestart: true },
+                    })
+                },
+            },
+        })
+
+        await expect(revokeCoreLegacyYjsMigrationAcceptance()).resolves.toEqual({ revoked: true, requiresRestart: true })
+        expect(calls).toEqual([
+            {
+                method: "initialize",
+                params: {
+                    clientName: "OpenADE Desktop",
+                    clientPlatform: "desktop",
+                    protocolVersion: 1,
+                },
+            },
+            { method: "host/core/legacyYjsMigration/revoke", params: undefined },
+        ])
+    })
+
+    it("rejects malformed legacy Yjs migration rollback responses", async () => {
+        stubOpenADEAPI({
+            runtime: {
+                connect: () => Promise.resolve({ ok: true }),
+                disconnect: () => Promise.resolve({ ok: true }),
+                onMessage: () => () => undefined,
+                request: (request: unknown) => {
+                    const record = request as { method: string }
+                    if (record.method === "initialize") {
+                        return Promise.resolve({ id: record.method, result: { protocolVersion: 1, serverName: "test-runtime" } })
+                    }
+                    return Promise.resolve({ id: record.method, result: { revoked: true } })
+                },
+            },
+        })
+
+        await expect(revokeCoreLegacyYjsMigrationAcceptance()).rejects.toThrow("Core legacy Yjs migration rollback response is invalid.")
     })
 })

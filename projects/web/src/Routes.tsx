@@ -1,4 +1,4 @@
-import { Code, ListTodo, Loader2, Settings, Sparkles } from "lucide-react"
+import { AlertTriangle, Code, ListTodo, Loader2, RefreshCw, Settings, Sparkles } from "lucide-react"
 import { observer } from "mobx-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Navigate, useParams } from "react-router"
@@ -16,18 +16,42 @@ import { WorkspaceCreatePage } from "./pages/WorkspaceCreatePage"
 import { WorkspaceSettingsPage } from "./pages/WorkspaceSettingsPage"
 import { RemoteApp } from "./remote/RemoteApp"
 import { useCodeNavigate } from "./routing"
+import { buildOpenADEShellCapabilitiesFromOpenADEMethods } from "./shell/capabilities"
 import { useCodeStore } from "./store/context"
 
 // Wrapper to inject isCodeModuleAvailable prop into CodeLayout
 const Layout = (props: Omit<CodeLayoutProps, "isCodeModuleAvailable">) => <CodeLayout {...props} isCodeModuleAvailable={isCodeModuleAvailable()} />
 
 function canUseMissingRepoProjection(codeStore: ReturnType<typeof useCodeStore>): boolean {
-    return codeStore.shouldUseRuntimeProductAPI() && codeStore.usesCleanManagedCoreRuntime()
+    return codeStore.usesCoreOwnedProductRuntime() && (codeStore.shouldUseRuntimeProductAPI() || !codeStore.storeInitialized)
+}
+
+function hasCoreProductProjectionError(codeStore: ReturnType<typeof useCodeStore>): boolean {
+    return codeStore.usesCoreOwnedProductRuntime() && codeStore.runtimeProductStoreStatus === "error"
+}
+
+function CoreProductProjectionError({ codeStore }: { codeStore: ReturnType<typeof useCodeStore> }) {
+    const retry = useCallback(() => {
+        void codeStore.initializeRuntimeProductStore()
+    }, [codeStore])
+
+    return (
+        <div className="flex flex-col items-center justify-center h-full text-muted px-6 text-center">
+            <AlertTriangle size="2rem" className="mb-3 text-warning" />
+            <div className="text-base font-medium text-base-content mb-1">OpenADE Core is unavailable</div>
+            <div className="text-sm max-w-md break-words">{codeStore.runtimeProductStoreError ?? "Core product state could not be loaded."}</div>
+            <button type="button" className="btn btn-sm mt-4 flex items-center gap-2" onClick={retry}>
+                <RefreshCw size="0.9rem" />
+                <span>Retry</span>
+            </button>
+        </div>
+    )
 }
 
 function useCleanCoreProjectListLoad(codeStore: ReturnType<typeof useCodeStore>, shouldLoad: boolean, loadKey: string): boolean {
     const [loadedProjectKey, setLoadedProjectKey] = useState<string | null>(null)
-    const shouldLoadProjectFromCore = shouldLoad && loadedProjectKey !== loadKey
+    const canLoadProjectFromCore = codeStore.shouldUseRuntimeProductAPI()
+    const shouldLoadProjectFromCore = shouldLoad && canLoadProjectFromCore && loadedProjectKey !== loadKey
 
     useEffect(() => {
         if (!shouldLoadProjectFromCore) return
@@ -45,7 +69,7 @@ function useCleanCoreProjectListLoad(codeStore: ReturnType<typeof useCodeStore>,
         }
     }, [codeStore, loadKey, shouldLoadProjectFromCore])
 
-    return shouldLoadProjectFromCore
+    return shouldLoad && loadedProjectKey !== loadKey
 }
 
 function useCleanCoreWorkspaceProjectionLoad(codeStore: ReturnType<typeof useCodeStore>, workspaceId: string | undefined, repo: unknown): boolean {
@@ -94,6 +118,14 @@ export const CodeBaseRoute = observer(() => {
                     <Loader2 size="2rem" className="animate-spin mb-4 opacity-50" />
                     <div className="text-sm">Loading...</div>
                 </div>
+            </Layout>
+        )
+    }
+
+    if (hasCoreProductProjectionError(codeStore)) {
+        return (
+            <Layout title="Code" icon={<Code size="1.25rem" className="text-muted" />}>
+                <CoreProductProjectionError codeStore={codeStore} />
             </Layout>
         )
     }
@@ -183,6 +215,14 @@ export const CodeWorkspaceRoute = observer(() => {
         )
     }
 
+    if (!repo && hasCoreProductProjectionError(codeStore)) {
+        return (
+            <Layout workspaceId={workspaceId} title="Workspace" icon={<Code size="1.25rem" className="text-muted" />}>
+                <CoreProductProjectionError codeStore={codeStore} />
+            </Layout>
+        )
+    }
+
     if (!repo && canUseMissingRepoProjection(codeStore)) {
         return <Navigate to={navigate.path("Code")} replace />
     }
@@ -228,6 +268,14 @@ export const CodeWorkspaceSettingsRoute = observer(() => {
         )
     }
 
+    if (!repo && hasCoreProductProjectionError(codeStore)) {
+        return (
+            <Layout title="Workspace Settings" icon={<Settings size="1.25rem" className="text-muted" />} workspaceId={workspaceId}>
+                <CoreProductProjectionError codeStore={codeStore} />
+            </Layout>
+        )
+    }
+
     if (!repo) {
         return <Navigate to={navigate.path("Code")} replace />
     }
@@ -250,6 +298,14 @@ export const CodeWorkspaceTaskCreateRoute = observer(() => {
 
     if (!workspaceId) {
         return <Navigate to={navigate.path("Code")} replace />
+    }
+
+    if (!repo && hasCoreProductProjectionError(codeStore)) {
+        return (
+            <Layout workspaceId={workspaceId} title="New Task" icon={<Code size="1.25rem" className="text-muted" />}>
+                <CoreProductProjectionError codeStore={codeStore} />
+            </Layout>
+        )
     }
 
     if (!repo && !canUseMissingRepoProjection(codeStore)) {
@@ -289,6 +345,14 @@ export const CodeWorkspaceTaskCreatingRoute = observer(() => {
         return <Navigate to={navigate.path("Code")} replace />
     }
 
+    if (!repo && hasCoreProductProjectionError(codeStore)) {
+        return (
+            <Layout workspaceId={workspaceId} title="Creating Task" icon={<Loader2 size="1.25rem" className="text-muted animate-spin" />}>
+                <CoreProductProjectionError codeStore={codeStore} />
+            </Layout>
+        )
+    }
+
     if (!repo && !canUseMissingRepoProjection(codeStore)) {
         return (
             <Layout workspaceId={workspaceId} title="Creating Task" icon={<Loader2 size="1.25rem" className="text-muted animate-spin" />}>
@@ -316,7 +380,20 @@ export const CodeWorkspaceTaskRoute = observer(() => {
     const navigate = useCodeNavigate()
 
     const repo = workspaceId ? codeStore.repos.getRepo(workspaceId) : null
-    const taskModel = taskId ? codeStore.tasks.getTaskModel(taskId) : null
+    const taskModel = workspaceId && taskId ? codeStore.tasks.getTaskModelForRoute(workspaceId, taskId) : null
+    const [taskReadRetrying, setTaskReadRetrying] = useState(false)
+    const handleRetryRouteTaskRead = useCallback(() => {
+        if (!workspaceId || !taskId || taskReadRetrying) return
+        setTaskReadRetrying(true)
+        void codeStore
+            .loadRuntimeProductTaskForRoute(workspaceId, taskId)
+            .catch((error) => {
+                console.warn("[Routes] Failed to retry Core task read:", error)
+            })
+            .finally(() => {
+                setTaskReadRetrying(false)
+            })
+    }, [codeStore, workspaceId, taskId, taskReadRetrying])
 
     // Redirects
     if (!workspaceId || !taskId) {
@@ -331,7 +408,10 @@ export const CodeWorkspaceTaskRoute = observer(() => {
     const titleInputRef = useRef<HTMLInputElement>(null)
     const titleGenerateButtonRef = useRef<HTMLButtonElement>(null)
     const isRegeneratingTitle = taskId ? codeStore.tasks.regeneratingTitleTaskIds.has(taskId) : false
-    const canRegenerateTitle = Boolean(taskModel?.description.trim())
+    const shellCapabilities = buildOpenADEShellCapabilitiesFromOpenADEMethods((method) => codeStore.canUseProductMethod(method))
+    const canUpdateTaskMetadata = shellCapabilities.taskRecordCapabilities.canUpdateMetadata
+    const canGenerateTaskTitle = shellCapabilities.taskRecordCapabilities.canGenerateTitle
+    const canRegenerateTitle = canGenerateTaskTitle && Boolean(taskModel?.description.trim())
     const handleRegenerateTitle = useCallback(() => {
         if (!taskId || isRegeneratingTitle || !canRegenerateTitle) return
 
@@ -342,7 +422,7 @@ export const CodeWorkspaceTaskRoute = observer(() => {
         if (nextFocus === titleGenerateButtonRef.current) return
 
         const value = titleInputRef.current?.value.trim()
-        if (value && value !== taskTitle && taskId) {
+        if (value && value !== taskTitle && taskId && canUpdateTaskMetadata) {
             codeStore.tasks.setTaskTitle(taskId, value)
         }
         setIsEditingTitle(false)
@@ -364,22 +444,32 @@ export const CodeWorkspaceTaskRoute = observer(() => {
                             if (e.key === "Escape") setIsEditingTitle(false)
                         }}
                     />
-                    <button
-                        ref={titleGenerateButtonRef}
-                        type="button"
-                        className="btn flex items-center gap-1 px-1.5 py-0.5 text-xs text-muted hover:bg-base-200 hover:text-base-content disabled:opacity-50 flex-shrink-0"
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={handleRegenerateTitle}
-                        disabled={isRegeneratingTitle || !canRegenerateTitle}
-                        title="Generate new title"
-                        aria-label="Generate new title"
-                    >
-                        {isRegeneratingTitle ? <Loader2 size="0.85rem" className="animate-spin" /> : <Sparkles size="0.85rem" />}
-                        <span>Generate Title</span>
-                    </button>
+                    {canGenerateTaskTitle && (
+                        <button
+                            ref={titleGenerateButtonRef}
+                            type="button"
+                            className="btn flex items-center gap-1 px-1.5 py-0.5 text-xs text-muted hover:bg-base-200 hover:text-base-content disabled:opacity-50 flex-shrink-0"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={handleRegenerateTitle}
+                            disabled={isRegeneratingTitle || !canRegenerateTitle}
+                            title="Generate new title"
+                            aria-label="Generate new title"
+                        >
+                            {isRegeneratingTitle ? <Loader2 size="0.85rem" className="animate-spin" /> : <Sparkles size="0.85rem" />}
+                            <span>Generate Title</span>
+                        </button>
+                    )}
                 </>
             ) : (
-                <span className="font-medium text-base-content truncate min-w-0 cursor-text" onClick={() => setIsEditingTitle(true)}>
+                <span
+                    data-openade-task-route-title="true"
+                    data-openade-task-route-can-update-metadata={canUpdateTaskMetadata ? "true" : "false"}
+                    data-openade-task-route-can-generate-title={canGenerateTaskTitle ? "true" : "false"}
+                    className={`font-medium text-base-content truncate min-w-0${canUpdateTaskMetadata ? " cursor-text" : ""}`}
+                    onClick={() => {
+                        if (canUpdateTaskMetadata) setIsEditingTitle(true)
+                    }}
+                >
                     {taskTitle}
                 </span>
             )}
@@ -390,13 +480,59 @@ export const CodeWorkspaceTaskRoute = observer(() => {
     const navbarIcon = <ListTodo size="1.25rem" className="text-muted" />
     const navbarRight = taskModel ? <TaskStatsBar taskModel={taskModel} /> : undefined
 
-    if (!repo && !canUseMissingRepoProjection(codeStore)) {
+    if (!repo && hasCoreProductProjectionError(codeStore)) {
+        return (
+            <Layout workspaceId={workspaceId} taskId={taskId} title={navbarTitle} icon={navbarIcon} navbarRight={navbarRight}>
+                <CoreProductProjectionError codeStore={codeStore} />
+            </Layout>
+        )
+    }
+
+    const canReadTaskWithoutWorkspaceProjection = codeStore.canUseRuntimeProductTaskRouteModelSource()
+    const routeTaskReadMissed = codeStore.hasRuntimeProductRouteTaskReadMiss?.(workspaceId, taskId) ?? false
+    const routeTaskReadError = codeStore.getRuntimeProductRouteTaskReadError?.(workspaceId, taskId) ?? null
+    const hasLoadedTaskSource = codeStore.hasProductTaskModelSource(taskId)
+
+    if (!repo && !canUseMissingRepoProjection(codeStore) && !canReadTaskWithoutWorkspaceProjection) {
         return (
             <Layout workspaceId={workspaceId} taskId={taskId} title={navbarTitle} icon={navbarIcon} navbarRight={navbarRight}>
                 <div className="flex flex-col items-center justify-center h-full text-muted">
                     <Code size="3rem" className="mb-4 opacity-30" />
                     <div className="text-lg font-medium mb-2">Workspace not found</div>
                     <div className="text-sm">Select a workspace from the sidebar or add a new one</div>
+                </div>
+            </Layout>
+        )
+    }
+
+    if (routeTaskReadMissed && !hasLoadedTaskSource) {
+        return (
+            <Layout workspaceId={workspaceId} taskId={taskId} title={navbarTitle} icon={navbarIcon} navbarRight={navbarRight}>
+                <div className="flex flex-col items-center justify-center h-full text-muted">
+                    <ListTodo size="3rem" className="mb-4 opacity-30" />
+                    <div className="text-lg font-medium mb-2">Task not found</div>
+                    <div className="text-sm">Select a task from the sidebar or create a new one</div>
+                </div>
+            </Layout>
+        )
+    }
+
+    if (routeTaskReadError && !hasLoadedTaskSource) {
+        return (
+            <Layout workspaceId={workspaceId} taskId={taskId} title={navbarTitle} icon={navbarIcon} navbarRight={navbarRight}>
+                <div className="flex flex-col items-center justify-center h-full text-muted px-6 text-center">
+                    <AlertTriangle size="3rem" className="mb-4 text-warning" />
+                    <div className="text-lg font-medium text-base-content mb-2">Task failed to load</div>
+                    <div className="text-sm max-w-md break-words">{routeTaskReadError}</div>
+                    <button
+                        type="button"
+                        className="btn btn-sm mt-4 flex items-center gap-2"
+                        onClick={handleRetryRouteTaskRead}
+                        disabled={taskReadRetrying}
+                    >
+                        {taskReadRetrying ? <Loader2 size="0.9rem" className="animate-spin" /> : <RefreshCw size="0.9rem" />}
+                        <span>{taskReadRetrying ? "Retrying" : "Retry"}</span>
+                    </button>
                 </div>
             </Layout>
         )

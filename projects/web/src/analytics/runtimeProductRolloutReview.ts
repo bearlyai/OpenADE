@@ -37,6 +37,10 @@ const APP_OPENED_ALLOWED_KEYS = new Set([
     "runtimeProductStoreEnabled",
     "runtimeProductStoreStatus",
     "runtimeProductStoreHasSnapshot",
+    "runtimeProductStoreHasProjectProjection",
+    "runtimeProductStoreRepoCount",
+    "runtimeProductStoreTaskPreviewCount",
+    "runtimeProductStoreCachedTaskCount",
     "runtimeProductTransport",
     "coreRolloutStatus",
     "coreRolloutSource",
@@ -52,6 +56,7 @@ const RUNTIME_PRODUCT_ALLOWED_KEYS = new Set([
     "enabled",
     "status",
     "hasSnapshot",
+    "hasProjectProjection",
     "repoCount",
     "taskPreviewCount",
     "cachedTaskCount",
@@ -64,6 +69,13 @@ const RUNTIME_PRODUCT_ALLOWED_KEYS = new Set([
     "coreLegacyYjsMigrationAccepted",
     "errorKind",
 ])
+
+const CORE_ROLLOUT_REASONS = new Set(["managed-core", "legacy-yjs-migration-accepted", "external-endpoint"])
+const APP_OPENED_PROJECTION_COUNT_FIELDS = [
+    "runtimeProductStoreRepoCount",
+    "runtimeProductStoreTaskPreviewCount",
+    "runtimeProductStoreCachedTaskCount",
+] as const
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -169,14 +181,44 @@ function validatePropertyHygiene(event: TelemetryEvent, failures: RolloutReviewF
     return 1
 }
 
+function invalidProjectionCountFields(properties: Record<string, unknown>): string[] {
+    return APP_OPENED_PROJECTION_COUNT_FIELDS.filter((field) => {
+        const value = properties[field]
+        return typeof value !== "number" || !Number.isSafeInteger(value) || value < 0
+    })
+}
+
 function isReadyDefaultOnAppOpened(event: TelemetryEvent): boolean {
     const properties = event.properties
     return (
         event.name === APP_OPENED_EVENT &&
         properties.runtimeProductStoreEnabled === true &&
         properties.runtimeProductStoreStatus === "ready" &&
-        properties.runtimeProductStoreHasSnapshot === true
+        properties.runtimeProductStoreHasProjectProjection === true &&
+        invalidProjectionCountFields(properties).length === 0 &&
+        properties.runtimeProductTransport === "core-websocket" &&
+        properties.coreRolloutStatus === "connected" &&
+        isConsistentProductCoreRollout(properties)
     )
+}
+
+function isConsistentProductCoreRollout(properties: Record<string, unknown>): boolean {
+    if (typeof properties.coreRolloutReason !== "string" || !CORE_ROLLOUT_REASONS.has(properties.coreRolloutReason)) return false
+    if (properties.coreRolloutReason === "managed-core") {
+        return (
+            properties.coreRolloutSource === "managed" &&
+            properties.coreLegacyYjsDocumentsPresent === false &&
+            properties.coreLegacyYjsMigrationAccepted === false
+        )
+    }
+    if (properties.coreRolloutReason === "legacy-yjs-migration-accepted") {
+        return (
+            properties.coreRolloutSource === "managed" &&
+            properties.coreLegacyYjsDocumentsPresent === true &&
+            properties.coreLegacyYjsMigrationAccepted === true
+        )
+    }
+    return properties.coreRolloutReason === "external-endpoint" && properties.coreRolloutSource === "external"
 }
 
 function validateAppOpened(event: TelemetryEvent, failures: RolloutReviewFailure[]): void {
@@ -189,8 +231,46 @@ function validateAppOpened(event: TelemetryEvent, failures: RolloutReviewFailure
     if (properties.runtimeProductStoreStatus !== "ready") {
         addFailure(failures, event, "runtime_product_store_not_ready", "app_opened did not report a ready runtime product store")
     }
-    if (properties.runtimeProductStoreHasSnapshot !== true) {
-        addFailure(failures, event, "runtime_product_store_missing_snapshot", "app_opened did not report a runtime product snapshot")
+    if (properties.runtimeProductStoreHasProjectProjection !== true) {
+        addFailure(failures, event, "runtime_product_store_missing_projection", "app_opened did not report a runtime product project projection")
+    } else {
+        const invalidCountFields = invalidProjectionCountFields(properties)
+        if (invalidCountFields.length > 0) {
+            addFailure(
+                failures,
+                event,
+                "runtime_product_projection_counts_invalid",
+                `app_opened reported invalid runtime product projection counts: ${invalidCountFields.join(", ")}`
+            )
+        }
+    }
+    if (properties.runtimeProductTransport !== "core-websocket") {
+        addFailure(failures, event, "runtime_product_transport_not_core", "app_opened did not report the Core WebSocket product runtime")
+    }
+    if (properties.coreRolloutStatus !== "connected") {
+        addFailure(failures, event, "core_rollout_not_connected", "app_opened did not report connected OpenADE Core rollout state")
+    }
+    if (typeof properties.coreRolloutReason !== "string" || !CORE_ROLLOUT_REASONS.has(properties.coreRolloutReason)) {
+        addFailure(failures, event, "core_rollout_reason_not_product_core", "app_opened did not report a product-Core rollout reason")
+    }
+    if (properties.coreRolloutReason === "managed-core") {
+        if (properties.coreRolloutSource !== "managed") {
+            addFailure(failures, event, "core_rollout_source_mismatch", "managed-core rollout must report managed source")
+        }
+        if (properties.coreLegacyYjsDocumentsPresent !== false || properties.coreLegacyYjsMigrationAccepted !== false) {
+            addFailure(failures, event, "core_rollout_legacy_state_mismatch", "managed-core rollout must not report legacy Yjs documents or accepted migration")
+        }
+    }
+    if (properties.coreRolloutReason === "legacy-yjs-migration-accepted") {
+        if (properties.coreRolloutSource !== "managed") {
+            addFailure(failures, event, "core_rollout_source_mismatch", "accepted legacy migration rollout must report managed source")
+        }
+        if (properties.coreLegacyYjsDocumentsPresent !== true || properties.coreLegacyYjsMigrationAccepted !== true) {
+            addFailure(failures, event, "core_rollout_legacy_state_mismatch", "accepted legacy migration rollout must report legacy docs plus accepted migration")
+        }
+    }
+    if (properties.coreRolloutReason === "external-endpoint" && properties.coreRolloutSource !== "external") {
+        addFailure(failures, event, "core_rollout_source_mismatch", "external Core rollout must report external source")
     }
 }
 
@@ -232,7 +312,7 @@ export function reviewRuntimeProductRollout(events: readonly TelemetryEvent[]): 
     } else if (readyDefaultOnAppOpenedEvents === 0) {
         failures.push({
             code: "missing_ready_default_on_app_opened",
-            message: "telemetry export does not contain a ready default-on app_opened event with a runtime snapshot",
+            message: "telemetry export does not contain a ready Core-backed app_opened event with a runtime project projection",
         })
     }
 
@@ -256,7 +336,7 @@ export function formatRuntimeProductRolloutReview(result: RolloutReviewResult): 
     const lines = [
         `Runtime product rollout review: ${result.passed ? "PASS" : "FAIL"}`,
         `Events: ${result.summary.totalEvents} total, ${result.summary.appOpenedEvents} app_opened, ${result.summary.fallbackEvents} fallback, ${result.summary.errorEvents} error`,
-        `Ready default-on app_opened events: ${result.summary.readyDefaultOnAppOpenedEvents}`,
+        `Ready Core-backed app_opened events: ${result.summary.readyDefaultOnAppOpenedEvents}`,
         `Property hygiene violations: ${result.summary.hygieneViolations}`,
     ]
 

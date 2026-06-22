@@ -2,6 +2,7 @@ import { ChevronLeft, ChevronRight, Columns2, FileCode, Loader2, Rows2 } from "l
 import { observer } from "mobx-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { twMerge } from "tailwind-merge"
+import { OPENADE_METHOD } from "../../../openade-client/src"
 import { type SnapshotPatchFile, type SnapshotPatchIndex, snapshotsApi } from "../electronAPI/snapshots"
 import { useCodeStore } from "../store/context"
 import { type AnnotationSide, type CommentHandlers, FileDiffViewer, type ParsedPatch, parsePatchFiles } from "./FilesAndDiffs"
@@ -264,8 +265,7 @@ export const ViewPatch = observer(function ViewPatch({
     const showSidebar = allFiles.length > 5
     const largeDiffKey = selectedFile ? `${selectedFile.id}:${selectedFile.changedLines}:${selectedFile.hunkCount}` : null
     const deferLargeDiff = patchFileId !== undefined && isHeavyFile(selectedFile) && renderLargeDiffKey !== largeDiffKey
-    const useProductSnapshotReads = codeStore.shouldUseRuntimeProductAPI()
-    const productRepoId = useProductSnapshotReads ? codeStore.findProductRepoIdForTask(taskId) : null
+    const productRuntimeOwnsSnapshots = codeStore.shouldUseRuntimeProductTaskRoute()
 
     useEffect(() => {
         setRenderLargeDiffKey(null)
@@ -313,27 +313,28 @@ export const ViewPatch = observer(function ViewPatch({
         setSelectedPatchLoading(true)
         setSelectedPatchError(false)
 
-        if (useProductSnapshotReads && !productRepoId) {
-            setSelectedPatch("")
-            setSelectedPatchLoading(false)
-            setSelectedPatchError(true)
-            return
-        }
-
-        const patchSlicePromise =
-            useProductSnapshotReads && productRepoId
-                ? codeStore
-                      .readProductTaskSnapshotPatchSlice({
-                          repoId: productRepoId,
-                          taskId,
-                          eventId: snapshotEventId,
-                          start: selectedPatchStart,
-                          end: selectedPatchEnd,
-                      })
-                      .then((result) => result.patch)
-                : snapshotsApi.loadPatchSlice(patchFileId, selectedPatchStart, selectedPatchEnd)
-
-        void patchSlicePromise
+        void (async () => {
+            if (productRuntimeOwnsSnapshots) {
+                const canReadSlice = codeStore.shouldUseRuntimeProductAPI()
+                    ? codeStore.canUseProductMethod(OPENADE_METHOD.taskSnapshotPatchReadSlice)
+                    : await codeStore.canUseProductMethodAfterConnect(OPENADE_METHOD.taskSnapshotPatchReadSlice)
+                if (!canReadSlice) {
+                    throw new Error("Runtime snapshot patch slice read is unavailable")
+                }
+                const productRepoId = codeStore.findProductRepoIdForTask(taskId)
+                if (!productRepoId) throw new Error("Runtime snapshot patch context unavailable")
+                return codeStore
+                    .readProductTaskSnapshotPatchSlice({
+                        repoId: productRepoId,
+                        taskId,
+                        eventId: snapshotEventId,
+                        start: selectedPatchStart,
+                        end: selectedPatchEnd,
+                    })
+                    .then((result) => result.patch)
+            }
+            return snapshotsApi.loadPatchSlice(patchFileId, selectedPatchStart, selectedPatchEnd)
+        })()
             .then((patchSlice) => {
                 if (cancelled) return
                 const nextPatch = patchSlice ?? ""
@@ -356,13 +357,12 @@ export const ViewPatch = observer(function ViewPatch({
         codeStore,
         deferLargeDiff,
         patchFileId,
-        productRepoId,
+        productRuntimeOwnsSnapshots,
         selectedPatchCacheId,
         selectedPatchEnd,
         selectedPatchStart,
         snapshotEventId,
         taskId,
-        useProductSnapshotReads,
     ])
 
     const selectedFileDiff = useMemo(() => {

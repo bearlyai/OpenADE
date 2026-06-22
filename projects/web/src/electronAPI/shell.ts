@@ -19,17 +19,22 @@ export type { CreateDirectoryResponse, SelectDirectoryResponse }
 // Shell API Functions
 // ============================================================================
 
+export function isDirectorySelectionAvailable(): boolean {
+    return typeof window !== "undefined" && typeof window.openadeAPI?.shell?.selectDirectory === "function"
+}
+
 /**
  * Open directory selection dialog
  * Returns the selected directory path or null if canceled
  */
 export async function selectDirectory(defaultPath?: string): Promise<string | null> {
-    if (!window.openadeAPI) {
+    const shellApi = window.openadeAPI?.shell
+    if (!isDirectorySelectionAvailable() || !shellApi) {
         console.warn("[ShellAPI] Not running in Electron")
         return null
     }
 
-    const response = (await window.openadeAPI.shell.selectDirectory({ defaultPath })) as SelectDirectoryResponse
+    const response = (await shellApi.selectDirectory({ defaultPath })) as SelectDirectoryResponse
     return response.path
 }
 

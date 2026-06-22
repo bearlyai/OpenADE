@@ -16,9 +16,10 @@ describe("task command model", () => {
         expect(taskCommandLabel("hyperplan")).toBe("HyperPlan")
     })
 
-    it("allows only Do and Ask to queue while a task is running", () => {
+    it("allows prompt-like commands to queue while a task is running", () => {
         expect(canQueueTaskCommandWhileRunning("do")).toBe(true)
         expect(canQueueTaskCommandWhileRunning("ask")).toBe(true)
+        expect(canQueueTaskCommandWhileRunning("hyperplan")).toBe(true)
         expect(canQueueTaskCommandWhileRunning("plan")).toBe(false)
         expect(canQueueTaskCommandWhileRunning("run_plan")).toBe(false)
     })

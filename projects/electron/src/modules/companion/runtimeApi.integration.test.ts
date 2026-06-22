@@ -451,6 +451,7 @@ describe("companion runtime API integration", () => {
                         "openade/task/git/fileAtTreeish/read",
                         "openade/task/git/commit/filePatch/read",
                         "openade/task/image/read",
+                        "openade/task/image/write",
                         "openade/task/resourceInventory/read",
                         "openade/task/snapshot/patch/read",
                         "openade/task/snapshot/index/read",
@@ -510,6 +511,7 @@ describe("companion runtime API integration", () => {
                 "data/yjs/read",
                 "host/platform/info",
                 "host/core/legacyYjsMigration/accept",
+                "host/core/legacyYjsMigration/revoke",
                 "fs/path/describe",
                 "git/status/read",
                 "pty/spawn",
@@ -583,6 +585,7 @@ describe("companion runtime API integration", () => {
             [21, "data/yjs/read", { id: "code:repos" }],
             [22, "host/platform/info"],
             [49, "host/core/legacyYjsMigration/accept"],
+            [58, "host/core/legacyYjsMigration/revoke"],
             [23, "snapshot/bundle/save", { id: "snapshot-1", patch: "", index: { files: [] } }],
             [25, "snapshot/patch/read", { id: "snapshot-1" }],
             [26, "snapshot/index/read", { id: "snapshot-1" }],
@@ -927,6 +930,24 @@ describe("companion runtime API integration", () => {
             imageId: "phone-image",
             mediaType: "image/png",
             data: Buffer.from("paired image bytes").toString("base64"),
+        })
+        const pairedUploadBytes = Buffer.from("paired uploaded image")
+        expect(
+            runtimeResult<{ imageId: string; ext: string; mediaType: string; size: number; sha256: string }>(
+                await runtimeRequest(socket, 42, "openade/task/image/write", {
+                    imageId: "phone-uploaded-image",
+                    ext: "png",
+                    mediaType: "image/png",
+                    data: pairedUploadBytes.toString("base64"),
+                    clientRequestId: "paired-image-upload",
+                }),
+                42
+            )
+        ).toMatchObject({
+            imageId: "phone-uploaded-image",
+            ext: "png",
+            mediaType: "image/png",
+            size: pairedUploadBytes.byteLength,
         })
         expect(
             runtimeResult<{ taskId: string; snapshotIds: string[]; images: Array<{ id: string; ext: string }>; worktree: null }>(

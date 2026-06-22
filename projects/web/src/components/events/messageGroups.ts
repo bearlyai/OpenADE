@@ -13,8 +13,8 @@
 
 import type { HarnessUsage } from "@openade/harness/browser"
 import type { ReactNode } from "react"
-import type { HarnessId, HarnessRawMessageEvent, HarnessStreamEvent } from "../../electronAPI/harnessEventTypes"
-import { extractRawMessageEvents } from "../../electronAPI/harnessEventTypes"
+import type { HarnessId, HarnessRawMessageEvent, HarnessStreamEvent } from "../../harness/harnessEventTypes"
+import { extractRawMessageEvents } from "../../harness/harnessEventTypes"
 import type { ActionEventSource } from "../../types"
 import { groupClaudeCodeMessages } from "./parsers/claudeCodeParser"
 import { groupCodexMessages } from "./parsers/codexParser"

@@ -9,11 +9,19 @@ import type {
     OpenADETaskReadOptions,
 } from "./types"
 
+export interface OpenADEYjsDocumentOperationOptions {
+    operation?: string
+}
+
+export interface OpenADEYjsProjectionCacheInvalidation {
+    documentIds: readonly string[]
+}
+
 export interface OpenADEYjsStorageAdapter {
     hostName?: () => string | undefined
     listDocuments(): Promise<string[]>
-    readDocumentUpdate?(id: string): Promise<Uint8Array | null>
-    readDocumentBase64(id: string): Promise<{ id: string; data: string } | null>
+    readDocumentUpdate?(id: string, options?: OpenADEYjsDocumentOperationOptions): Promise<Uint8Array | null>
+    readDocumentBase64(id: string, options?: OpenADEYjsDocumentOperationOptions): Promise<{ id: string; data: string } | null>
     readMapObject(documentId: string, mapName: string): Promise<Record<string, unknown> | null>
     readOrderedArray<T extends Record<string, unknown>>(documentId: string, name: string): Promise<T[] | null>
 }
@@ -29,6 +37,22 @@ interface ProjectedTaskDocument {
     deviceEnvironments: Record<string, unknown>[] | null
 }
 
+interface ProjectedReposDocument {
+    repos: Record<string, unknown>[]
+}
+
+interface CachedProjectedDocument<T> {
+    data: Uint8Array
+    value: T
+    expiresAt: number
+}
+
+interface ProjectionReadCache {
+    personalSettingsDocuments: Map<string, CachedProjectedDocument<Record<string, unknown>>>
+    reposDocuments: Map<string, CachedProjectedDocument<ProjectedReposDocument>>
+    taskDocuments: Map<string, CachedProjectedDocument<ProjectedTaskDocument>>
+}
+
 export interface OpenADEYjsProjection {
     readPersonalSettings(): Promise<Record<string, unknown>>
     readSnapshot(options?: { version?: string; hostName?: string; workingTaskIds?: string[] }): Promise<OpenADESnapshot>
@@ -36,7 +60,8 @@ export interface OpenADEYjsProjection {
     readTaskList(repoId: string, options?: { workingTaskIds?: string[] }): Promise<OpenADETaskPreview[]>
     readTask(repoId: string, taskId: string, options?: OpenADETaskReadOptions): Promise<OpenADETask>
     listDataDocuments(): Promise<string[]>
-    readDataDocumentBase64(id: string): Promise<{ id: string; data: string } | null>
+    readDataDocumentBase64(id: string, options?: OpenADEYjsDocumentOperationOptions): Promise<{ id: string; data: string } | null>
+    invalidateCache(invalidation?: OpenADEYjsProjectionCacheInvalidation): void
 }
 
 type OpenADETaskPreviewLastEvent = NonNullable<OpenADETaskPreview["lastEvent"]>
@@ -52,7 +77,13 @@ const themeLabels: Record<string, string> = {
 
 const zeroTime = new Date(0).toISOString()
 const LIGHTWEIGHT_TASK_EVENT_TAIL_COUNT = 80
-const LIGHTWEIGHT_STREAM_EVENT_TAIL_COUNT = 360
+const LIGHTWEIGHT_STREAM_EVENT_TASK_TAIL_COUNT = 20
+const LIGHTWEIGHT_STREAM_EVENT_TAIL_COUNT = 120
+const PROJECTED_TASK_DOCUMENT_CACHE_TTL_MS = 15_000
+const PROJECTED_TASK_DOCUMENT_CACHE_MAX = 96
+const PROJECTED_TASK_DOCUMENT_CACHE_MAX_BYTES = 160 * 1024 * 1024
+const PROJECTED_SMALL_DOCUMENT_CACHE_TTL_MS = PROJECTED_TASK_DOCUMENT_CACHE_TTL_MS
+const PROJECTED_SMALL_DOCUMENT_CACHE_MAX = 4
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -204,27 +235,120 @@ function boundedTaskEvent(value: Record<string, unknown>, keepTail: boolean): Re
 function boundTaskSessionPayloads(events: Record<string, unknown>[], options: OpenADETaskReadOptions | undefined): Record<string, unknown>[] {
     if (options?.hydrateSessionEvents) return events
 
-    const tailStart = Math.max(0, events.length - LIGHTWEIGHT_TASK_EVENT_TAIL_COUNT)
-    return events.map((event, index) => boundedTaskEvent(event, index >= tailStart))
+    const requestedEventLimit = options?.eventLimit
+    const taskEventLimit =
+        typeof requestedEventLimit === "number" && Number.isFinite(requestedEventLimit) && requestedEventLimit > 0
+            ? Math.min(Math.floor(requestedEventLimit), LIGHTWEIGHT_TASK_EVENT_TAIL_COUNT)
+            : LIGHTWEIGHT_TASK_EVENT_TAIL_COUNT
+    const taskTailStart = Math.max(0, events.length - taskEventLimit)
+    const streamTailStart = Math.max(0, events.length - LIGHTWEIGHT_STREAM_EVENT_TASK_TAIL_COUNT)
+    const selectedEvents = requestedEventLimit === undefined ? events : events.slice(taskTailStart)
+    const selectedStartIndex = requestedEventLimit === undefined ? 0 : taskTailStart
+    return selectedEvents.map((event, index) => {
+        const sourceIndex = selectedStartIndex + index
+        return sourceIndex >= taskTailStart ? boundedTaskEvent(event, sourceIndex >= streamTailStart) : boundedTaskEvent(event, false)
+    })
 }
 
-async function readProjectedTaskDocument(storage: OpenADEYjsStorageAdapter, documentId: string): Promise<ProjectedTaskDocument> {
-    const data = await storage.readDocumentUpdate?.(documentId)
+function sameDocumentData(left: Uint8Array, right: Uint8Array): boolean {
+    if (left === right) return true
+    if (left.byteLength !== right.byteLength) return false
+    for (let index = 0; index < left.byteLength; index += 1) {
+        if (left[index] !== right[index]) return false
+    }
+    return true
+}
+
+function rememberProjectedDocument<T>(
+    documents: Map<string, CachedProjectedDocument<T>>,
+    documentId: string,
+    data: Uint8Array,
+    value: T,
+    ttlMs: number,
+    maxDocuments: number,
+    maxBytes?: number
+): void {
+    documents.delete(documentId)
+    documents.set(documentId, {
+        data,
+        value,
+        expiresAt: Date.now() + ttlMs,
+    })
+
+    while (documents.size > maxDocuments || (maxBytes !== undefined && projectedDocumentCacheBytes(documents) > maxBytes)) {
+        const oldestKey = documents.keys().next().value
+        if (typeof oldestKey !== "string") break
+        documents.delete(oldestKey)
+    }
+}
+
+function projectedDocumentCacheBytes<T>(documents: Map<string, CachedProjectedDocument<T>>): number {
+    let bytes = 0
+    for (const document of documents.values()) bytes += document.data.byteLength
+    return bytes
+}
+
+function cachedProjectedDocument<T>(documents: Map<string, CachedProjectedDocument<T>>, documentId: string, data: Uint8Array, ttlMs: number): T | null {
+    const cached = documents.get(documentId)
+    if (!cached) return null
+    if (cached.expiresAt <= Date.now() || !sameDocumentData(cached.data, data)) {
+        documents.delete(documentId)
+        return null
+    }
+
+    documents.delete(documentId)
+    documents.set(documentId, {
+        ...cached,
+        expiresAt: Date.now() + ttlMs,
+    })
+    return cached.value
+}
+
+function freshProjectedDocument<T>(documents: Map<string, CachedProjectedDocument<T>>, documentId: string): T | null {
+    const cached = documents.get(documentId)
+    if (!cached) return null
+    if (cached.expiresAt <= Date.now()) return null
+    return cached.value
+}
+
+async function readProjectedTaskDocument(
+    storage: OpenADEYjsStorageAdapter,
+    documentId: string,
+    cache: ProjectionReadCache
+): Promise<ProjectedTaskDocument> {
+    const fresh = freshProjectedDocument(cache.taskDocuments, documentId)
+    if (fresh) return fresh
+
+    const data = await storage.readDocumentUpdate?.(documentId, { operation: "OpenADEYjsProjection.readTask" })
     if (data) {
+        const cached = cachedProjectedDocument(cache.taskDocuments, documentId, data, PROJECTED_TASK_DOCUMENT_CACHE_TTL_MS)
+        if (cached) return cached
+
         const doc = applyYjsUpdate(data)
         try {
-            return {
+            const value = {
                 meta: readMapObjectFromDoc(doc, "task:meta"),
                 events: readOrderedArrayFromDoc<Record<string, unknown>>(doc, "task:events"),
                 comments: readOrderedArrayFromDoc<Record<string, unknown>>(doc, "task:comments"),
                 deviceEnvironments: readOrderedArrayFromDoc<Record<string, unknown>>(doc, "task:deviceEnvironments"),
             }
+            rememberProjectedDocument(
+                cache.taskDocuments,
+                documentId,
+                data,
+                value,
+                PROJECTED_TASK_DOCUMENT_CACHE_TTL_MS,
+                PROJECTED_TASK_DOCUMENT_CACHE_MAX,
+                PROJECTED_TASK_DOCUMENT_CACHE_MAX_BYTES
+            )
+            return value
         } finally {
             doc.destroy()
         }
     }
 
     if (data === null) {
+        cache.taskDocuments.delete(documentId)
         return {
             meta: null,
             events: null,
@@ -323,12 +447,77 @@ function toOpenADEProject(value: Record<string, unknown>, options: { workingTask
     }
 }
 
-async function readPersonalSettings(storage: OpenADEYjsStorageAdapter): Promise<Record<string, unknown>> {
+async function readPersonalSettings(storage: OpenADEYjsStorageAdapter, cache: ProjectionReadCache): Promise<Record<string, unknown>> {
+    const documentId = "code:personal_settings"
+    const fresh = freshProjectedDocument(cache.personalSettingsDocuments, documentId)
+    if (fresh) return fresh
+
+    const data = await storage.readDocumentUpdate?.(documentId, { operation: "OpenADEYjsProjection.readPersonalSettings" })
+    if (data) {
+        const cached = cachedProjectedDocument(cache.personalSettingsDocuments, documentId, data, PROJECTED_SMALL_DOCUMENT_CACHE_TTL_MS)
+        if (cached) return cached
+
+        const doc = applyYjsUpdate(data)
+        try {
+            const value = readMapObjectFromDoc(doc, "personal_settings")
+            rememberProjectedDocument(
+                cache.personalSettingsDocuments,
+                documentId,
+                data,
+                value,
+                PROJECTED_SMALL_DOCUMENT_CACHE_TTL_MS,
+                PROJECTED_SMALL_DOCUMENT_CACHE_MAX
+            )
+            return value
+        } finally {
+            doc.destroy()
+        }
+    }
+
+    if (data === null) {
+        cache.personalSettingsDocuments.delete(documentId)
+        return {}
+    }
+
     return (await storage.readMapObject("code:personal_settings", "personal_settings")) ?? {}
 }
 
-async function readRepos(storage: OpenADEYjsStorageAdapter, options: { workingTaskIds: string[]; pinnedTaskIds: string[] }): Promise<OpenADEProject[]> {
-    const repos = (await storage.readOrderedArray<Record<string, unknown>>("code:repos", "repos")) ?? []
+async function readRepoRows(storage: OpenADEYjsStorageAdapter, cache: ProjectionReadCache): Promise<Record<string, unknown>[]> {
+    const documentId = "code:repos"
+    const fresh = freshProjectedDocument(cache.reposDocuments, documentId)
+    if (fresh) return fresh.repos
+
+    const data = await storage.readDocumentUpdate?.(documentId, { operation: "OpenADEYjsProjection.readRepos" })
+    if (data) {
+        const cached = cachedProjectedDocument(cache.reposDocuments, documentId, data, PROJECTED_SMALL_DOCUMENT_CACHE_TTL_MS)
+        if (cached) return cached.repos
+
+        const doc = applyYjsUpdate(data)
+        try {
+            const value: ProjectedReposDocument = {
+                repos: readOrderedArrayFromDoc<Record<string, unknown>>(doc, "repos"),
+            }
+            rememberProjectedDocument(cache.reposDocuments, documentId, data, value, PROJECTED_SMALL_DOCUMENT_CACHE_TTL_MS, PROJECTED_SMALL_DOCUMENT_CACHE_MAX)
+            return value.repos
+        } finally {
+            doc.destroy()
+        }
+    }
+
+    if (data === null) {
+        cache.reposDocuments.delete(documentId)
+        return []
+    }
+
+    return (await storage.readOrderedArray<Record<string, unknown>>(documentId, "repos")) ?? []
+}
+
+async function readRepos(
+    storage: OpenADEYjsStorageAdapter,
+    cache: ProjectionReadCache,
+    options: { workingTaskIds: string[]; pinnedTaskIds: string[] }
+): Promise<OpenADEProject[]> {
+    const repos = await readRepoRows(storage, cache)
     return repos.map((repo) => toOpenADEProject(repo, options)).filter((repo): repo is OpenADEProject => repo !== null)
 }
 
@@ -343,8 +532,29 @@ function resolveTheme(settings: Record<string, unknown>): OpenADESnapshot["serve
 }
 
 export function createOpenADEYjsProjection(storage: OpenADEYjsStorageAdapter): OpenADEYjsProjection {
+    const cache: ProjectionReadCache = {
+        personalSettingsDocuments: new Map(),
+        reposDocuments: new Map(),
+        taskDocuments: new Map(),
+    }
+
+    function invalidateCache(invalidation?: OpenADEYjsProjectionCacheInvalidation): void {
+        if (invalidation) {
+            for (const documentId of invalidation.documentIds) {
+                if (documentId === "code:personal_settings") cache.personalSettingsDocuments.delete(documentId)
+                if (documentId === "code:repos") cache.reposDocuments.delete(documentId)
+                if (documentId.startsWith("code:task:")) cache.taskDocuments.delete(documentId)
+            }
+            return
+        }
+
+        cache.personalSettingsDocuments.clear()
+        cache.reposDocuments.clear()
+        cache.taskDocuments.clear()
+    }
+
     async function readSnapshot(options: { version?: string; hostName?: string; workingTaskIds?: string[] } = {}): Promise<OpenADESnapshot> {
-        const settings = await readPersonalSettings(storage)
+        const settings = await readPersonalSettings(storage, cache)
         const workingTaskIds = options.workingTaskIds ?? []
         const pinnedTaskIds = Array.isArray(settings.pinnedTaskIds)
             ? settings.pinnedTaskIds.filter((id): id is string => typeof id === "string")
@@ -356,14 +566,13 @@ export function createOpenADEYjsProjection(storage: OpenADEYjsStorageAdapter): O
                 hostName: options.hostName ?? storage.hostName?.() ?? "OpenADE",
                 theme: resolveTheme(settings),
             },
-            repos: await readRepos(storage, { workingTaskIds, pinnedTaskIds }),
+            repos: await readRepos(storage, cache, { workingTaskIds, pinnedTaskIds }),
             workingTaskIds,
         }
     }
 
     async function readProjects(options: { workingTaskIds?: string[] } = {}): Promise<OpenADEProject[]> {
-        const snapshot = await readSnapshot(options)
-        return snapshot.repos
+        return readRepos(storage, cache, { workingTaskIds: options.workingTaskIds ?? [], pinnedTaskIds: [] })
     }
 
     async function readTaskList(repoId: string, options: { workingTaskIds?: string[] } = {}): Promise<OpenADETaskPreview[]> {
@@ -372,13 +581,13 @@ export function createOpenADEYjsProjection(storage: OpenADEYjsStorageAdapter): O
     }
 
     async function readTaskPreview(repoId: string, taskId: string): Promise<OpenADETaskPreview | undefined> {
-        const repos = await readRepos(storage, { workingTaskIds: [], pinnedTaskIds: [] })
+        const repos = await readRepos(storage, cache, { workingTaskIds: [], pinnedTaskIds: [] })
         return repos.find((repo) => repo.id === repoId)?.tasks.find((task) => task.id === taskId)
     }
 
     async function readTask(repoId: string, taskId: string, options: OpenADETaskReadOptions = {}): Promise<OpenADETask> {
         const documentId = `code:task:${taskId}`
-        const taskDocument = await readProjectedTaskDocument(storage, documentId)
+        const taskDocument = await readProjectedTaskDocument(storage, documentId, cache)
         const { meta, events, comments, deviceEnvironments } = taskDocument
 
         if (!meta) {
@@ -445,17 +654,21 @@ export function createOpenADEYjsProjection(storage: OpenADEYjsStorageAdapter): O
         return storage.listDocuments()
     }
 
-    async function readDataDocumentBase64(id: string): Promise<{ id: string; data: string } | null> {
-        return storage.readDocumentBase64(id)
+    async function readDataDocumentBase64(
+        id: string,
+        options?: OpenADEYjsDocumentOperationOptions
+    ): Promise<{ id: string; data: string } | null> {
+        return storage.readDocumentBase64(id, options)
     }
 
     return {
-        readPersonalSettings: () => readPersonalSettings(storage),
+        readPersonalSettings: () => readPersonalSettings(storage, cache),
         readSnapshot,
         readProjects,
         readTaskList,
         readTask,
         listDataDocuments,
         readDataDocumentBase64,
+        invalidateCache,
     }
 }

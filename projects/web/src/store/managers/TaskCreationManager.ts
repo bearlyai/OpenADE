@@ -1,9 +1,12 @@
 import { makeAutoObservable, runInAction } from "mobx"
+import { OPENADE_METHOD, type OpenADEMethod } from "../../../../openade-client/src"
+import type { OpenADETaskCreateRequest, OpenADETurnStartRequest } from "../../../../openade-module/src"
 import { track } from "../../analytics"
 import type { HarnessId } from "../../electronAPI/harnessEventTypes"
 import type { HyperPlanStrategy } from "../../hyperplan/types"
 import { fallbackTitle, generateTitle } from "../../prompts/titleExtractor"
 import type { ImageAttachment, IsolationStrategy, UserInputContext } from "../../types"
+import { getDeviceId } from "../../utils/deviceId"
 import { ulid } from "../../utils/ulid"
 import type { ThinkingLevel } from "../TaskModel"
 import type { CodeStore } from "../store"
@@ -84,6 +87,10 @@ function cloneHyperPlanStrategy(strategy: HyperPlanStrategy): HyperPlanStrategy 
     }
 }
 
+function cloneOptionalStringArray(value: string[] | undefined): string[] {
+    return value ? [...value] : []
+}
+
 export class TaskCreationManager {
     creationsById: Map<string, TaskCreation> = new Map()
 
@@ -131,6 +138,32 @@ export class TaskCreationManager {
         return Array.from(this.creationsById.values()).filter((c) => c.repoId === repoId && c.completedTaskId === null)
     }
 
+    private productRuntimeOwnsCapabilities(): boolean {
+        return this.store.shouldUseRuntimeProductAPI() || this.store.usesCoreOwnedProductRuntime()
+    }
+
+    private async canUseProductMethodAfterConnect(method: OpenADEMethod): Promise<boolean> {
+        if (!this.productRuntimeOwnsCapabilities()) return this.store.canUseProductMethod(method)
+        if (this.store.usesCoreOwnedProductRuntime()) return this.store.canUseProductMethodAfterConnect(method)
+        if (this.store.shouldUseRuntimeProductAPI()) return this.store.canUseProductMethod(method)
+        return this.store.canUseProductMethodAfterConnect(method)
+    }
+
+    private async enabledMcpServerIdsForCapabilities(creation: TaskCreation): Promise<string[]> {
+        if (this.productRuntimeOwnsCapabilities() && !(await this.canUseProductMethodAfterConnect(OPENADE_METHOD.settingsMcpServersRead))) return []
+        return cloneOptionalStringArray(creation.enabledMcpServerIds)
+    }
+
+    private async imagesForCapabilities(creation: TaskCreation): Promise<ImageAttachment[]> {
+        if (this.productRuntimeOwnsCapabilities() && !(await this.canUseProductMethodAfterConnect(OPENADE_METHOD.taskImageWrite))) return []
+        return creation.images.map(cloneImageAttachment)
+    }
+
+    private async isolationStrategyForCapabilities(creation: TaskCreation): Promise<IsolationStrategy> {
+        if (this.productRuntimeOwnsCapabilities() && !(await this.canUseProductMethodAfterConnect(OPENADE_METHOD.projectGitBranchesRead))) return { type: "head" }
+        return cloneIsolationStrategy(creation.isolationStrategy)
+    }
+
     async cancelCreation(id: string): Promise<void> {
         const creation = this.creationsById.get(id)
         if (!creation) return
@@ -172,7 +205,9 @@ export class TaskCreationManager {
         if (!creation) return
 
         const repo = this.store.repos.getRepo(creation.repoId)
-        if (!repo && !this.store.shouldUseRuntimeProductAPI()) {
+        let useRuntimeProductAPI = this.store.shouldUseRuntimeProductAPI()
+        const productRuntimeOwned = useRuntimeProductAPI || this.store.usesCoreOwnedProductRuntime()
+        if (!repo && !productRuntimeOwned) {
             runInAction(() => {
                 creation.error = "Repository not found"
             })
@@ -183,24 +218,35 @@ export class TaskCreationManager {
 
         try {
             if (signal.aborted) throw new Error("Task creation cancelled")
+            if (productRuntimeOwned && !useRuntimeProductAPI) {
+                await this.canUseProductMethodAfterConnect(OPENADE_METHOD.taskCreate)
+                useRuntimeProductAPI = this.store.shouldUseRuntimeProductAPI()
+            }
+            if (productRuntimeOwned && (!useRuntimeProductAPI || !this.store.canUseProductMethod(OPENADE_METHOD.taskCreate))) {
+                runInAction(() => {
+                    creation.error = "Task creation is not available from this runtime"
+                })
+                return
+            }
+            if (!productRuntimeOwned && !this.store.canUseProductMethod(OPENADE_METHOD.turnStart)) {
+                runInAction(() => {
+                    creation.error = "Task creation is not available from this runtime"
+                })
+                return
+            }
 
             runInAction(() => {
                 creation.phase = "completing"
             })
 
-            const result = await this.store.startProductTurn({
-                repoId: creation.repoId,
-                type: creation.mode,
-                input: creation.description,
-                isolationStrategy: cloneIsolationStrategy(creation.isolationStrategy),
-                enabledMcpServerIds: creation.enabledMcpServerIds ? [...creation.enabledMcpServerIds] : undefined,
-                harnessId: creation.harnessId,
-                modelId: creation.modelId,
-                images: creation.images.map(cloneImageAttachment),
-                thinking: creation.thinking,
-                fastMode: creation.fastMode,
-                hyperplanStrategy: creation.mode === "hyperplan" ? cloneHyperPlanStrategy(this.store.getActiveHyperPlanStrategy()) : undefined,
-            })
+            const [enabledMcpServerIds, images, isolationStrategy] = await Promise.all([
+                this.enabledMcpServerIdsForCapabilities(creation),
+                this.imagesForCapabilities(creation),
+                this.isolationStrategyForCapabilities(creation),
+            ])
+            const result = useRuntimeProductAPI
+                ? await this.createRuntimeTaskAndMaybeStartTurn(creation, signal, enabledMcpServerIds, images, isolationStrategy)
+                : await this.startLegacyTaskCreationTurn(creation, enabledMcpServerIds, images, isolationStrategy)
 
             const cleanupIfCancelled = async () => {
                 if (!signal.aborted) return false
@@ -209,7 +255,7 @@ export class TaskCreationManager {
             }
 
             if (await cleanupIfCancelled()) throw new Error("Task creation cancelled")
-            if (!this.store.shouldUseRuntimeProductAPI()) {
+            if (!useRuntimeProductAPI) {
                 await this.store.refreshProductStateAfterTaskCreation(creation.repoId, result.taskId)
             }
 
@@ -222,8 +268,8 @@ export class TaskCreationManager {
             // Track task creation
             track("task_created", {
                 mode: creation.mode,
-                isolationStrategy: creation.isolationStrategy.type,
-                hasMcpServers: (creation.enabledMcpServerIds?.length ?? 0) > 0,
+                isolationStrategy: isolationStrategy.type,
+                hasMcpServers: enabledMcpServerIds.length > 0,
             })
 
             // Generate title async - don't block task creation
@@ -246,6 +292,66 @@ export class TaskCreationManager {
                 creation.error = err instanceof Error ? err.message : "Failed to create task"
             })
         }
+    }
+
+    private async startLegacyTaskCreationTurn(
+        creation: TaskCreation,
+        enabledMcpServerIds: string[],
+        images: ImageAttachment[],
+        isolationStrategy: IsolationStrategy
+    ): Promise<{ taskId: string }> {
+        const request: OpenADETurnStartRequest = {
+            repoId: creation.repoId,
+            type: creation.mode,
+            input: creation.description,
+            isolationStrategy,
+            harnessId: creation.harnessId,
+            modelId: creation.modelId,
+            images,
+            thinking: creation.thinking,
+            fastMode: creation.fastMode,
+            hyperplanStrategy: creation.mode === "hyperplan" ? cloneHyperPlanStrategy(this.store.getActiveHyperPlanStrategy()) : undefined,
+        }
+        if (enabledMcpServerIds.length > 0) request.enabledMcpServerIds = enabledMcpServerIds
+        return this.store.startProductTurn(request)
+    }
+
+    private async createRuntimeTaskAndMaybeStartTurn(
+        creation: TaskCreation,
+        signal: AbortSignal,
+        enabledMcpServerIds: string[],
+        images: ImageAttachment[],
+        isolationStrategy: IsolationStrategy
+    ): Promise<{ taskId: string }> {
+        const taskRequest: OpenADETaskCreateRequest = {
+            repoId: creation.repoId,
+            input: creation.description,
+            createdBy: this.store.currentUser,
+            deviceId: getDeviceId(),
+            isolationStrategy,
+        }
+        if (enabledMcpServerIds.length > 0) taskRequest.enabledMcpServerIds = enabledMcpServerIds
+        const created = await this.store.createProductTask(taskRequest)
+
+        if (signal.aborted) return { taskId: created.taskId }
+        if (!(await this.canUseProductMethodAfterConnect(OPENADE_METHOD.turnStart))) return { taskId: created.taskId }
+
+        const turnRequest: OpenADETurnStartRequest = {
+            repoId: creation.repoId,
+            inTaskId: created.taskId,
+            type: creation.mode,
+            input: creation.description,
+            harnessId: creation.harnessId,
+            modelId: creation.modelId,
+            images,
+            thinking: creation.thinking,
+            fastMode: creation.fastMode,
+            hyperplanStrategy: creation.mode === "hyperplan" ? cloneHyperPlanStrategy(this.store.getActiveHyperPlanStrategy()) : undefined,
+        }
+        if (enabledMcpServerIds.length > 0) turnRequest.enabledMcpServerIds = enabledMcpServerIds
+        await this.store.startProductTurn(turnRequest)
+
+        return { taskId: created.taskId }
     }
 
     private async cleanupAcceptedCancelledTask(repoId: string, taskId: string): Promise<void> {
@@ -285,8 +391,10 @@ export class TaskCreationManager {
         harnessId?: HarnessId
         cwd: string | null
     }): Promise<void> {
+        const productRuntimeOwned = this.productRuntimeOwnsCapabilities()
         try {
-            if (this.store.shouldUseRuntimeProductAPI()) {
+            if (productRuntimeOwned) {
+                if (!(await this.canUseProductMethodAfterConnect(OPENADE_METHOD.taskTitleGenerate))) return
                 await this.store.generateProductTaskTitle({ repoId, taskId, harnessId })
                 return
             }
@@ -298,7 +406,9 @@ export class TaskCreationManager {
             this.store.tasks.setTaskTitle(taskId, generatedTitle ?? fallbackTitle(description))
         } catch (err) {
             console.error("[TaskCreationManager] Title generation failed:", err)
-            this.store.tasks.setTaskTitle(taskId, fallbackTitle(description))
+            if (!productRuntimeOwned) {
+                this.store.tasks.setTaskTitle(taskId, fallbackTitle(description))
+            }
         }
     }
 }

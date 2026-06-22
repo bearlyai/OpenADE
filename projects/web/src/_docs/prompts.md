@@ -83,7 +83,7 @@ No required sections. Cover what was done, what was verified, and any risks or b
 
 ## Action Prompts
 
-One-off prompts for specific actions:
+One-off prompts for specific actions live in `actionPrompts.ts` so runtime/shared shell code can import them without pulling in image/data-folder prompt builders:
 - `RETRY_PROMPT` - Retry failed action, analyze root cause
 - `buildCommitPrompt(userInstructions?)` - Create git commit; optional user instructions are appended with explicit precedence over defaults
 - `buildPushPrompt(hasGhCli, branch)` - Push and optionally create PR

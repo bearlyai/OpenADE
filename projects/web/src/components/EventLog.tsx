@@ -2,7 +2,7 @@
  * EventLog - Container for all events, displays newest at bottom
  */
 
-import { Code } from "lucide-react"
+import { Code, Loader2 } from "lucide-react"
 import { observer } from "mobx-react"
 import { useState } from "react"
 import type { CodeEvent } from "../types"
@@ -29,10 +29,12 @@ export const EventLog = observer(
     ({
         taskId,
         events,
+        isLoading,
         onRequestFullHistory,
     }: {
         taskId: string
         events: CodeEvent[]
+        isLoading?: boolean
         onRequestFullHistory?: () => void
     }) => {
         const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null)
@@ -40,9 +42,11 @@ export const EventLog = observer(
         if (events.length === 0) {
             return (
                 <div className="h-full flex flex-col items-center justify-center text-muted px-8 py-16">
-                    <Code size="3rem" className="mb-4 opacity-30" />
-                    <div className="text-lg font-medium mb-2">No activity yet</div>
-                    <div className="text-sm text-center">Enter a task description below and click Plan or Do to get started.</div>
+                    {isLoading ? <Loader2 size="3rem" className="mb-4 animate-spin opacity-40" /> : <Code size="3rem" className="mb-4 opacity-30" />}
+                    <div className="text-lg font-medium mb-2">{isLoading ? "Loading activity..." : "No activity yet"}</div>
+                    <div className="text-sm text-center">
+                        {isLoading ? "Fetching the latest task events." : "Enter a task description below and click Plan or Do to get started."}
+                    </div>
                 </div>
             )
         }
@@ -66,7 +70,6 @@ export const EventLog = observer(
                         className="btn border-b border-border px-3 py-2 text-left text-xs text-muted hover:bg-base-200 hover:text-base-content"
                         onClick={() => {
                             setExpandedTaskId(taskId)
-                            onRequestFullHistory?.()
                         }}
                     >
                         Show {hiddenEventCount.toLocaleString()} earlier events

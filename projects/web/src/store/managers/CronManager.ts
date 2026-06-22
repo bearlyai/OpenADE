@@ -16,11 +16,13 @@
  * cancelling/recreating timers on every event.
  *
  * Runtime-backed cron state is persisted through OpenADE product APIs.
- * Legacy renderer scheduling falls back to ~/.openade/data/cron/{repoId}.json.
+ * Legacy renderer scheduling falls back to ~/.openade/data/cron/{repoId}.json
+ * only when the product runtime does not own cron state.
  */
 
 import { Cron } from "croner"
 import { makeAutoObservable, observable, runInAction } from "mobx"
+import { OPENADE_METHOD } from "../../../../openade-client/src"
 import type { OpenADECronInstallState, OpenADETurnStartRequest } from "../../../../openade-module/src"
 import { dataFolderApi } from "../../electronAPI/dataFolder"
 import type { CronDef, ReadProcsResult } from "../../electronAPI/procs"
@@ -39,6 +41,17 @@ interface PersistedCronState {
     installations: Record<string, CronInstallState>
 }
 
+interface PersistedCronInstallIndex {
+    version: 1
+    repoIds: string[]
+}
+
+function isPersistedCronInstallIndex(value: unknown): value is PersistedCronInstallIndex {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return false
+    const record = value as Record<string, unknown>
+    return record.version === 1 && Array.isArray(record.repoIds) && record.repoIds.every((repoId) => typeof repoId === "string" && repoId.length > 0)
+}
+
 // ============================================================================
 // Cron View Model (for sidebar display)
 // ============================================================================
@@ -49,6 +62,8 @@ export interface CronViewModel {
     installed: boolean
     enabled: boolean
     running: boolean
+    canRunNow: boolean
+    canUpdateInstallState: boolean
     nextRunAt: Date | null
     lastRunAt?: string
     lastTaskId?: string
@@ -65,12 +80,14 @@ interface RepoState {
     cronDefs: Map<string, { def: CronDef; configFilePath: string }>
     installStates: Map<string, CronInstallState>
     configLoaded: boolean
+    installStateLoaded: boolean
 }
 
 // Max safe delay for setTimeout (~24.8 days). Longer delays get chained.
 const MAX_TIMEOUT_DELAY = 0x7fffffff
 const PROCS_REFRESH_CONCURRENCY = 2
 const FOCUS_PROCS_REFRESH_MIN_INTERVAL_MS = 60_000
+const LEGACY_CRON_INSTALL_INDEX_ID = "_index"
 
 async function runWithConcurrencyLimit<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
     let index = 0
@@ -109,21 +126,30 @@ export class CronManager {
 
     /** Start cron tracking for all repos */
     async startAll(): Promise<void> {
-        if (this.store.shouldUseCoreOwnedCronScheduler()) return
+        if (this.stopIfProductRuntimeOwnsScheduling()) return
         if (this._started) return
         this._started = true
 
         const repos = this.store.repos.repos
-        await runWithConcurrencyLimit(repos, PROCS_REFRESH_CONCURRENCY, async (repo) => {
+        const indexedRepoIds = this.productRuntimeOwnsCrons() ? await this.loadProductCronInstallStateRepoIds() : await this.loadLegacyCronInstallIndex()
+        const reposToLoadInstallState = repos.filter((repo) => indexedRepoIds.has(repo.id))
+
+        if (this.stopIfProductRuntimeOwnsScheduling()) return
+        await runWithConcurrencyLimit(reposToLoadInstallState, PROCS_REFRESH_CONCURRENCY, async (repo) => {
+            if (this.stopIfProductRuntimeOwnsScheduling()) return
             await this.ensureRepoState(repo.id, repo.path)
         })
+        if (this.stopIfProductRuntimeOwnsScheduling()) return
         const reposWithInstalledCrons = Array.from(this._repos.values()).filter((repoState) => repoState.installStates.size > 0)
         await runWithConcurrencyLimit(reposWithInstalledCrons, PROCS_REFRESH_CONCURRENCY, async (repoState) => {
+            if (this.stopIfProductRuntimeOwnsScheduling()) return
             await this.refreshRepoConfig(repoState)
+            if (this.stopIfProductRuntimeOwnsScheduling()) return
             this.rescheduleRepo(repoState)
         })
+        if (this.stopIfProductRuntimeOwnsScheduling()) return
 
-        // Refresh config after any task event completes (e.g. a plan that edits openade.toml)
+        // Refresh config after task events complete (e.g. a plan that edits openade.toml)
         this._afterEventDisposer = this.store.execution.onAfterEvent(() => {
             this.requestRefresh()
         })
@@ -135,8 +161,14 @@ export class CronManager {
 
     /** Add or refresh a single repo */
     async addRepo(repoId: string, repoPath: string): Promise<void> {
+        if (this.stopIfProductRuntimeOwnsScheduling()) return
+
         const repoState = await this.ensureRepoState(repoId, repoPath)
+        if (this.stopIfProductRuntimeOwnsScheduling()) return
+        if (!repoState.configLoaded && repoState.installStates.size === 0) return
+
         await this.refreshRepoConfig(repoState)
+        if (this.stopIfProductRuntimeOwnsScheduling()) return
         this.rescheduleRepo(repoState)
     }
 
@@ -190,9 +222,13 @@ export class CronManager {
 
     /** Get view models for sidebar display for a specific repo */
     getCronsForRepo(repoId: string): CronViewModel[] {
+        if (this.productRuntimeOwnsCrons() && !this.store.canUseProductMethod(OPENADE_METHOD.cronDefinitionsRead)) return []
+
         const repoState = this._repos.get(repoId)
         if (!repoState) return []
 
+        const canRunNow = this.canRunNow()
+        const canUpdateInstallState = this.canUpdateInstallState()
         return Array.from(repoState.cronDefs.values()).map(({ def, configFilePath }) => {
             const state = repoState.installStates.get(def.id)
             let nextRunAt: Date | null = null
@@ -209,6 +245,8 @@ export class CronManager {
                 installed: !!state,
                 enabled: state?.enabled ?? false,
                 running: this.runningCrons.has(`${repoId}::${def.id}`),
+                canRunNow,
+                canUpdateInstallState,
                 nextRunAt,
                 lastRunAt: state?.lastRunAt,
                 lastTaskId: state?.lastTaskId,
@@ -222,6 +260,8 @@ export class CronManager {
     // ============================================================================
 
     async installCron(repoId: string, cronId: string): Promise<void> {
+        if (!this.canUpdateInstallState()) return
+
         const repoState = this._repos.get(repoId)
         if (!repoState) return
 
@@ -240,6 +280,8 @@ export class CronManager {
     }
 
     async uninstallCron(repoId: string, cronId: string): Promise<void> {
+        if (!this.canUpdateInstallState()) return
+
         const repoState = this._repos.get(repoId)
         if (!repoState) return
 
@@ -251,6 +293,8 @@ export class CronManager {
     }
 
     async toggleCron(repoId: string, cronId: string, enabled: boolean): Promise<void> {
+        if (!this.canUpdateInstallState()) return
+
         const repoState = this._repos.get(repoId)
         if (!repoState) return
 
@@ -272,6 +316,12 @@ export class CronManager {
 
     /** Immediately execute a cron job regardless of schedule */
     async runNow(repoId: string, cronId: string): Promise<void> {
+        if (!this.canRunNow()) return
+
+        if (this.store.shouldUseCoreOwnedCronScheduler()) {
+            await this.runCoreCronNow(repoId, cronId)
+            return
+        }
         const repoState = this._repos.get(repoId)
         if (!repoState) return
 
@@ -281,11 +331,52 @@ export class CronManager {
         await this.executeCron(repoState, cronId, entry.def)
     }
 
+    private async runCoreCronNow(repoId: string, cronId: string): Promise<void> {
+        const repoState = this._repos.get(repoId)
+        try {
+            const result = await this.store.runProductCron({ repoId, cronId })
+            const installation = result.installation
+            if (repoState && installation) {
+                runInAction(() => {
+                    repoState.installStates.set(result.cronId, installation)
+                })
+            }
+        } catch (err) {
+            console.error(`[CronManager] Failed to run product cron ${cronId}:`, err)
+        }
+    }
+
+    private canRunNow(): boolean {
+        return this.store.canUseProductMethod(OPENADE_METHOD.cronRun)
+    }
+
+    private canUpdateInstallState(): boolean {
+        return this.store.canUseProductMethod(OPENADE_METHOD.cronInstallStateReplace)
+    }
+
+    private canUseProductCronMethodAfterConnect(method: Parameters<CodeStore["canUseProductMethodAfterConnect"]>[0]): Promise<boolean> {
+        return this.store.canUseProductMethodAfterConnect(method)
+    }
+
+    private canStartCronTurn(): boolean {
+        if (!this.productRuntimeOwnsCrons()) return true
+        return this.store.canUseProductMethod(OPENADE_METHOD.turnStart)
+    }
+
+    private productRuntimeOwnsCrons(): boolean {
+        return this.store.shouldUseRuntimeProductTaskRoute()
+    }
+
+    private productRuntimeOwnsScheduling(): boolean {
+        return this.productRuntimeOwnsCrons() || this.store.shouldUseCoreOwnedCronScheduler()
+    }
+
     // ============================================================================
     // Config refresh
     // ============================================================================
 
     private requestRefresh(): void {
+        if (this.stopIfProductRuntimeOwnsScheduling()) return
         if (this._refreshDebounceTimer) clearTimeout(this._refreshDebounceTimer)
         this._refreshDebounceTimer = setTimeout(() => {
             this._refreshDebounceTimer = null
@@ -294,11 +385,13 @@ export class CronManager {
     }
 
     private requestFocusRefresh(): void {
+        if (this.stopIfProductRuntimeOwnsScheduling()) return
         if (Date.now() - this._lastConfigRefreshAt < FOCUS_PROCS_REFRESH_MIN_INTERVAL_MS) return
         this.requestRefresh()
     }
 
     private async debouncedRefresh(): Promise<void> {
+        if (this.stopIfProductRuntimeOwnsScheduling()) return
         if (this._refreshInFlight) {
             this._refreshPendingAgain = true
             return
@@ -316,11 +409,14 @@ export class CronManager {
     }
 
     private async refreshAndRescheduleAll(): Promise<void> {
+        if (this.stopIfProductRuntimeOwnsScheduling()) return
         const reposToRefresh = Array.from(this._repos.values()).filter(
             (repoState) => repoState.configLoaded || repoState.installStates.size > 0 || repoState.cronDefs.size > 0
         )
         await runWithConcurrencyLimit(reposToRefresh, PROCS_REFRESH_CONCURRENCY, async (rs) => {
+            if (this.stopIfProductRuntimeOwnsScheduling()) return
             await this.refreshRepoConfig(rs)
+            if (this.stopIfProductRuntimeOwnsScheduling()) return
             this.rescheduleRepo(rs)
         })
     }
@@ -336,9 +432,23 @@ export class CronManager {
         return promise
     }
 
+    private stopIfProductRuntimeOwnsScheduling(): boolean {
+        if (!this.productRuntimeOwnsScheduling()) return false
+        this.stop()
+        return true
+    }
+
     private async refreshRepoConfigUncoalesced(repoState: RepoState): Promise<void> {
         try {
-            if (this.store.shouldUseRuntimeProductAPI()) {
+            if (this.productRuntimeOwnsCrons()) {
+                if (!(await this.canUseProductCronMethodAfterConnect(OPENADE_METHOD.cronDefinitionsRead))) {
+                    runInAction(() => {
+                        repoState.cronDefs.clear()
+                        repoState.configLoaded = false
+                    })
+                    this._lastConfigRefreshAt = Date.now()
+                    return
+                }
                 const result = await this.store.readProductCronDefinitions({ repoId: repoState.repoId })
                 this.applyProcsResult(repoState, readProcsResultFromProductCronDefinitions(result))
                 runInAction(() => {
@@ -360,7 +470,10 @@ export class CronManager {
 
     private async ensureRepoState(repoId: string, repoPath: string): Promise<RepoState> {
         let repoState = this._repos.get(repoId)
-        if (repoState) return repoState
+        if (repoState) {
+            if (!repoState.installStateLoaded) await this.loadInstallStates(repoState)
+            return repoState
+        }
 
         repoState = {
             repoId,
@@ -368,6 +481,7 @@ export class CronManager {
             cronDefs: observable.map(),
             installStates: observable.map(),
             configLoaded: false,
+            installStateLoaded: false,
         }
         this._repos.set(repoId, repoState)
         await this.loadInstallStates(repoState)
@@ -410,7 +524,8 @@ export class CronManager {
     // ============================================================================
 
     private async loadInstallStates(repoState: RepoState): Promise<void> {
-        if (this.store.shouldUseRuntimeProductAPI()) {
+        if (this.productRuntimeOwnsCrons()) {
+            if (!(await this.canUseProductCronMethodAfterConnect(OPENADE_METHOD.cronInstallStateRead))) return
             try {
                 const result = await this.store.readProductCronInstallState({ repoId: repoState.repoId })
                 runInAction(() => {
@@ -418,6 +533,7 @@ export class CronManager {
                     for (const [key, state] of Object.entries(result.installations)) {
                         repoState.installStates.set(key, state)
                     }
+                    repoState.installStateLoaded = true
                 })
                 return
             } catch (err) {
@@ -426,11 +542,21 @@ export class CronManager {
             }
         }
 
-        if (!dataFolderApi.isAvailable()) return
+        if (!dataFolderApi.isAvailable()) {
+            runInAction(() => {
+                repoState.installStateLoaded = true
+            })
+            return
+        }
 
         try {
             const data = await dataFolderApi.load("cron", repoState.repoId, "json")
-            if (!data) return
+            if (!data) {
+                runInAction(() => {
+                    repoState.installStateLoaded = true
+                })
+                return
+            }
 
             const text = typeof data === "string" ? data : new TextDecoder().decode(data as ArrayBuffer)
             const parsed: PersistedCronState = JSON.parse(text)
@@ -440,10 +566,78 @@ export class CronManager {
                 for (const [key, state] of Object.entries(parsed.installations)) {
                     repoState.installStates.set(key, state)
                 }
+                repoState.installStateLoaded = true
             })
         } catch (err) {
             console.error(`[CronManager] Failed to load install states for ${repoState.repoId}:`, err)
+            runInAction(() => {
+                repoState.installStateLoaded = true
+            })
         }
+    }
+
+    private async loadLegacyCronInstallIndex(options: { warnIfMissing?: boolean } = {}): Promise<Set<string>> {
+        if (!dataFolderApi.isAvailable()) return new Set()
+
+        try {
+            const data = await dataFolderApi.load("cron", LEGACY_CRON_INSTALL_INDEX_ID, "json")
+            if (!data) {
+                if (options.warnIfMissing !== false) {
+                    console.warn("[CronManager] Legacy cron install-state index unavailable; skipping automatic startup scheduling")
+                }
+                return new Set()
+            }
+
+            const text = typeof data === "string" ? data : new TextDecoder().decode(data as ArrayBuffer)
+            const parsed: unknown = JSON.parse(text)
+            if (!isPersistedCronInstallIndex(parsed)) {
+                console.warn("[CronManager] Legacy cron install-state index invalid; skipping automatic startup scheduling")
+                return new Set()
+            }
+
+            return new Set(parsed.repoIds)
+        } catch (err) {
+            console.warn("[CronManager] Failed to load legacy cron install index; skipping automatic startup scheduling:", err)
+            return new Set()
+        }
+    }
+
+    private async loadProductCronInstallStateRepoIds(): Promise<Set<string>> {
+        if (!(await this.canUseProductCronMethodAfterConnect(OPENADE_METHOD.cronInstallStateList))) {
+            console.warn("[CronManager] Product cron install-state index unavailable; skipping automatic startup scheduling")
+            return new Set()
+        }
+
+        try {
+            const result = await this.store.listProductCronInstallStateRepos()
+            if (!result) return new Set()
+            return new Set(result.repoIds)
+        } catch (err) {
+            console.warn("[CronManager] Failed to load product cron install-state repo index; skipping automatic startup scheduling:", err)
+            return new Set()
+        }
+    }
+
+    private async saveLegacyCronInstallIndex(repoIds: string[]): Promise<void> {
+        if (!dataFolderApi.isAvailable()) return
+
+        const uniqueRepoIds = Array.from(new Set(repoIds)).sort()
+        const index: PersistedCronInstallIndex = { version: 1, repoIds: uniqueRepoIds }
+        try {
+            await dataFolderApi.save("cron", LEGACY_CRON_INSTALL_INDEX_ID, JSON.stringify(index, null, 2), "json")
+        } catch (err) {
+            console.warn("[CronManager] Failed to save legacy cron install index:", err)
+        }
+    }
+
+    private async updateLegacyCronInstallIndexForRepo(repoState: RepoState): Promise<void> {
+        const current = await this.loadLegacyCronInstallIndex({ warnIfMissing: false })
+        if (repoState.installStates.size > 0) {
+            current.add(repoState.repoId)
+        } else {
+            current.delete(repoState.repoId)
+        }
+        await this.saveLegacyCronInstallIndex(Array.from(current))
     }
 
     private async saveInstallStates(repoState: RepoState): Promise<void> {
@@ -451,7 +645,8 @@ export class CronManager {
             installations: Object.fromEntries(repoState.installStates),
         }
 
-        if (this.store.shouldUseRuntimeProductAPI()) {
+        if (this.productRuntimeOwnsCrons()) {
+            if (!this.store.canUseProductMethod(OPENADE_METHOD.cronInstallStateReplace)) return
             try {
                 await this.store.replaceProductCronInstallState({ repoId: repoState.repoId, installations: data.installations })
                 return
@@ -465,6 +660,7 @@ export class CronManager {
 
         try {
             await dataFolderApi.save("cron", repoState.repoId, JSON.stringify(data, null, 2), "json")
+            await this.updateLegacyCronInstallIndexForRepo(repoState)
         } catch (err) {
             console.error(`[CronManager] Failed to save install states for ${repoState.repoId}:`, err)
         }
@@ -484,7 +680,7 @@ export class CronManager {
         const key = `${repoState.repoId}::${cronId}`
         this.cancelTimer(key)
 
-        if (this.store.shouldUseCoreOwnedCronScheduler()) return
+        if (this.productRuntimeOwnsScheduling()) return
 
         const state = repoState.installStates.get(cronId)
         if (!state?.enabled) return
@@ -581,16 +777,20 @@ export class CronManager {
     }
 
     /** Cancel all timers for a repo and reschedule all its enabled crons */
-    private rescheduleRepo(repoState: RepoState): void {
-        // Cancel existing timers for this repo
-        const prefix = `${repoState.repoId}::`
+    private cancelRepoTimers(repoId: string): void {
+        const prefix = `${repoId}::`
         for (const [key, timer] of this._timers) {
             if (key.startsWith(prefix)) {
                 clearTimeout(timer)
                 this._timers.delete(key)
             }
         }
-        if (this.store.shouldUseCoreOwnedCronScheduler()) return
+    }
+
+    /** Cancel all timers for a repo and reschedule all its enabled crons */
+    private rescheduleRepo(repoState: RepoState): void {
+        this.cancelRepoTimers(repoState.repoId)
+        if (this.productRuntimeOwnsScheduling()) return
         // Schedule all enabled crons (skip running ones — fireCron.finally() handles their rescheduling)
         for (const [cronId, { def }] of repoState.cronDefs) {
             const key = `${repoState.repoId}::${cronId}`
@@ -606,6 +806,7 @@ export class CronManager {
     private async executeCron(repoState: RepoState, cronId: string, def: CronDef): Promise<void> {
         const runKey = `${repoState.repoId}::${cronId}`
         if (this.runningCrons.has(runKey)) return
+        if (!this.canStartCronTurn()) return
 
         runInAction(() => {
             this.runningCrons.add(runKey)
@@ -621,20 +822,24 @@ export class CronManager {
         try {
             const isolationStrategy: OpenADETurnStartRequest["isolationStrategy"] =
                 def.isolation === "worktree" ? { type: "worktree", sourceBranch: "HEAD" } : { type: "head" }
+            const inTaskId = def.inTaskId || (def.reuseTask && state?.lastTaskId) || undefined
             const args: OpenADETurnStartRequest = {
                 repoId: repoState.repoId,
                 type: def.type,
                 input: def.prompt,
                 appendSystemPrompt: def.appendSystemPrompt,
-                inTaskId: def.inTaskId || (def.reuseTask && state?.lastTaskId) || undefined,
-                isolationStrategy,
                 harnessId: (def.harness as HarnessId) || undefined,
-                title: `[Cron] ${def.name}`,
                 hyperplanStrategy: def.type === "hyperplan" ? this.store.getActiveHyperPlanStrategy() : undefined,
+            }
+            if (inTaskId) {
+                args.inTaskId = inTaskId
+            } else {
+                args.isolationStrategy = isolationStrategy
+                args.title = `[Cron] ${def.name}`
             }
 
             const result = await this.store.startProductTurn(args)
-            if (!this.store.shouldUseRuntimeProductAPI()) {
+            if (!this.productRuntimeOwnsCrons()) {
                 if (args.inTaskId) {
                     await this.store.refreshProductStateAfterTaskMutation(result.taskId)
                 } else {

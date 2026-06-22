@@ -41,7 +41,7 @@ import type {
     OpenADETaskCreateResult,
     OpenADETaskMetadataUpdateRequest,
 } from "./types"
-import type { OpenADEYjsStorageAdapter } from "./yjsProjection"
+import type { OpenADEYjsDocumentOperationOptions, OpenADEYjsStorageAdapter } from "./yjsProjection"
 
 type JsonPrimitive = string | number | boolean | null
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
@@ -53,8 +53,8 @@ const PERSONAL_SETTINGS_DOCUMENT_ID = "code:personal_settings"
 const PERSONAL_SETTINGS_MAP_NAME = "personal_settings"
 
 export interface OpenADEYjsMutationStorageAdapter extends OpenADEYjsStorageAdapter {
-    readDocumentUpdate(id: string): Promise<Uint8Array | null>
-    saveDocumentUpdate(id: string, data: Uint8Array): Promise<void>
+    readDocumentUpdate(id: string, options?: OpenADEYjsDocumentOperationOptions): Promise<Uint8Array | null>
+    saveDocumentUpdate(id: string, data: Uint8Array, options?: OpenADEYjsDocumentOperationOptions): Promise<void>
     deleteDocument(id: string): Promise<void>
 }
 
@@ -234,6 +234,7 @@ function mcpOAuthTokens(value: unknown): OpenADEMCPOAuthTokens | undefined {
         accessToken,
         tokenType,
         refreshToken: optionalString(value.refreshToken),
+        clientId: optionalString(value.clientId),
         expiresAt: optionalString(value.expiresAt),
     }
 }
@@ -590,6 +591,17 @@ function updateTaskPreview(
     repoMap.set("updatedAt", updatedAt)
 }
 
+function taskPreviewMap(repoMap: Y.Map<unknown>, taskId: string): Y.Map<unknown> | null {
+    const tasks = repoMap.get("tasks")
+    if (!(tasks instanceof Y.Array)) return null
+    for (const item of tasks.toArray()) {
+        const plain = toPlain(item)
+        if (!isRecord(plain) || plain.id !== taskId) continue
+        return item instanceof Y.Map ? item : null
+    }
+    return null
+}
+
 function getEventPreview(event: Y.Map<unknown>, at: string): Record<string, unknown> {
     const source = event.get("source")
     const sourceMap = source instanceof Y.Map ? source : null
@@ -675,32 +687,51 @@ function isLastViewedOnlyMetadataUpdate(request: OpenADETaskMetadataUpdateReques
     )
 }
 
+function isUsageOnlyMetadataUpdate(request: OpenADETaskMetadataUpdateRequest): boolean {
+    return (
+        request.usage !== undefined &&
+        request.title === undefined &&
+        request.closed === undefined &&
+        request.lastViewedAt === undefined &&
+        request.lastEventAt === undefined &&
+        request.cancelledPlanEventId === undefined &&
+        request.enabledMcpServerIds === undefined &&
+        request.sessionIds === undefined &&
+        request.queuedTurns === undefined
+    )
+}
+
 async function syncTaskViewedPreview(
     storage: OpenADEYjsMutationStorageAdapter,
     taskId: string,
     lastViewedAt: string,
     updatedAt: string
-): Promise<boolean> {
+): Promise<{ found: boolean; updated: boolean }> {
     const reposDoc = await loadDoc(storage, "code:repos")
     let updated = false
+    let found = false
     try {
         const repos = reposDoc.getMap<Y.Map<unknown>>("repos:data")
         reposDoc.transact(() => {
             repos.forEach((repoMap) => {
-                if (updated || !(repoMap instanceof Y.Map)) return
+                if (found || !(repoMap instanceof Y.Map)) return
                 const tasks = repoMap.get("tasks")
                 if (!(tasks instanceof Y.Array)) return
-                const found = tasks.toArray().some((task) => {
+                const containsTask = tasks.toArray().some((task) => {
                     const plain = toPlain(task)
                     return isRecord(plain) && plain.id === taskId
                 })
-                if (!found) return
+                if (!containsTask) return
+                const preview = taskPreviewMap(repoMap, taskId)
+                const currentLastViewedAt = preview?.get("lastViewedAt")
+                found = true
+                if (currentLastViewedAt === lastViewedAt) return
                 updateTaskPreview(repoMap, taskId, { lastViewedAt }, updatedAt)
                 updated = true
             })
         })
         if (updated) await saveDoc(storage, "code:repos", reposDoc)
-        return updated
+        return { found, updated }
     } finally {
         reposDoc.destroy()
     }
@@ -1358,8 +1389,8 @@ export function createOpenADEYjsWriter(storage: OpenADEYjsMutationStorageAdapter
         async updateTaskMetadata(request) {
             const updatedAt = request.updatedAt ?? now()
             if (request.lastViewedAt && isLastViewedOnlyMetadataUpdate(request)) {
-                const updatedPreview = await syncTaskViewedPreview(storage, request.taskId, request.lastViewedAt, updatedAt)
-                if (updatedPreview) return
+                const viewedPreview = await syncTaskViewedPreview(storage, request.taskId, request.lastViewedAt, updatedAt)
+                if (viewedPreview.found) return
             }
 
             const taskDoc = await loadDoc(storage, `code:task:${request.taskId}`)
@@ -1367,6 +1398,11 @@ export function createOpenADEYjsWriter(storage: OpenADEYjsMutationStorageAdapter
             try {
                 const meta = taskDoc.getMap("task:meta")
                 assertTaskMeta(meta, request.taskId)
+
+                if (isUsageOnlyMetadataUpdate(request)) {
+                    await syncTaskMetadataPreview(storage, request.taskId, taskDoc, updatedAt, request.usage)
+                    return
+                }
 
                 taskDoc.transact(() => {
                     if (request.title !== undefined) {

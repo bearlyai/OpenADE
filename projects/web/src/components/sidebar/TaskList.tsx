@@ -9,6 +9,7 @@ import type { OpenADETaskPreview } from "../../../../openade-module/src"
 import { usePortalContainer } from "../../hooks/usePortalContainer"
 import { useShortcutHintsVisible } from "../../hooks/useShortcutHintsVisible"
 import { useCodeNavigate } from "../../routing"
+import { buildOpenADEShellCapabilitiesFromOpenADEMethods } from "../../shell/capabilities"
 import { useCodeStore } from "../../store/context"
 import type { TaskCreation } from "../../store/managers/TaskCreationManager"
 import { projectPathFromGitInfo } from "../../store/managers/RepoManager"
@@ -45,7 +46,7 @@ export async function resolveTaskListCopyPath({
 }): Promise<string | null> {
     const repo = codeStore.repos.getRepo(workspaceId)
     let repoPath = repo?.path ?? null
-    if (!repoPath && codeStore.shouldUseRuntimeProductAPI()) {
+    if (!repoPath && (codeStore.shouldUseRuntimeProductTaskRoute())) {
         const gitInfo = await codeStore.repos.getGitInfo(workspaceId)
         repoPath = gitInfo ? projectPathFromGitInfo(gitInfo) : null
     }
@@ -53,12 +54,14 @@ export async function resolveTaskListCopyPath({
 
     const task = await codeStore.loadProductTaskForRead(workspaceId, selectedTaskId)
     const taskModel = codeStore.tasks.getTaskModel(selectedTaskId)
-    const environment =
-        task?.isolationStrategy?.type === "worktree" ? (taskModel?.environment ?? (await taskModel?.loadEnvironment())) : (taskModel?.environment ?? null)
+    const environmentPath =
+        task?.isolationStrategy?.type === "worktree"
+            ? (taskModel?.taskWorkingDirHint ?? taskModel?.environment?.taskWorkingDir ?? null)
+            : (taskModel?.environment?.taskWorkingDir ?? null)
     return resolveTaskCopyPath({
         repoPath,
         isolationStrategy: task?.isolationStrategy,
-        environmentPath: environment?.taskWorkingDir ?? null,
+        environmentPath,
         events: task?.events ?? [],
     })
 }
@@ -133,7 +136,7 @@ const contextPopupClassName =
 // TaskItem — single-line with right-click context menu
 // ============================================================================
 
-const TaskItem = ({
+export const TaskItem = ({
     preview,
     isActive,
     isUnread,
@@ -149,6 +152,8 @@ const TaskItem = ({
     onTogglePinned,
     onCopyPath,
     onRename,
+    canUpdateTaskMetadata,
+    canDeleteTask,
 }: {
     preview: OpenADETaskPreview
     isActive: boolean
@@ -165,14 +170,31 @@ const TaskItem = ({
     onTogglePinned: () => void
     onCopyPath: () => void
     onRename: (newTitle: string) => void
+    canUpdateTaskMetadata: boolean
+    canDeleteTask: boolean
 }) => {
     const isClosed = preview.closed ?? false
     const displayEvent = inProgressEvent ?? preview.lastEvent
     const portalContainer = usePortalContainer()
     const [isEditing, setIsEditing] = useState(false)
     const inputRef = useRef<HTMLInputElement>(null)
+    const canUpdateTaskMetadataRef = useRef(canUpdateTaskMetadata)
+
+    useEffect(() => {
+        canUpdateTaskMetadataRef.current = canUpdateTaskMetadata
+        if (!canUpdateTaskMetadata) setIsEditing(false)
+    }, [canUpdateTaskMetadata])
+
+    const startEditing = () => {
+        if (!canUpdateTaskMetadataRef.current) return
+        setIsEditing(true)
+    }
 
     const handleCommit = () => {
+        if (!canUpdateTaskMetadataRef.current) {
+            setIsEditing(false)
+            return
+        }
         const value = inputRef.current?.value.trim()
         if (value && value !== preview.title) {
             onRename(value)
@@ -224,9 +246,9 @@ const TaskItem = ({
                 <span
                     className="truncate min-w-0 flex-1 select-none"
                     onDoubleClick={(e) => {
-                        if (selectionMode) return
+                        if (selectionMode || !canUpdateTaskMetadata) return
                         e.stopPropagation()
-                        setIsEditing(true)
+                        startEditing()
                     }}
                 >
                     {preview.title}
@@ -289,22 +311,28 @@ const TaskItem = ({
                             <Copy className="w-4 h-4" />
                             <span>Copy path</span>
                         </ContextMenu.Item>
-                        <ContextMenu.Item className={contextItemClassName} onClick={() => setTimeout(() => setIsEditing(true), 0)}>
-                            <Pencil className="w-4 h-4" />
-                            <span>Rename</span>
-                        </ContextMenu.Item>
-                        <ContextMenu.Item className={contextItemClassName} onClick={onToggleClosed}>
-                            {isClosed ? <RotateCcw className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
-                            <span>{isClosed ? "Reopen" : "Close"}</span>
-                        </ContextMenu.Item>
+                        {canUpdateTaskMetadata && (
+                            <>
+                                <ContextMenu.Item className={contextItemClassName} onClick={() => setTimeout(startEditing, 0)}>
+                                    <Pencil className="w-4 h-4" />
+                                    <span>Rename</span>
+                                </ContextMenu.Item>
+                                <ContextMenu.Item className={contextItemClassName} onClick={onToggleClosed}>
+                                    {isClosed ? <RotateCcw className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
+                                    <span>{isClosed ? "Reopen" : "Close"}</span>
+                                </ContextMenu.Item>
+                            </>
+                        )}
                         <ContextMenu.Item className={contextItemClassName} onClick={onEnterSelect}>
                             <CheckSquare className="w-4 h-4" />
                             <span>Select</span>
                         </ContextMenu.Item>
-                        <ContextMenu.Item className={contextItemClassName} onClick={onDelete}>
-                            <Trash2 className="w-4 h-4" />
-                            <span>Delete</span>
-                        </ContextMenu.Item>
+                        {canDeleteTask && (
+                            <ContextMenu.Item className={contextItemClassName} onClick={onDelete}>
+                                <Trash2 className="w-4 h-4" />
+                                <span>Delete</span>
+                            </ContextMenu.Item>
+                        )}
                     </ContextMenu.Popup>
                 </ContextMenu.Positioner>
             </ContextMenu.Portal>
@@ -415,6 +443,10 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     })
     const selectedOpenIds = sortedPreviews.filter((preview) => selectedIds.has(preview.id) && !preview.closed).map((preview) => preview.id)
     const creations = codeStore.creation.getCreationsForRepo(workspaceId)
+    const shellCapabilities = buildOpenADEShellCapabilitiesFromOpenADEMethods((method) => codeStore.canUseProductMethod(method))
+    const canUpdateTaskMetadata = shellCapabilities.taskRecordCapabilities.canUpdateMetadata
+    const canReadTaskResourceInventory = shellCapabilities.taskResourceCapabilities.canRead
+    const canDeleteTask = shellCapabilities.taskRecordCapabilities.canDelete && canReadTaskResourceInventory
 
     const navigateTaskByOffset = useCallback(
         (offset: 1 | -1) => {
@@ -511,7 +543,9 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     }
 
     const showDeleteConfirm = async (ids: string[], onDone?: () => void) => {
+        if (!canDeleteTask) return
         const inventory = await codeStore.tasks.getResourceInventory(ids)
+        if (inventory.length === 0) return
         deleteConfirmModal.show({
             tasks: inventory,
             onConfirm: async (options) => {
@@ -529,6 +563,7 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     }
 
     const handleBulkDelete = async () => {
+        if (!canDeleteTask) return
         if (selectedIds.size === 0) return
         const ids = [...selectedIds]
         await showDeleteConfirm(ids, exitSelectionMode)
@@ -536,6 +571,7 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     handleBulkDeleteRef.current = handleBulkDelete
 
     const handleBulkClose = async () => {
+        if (!canUpdateTaskMetadata) return
         if (selectedOpenIds.length === 0) return
         await Promise.all(selectedOpenIds.map((id) => codeStore.tasks.setTaskClosed(id, true)))
         exitSelectionMode()
@@ -549,6 +585,7 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     }
 
     const handleToggleClosed = async (toggledTaskId: string, currentClosed: boolean) => {
+        if (!canUpdateTaskMetadata) return
         await codeStore.tasks.setTaskClosed(toggledTaskId, !currentClosed)
     }
 
@@ -557,6 +594,7 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
     }
 
     const handleRenameTask = (renamedTaskId: string, newTitle: string) => {
+        if (!canUpdateTaskMetadata) return
         codeStore.tasks.setTaskTitle(renamedTaskId, newTitle)
     }
 
@@ -607,20 +645,22 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
                             type="button"
                             className="btn flex items-center gap-1 px-2 py-1 text-xs hover:bg-base-300 transition-colors"
                             onClick={handleBulkClose}
-                            disabled={selectedOpenIds.length === 0}
+                            disabled={!canUpdateTaskMetadata || selectedOpenIds.length === 0}
                         >
                             <CheckCircle className="w-3 h-3" />
                             Close
                         </button>
-                        <button
-                            type="button"
-                            className="btn flex items-center gap-1 px-2 py-1 text-xs text-error hover:bg-error/10 transition-colors"
-                            onClick={handleBulkDelete}
-                            disabled={selectedIds.size === 0}
-                        >
-                            <Trash2 className="w-3 h-3" />
-                            Delete
-                        </button>
+                        {canDeleteTask && (
+                            <button
+                                type="button"
+                                className="btn flex items-center gap-1 px-2 py-1 text-xs text-error hover:bg-error/10 transition-colors"
+                                onClick={handleBulkDelete}
+                                disabled={selectedIds.size === 0}
+                            >
+                                <Trash2 className="w-3 h-3" />
+                                Delete
+                            </button>
+                        )}
                         <button type="button" className="btn px-1 py-1 text-xs hover:bg-base-300 transition-colors" onClick={exitSelectionMode}>
                             <X className="w-3.5 h-3.5" />
                         </button>
@@ -666,6 +706,8 @@ export const TasksSidebarContent = observer(({ workspaceId, taskId, creationId }
                                         void handleCopyTaskPath(preview.id)
                                     }}
                                     onRename={(newTitle) => handleRenameTask(preview.id, newTitle)}
+                                    canUpdateTaskMetadata={canUpdateTaskMetadata}
+                                    canDeleteTask={canDeleteTask}
                                 />
                             ))}
                         </>

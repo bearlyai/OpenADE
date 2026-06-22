@@ -4,7 +4,7 @@ import { RotateCcw } from "lucide-react"
 import { useCallback, useEffect, useRef } from "react"
 import { twMerge } from "tailwind-merge"
 import "@xterm/xterm/css/xterm.css"
-import { setTerminalKeyboardCapture } from "../electronAPI/app"
+import { areDesktopFallbackChunksEnabled } from "../featureFlags"
 import { useTerminalTheme } from "../hooks/useTerminalTheme"
 import { DEFAULT_TERMINAL_THEME } from "../themes/terminalThemes"
 import { createTerminalSession, type TaskTerminalProductAccess, type TerminalRuntimeSession } from "./terminalSession"
@@ -22,6 +22,12 @@ const DOUBLE_ESCAPE_THRESHOLD_MS = 300
 // Global map of terminal instances keyed by task terminal scope.
 const terminalInstances = new Map<string, TerminalInstance>()
 
+async function setTerminalKeyboardCaptureState(capturesKeyboard: boolean): Promise<void> {
+    if (!areDesktopFallbackChunksEnabled) return
+    const { setTerminalKeyboardCapture } = await import("../electronAPI/app")
+    await setTerminalKeyboardCapture(capturesKeyboard)
+}
+
 interface TerminalProps {
     ptyId: string
     cwd: string
@@ -38,6 +44,10 @@ function attachSession(instance: TerminalInstance, session: TerminalRuntimeSessi
     session.on("exit", () => {
         instance.terminal.write("\r\n[Process exited]\r\n")
     })
+}
+
+function canRestartTerminal(productAccess?: TaskTerminalProductAccess | null): boolean {
+    return !productAccess || (productAccess.capabilities.canStart && productAccess.capabilities.canStop)
 }
 
 async function stopSession(session: TerminalRuntimeSession): Promise<void> {
@@ -68,8 +78,10 @@ export function Terminal({ ptyId, cwd, productAccess, className, onClose }: Term
     // Get terminal theme from CSS variable (updates when UI theme changes)
     const terminalTheme = useTerminalTheme(containerRef)
     const terminalKey = productAccess ? `product:${productAccess.repoId}:${productAccess.taskId}` : `raw:${ptyId}`
+    const canRestart = canRestartTerminal(productAccess)
 
     const handleRestart = useCallback(async () => {
+        if (!canRestartTerminal(productAccessRef.current)) return
         const instance = terminalInstances.get(terminalKey)
         if (!instance) return
 
@@ -77,7 +89,13 @@ export function Terminal({ ptyId, cwd, productAccess, className, onClose }: Term
             const oldSession = instance.terminalSession
             instance.terminalSession = null
             await stopSession(oldSession)
+            if (productAccessRef.current && !oldSession.exited) {
+                instance.terminalSession = oldSession
+                return
+            }
         }
+
+        if (!canRestartTerminal(productAccessRef.current)) return
 
         // Clear terminal
         instance.terminal.clear()
@@ -98,12 +116,12 @@ export function Terminal({ ptyId, cwd, productAccess, className, onClose }: Term
 
         let resizeObserver: ResizeObserver | null = null
         const handleFocusIn = () => {
-            setTerminalKeyboardCapture(true).catch(() => {})
+            setTerminalKeyboardCaptureState(true).catch(() => {})
         }
         const handleFocusOut = (event: FocusEvent) => {
             const nextTarget = event.relatedTarget
             if (nextTarget instanceof Node && container.contains(nextTarget)) return
-            setTerminalKeyboardCapture(false).catch(() => {})
+            setTerminalKeyboardCaptureState(false).catch(() => {})
         }
 
         container.addEventListener("focusin", handleFocusIn)
@@ -135,6 +153,16 @@ export function Terminal({ ptyId, cwd, productAccess, className, onClose }: Term
 
                 // Re-fit to new container dimensions
                 instance.fitAddon.fit()
+                if (!instance.terminalSession || instance.terminalSession.exited) {
+                    const session = await createTerminalSession({
+                        ptyId,
+                        cwd,
+                        cols: instance.terminal.cols,
+                        rows: instance.terminal.rows,
+                        productAccess: productAccessRef.current,
+                    })
+                    if (session) attachSession(instance, session)
+                }
                 // Focus terminal when opened
                 instance.terminal.focus()
                 return
@@ -226,7 +254,7 @@ export function Terminal({ ptyId, cwd, productAccess, className, onClose }: Term
             resizeObserver?.disconnect()
             container.removeEventListener("focusin", handleFocusIn)
             container.removeEventListener("focusout", handleFocusOut)
-            setTerminalKeyboardCapture(false).catch(() => {})
+            setTerminalKeyboardCaptureState(false).catch(() => {})
         }
     }, [terminalKey, ptyId, cwd])
 
@@ -250,15 +278,17 @@ export function Terminal({ ptyId, cwd, productAccess, className, onClose }: Term
                         to close
                     </span>
                 </span>
-                <button
-                    type="button"
-                    onClick={handleRestart}
-                    className="btn flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-muted hover:text-base-content transition-colors"
-                    title="Restart terminal"
-                >
-                    <RotateCcw size="1em" />
-                    Restart
-                </button>
+                {canRestart && (
+                    <button
+                        type="button"
+                        onClick={handleRestart}
+                        className="btn flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-muted hover:text-base-content transition-colors"
+                        title="Restart terminal"
+                    >
+                        <RotateCcw size="1em" />
+                        Restart
+                    </button>
+                )}
             </div>
             <div className="flex-1 min-h-0 px-2 pt-2" style={{ backgroundColor: terminalTheme.background }}>
                 <div ref={containerRef} className="h-full" />

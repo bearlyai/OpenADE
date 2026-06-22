@@ -1,16 +1,28 @@
 import { describe, expect, it, vi } from "vitest"
 import { RuntimeClientError, type RuntimeClient } from "../../../runtime-client/src"
-import { OpenADEClient } from "../../../openade-client/src"
+import { OPENADE_METHOD, OPENADE_NOTIFICATION, OpenADEClient } from "../../../openade-client/src"
+import type { RuntimeCapabilities } from "../../../runtime-protocol/src"
 import { remoteErrorMessage } from "./client"
 
 type RuntimeNotification = { method: string; params?: unknown }
 
 function fakeRuntime() {
+    const capabilities: RuntimeCapabilities = {
+        methods: Object.values(OPENADE_METHOD),
+        notifications: Object.values(OPENADE_NOTIFICATION),
+        agentProviders: [],
+    }
     return {
+        capabilities,
+        connect: vi.fn(async () => undefined),
+        hasMethod: vi.fn((method: string) => capabilities.methods.includes(method)),
         request: vi.fn(async (_method: string) => ({})),
         subscribe: vi.fn((_listener: (notification: RuntimeNotification) => void) => () => {}),
         close: vi.fn(),
     } as unknown as RuntimeClient & {
+        capabilities: RuntimeCapabilities
+        connect: ReturnType<typeof vi.fn>
+        hasMethod: ReturnType<typeof vi.fn>
         request: ReturnType<typeof vi.fn>
         subscribe: ReturnType<typeof vi.fn>
         close: ReturnType<typeof vi.fn>
@@ -44,7 +56,7 @@ describe("OpenADEClient", () => {
         await client.generateTaskTitle({ repoId: "repo-1", taskId: "task-1", harnessId: "codex" }, { clientRequestId: "request-title" })
         await client.prepareTaskEnvironment({ repoId: "repo-1", taskId: "task-1" }, { clientRequestId: "request-2" })
 
-        expect(runtime.request).toHaveBeenNthCalledWith(1, "openade/snapshot/read", undefined)
+        expect(runtime.request).toHaveBeenNthCalledWith(1, "openade/snapshot/read")
         expect(runtime.request).toHaveBeenNthCalledWith(2, "openade/turn/start", {
             repoId: "repo-1",
             type: "ask",
@@ -123,7 +135,10 @@ describe("OpenADEClient", () => {
             await client.readProjectGitSummary({ repoId: "repo-secret-path-not-logged" })
             expect(warnSpy).toHaveBeenCalledWith("[OpenADEClient] Slow runtime request", {
                 method: "openade/project/git/summary/read",
+                requestId: expect.any(String),
                 durationMs: 751,
+                clientObservedDurationMs: 751,
+                serverTiming: "correlate with runtime slow logs by requestId for queueWaitMs and handlerMs",
                 failed: false,
                 clientName: "test-client",
                 clientPlatform: "web",
@@ -143,6 +158,7 @@ describe("OpenADEClient", () => {
             await Promise.all(Array.from({ length: 12 }, (_, index) => client.getTask("repo-1", `task-${index}`, { hydrateSessionEvents: false })))
             expect(warnSpy).toHaveBeenCalledWith("[OpenADEClient] Runtime request burst", {
                 method: "openade/task/read",
+                lastRequestId: expect.any(String),
                 count: 12,
                 windowMs: expect.any(Number),
                 clientName: "burst-client",
@@ -169,7 +185,7 @@ describe("OpenADEClient", () => {
         const first = client.listProjectProcesses({ repoId: "repo-1" })
         const second = client.listProjectProcesses({ repoId: "repo-1" })
 
-        expect(runtime.request).toHaveBeenCalledTimes(1)
+        await vi.waitFor(() => expect(runtime.request).toHaveBeenCalledTimes(1))
         expect(runtime.request).toHaveBeenCalledWith("openade/project/process/list", { repoId: "repo-1" })
         resolveRequest({ repoId: "repo-1", configs: [], processes: [], errors: [], instances: [] })
         await expect(Promise.all([first, second])).resolves.toEqual([

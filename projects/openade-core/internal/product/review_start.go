@@ -84,7 +84,7 @@ type reviewFollowUpSourceDTO struct {
 }
 
 func (service *Service) handleReviewStart(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/review/start", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodReviewStart, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.startReview(ctx, raw)
 	})
 }
@@ -337,7 +337,7 @@ func (service *Service) createAgentRuntime(ctx context.Context, repo storage.Rep
 		return handlerError(err)
 	}
 	service.runtime.Notify("runtime/created", runtimeDTO)
-	service.runtime.Notify("openade/task/updated", actionEventTaskUpdatedNotification(task.RepoID, task.ID, eventID, "in_progress"))
+	service.runtime.Notify(openADENotificationTaskUpdated, actionEventTaskUpdatedNotification(task.RepoID, task.ID, eventID, "in_progress"))
 	service.notifyWorkingTasks(ctx, now)
 	return nil
 }

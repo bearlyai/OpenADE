@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest"
+import { createElement } from "react"
+import { act } from "react"
+import { createRoot, type Root } from "react-dom/client"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { CodeStoreProvider } from "../../store/context"
+import type { CodeStore } from "../../store/store"
 import type { ActionEvent } from "../../types"
-import { getReviewUserInstructions } from "./ActionEventItem"
+import { ActionEventItem, getReviewUserInstructions } from "./ActionEventItem"
 
 function makeActionEvent(overrides: Partial<ActionEvent> = {}): ActionEvent {
     return {
@@ -65,5 +70,68 @@ describe("getReviewUserInstructions", () => {
         })
 
         expect(getReviewUserInstructions(event)).toBeUndefined()
+    })
+})
+
+describe("ActionEventItem", () => {
+    let container: HTMLDivElement
+    let root: Root
+
+    beforeEach(() => {
+        ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+        container = document.createElement("div")
+        document.body.appendChild(container)
+        root = createRoot(container)
+    })
+
+    afterEach(() => {
+        act(() => root.unmount())
+        container.remove()
+    })
+
+    it("does not recheck GitHub CLI status while rendering completed push events", async () => {
+        const refreshGhCliStatus = vi.fn(async () => true)
+        const store = {
+            events: {
+                hasDefunctSessionError: vi.fn(() => false),
+            },
+            tasks: {
+                getTask: vi.fn(() => null),
+                getTaskModel: vi.fn(() => ({
+                    hasGhCli: false,
+                    repoId: "repo-1",
+                })),
+            },
+            repos: {
+                refreshGhCliStatus,
+            },
+        } as unknown as CodeStore
+        const event = makeActionEvent({
+            userInput: "Commit and push this",
+            source: {
+                type: "do",
+                userLabel: "Commit & Push",
+            },
+        })
+
+        await act(async () => {
+            root.render(
+                createElement(
+                    CodeStoreProvider,
+                    { store },
+                    createElement(ActionEventItem, {
+                        event,
+                        expanded: true,
+                        onToggle: vi.fn(),
+                        displayMode: "compact",
+                        taskId: "task-1",
+                    })
+                )
+            )
+            await Promise.resolve()
+        })
+
+        expect(refreshGhCliStatus).not.toHaveBeenCalled()
+        expect(container.textContent).toContain("installing the GitHub CLI")
     })
 })

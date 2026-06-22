@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import type { RuntimeRecord, RuntimeStatus } from "../../runtime-protocol/src"
+import type { RuntimeMessage, RuntimeRecord, RuntimeStatus } from "../../runtime-protocol/src"
 import { RuntimeHandlerError, RuntimeServer, type RuntimeConnection, type RuntimeNotificationBurstEvent, type RuntimeSlowRequestEvent } from "./server"
 
 function connection(): RuntimeConnection {
@@ -41,9 +41,18 @@ describe("RuntimeServer slow request observer", () => {
 
         const rawRequestId = `slow\nrequest-${"x".repeat(100)}`
         const response = await server.handleRequest(
-            { id: rawRequestId, method: "test/slow" },
+            {
+                id: rawRequestId,
+                method: "test/slow",
+                params: {
+                    repoId: "repo-1",
+                    taskId: "task-1",
+                    path: "src/secret/file.ts",
+                    query: "secret query",
+                },
+            },
             connection(),
-            { queuedAtMs: Date.now() - 10 }
+            { queuedAtMs: Date.now() }
         )
 
         expect(response).toEqual({ id: rawRequestId, result: { ok: true } })
@@ -53,6 +62,13 @@ describe("RuntimeServer slow request observer", () => {
             method: "test/slow",
             connectionId: "connection-1",
             failed: false,
+            dominantPhase: "handler",
+            scope: {
+                repoId: "repo-1",
+                taskId: "task-1",
+                pathDepth: 3,
+                queryLength: 12,
+            },
         })
         expect(events[0].durationMs).toBeGreaterThanOrEqual(events[0].handlerMs)
         expect(events[0].queueWaitMs).toBeGreaterThanOrEqual(0)
@@ -61,6 +77,7 @@ describe("RuntimeServer slow request observer", () => {
         expect(events[0].requestId.length).toBeLessThanOrEqual(83)
         expect(events[0].requestId).not.toContain("\n")
         expect(events[0].requestId).not.toContain("x".repeat(100))
+        expect(JSON.stringify(events[0].scope)).not.toContain("secret")
     })
 
     it("records sanitized failure state and error code", async () => {
@@ -87,6 +104,105 @@ describe("RuntimeServer slow request observer", () => {
                 errorCode: "test_failed",
             }),
         ])
+    })
+
+    it("records queue wait for early runtime error responses", async () => {
+        const events: RuntimeSlowRequestEvent[] = []
+        const server = new RuntimeServer({
+            serverName: "test-runtime",
+            slowRequestThresholdMs: 0,
+            onSlowRequest: (event) => events.push(event),
+        })
+        server.register("test/allowed", () => ({ ok: true }))
+
+        const queuedAtMs = Date.now() - 25
+        const notInitialized = await server.handleRequest({ id: "not-init", method: "test/allowed" }, connection(), {
+            requireInitialized: true,
+            queuedAtMs,
+        })
+        const methodNotFound = await server.handleRequest({ id: "missing", method: "test/missing" }, connection(), { queuedAtMs })
+        const permissionDenied = await server.handleRequest(
+            { id: "denied", method: "test/allowed" },
+            { ...connection(), permissions: ["initialize"] },
+            { queuedAtMs }
+        )
+
+        expect(notInitialized).toMatchObject({ id: "not-init", error: { code: "not_initialized" } })
+        expect(methodNotFound).toMatchObject({ id: "missing", error: { code: "method_not_found" } })
+        expect(permissionDenied).toMatchObject({ id: "denied", error: { code: "permission_denied" } })
+        expect(events).toEqual([
+            expect.objectContaining({
+                method: "test/allowed",
+                requestId: "not-init",
+                failed: true,
+                errorCode: "not_initialized",
+            }),
+            expect.objectContaining({
+                method: "test/missing",
+                requestId: "missing",
+                failed: true,
+                errorCode: "method_not_found",
+            }),
+            expect.objectContaining({
+                method: "test/allowed",
+                requestId: "denied",
+                failed: true,
+                errorCode: "permission_denied",
+            }),
+        ])
+        for (const event of events) {
+            expect(event.service).toBe("test-runtime")
+            expect(event.connectionId).toBe("connection-1")
+            expect(event.queueWaitMs).toBeGreaterThan(0)
+            expect(event.handlerMs).toBeGreaterThanOrEqual(0)
+            expect(event.durationMs).toBeGreaterThanOrEqual(event.queueWaitMs)
+            expect(event.dominantPhase).toBe("queue_wait")
+        }
+    })
+
+    it("records protocol decode failures without logging raw payloads", async () => {
+        const events: RuntimeSlowRequestEvent[] = []
+        const sent: RuntimeMessage[] = []
+        const server = new RuntimeServer({
+            serverName: "test-runtime",
+            slowRequestThresholdMs: 0,
+            onSlowRequest: (event) => events.push(event),
+        })
+        const runtimeConnection: RuntimeConnection = {
+            ...connection(),
+            send: (message) => sent.push(message),
+        }
+
+        await server.handleMessage(runtimeConnection, "{")
+        await server.handleMessage(runtimeConnection, JSON.stringify({ id: "bad\nid", params: { prompt: "secret" } }))
+
+        expect(sent).toEqual([
+            expect.objectContaining({ id: "parse-error", error: expect.objectContaining({ code: "parse_error" }) }),
+            expect.objectContaining({ id: "bad\nid", error: expect.objectContaining({ code: "invalid_message" }) }),
+        ])
+        expect(events).toEqual([
+            expect.objectContaining({
+                service: "test-runtime",
+                method: "protocol/decode",
+                requestId: "parse-error",
+                connectionId: "connection-1",
+                failed: true,
+                errorCode: "parse_error",
+            }),
+            expect.objectContaining({
+                service: "test-runtime",
+                method: "protocol/decode",
+                requestId: "bad?id",
+                connectionId: "connection-1",
+                failed: true,
+                errorCode: "invalid_message",
+            }),
+        ])
+        for (const event of events) {
+            expect(event.durationMs).toBeGreaterThanOrEqual(event.handlerMs)
+            expect(event.requestId).not.toContain("\n")
+            expect(JSON.stringify(event)).not.toContain("secret")
+        }
     })
 })
 

@@ -35,21 +35,28 @@ type CronSchedulerIssue struct {
 	Code   string `json:"code"`
 }
 
+type cronRunDTO struct {
+	RepoID       string               `json:"repoId"`
+	CronID       string               `json:"cronId"`
+	TaskID       string               `json:"taskId"`
+	Installation *cronInstallStateRow `json:"installation,omitempty"`
+}
+
 type cronTurnIsolationDTO struct {
 	Type         string `json:"type"`
 	SourceBranch string `json:"sourceBranch,omitempty"`
 }
 
 type cronTurnStartRequestDTO struct {
-	RepoID             string               `json:"repoId"`
-	Type               string               `json:"type"`
-	Input              string               `json:"input"`
-	AppendSystemPrompt string               `json:"appendSystemPrompt,omitempty"`
-	InTaskID           string               `json:"inTaskId,omitempty"`
-	IsolationStrategy  cronTurnIsolationDTO `json:"isolationStrategy"`
-	HarnessID          string               `json:"harnessId,omitempty"`
-	Title              string               `json:"title"`
-	ClientRequestID    string               `json:"clientRequestId"`
+	RepoID             string                `json:"repoId"`
+	Type               string                `json:"type"`
+	Input              string                `json:"input"`
+	AppendSystemPrompt string                `json:"appendSystemPrompt,omitempty"`
+	InTaskID           string                `json:"inTaskId,omitempty"`
+	IsolationStrategy  *cronTurnIsolationDTO `json:"isolationStrategy,omitempty"`
+	HarnessID          string                `json:"harnessId,omitempty"`
+	Title              string                `json:"title,omitempty"`
+	ClientRequestID    string                `json:"clientRequestId"`
 }
 
 func (service *Service) StartCronScheduler(ctx context.Context, interval time.Duration) {
@@ -88,6 +95,28 @@ func (service *Service) RunDueCrons(ctx context.Context, now time.Time) (CronSch
 	return result, nil
 }
 
+func (service *Service) handleCronRun(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodCronRun, raw, func() (core.JSONPayload, *core.RuntimeError) {
+		var params struct {
+			RepoID          string `json:"repoId"`
+			CronID          string `json:"cronId"`
+			ClientRequestID string `json:"clientRequestId"`
+		}
+		if runtimeErr := decodeObject(raw, &params); runtimeErr != nil {
+			return nil, runtimeErr
+		}
+		repo, runtimeErr := service.repoByID(ctx, strings.TrimSpace(params.RepoID))
+		if runtimeErr != nil {
+			return nil, runtimeErr
+		}
+		cronID := strings.TrimSpace(params.CronID)
+		if runtimeErr := validateCronInstallStateText("cronId", cronID, 512, true); runtimeErr != nil {
+			return nil, runtimeErr
+		}
+		return service.runCronNow(ctx, repo, cronID, strings.TrimSpace(params.ClientRequestID), time.Now().UTC())
+	})
+}
+
 func (service *Service) runDueCronsForRepo(ctx context.Context, repo storage.Repo, now time.Time, result *CronSchedulerRunResult) {
 	installations, runtimeErr := service.loadCronInstallState(ctx, repo.ID)
 	if runtimeErr != nil {
@@ -98,13 +127,13 @@ func (service *Service) runDueCronsForRepo(ctx context.Context, repo storage.Rep
 	if len(installations) == 0 {
 		return
 	}
-	processes, err := host.ListProjectProcesses(ctx, repo.Path)
+	definitionsResult, err := host.ListProjectCronDefinitions(ctx, repo.Path)
 	if err != nil {
 		result.FailedCrons += len(installations)
 		result.Issues = append(result.Issues, CronSchedulerIssue{RepoID: repo.ID, Code: "process_config_read_failed"})
 		return
 	}
-	definitions := cronDefinitionsByID(processes.Configs)
+	definitions := cronDefinitionsByID(definitionsResult.Configs)
 	changed := false
 	for cronID, state := range installations {
 		result.InstalledCrons++
@@ -123,6 +152,55 @@ func (service *Service) runDueCronsForRepo(ctx context.Context, repo storage.Rep
 			result.Issues = append(result.Issues, CronSchedulerIssue{RepoID: repo.ID, Code: "install_state_save_failed"})
 		}
 	}
+}
+
+func (service *Service) runCronNow(ctx context.Context, repo storage.Repo, cronID string, clientRequestID string, now time.Time) (cronRunDTO, *core.RuntimeError) {
+	definitionsResult, err := host.ListProjectCronDefinitions(ctx, repo.Path)
+	if err != nil {
+		return cronRunDTO{}, handlerError(err)
+	}
+	definition := cronDefinitionsByID(definitionsResult.Configs)[cronID]
+	if definition.ID == "" {
+		return cronRunDTO{}, &core.RuntimeError{Code: "not_found", Message: "Cron definition not found"}
+	}
+	if !service.claimCronRun(repo.ID, cronID) {
+		return cronRunDTO{}, &core.RuntimeError{Code: "conflict", Message: "Cron is already running"}
+	}
+	defer service.releaseCronRun(repo.ID, cronID)
+
+	installations, runtimeErr := service.loadCronInstallState(ctx, repo.ID)
+	if runtimeErr != nil {
+		return cronRunDTO{}, runtimeErr
+	}
+	state, installed := installations[cronID]
+	if !installed {
+		state = cronInstallStateRow{CronID: cronID, InstalledAt: formatTime(now)}
+	}
+	state.LastRunAt = formatTime(now)
+
+	raw, err := json.Marshal(cronTurnStartRequestWithClientRequestID(repo.ID, definition, state, now, clientRequestID))
+	if err != nil {
+		return cronRunDTO{}, handlerError(err)
+	}
+	payload, runtimeErr := service.startTurn(ctx, raw)
+	if runtimeErr != nil {
+		return cronRunDTO{}, runtimeErr
+	}
+	started, ok := payload.(turnStartResultDTO)
+	if !ok || strings.TrimSpace(started.TaskID) == "" {
+		return cronRunDTO{}, handlerError(errorString("turn start result is invalid"))
+	}
+
+	var installation *cronInstallStateRow
+	if installed {
+		state.LastTaskID = started.TaskID
+		installations[cronID] = state
+		if runtimeErr := service.saveCronInstallState(ctx, repo.ID, installations); runtimeErr != nil {
+			return cronRunDTO{}, runtimeErr
+		}
+		installation = &state
+	}
+	return cronRunDTO{RepoID: repo.ID, CronID: cronID, TaskID: started.TaskID, Installation: installation}, nil
 }
 
 func (service *Service) runDueCron(
@@ -214,29 +292,44 @@ func cronDueAt(schedule string, state cronInstallStateRow, now time.Time) (time.
 }
 
 func cronTurnStartRequest(repoID string, definition host.ProcsCronDef, state cronInstallStateRow, dueAt time.Time) cronTurnStartRequestDTO {
-	isolation := cronTurnIsolationDTO{Type: "head"}
-	if definition.Isolation == "worktree" {
-		isolation = cronTurnIsolationDTO{Type: "worktree", SourceBranch: "HEAD"}
-	}
+	return cronTurnStartRequestWithClientRequestID(repoID, definition, state, dueAt, "")
+}
+
+func cronTurnStartRequestWithClientRequestID(repoID string, definition host.ProcsCronDef, state cronInstallStateRow, dueAt time.Time, clientRequestID string) cronTurnStartRequestDTO {
 	inTaskID := strings.TrimSpace(definition.InTaskID)
 	if inTaskID == "" && definition.ReuseTask {
 		inTaskID = strings.TrimSpace(state.LastTaskID)
 	}
-	return cronTurnStartRequestDTO{
+	requestID := cronClientRequestID(repoID, definition.ID, dueAt)
+	if strings.TrimSpace(clientRequestID) != "" {
+		requestID = cronRunClientRequestID(repoID, definition.ID, clientRequestID)
+	}
+	request := cronTurnStartRequestDTO{
 		RepoID:             repoID,
 		Type:               strings.TrimSpace(definition.Type),
 		Input:              definition.Prompt,
 		AppendSystemPrompt: definition.AppendSystemPrompt,
 		InTaskID:           inTaskID,
-		IsolationStrategy:  isolation,
 		HarnessID:          strings.TrimSpace(definition.Harness),
-		Title:              "[Cron] " + strings.TrimSpace(definition.Name),
-		ClientRequestID:    cronClientRequestID(repoID, definition.ID, dueAt),
+		ClientRequestID:    requestID,
 	}
+	if inTaskID == "" {
+		isolation := cronTurnIsolationDTO{Type: "head"}
+		if definition.Isolation == "worktree" {
+			isolation = cronTurnIsolationDTO{Type: "worktree", SourceBranch: "HEAD"}
+		}
+		request.IsolationStrategy = &isolation
+		request.Title = "[Cron] " + strings.TrimSpace(definition.Name)
+	}
+	return request
 }
 
 func cronClientRequestID(repoID string, cronID string, dueAt time.Time) string {
 	return fmt.Sprintf("cron:%s:%s:%d", repoID, cronID, dueAt.UTC().Unix())
+}
+
+func cronRunClientRequestID(repoID string, cronID string, clientRequestID string) string {
+	return fmt.Sprintf("cron-run:%s:%s:%s", repoID, cronID, strings.TrimSpace(clientRequestID))
 }
 
 func (service *Service) claimCronRun(repoID string, cronID string) bool {

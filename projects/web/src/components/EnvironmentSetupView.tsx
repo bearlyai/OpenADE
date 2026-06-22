@@ -3,6 +3,7 @@ import { CheckCircle, FolderGit2, Loader2, RotateCcw, XCircle } from "lucide-rea
 import { runInAction } from "mobx"
 import { observer } from "mobx-react"
 import { useCallback, useEffect, useRef, useState } from "react"
+import { OPENADE_METHOD } from "../../../openade-client/src"
 import { type SetupParams, TaskEnvironment } from "../store/TaskEnvironment"
 import type { TaskModel } from "../store/TaskModel"
 import { useCodeStore } from "../store/context"
@@ -45,7 +46,11 @@ export const EnvironmentSetupView = observer(function EnvironmentSetupView({ tas
         abortControllerRef.current = new AbortController()
 
         try {
-            if (codeStore.shouldUseRuntimeProductAPI()) {
+            if (codeStore.shouldUseRuntimeProductTaskRoute()) {
+                if (!(await codeStore.canUseProductMethodAfterConnect(OPENADE_METHOD.taskEnvironmentPrepare))) {
+                    setError("Environment setup is not available from this runtime")
+                    return
+                }
                 setPhase("workspace")
                 await codeStore.prepareProductTaskEnvironment({ repoId: task.repoId, taskId: task.id })
                 setPhase("completing")

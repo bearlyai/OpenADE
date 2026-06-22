@@ -36,14 +36,10 @@ import { cleanup as cleanupFilePreviewProtocol, load as loadFilePreviewProtocol,
 import { load as loadCompanion, cleanup as cleanupCompanion } from "./modules/companion"
 import { hasActiveRuntimeWork } from "./modules/companion/runtimeGateway"
 import { isDev } from "./config"
-import { load as loadRuntimeCore, cleanup as cleanupRuntimeCore } from "./modules/runtimeCore"
+import { load as loadRuntimeCore, cleanup as cleanupRuntimeCore, hasActiveOpenADECoreRuntimeWork, hasOpenADECoreRuntimeEndpoint } from "./modules/runtimeCore"
+import { envFlag } from "./modules/envFlag"
 
 registerFilePreviewProtocolSchemes()
-
-function envFlag(value: string | undefined, fallback = false): boolean {
-    if (!value) return fallback
-    return ["1", "true", "yes", "on"].includes(value.toLowerCase())
-}
 
 const main = () => {
     const companionEnabled = envFlag(process.env.OPENADE_ENABLE_COMPANION ?? process.env.VITE_OPENADE_ENABLE_COMPANION, isDev)
@@ -85,102 +81,115 @@ const main = () => {
     ipcMain.handle("quit-app", () => {
         app.quit()
     })
+    let relaunchAfterQuitAllowed = false
+    const cancelPendingRelaunch = () => {
+        relaunchAfterQuitAllowed = false
+    }
+    const relaunchIfRequested = () => {
+        if (!relaunchAfterQuitAllowed) return
+        relaunchAfterQuitAllowed = false
+        app.relaunch()
+    }
+
+    ipcMain.handle("restart-app", () => {
+        relaunchAfterQuitAllowed = true
+        app.quit()
+    })
     ipcMain.handle("open-url", (_, args) => {
         shell.openExternal(args)
     })
 
+    const cleanupBeforeExit = () => {
+        cleanupSentry()
+        cleanupHarness()
+        cleanupGit()
+        cleanupProcess()
+        cleanupPty()
+        cleanupFiles()
+        cleanupNotifications()
+        cleanupProcs()
+        cleanupShell()
+        cleanupMcp()
+        cleanupPlatform()
+        cleanupYjsStorage()
+        cleanupDataFolder()
+        cleanupCapabilities()
+        cleanupBinaries()
+        cleanupCodeWindowFrame()
+        cleanupFilePreviewProtocol()
+        cleanupRuntimeCore()
+        if (companionEnabled) {
+            void cleanupCompanion()
+        }
+        cleanupSubprocess()
+    }
+
+    const shouldCancelQuitForActiveWork = () => {
+        const response = dialog.showMessageBoxSync({
+            type: "warning",
+            buttons: ["Cancel", "Quit Anyway"],
+            defaultId: 0,
+            cancelId: 0,
+            title: "Agents Running",
+            message: "Agents are still running",
+            detail: "Quitting now may result in lost progress and corrupted state. Are you sure you want to quit?",
+        })
+        return response === 0
+    }
+
+    let quitAfterCoreActiveWorkCheck = false
+    let coreActiveWorkCheckInFlight = false
+
     // Graceful shutdown - show confirmation dialog if runtime-owned work is active.
     app.on("before-quit", (event) => {
-        if (!activeWorkQuitPromptDisabled && hasActiveRuntimeWork()) {
-            const response = dialog.showMessageBoxSync({
-                type: "warning",
-                buttons: ["Cancel", "Quit Anyway"],
-                defaultId: 0,
-                cancelId: 0,
-                title: "Agents Running",
-                message: "Agents are still running",
-                detail: "Quitting now may result in lost progress and corrupted state. Are you sure you want to quit?",
-            })
+        if (!activeWorkQuitPromptDisabled && !quitAfterCoreActiveWorkCheck && hasOpenADECoreRuntimeEndpoint()) {
+            event.preventDefault()
+            if (coreActiveWorkCheckInFlight) return
 
-            if (response === 0) {
+            coreActiveWorkCheckInFlight = true
+            const legacyActiveWork = hasActiveRuntimeWork()
+            void hasActiveOpenADECoreRuntimeWork()
+                .then((coreActiveWork) => {
+                    coreActiveWorkCheckInFlight = false
+                    if ((legacyActiveWork || coreActiveWork) && shouldCancelQuitForActiveWork()) {
+                        cancelPendingRelaunch()
+                        return
+                    }
+                    quitAfterCoreActiveWorkCheck = true
+                    app.quit()
+                })
+                .catch((error: unknown) => {
+                    coreActiveWorkCheckInFlight = false
+                    logger.warn("[OpenADECore] active work quit check failed", { error: error instanceof Error ? error.message : String(error) })
+                    if (legacyActiveWork && shouldCancelQuitForActiveWork()) {
+                        cancelPendingRelaunch()
+                        return
+                    }
+                    quitAfterCoreActiveWorkCheck = true
+                    app.quit()
+                })
+            return
+        }
+
+        if (!activeWorkQuitPromptDisabled && hasActiveRuntimeWork()) {
+            if (shouldCancelQuitForActiveWork()) {
                 event.preventDefault()
+                cancelPendingRelaunch()
                 return
             }
         }
 
-        cleanupSentry()
-        cleanupHarness()
-        cleanupGit()
-        cleanupProcess()
-        cleanupPty()
-        cleanupFiles()
-        cleanupNotifications()
-        cleanupProcs()
-        cleanupShell()
-        cleanupMcp()
-        cleanupPlatform()
-        cleanupYjsStorage()
-        cleanupDataFolder()
-        cleanupCapabilities()
-        cleanupBinaries()
-        cleanupCodeWindowFrame()
-        cleanupFilePreviewProtocol()
-        cleanupRuntimeCore()
-        if (companionEnabled) {
-            void cleanupCompanion()
-        }
-        cleanupSubprocess()
+        relaunchIfRequested()
+        cleanupBeforeExit()
     })
 
     process.on("SIGINT", () => {
-        cleanupSentry()
-        cleanupHarness()
-        cleanupGit()
-        cleanupProcess()
-        cleanupPty()
-        cleanupFiles()
-        cleanupNotifications()
-        cleanupProcs()
-        cleanupShell()
-        cleanupMcp()
-        cleanupPlatform()
-        cleanupYjsStorage()
-        cleanupDataFolder()
-        cleanupCapabilities()
-        cleanupBinaries()
-        cleanupCodeWindowFrame()
-        cleanupFilePreviewProtocol()
-        cleanupRuntimeCore()
-        if (companionEnabled) {
-            void cleanupCompanion()
-        }
-        cleanupSubprocess()
+        cleanupBeforeExit()
         app.quit()
     })
 
     process.on("SIGTERM", () => {
-        cleanupSentry()
-        cleanupHarness()
-        cleanupGit()
-        cleanupProcess()
-        cleanupPty()
-        cleanupFiles()
-        cleanupNotifications()
-        cleanupProcs()
-        cleanupShell()
-        cleanupMcp()
-        cleanupPlatform()
-        cleanupYjsStorage()
-        cleanupDataFolder()
-        cleanupCapabilities()
-        cleanupBinaries()
-        cleanupCodeWindowFrame()
-        cleanupFilePreviewProtocol()
-        cleanupRuntimeCore()
-        if (companionEnabled) {
-            void cleanupCompanion()
-        }
-        cleanupSubprocess()
+        cleanupBeforeExit()
         app.quit()
     })
 }

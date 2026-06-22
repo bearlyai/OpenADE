@@ -1,7 +1,8 @@
 import NiceModal, { useModal } from "@ebay/nice-modal-react"
 import { Star } from "lucide-react"
 import { observer } from "mobx-react"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { OPENADE_METHOD } from "../../../openade-client/src"
 import { HARNESS_META, MODEL_REGISTRY } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { getVisibleModelEntries, getVisibleModelId } from "../modelVisibility"
@@ -54,8 +55,27 @@ export const ReviewPickerModal = NiceModal.create(
         const modal = useModal()
         const codeStore = useCodeStore()
         const taskModel = codeStore.tasks.getTaskModel(taskId)
+        const productRuntimeOwnsReviews = codeStore.shouldUseRuntimeProductTaskRoute()
+        const canStartReview = codeStore.canUseProductMethod(OPENADE_METHOD.reviewStart)
+        const [, refreshCapabilityState] = useState(0)
 
         const [notes, setNotes] = useState(customInstructions ?? "")
+
+        useEffect(() => {
+            if (!productRuntimeOwnsReviews || codeStore.shouldUseRuntimeProductAPI()) return
+            let cancelled = false
+            void codeStore
+                .canUseProductMethodAfterConnect(OPENADE_METHOD.reviewStart)
+                .then(() => {
+                    if (!cancelled) refreshCapabilityState((version) => version + 1)
+                })
+                .catch((error) => {
+                    console.error("[ReviewPickerModal] Failed to attach review capability:", error)
+                })
+            return () => {
+                cancelled = true
+            }
+        }, [codeStore, productRuntimeOwnsReviews])
 
         const options = useMemo<ReviewAgentOption[]>(() => {
             const pairs: ReviewAgentOption[] = []
@@ -78,8 +98,12 @@ export const ReviewPickerModal = NiceModal.create(
             })
         }, [])
 
-        const startReview = (harnessId: HarnessId, modelId: string) => {
+        const startReview = async (harnessId: HarnessId, modelId: string) => {
             if (!taskModel?.repoId) return
+            const canStart = productRuntimeOwnsReviews
+                ? await codeStore.canUseProductMethodAfterConnect(OPENADE_METHOD.reviewStart)
+                : codeStore.canUseProductMethod(OPENADE_METHOD.reviewStart)
+            if (!canStart) return
             onStart?.()
             modal.remove()
             void codeStore
@@ -132,7 +156,7 @@ export const ReviewPickerModal = NiceModal.create(
                         rows={3}
                     />
 
-                    <div className="text-xs text-muted">Pick an agent to start review.</div>
+                    <div className="text-xs text-muted">{canStartReview ? "Pick an agent to start review." : "Review is not available from this runtime."}</div>
 
                     {reviewOptions.length > 0 && (
                         <div className="flex flex-col gap-2">
@@ -140,10 +164,11 @@ export const ReviewPickerModal = NiceModal.create(
                                 <button
                                     key={option.id}
                                     type="button"
+                                    disabled={!canStartReview}
                                     className={`btn flex w-full items-center justify-between px-3 py-2.5 border text-base-content ${
                                         option.isTop ? "border-primary/35 bg-primary/10 hover:bg-primary/20" : "border-border bg-base-200 hover:bg-base-300"
                                     }`}
-                                    onClick={() => startReview(option.harnessId, option.modelId)}
+                                    onClick={() => void startReview(option.harnessId, option.modelId)}
                                 >
                                     <span className="flex min-w-0 items-center gap-2.5 text-left">
                                         <span className={`${option.isTop ? "text-primary" : "text-muted"} shrink-0`}>{getHarnessIcon(option.harnessId)}</span>
@@ -168,8 +193,9 @@ export const ReviewPickerModal = NiceModal.create(
                             <div className="text-[11px] font-semibold tracking-wide uppercase text-muted">Current Session</div>
                             <button
                                 type="button"
+                                disabled={!canStartReview}
                                 className="btn flex w-full items-center justify-between px-3 py-2.5 border border-border bg-base-200 hover:bg-base-300 text-base-content"
-                                onClick={() => startReview(currentOption.harnessId, currentOption.modelId)}
+                                onClick={() => void startReview(currentOption.harnessId, currentOption.modelId)}
                             >
                                 <span className="flex min-w-0 items-center gap-2.5 text-left">
                                     <span className="text-muted shrink-0">{getHarnessIcon(currentOption.harnessId)}</span>

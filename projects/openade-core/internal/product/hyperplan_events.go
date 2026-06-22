@@ -12,7 +12,7 @@ import (
 )
 
 func (service *Service) handleHyperPlanSubExecutionAdd(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/hyperplan/subExecution/add", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodHyperplanSubExecutionAdd, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			TaskID       string          `json:"taskId"`
 			EventID      string          `json:"eventId"`
@@ -43,7 +43,7 @@ func (service *Service) handleHyperPlanSubExecutionAdd(ctx context.Context, _ *c
 }
 
 func (service *Service) handleHyperPlanSubExecutionStreamAppend(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/hyperplan/subExecution/stream/append", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodHyperplanSubExecutionStreamAppend, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			TaskID      string          `json:"taskId"`
 			EventID     string          `json:"eventId"`
@@ -99,7 +99,7 @@ func (service *Service) handleHyperPlanSubExecutionStreamAppend(ctx context.Cont
 }
 
 func (service *Service) handleHyperPlanSubExecutionUpdate(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/hyperplan/subExecution/update", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodHyperplanSubExecutionUpdate, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			TaskID  string `json:"taskId"`
 			EventID string `json:"eventId"`
@@ -144,7 +144,7 @@ func (service *Service) handleHyperPlanSubExecutionUpdate(ctx context.Context, _
 }
 
 func (service *Service) handleHyperPlanReconcileLabelsSet(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/hyperplan/reconcileLabels/set", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodHyperplanReconcileLabelsSet, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			TaskID  string                  `json:"taskId"`
 			EventID string                  `json:"eventId"`
@@ -319,7 +319,7 @@ func (service *Service) persistHyperPlanSubExecutions(ctx context.Context, task 
 	}); err != nil {
 		return taskEventWriteRuntimeError(err)
 	}
-	service.runtime.Notify("openade/task/updated", map[string]string{"repoId": task.RepoID, "taskId": task.ID})
+	service.runtime.Notify(openADENotificationTaskUpdated, map[string]string{"repoId": task.RepoID, "taskId": task.ID})
 	return nil
 }
 

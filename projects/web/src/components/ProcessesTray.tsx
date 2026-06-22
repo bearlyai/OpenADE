@@ -3,6 +3,7 @@ import cx from "classnames"
 import { AlertTriangle, CheckCircle, ExternalLink, FileText, Folder, Pencil, Play, RefreshCw, RotateCcw, Server, Square, Wrench } from "lucide-react"
 import { observer } from "mobx-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { OPENADE_METHOD } from "../../../openade-client/src"
 import { type ProcessDef, type ProcessType, type ProcsConfig, type ReadProcsResult, type RunContext, readProcs } from "../electronAPI/procs"
 import { openUrlInNativeBrowser } from "../electronAPI/shell"
 import { useCodeStore } from "../store/context"
@@ -58,8 +59,13 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
     const [procsResult, setProcsResult] = useState<ReadProcsResult | null>(null)
     const [loading, setLoading] = useState(true)
     const [refreshing, setRefreshing] = useState(false)
+    const contextType = context.type
+    const contextRoot = context.root
+    const stableContext = useMemo<RunContext>(() => ({ type: contextType, root: contextRoot }), [contextType, contextRoot])
     const productRepoId = productScope?.repoId ?? null
     const productTaskId = productScope?.taskId
+    const useRuntimeProductAPI = codeStore.shouldUseRuntimeProductTaskRoute()
+    const canReadProductProcesses = codeStore.canUseProductMethod(OPENADE_METHOD.projectProcessList)
     const productRequest = useMemo(() => (productRepoId ? { repoId: productRepoId, taskId: productTaskId } : null), [productRepoId, productTaskId])
     const productAccess = useMemo<ProductProjectProcessAccess | null>(() => {
         if (!productRepoId) return null
@@ -75,11 +81,15 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                 setLoading(true)
             }
             try {
-                if (productRequest) {
-                    const result = await codeStore.listProductProjectProcesses(productRequest)
+                if (useRuntimeProductAPI) {
+                    if (!productRequest || !canReadProductProcesses) {
+                        setProcsResult(null)
+                        return
+                    }
+                    const result = await codeStore.listProductProjectProcesses(productRequest, { bypassCache: isRefresh })
                     const readResult = readProcsResultFromProductProcesses(result)
                     setProcsResult(readResult)
-                    codeStore.repoProcesses.syncProductProcesses(context, readResult, result)
+                    codeStore.repoProcesses.syncProductProcesses(stableContext, readResult, result)
                     return
                 }
 
@@ -95,7 +105,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                 setRefreshing(false)
             }
         },
-        [searchPath, codeStore, context, productRequest, workspaceId]
+        [searchPath, codeStore, stableContext, productRequest, workspaceId, useRuntimeProductAPI, canReadProductProcesses]
     )
 
     // Load when panel opens or path changes
@@ -114,7 +124,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
             NiceModal.show(ProcsEditorModal, {
                 workspaceId,
                 searchPath,
-                context,
+                context: stableContext,
                 initialTab,
                 initialFilePath,
                 productScope,
@@ -124,7 +134,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                 },
             })
         },
-        [workspaceId, searchPath, context, productScope, productAccess]
+        [workspaceId, searchPath, stableContext, productScope, productAccess]
     )
 
     const editMenuItems: MenuItem[] = [
@@ -153,12 +163,12 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
     const rawSelectedId = repoProcesses.expandedProcessId
     const rawSelectedProcess = rawSelectedId ? repoProcesses.getProcess(rawSelectedId) : null
     // Only show selected process if it belongs to this context
-    const selectedProcess = rawSelectedProcess && rawSelectedProcess.context.root === context.root ? rawSelectedProcess : null
+    const selectedProcess = rawSelectedProcess && rawSelectedProcess.context.root === stableContext.root ? rawSelectedProcess : null
 
     // Group processes by config file, excluding setup processes from display
     const configGroups: ConfigGroup[] = []
     if (procsResult) {
-        const runningProcesses = repoProcesses.getProcessesForContext(context)
+        const runningProcesses = repoProcesses.getProcessesForContext(stableContext)
         const runningByProcessId = new Map(runningProcesses.map((process) => [process.id, process]))
 
         for (const config of procsResult.configs) {
@@ -189,18 +199,24 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
         return status === "stopped" || status === "error"
     })
     const allRunningDaemons = allDaemonItems.filter((item) => item.instance?.status === "running")
+    const canStartProductProcesses = !productAccess || productAccess.canStartProjectProcess
+    const canStopProductProcesses = !productAccess || productAccess.canStopProjectProcess
 
     const handleStartAllDaemons = useCallback(async () => {
+        if (!canStartProductProcesses) return
+
         for (const item of allStoppedDaemons) {
             if (productAccess) {
-                await repoProcesses.startProductProcess(item.process, item.config, context, productAccess)
+                await repoProcesses.startProductProcess(item.process, item.config, stableContext, productAccess)
             } else {
-                await repoProcesses.startProcess(item.process, item.config, context, procsResult!)
+                await repoProcesses.startProcess(item.process, item.config, stableContext, procsResult!)
             }
         }
-    }, [allStoppedDaemons, context, productAccess, procsResult, repoProcesses])
+    }, [allStoppedDaemons, canStartProductProcesses, stableContext, productAccess, procsResult, repoProcesses])
 
     const handleStopAllDaemons = useCallback(async () => {
+        if (!canStopProductProcesses) return
+
         for (const item of allRunningDaemons) {
             if (productAccess) {
                 await repoProcesses.stopProductProcess(item.process.id, productAccess)
@@ -208,7 +224,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                 await repoProcesses.stopProcess(item.process.id)
             }
         }
-    }, [allRunningDaemons, productAccess, repoProcesses])
+    }, [allRunningDaemons, canStopProductProcesses, productAccess, repoProcesses])
 
     const hasProcesses = configGroups.length > 0
     const hasErrors = procsResult && procsResult.errors.length > 0
@@ -242,7 +258,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                 <div className="flex-shrink-0 flex items-center justify-between px-2.5 py-1.5 border-b border-border bg-base-200/50">
                     <span className="text-xs font-medium text-muted uppercase tracking-wider">Processes</span>
                     <div className="flex items-center">
-                        {allStoppedDaemons.length > 0 && (
+                        {allStoppedDaemons.length > 0 && canStartProductProcesses && (
                             <button
                                 type="button"
                                 onClick={handleStartAllDaemons}
@@ -252,7 +268,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                                 <Play size={12} />
                             </button>
                         )}
-                        {allRunningDaemons.length > 0 && (
+                        {allRunningDaemons.length > 0 && canStopProductProcesses && (
                             <button
                                 type="button"
                                 onClick={handleStopAllDaemons}
@@ -314,7 +330,7 @@ export const ProcessesTray = observer(function ProcessesTray({ searchPath, conte
                         <ConfigGroupView
                             key={group.config.relativePath}
                             group={group}
-                            context={context}
+                            context={stableContext}
                             procsResult={procsResult!}
                             productAccess={productAccess}
                             onEditConfig={() => openEditor("processes", joinPath(procsResult!.repoRoot, group.config.relativePath))}
@@ -365,8 +381,12 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
         return status === "stopped" || status === "error"
     })
     const runningDaemons = daemonItems.filter((item) => item.instance?.status === "running")
+    const canStartProductProcesses = !productAccess || productAccess.canStartProjectProcess
+    const canStopProductProcesses = !productAccess || productAccess.canStopProjectProcess
 
     const handleStartAllDaemons = useCallback(async () => {
+        if (!canStartProductProcesses) return
+
         for (const item of stoppedDaemons) {
             if (productAccess) {
                 await repoProcesses.startProductProcess(item.process, group.config, context, productAccess)
@@ -374,9 +394,11 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
                 await repoProcesses.startProcess(item.process, group.config, context, procsResult)
             }
         }
-    }, [stoppedDaemons, group.config, context, productAccess, procsResult, repoProcesses])
+    }, [stoppedDaemons, group.config, canStartProductProcesses, context, productAccess, procsResult, repoProcesses])
 
     const handleStopAllDaemons = useCallback(async () => {
+        if (!canStopProductProcesses) return
+
         for (const item of runningDaemons) {
             if (productAccess) {
                 await repoProcesses.stopProductProcess(item.process.id, productAccess)
@@ -384,7 +406,7 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
                 await repoProcesses.stopProcess(item.process.id)
             }
         }
-    }, [runningDaemons, productAccess, repoProcesses])
+    }, [runningDaemons, canStopProductProcesses, productAccess, repoProcesses])
 
     // Extract directory from config path (e.g., "packages/api/openade.toml" -> "packages/api")
     const configDir = group.config.relativePath.replace(/\/openade\.toml$/, "") || "."
@@ -405,7 +427,7 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
                         >
                             <Pencil size={12} />
                         </button>
-                        {stoppedDaemons.length > 0 && (
+                        {stoppedDaemons.length > 0 && canStartProductProcesses && (
                             <button
                                 type="button"
                                 onClick={handleStartAllDaemons}
@@ -415,7 +437,7 @@ const ConfigGroupView = observer(function ConfigGroupView({ group, context, proc
                                 <Play size={12} />
                             </button>
                         )}
-                        {runningDaemons.length > 0 && (
+                        {runningDaemons.length > 0 && canStopProductProcesses && (
                             <button
                                 type="button"
                                 onClick={handleStopAllDaemons}
@@ -489,32 +511,40 @@ const ProcessRowView = observer(function ProcessRowView({
     const status = instance?.status ?? "stopped"
     const isStarting = status === "starting"
     const canStart = status === "stopped" || status === "error"
+    const canStartProductProcess = !productAccess || productAccess.canStartProjectProcess
+    const canReconnectProductProcess = !productAccess || productAccess.canReconnectProjectProcess
+    const canStopProductProcess = !productAccess || productAccess.canStopProjectProcess
+    const canRestartProductProcess = canStartProductProcess && (canStart || canStopProductProcess)
 
     const handleStart = useCallback(async () => {
+        if (!canStartProductProcess) return
+
         repoProcesses.setExpandedProcess(process.id)
         if (productAccess) {
             await repoProcesses.startProductProcess(process, config, context, productAccess)
         } else {
             await repoProcesses.startProcess(process, config, context, procsResult)
         }
-    }, [repoProcesses, process, config, context, productAccess, procsResult])
+    }, [repoProcesses, process, config, canStartProductProcess, context, productAccess, procsResult])
 
     const handleStop = useCallback(() => {
+        if (!canStopProductProcess) return undefined
         if (productAccess) return repoProcesses.stopProductProcess(process.id, productAccess)
         return repoProcesses.stopProcess(process.id)
-    }, [repoProcesses, process.id, productAccess])
+    }, [repoProcesses, process.id, canStopProductProcess, productAccess])
 
     const handleRestart = useCallback(() => {
+        if (!canRestartProductProcess) return undefined
         if (productAccess) return repoProcesses.restartProductProcess(process.id, productAccess)
         return repoProcesses.restartProcess(process.id, procsResult)
-    }, [repoProcesses, process.id, productAccess, procsResult])
+    }, [repoProcesses, process.id, canRestartProductProcess, productAccess, procsResult])
 
     const handleSelect = useCallback(() => {
         repoProcesses.setExpandedProcess(process.id)
-        if (productAccess && instance?.productProcessId) {
+        if (productAccess && canReconnectProductProcess && instance?.productProcessId) {
             void repoProcesses.refreshProductProcessOutput(process.id, productAccess)
         }
-    }, [repoProcesses, process.id, productAccess, instance?.productProcessId])
+    }, [repoProcesses, process.id, productAccess, canReconnectProductProcess, instance?.productProcessId])
 
     const TypeIcon = TYPE_INFO[process.type].icon
 
@@ -546,11 +576,11 @@ const ProcessRowView = observer(function ProcessRowView({
                         <ExternalLink size={12} />
                     </button>
                 )}
-                {canStart ? (
+                {canStart && canStartProductProcess ? (
                     <button type="button" onClick={handleStart} className="btn p-1 text-success/70 hover:text-success transition-colors" title="Start">
                         <Play size={12} />
                     </button>
-                ) : (
+                ) : !canStart && canStopProductProcess ? (
                     <button
                         type="button"
                         onClick={handleStop}
@@ -560,16 +590,18 @@ const ProcessRowView = observer(function ProcessRowView({
                     >
                         <Square size={12} />
                     </button>
+                ) : null}
+                {canRestartProductProcess && (
+                    <button
+                        type="button"
+                        onClick={handleRestart}
+                        disabled={isStarting}
+                        className={cx("btn p-1 transition-colors", isStarting ? "text-muted cursor-not-allowed" : "text-muted hover:text-base-content")}
+                        title="Restart"
+                    >
+                        <RotateCcw size={12} />
+                    </button>
                 )}
-                <button
-                    type="button"
-                    onClick={handleRestart}
-                    disabled={isStarting}
-                    className={cx("btn p-1 transition-colors", isStarting ? "text-muted cursor-not-allowed" : "text-muted hover:text-base-content")}
-                    title="Restart"
-                >
-                    <RotateCcw size={12} />
-                </button>
             </div>
         </div>
     )

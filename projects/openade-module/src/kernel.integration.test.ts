@@ -3,11 +3,12 @@ import os from "node:os"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
 import { afterEach, describe, expect, it } from "vitest"
-import { OpenADEClient } from "../../openade-client/src"
+import { OPENADE_METHOD, OPENADE_NOTIFICATION, OpenADEClient } from "../../openade-client/src"
 import { RuntimeClient } from "../../runtime-client/src"
 import type { RuntimeConnection, RuntimeServer } from "../../runtime/src"
-import type { AgentProviderSummary, RuntimeInitializeResult, RuntimeResponse } from "../../runtime-protocol/src"
+import type { AgentProviderSummary, RuntimeInitializeResult, RuntimeMessage, RuntimeResponse } from "../../runtime-protocol/src"
 import type { RuntimeNodeAgentExecutor, RuntimeNodeAgentStartCallbacks, RuntimeNodeAgentStartParams } from "../../runtime-node/src"
+import { peerReviewOpenADEHyperPlanStrategy } from "./hyperplan"
 import { createOpenADEKernel, serveOpenADEKernelHttp, type OpenADEKernel } from "./kernel"
 import type { OpenADETask } from "./types"
 
@@ -115,6 +116,19 @@ function initializeGitRepo(repoPath: string): void {
 async function waitForCompletedTask(client: OpenADEClient, repoId: string, taskId: string): Promise<OpenADETask> {
     for (let attempt = 0; attempt < 50; attempt++) {
         const task = await client.getTask(repoId, taskId, { hydrateSessionEvents: false })
+        if (actionEvent(task)?.status === "completed") return task
+        await delay(20)
+    }
+    throw new Error(`Task ${taskId} did not complete`)
+}
+
+async function waitForCompletedServerTask(server: RuntimeServer, repoId: string, taskId: string): Promise<OpenADETask> {
+    for (let attempt = 0; attempt < 50; attempt++) {
+        const task = await runtimeRequest<OpenADETask>(server, OPENADE_METHOD.taskRead, {
+            repoId,
+            taskId,
+            hydrateSessionEvents: false,
+        })
         if (actionEvent(task)?.status === "completed") return task
         await delay(20)
     }
@@ -233,6 +247,85 @@ describe("OpenADE kernel composition", () => {
         expect(initialized.capabilities.agentProviders).toContainEqual(agentProvider)
     })
 
+    it("does not publish task preview notifications for stream-only headless and HyperPlan events", async () => {
+        const root = tempRoot()
+        const repoPath = path.join(root, "repo")
+        fs.mkdirSync(repoPath, { recursive: true })
+        fs.writeFileSync(path.join(repoPath, "README.md"), "notification fixture\n")
+        const kernel = createOpenADEKernel({
+            dataDir: path.join(root, "yjs"),
+            checkpointFile: path.join(root, "runtime-checkpoints.json"),
+            hostName: "kernel-host",
+            serverVersion: "kernel-test",
+            agentExecutor: createDeterministicAgentExecutor(),
+        })
+        kernels.push(kernel)
+        const notifications: RuntimeMessage[] = []
+        const unsubscribe = kernel.server.connect({
+            id: "kernel-notification-observer",
+            send(message) {
+                notifications.push(message)
+            },
+        })
+
+        try {
+            const repo = await runtimeRequest<{ repoId: string }>(kernel.server, OPENADE_METHOD.repoCreate, {
+                repoId: "repo-notifications",
+                name: "Notification Repo",
+                path: repoPath,
+                createdBy: { id: "user-kernel", email: "kernel@example.com" },
+            })
+            notifications.length = 0
+
+            const started = await runtimeRequest<{ taskId: string }>(kernel.server, OPENADE_METHOD.turnStart, {
+                repoId: repo.repoId,
+                type: "do",
+                input: "Run deterministic notification turn",
+                title: "Notification turn",
+                harnessId: "codex",
+                modelId: "fixture-model",
+                isolationStrategy: { type: "head" },
+                clientRequestId: "turn-notification-preview",
+            })
+            await waitForCompletedServerTask(kernel.server, repo.repoId, started.taskId)
+            await delay(20)
+
+            const notificationMethods = notifications.flatMap((message) => ("method" in message ? [message.method] : []))
+            const taskUpdatedCount = notificationMethods.filter((method) => method === OPENADE_NOTIFICATION.taskUpdated).length
+            const taskPreviewCount = notificationMethods.filter((method) => method === OPENADE_NOTIFICATION.taskPreviewChanged).length
+
+            expect(taskUpdatedCount).toBeGreaterThanOrEqual(4)
+            expect(taskPreviewCount).toBe(1)
+
+            notifications.length = 0
+            const hyperPlanStarted = await runtimeRequest<{ taskId: string }>(kernel.server, OPENADE_METHOD.turnStart, {
+                repoId: repo.repoId,
+                type: "hyperplan",
+                input: "Run deterministic HyperPlan notification turn",
+                title: "HyperPlan notification turn",
+                harnessId: "codex",
+                modelId: "fixture-model",
+                isolationStrategy: { type: "head" },
+                hyperplanStrategy: peerReviewOpenADEHyperPlanStrategy(
+                    { harnessId: "codex", modelId: "fixture-model" },
+                    { harnessId: "codex", modelId: "fixture-model" }
+                ),
+                clientRequestId: "hyperplan-notification-preview",
+            })
+            await waitForCompletedServerTask(kernel.server, repo.repoId, hyperPlanStarted.taskId)
+            await delay(20)
+
+            const hyperPlanNotificationMethods = notifications.flatMap((message) => ("method" in message ? [message.method] : []))
+            const hyperPlanTaskUpdatedCount = hyperPlanNotificationMethods.filter((method) => method === OPENADE_NOTIFICATION.taskUpdated).length
+            const hyperPlanTaskPreviewCount = hyperPlanNotificationMethods.filter((method) => method === OPENADE_NOTIFICATION.taskPreviewChanged).length
+
+            expect(hyperPlanTaskUpdatedCount).toBeGreaterThanOrEqual(4)
+            expect(hyperPlanTaskPreviewCount).toBe(1)
+        } finally {
+            unsubscribe()
+        }
+    })
+
     it("serves a real WebSocket OpenADE kernel that persists turn results across reload", async () => {
         const root = tempRoot()
         const dataDir = path.join(root, "yjs")
@@ -342,6 +435,25 @@ describe("OpenADE kernel composition", () => {
                 repoId: repo.repoId,
                 matches: [expect.objectContaining({ path: "README.md", line: 1, content: "scoped kernel file search" })],
             })
+            const cronDefinitions = await client.readCronDefinitions({ repoId: repo.repoId })
+            expect(cronDefinitions).toMatchObject({
+                repoId: repo.repoId,
+                configs: [
+                    expect.objectContaining({
+                        relativePath: "openade.toml",
+                        crons: [
+                            expect.objectContaining({
+                                id: "openade.toml::Ignored Cron",
+                                name: "Ignored Cron",
+                                prompt: "Should not appear in project process results",
+                            }),
+                        ],
+                    }),
+                ],
+                errors: [],
+            })
+            expect(cronDefinitions).not.toHaveProperty("processes")
+            expect(cronDefinitions).not.toHaveProperty("instances")
             const processes = await client.listProjectProcesses({ repoId: repo.repoId })
             expect(processes).toMatchObject({
                 repoId: repo.repoId,
@@ -404,6 +516,30 @@ describe("OpenADE kernel composition", () => {
                 },
                 { clientRequestId: "turn-start" }
             )
+            await expect(
+                client.startTurn(
+                    {
+                        repoId: repo.repoId,
+                        inTaskId: started.taskId,
+                        type: "do",
+                        input: "Existing turn cannot redefine isolation",
+                        isolationStrategy: { type: "head" },
+                    },
+                    { clientRequestId: "turn-existing-isolation" }
+                )
+            ).rejects.toThrow(/isolationStrategy/)
+            await expect(
+                client.startTurn(
+                    {
+                        repoId: repo.repoId,
+                        inTaskId: started.taskId,
+                        type: "do",
+                        input: "Existing turn cannot redefine title",
+                        title: "Should not retitle",
+                    },
+                    { clientRequestId: "turn-existing-title" }
+                )
+            ).rejects.toThrow(/title/)
             const task = await waitForCompletedTask(client, repo.repoId, started.taskId)
             const action = actionEvent(task)
             const execution = eventRecord(action?.execution)
@@ -692,7 +828,7 @@ describe("OpenADE kernel composition", () => {
                 repoId: repo.repoId,
                 taskId: started.taskId,
                 taskTitle: "Deterministic Title",
-                snapshotIds: [],
+                snapshotIds: ["snapshot-kernel"],
                 images: [{ id: "image-kernel", ext: "png" }],
                 worktree: null,
             })

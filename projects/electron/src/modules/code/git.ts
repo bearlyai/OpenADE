@@ -278,20 +278,14 @@ async function resolveGitInfo(directory: string): Promise<{ repoRoot: string; re
         throw new Error(`Directory does not exist: ${directory}`)
     }
 
-    // Get repository root
-    const rootResult = await execGit(["rev-parse", "--show-toplevel"], directory)
-    if (!rootResult.success) {
+    const revParseResult = await execGit(["rev-parse", "--show-toplevel", "--show-prefix"], directory)
+    if (!revParseResult.success) {
         throw new Error(`Not a git repository: ${directory}`)
     }
-    const repoRoot = rootResult.stdout.trim()
-
-    // Get relative path from root (empty string if at root)
-    const prefixResult = await execGit(["rev-parse", "--show-prefix"], directory)
-    let relativePath = ""
-    if (prefixResult.success && prefixResult.stdout.trim()) {
-        // Remove trailing slash if present
-        relativePath = prefixResult.stdout.trim().replace(/\/$/, "")
-    }
+    const [rawRepoRoot = "", rawRelativePath = ""] = revParseResult.stdout.split(/\r?\n/)
+    const repoRoot = rawRepoRoot.trim()
+    const relativePath = rawRelativePath.trim().replace(/\/$/, "")
+    if (!repoRoot) throw new Error(`Not a git repository: ${directory}`)
 
     logger.info(`[Git:resolveGitInfo] Resolved: ${directory} -> root=${repoRoot}, relative=${relativePath || "(root)"}`, JSON.stringify({
         duration: Date.now() - startTime,
@@ -428,7 +422,7 @@ async function checkGhCliUncached(): Promise<CheckGhCliResponse> {
 
     let hasGhCli = false
     try {
-        const ghResult = await execCommand("gh", ["auth", "status"], { timeout: 5000 })
+        const ghResult = await execCommand("gh", ["--version"], { timeout: 1000 })
         hasGhCli = ghResult.success
     } catch {
         // gh not installed or not in PATH
@@ -457,11 +451,28 @@ function cachedGhCli(): Promise<CheckGhCliResponse> {
 }
 
 /**
- * Check if gh CLI is installed and authenticated.
- * Lightweight endpoint that only runs `gh auth status`.
+ * Check if gh CLI is installed.
+ * Lightweight endpoint that only checks CLI availability.
  */
 async function handleCheckGhCli(): Promise<CheckGhCliResponse> {
     return cachedGhCli()
+}
+
+async function detectMainBranch(repoRoot: string): Promise<string> {
+    const remoteHeadResult = await execGit(["symbolic-ref", "refs/remotes/origin/HEAD"], repoRoot)
+    if (remoteHeadResult.success) {
+        const refName = remoteHeadResult.stdout.trim()
+        const remoteMainBranch = refName.replace("refs/remotes/origin/", "")
+        if (remoteMainBranch) return remoteMainBranch
+    }
+
+    const mainExistsResult = await execGit(["show-ref", "--verify", "refs/heads/main"], repoRoot)
+    if (mainExistsResult.success) return "main"
+
+    const masterExistsResult = await execGit(["show-ref", "--verify", "refs/heads/master"], repoRoot)
+    if (masterExistsResult.success) return "master"
+
+    return "main"
 }
 
 /**
@@ -475,29 +486,7 @@ async function handleIsGitDirectory(params: IsGitDirectoryParams): Promise<IsGit
         // Resolve git info (repo root and relative path)
         const { repoRoot, relativePath } = await resolveGitInfo(params.directory)
 
-        // Detect main branch using the repo root
-        let mainBranch = "main"
-
-        // Try to get from remote HEAD
-        const remoteHeadResult = await execGit(["symbolic-ref", "refs/remotes/origin/HEAD"], repoRoot)
-        if (remoteHeadResult.success) {
-            const refName = remoteHeadResult.stdout.trim()
-            mainBranch = refName.replace("refs/remotes/origin/", "")
-        } else {
-            // Check if main exists
-            const mainExistsResult = await execGit(["show-ref", "--verify", "refs/heads/main"], repoRoot)
-            if (mainExistsResult.success) {
-                mainBranch = "main"
-            } else {
-                // Check if master exists
-                const masterExistsResult = await execGit(["show-ref", "--verify", "refs/heads/master"], repoRoot)
-                if (masterExistsResult.success) {
-                    mainBranch = "master"
-                }
-            }
-        }
-
-        const { hasGhCli } = await cachedGhCli()
+        const [mainBranch, { hasGhCli }] = await Promise.all([detectMainBranch(repoRoot), cachedGhCli()])
 
         logger.info("[Git:isGitDirectory] Git directory found", JSON.stringify({
             directory: params.directory,
@@ -1366,31 +1355,14 @@ async function handleListBranches(params: ListBranchesParams): Promise<ListBranc
 
         // Resolve git info (handles subdirectories)
         const { repoRoot } = await resolveGitInfo(params.repoDir)
-
-        // Detect default branch
-        let defaultBranch = "main"
-
-        // Try to get from remote HEAD
-        const remoteHeadResult = await execGit(["symbolic-ref", "refs/remotes/origin/HEAD"], repoRoot)
-        if (remoteHeadResult.success) {
-            const refName = remoteHeadResult.stdout.trim()
-            defaultBranch = refName.replace("refs/remotes/origin/", "")
-        } else {
-            // Check if main exists
-            const mainExistsResult = await execGit(["show-ref", "--verify", "refs/heads/main"], repoRoot)
-            if (mainExistsResult.success) {
-                defaultBranch = "main"
-            } else {
-                // Check if master exists
-                const masterExistsResult = await execGit(["show-ref", "--verify", "refs/heads/master"], repoRoot)
-                if (masterExistsResult.success) {
-                    defaultBranch = "master"
-                }
-            }
-        }
-
-        // Get local branches
-        const localBranchesResult = await execGit(["branch", "--format=%(refname:short)"], repoRoot)
+        const remoteHeadPromise = execGit(["symbolic-ref", "refs/remotes/origin/HEAD"], repoRoot)
+        const localBranchesPromise = execGit(["branch", "--format=%(refname:short)"], repoRoot)
+        const remoteBranchesPromise = params.includeRemote ? execGit(["branch", "-r", "--format=%(refname:short)"], repoRoot) : Promise.resolve(null)
+        const [remoteHeadResult, localBranchesResult, remoteBranchesResult] = await Promise.all([
+            remoteHeadPromise,
+            localBranchesPromise,
+            remoteBranchesPromise,
+        ])
         if (!localBranchesResult.success) {
             throw new Error(`Failed to list branches: ${localBranchesResult.stderr}`)
         }
@@ -1399,6 +1371,8 @@ async function handleListBranches(params: ListBranchesParams): Promise<ListBranc
             .split("\n")
             .map((b) => b.trim())
             .filter((b) => b.length > 0)
+        const remoteHead = remoteHeadResult.success ? remoteHeadResult.stdout.trim().replace("refs/remotes/origin/", "") : ""
+        const defaultBranch = remoteHead || (localBranches.includes("main") ? "main" : localBranches.includes("master") ? "master" : "main")
 
         const branches: BranchInfo[] = localBranches.map((name) => ({
             name,
@@ -1407,24 +1381,21 @@ async function handleListBranches(params: ListBranchesParams): Promise<ListBranc
         }))
 
         // Optionally include remote branches
-        if (params.includeRemote) {
-            const remoteBranchesResult = await execGit(["branch", "-r", "--format=%(refname:short)"], repoRoot)
-            if (remoteBranchesResult.success) {
-                const remoteBranches = remoteBranchesResult.stdout
-                    .split("\n")
-                    .map((b) => b.trim())
-                    .filter((b) => b.length > 0 && !b.includes("HEAD"))
+        if (remoteBranchesResult?.success) {
+            const remoteBranches = remoteBranchesResult.stdout
+                .split("\n")
+                .map((b) => b.trim())
+                .filter((b) => b.length > 0 && !b.includes("HEAD"))
 
-                for (const remoteBranch of remoteBranches) {
-                    // Skip if already in local branches (e.g., origin/main when main exists locally)
-                    const localName = remoteBranch.replace(/^origin\//, "")
-                    if (!localBranches.includes(localName)) {
-                        branches.push({
-                            name: remoteBranch,
-                            isDefault: localName === defaultBranch,
-                            isRemote: true,
-                        })
-                    }
+            for (const remoteBranch of remoteBranches) {
+                // Skip if already in local branches (e.g., origin/main when main exists locally)
+                const localName = remoteBranch.replace(/^origin\//, "")
+                if (!localBranches.includes(localName)) {
+                    branches.push({
+                        name: remoteBranch,
+                        isDefault: localName === defaultBranch,
+                        isRemote: true,
+                    })
                 }
             }
         }

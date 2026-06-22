@@ -1,9 +1,8 @@
 import NiceModal from "@ebay/nice-modal-react"
 import { EyeOff } from "lucide-react"
 import { observer } from "mobx-react"
-import { type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useState } from "react"
+import { type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { twMerge } from "tailwind-merge"
-import { DiffsWorkerProvider } from "../components/DiffsWorkerProvider"
 import { UpdateBanner, UpdateErrorBanner } from "../components/UpdateBanner"
 import { ReleaseNotification } from "../components/notifications/ReleaseNotification"
 import { CodeSidebar } from "../components/sidebar/Sidebar"
@@ -128,6 +127,7 @@ const ElectronFrame = observer((props: { children: ReactNode; resolvedTheme: "li
     const [frameEnabled, setFrameEnabled] = useState(true)
     const [updateReady, setUpdateReady] = useState(false)
     const [updateError, setUpdateError] = useState(false)
+    const appliedFrameColorsKeyRef = useRef<string | null>(null)
 
     const updateElectronFrameColorsFromTheme = useCallback(async () => {
         const isDark = resolvedTheme === "dark"
@@ -135,7 +135,11 @@ const ElectronFrame = observer((props: { children: ReactNode; resolvedTheme: "li
             color: isDark ? "#303030" : "#F2F3F5",
             symbolColor: isDark ? "#DBDDE0" : "#555558",
         }
-        await windowFrameSetColors(color)
+        const key = `${color.color}:${color.symbolColor}`
+        if (appliedFrameColorsKeyRef.current === key) return
+        appliedFrameColorsKeyRef.current = key
+        const result = await windowFrameSetColors(color)
+        if (result.type === "error") appliedFrameColorsKeyRef.current = null
     }, [resolvedTheme])
 
     useEffect(() => {
@@ -239,29 +243,27 @@ export const CodeAppLayout = observer((props: CodeAppLayoutProps) => {
     return (
         <div className={`code-theme ${themeClass} w-full h-full overflow-hidden relative flex flex-col`} onClickCapture={handleExternalLinkClick}>
             <FramedApp resolvedTheme={isDark ? "dark" : "light"} center={frameCenter}>
-                <DiffsWorkerProvider>
-                    <NiceModal.Provider>
-                        <PortalContainerProvider>
-                            <div className="w-full h-full relative overflow-hidden bg-base-200">
-                                <CodeSidebar />
-                                <ShortcutHintsHideButton />
-                                <div
-                                    className={twMerge(
-                                        "flex flex-col relative z-10 h-full min-w-0 overflow-hidden bg-base-100 transition-[margin-left,border-radius] duration-300 ease-in-out",
-                                        sidebarManager.showSidebar
-                                            ? "min-[901px]:ml-[300px] min-[901px]:rounded-l-xl min-[901px]:border-l min-[901px]:border-border"
-                                            : "ml-0 rounded-l-none"
-                                    )}
-                                >
-                                    <div className="h-full w-full relative flex flex-col">
-                                        <WithNavbar navbar={navbar}>{children}</WithNavbar>
-                                    </div>
+                <NiceModal.Provider>
+                    <PortalContainerProvider>
+                        <div className="w-full h-full relative overflow-hidden bg-base-200">
+                            <CodeSidebar />
+                            <ShortcutHintsHideButton />
+                            <div
+                                className={twMerge(
+                                    "flex flex-col relative z-10 h-full min-w-0 overflow-hidden bg-base-100 transition-[margin-left,border-radius] duration-300 ease-in-out",
+                                    sidebarManager.showSidebar
+                                        ? "min-[901px]:ml-[300px] min-[901px]:rounded-l-xl min-[901px]:border-l min-[901px]:border-border"
+                                        : "ml-0 rounded-l-none"
+                                )}
+                            >
+                                <div className="h-full w-full relative flex flex-col">
+                                    <WithNavbar navbar={navbar}>{children}</WithNavbar>
                                 </div>
                             </div>
-                            <ReleaseNotification />
-                        </PortalContainerProvider>
-                    </NiceModal.Provider>
-                </DiffsWorkerProvider>
+                        </div>
+                        <ReleaseNotification />
+                    </PortalContainerProvider>
+                </NiceModal.Provider>
             </FramedApp>
         </div>
     )

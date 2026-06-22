@@ -22,11 +22,18 @@ interface ProductFileBrowserContext {
     taskId?: string
 }
 
+interface ProductFileBrowserScope {
+    workingDir: string
+    productContext: ProductFileBrowserContext | null
+    usesLegacyFilesApi: boolean
+}
+
 interface ProductFileBrowserAccess {
+    ownsFiles?(): boolean
     getContext(workingDir: string): ProductFileBrowserContext | null
-    listProjectFiles(args: OpenADEProjectFilesTreeRequest): Promise<OpenADEProjectFilesTreeResult>
-    readProjectFile(args: { repoId: string; taskId?: string; path: string; maxBytes: number }): Promise<OpenADEProjectFileReadResult>
-    fuzzySearchProjectFiles(args: OpenADEProjectFilesFuzzySearchRequest): Promise<OpenADEProjectFilesFuzzySearchResult>
+    listProjectFiles(args: OpenADEProjectFilesTreeRequest): Promise<OpenADEProjectFilesTreeResult | null>
+    readProjectFile(args: { repoId: string; taskId?: string; path: string; maxBytes: number }): Promise<OpenADEProjectFileReadResult | null>
+    fuzzySearchProjectFiles(args: OpenADEProjectFilesFuzzySearchRequest): Promise<OpenADEProjectFilesFuzzySearchResult | null>
 }
 
 function normalizePathForMatch(path: string): string {
@@ -109,35 +116,64 @@ export class FileBrowserManager {
     showHidden = true // Show dotfiles like .env, .gitignore by default
 
     private searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+    private directoryLoadTokens: Map<string, number> = new Map()
+    private nextDirectoryLoadToken = 0
+    private searchGeneration = 0
+    private fileGeneration = 0
 
     constructor(private readonly productAccess: ProductFileBrowserAccess | null = null) {
-        makeAutoObservable(this)
+        makeAutoObservable<FileBrowserManager, "searchDebounceTimer" | "directoryLoadTokens" | "nextDirectoryLoadToken" | "searchGeneration" | "fileGeneration">(this, {
+            searchDebounceTimer: false,
+            directoryLoadTokens: false,
+            nextDirectoryLoadToken: false,
+            searchGeneration: false,
+            fileGeneration: false,
+        })
     }
 
-    private get productContext(): ProductFileBrowserContext | null {
-        return this.productAccess?.getContext(this.workingDir) ?? null
+    private get productRuntimeOwnsFiles(): boolean {
+        return this.productAccess?.ownsFiles?.() ?? this.productAccess !== null
     }
 
     private get shouldUseLegacyFilesApi(): boolean {
-        return this.productAccess === null
+        return !this.productRuntimeOwnsFiles
     }
 
-    private relativePathForProduct(absolutePath: string): string | null {
-        if (!this.workingDir) return null
-        const relativePath = getRelativePath(this.workingDir, absolutePath)
+    private scopeFor(workingDir: string): ProductFileBrowserScope {
+        const productRuntimeOwnsFiles = this.productRuntimeOwnsFiles
+        return {
+            workingDir,
+            productContext: productRuntimeOwnsFiles ? (this.productAccess?.getContext(workingDir) ?? null) : null,
+            usesLegacyFilesApi: this.shouldUseLegacyFilesApi,
+        }
+    }
+
+    private scopeMatches(scope: ProductFileBrowserScope): boolean {
+        const current = this.scopeFor(this.workingDir)
+        return (
+            current.workingDir === scope.workingDir &&
+            current.usesLegacyFilesApi === scope.usesLegacyFilesApi &&
+            current.productContext?.repoId === scope.productContext?.repoId &&
+            current.productContext?.taskId === scope.productContext?.taskId
+        )
+    }
+
+    private relativePathForProduct(absolutePath: string, scope: ProductFileBrowserScope): string | null {
+        if (!scope.workingDir) return null
+        const relativePath = getRelativePath(scope.workingDir, absolutePath)
         if (relativePath === absolutePath || isAbsolutePath(relativePath) || splitPath(relativePath).some((part) => part === "..")) return null
         return relativePath.replace(/\\/g, "/")
     }
 
-    private absolutePathFromProduct(relativePath: string): string {
-        if (!relativePath) return this.workingDir
-        return joinPath(this.workingDir, relativePath)
+    private absolutePathFromProduct(relativePath: string, scope: ProductFileBrowserScope): string {
+        if (!relativePath) return scope.workingDir
+        return joinPath(scope.workingDir, relativePath)
     }
 
-    private productEntryToPathEntry(entry: OpenADEProjectFilesTreeResult["entries"][number]): PathEntry {
+    private productEntryToPathEntry(entry: OpenADEProjectFilesTreeResult["entries"][number], scope: ProductFileBrowserScope): PathEntry {
         return {
             name: entry.name,
-            path: this.absolutePathFromProduct(entry.path),
+            path: this.absolutePathFromProduct(entry.path, scope),
             isDir: entry.type === "directory",
             isSymlink: false,
             size: entry.size ?? 0,
@@ -160,10 +196,10 @@ export class FileBrowserManager {
         }
     }
 
-    private async listDirectoryViaProduct(dirPath: string): Promise<DescribePathResponse | null> {
+    private async listDirectoryViaProduct(dirPath: string, scope: ProductFileBrowserScope): Promise<DescribePathResponse | null> {
         const productAccess = this.productAccess
-        const productContext = this.productContext
-        const relativePath = this.relativePathForProduct(dirPath)
+        const productContext = scope.productContext
+        const relativePath = this.relativePathForProduct(dirPath, scope)
         if (!productAccess || !productContext || relativePath === null) return null
 
         const result = await productAccess.listProjectFiles({
@@ -175,17 +211,18 @@ export class FileBrowserManager {
             includeHidden: true,
             includeGenerated: true,
         })
+        if (!result) return null
         return {
             type: "dir",
             path: dirPath,
             mode: 0,
-            entries: result.entries.map((entry) => this.productEntryToPathEntry(entry)),
+            entries: result.entries.map((entry) => this.productEntryToPathEntry(entry, scope)),
         }
     }
 
-    private async fuzzySearchViaProduct(params: { query: string; matchDirs: boolean; limit: number }): Promise<OpenADEProjectFilesFuzzySearchResult | null> {
+    private async fuzzySearchViaProduct(params: { query: string; matchDirs: boolean; limit: number }, scope: ProductFileBrowserScope): Promise<OpenADEProjectFilesFuzzySearchResult | null> {
         const productAccess = this.productAccess
-        const productContext = this.productContext
+        const productContext = scope.productContext
         if (!productAccess || !productContext) return null
 
         return productAccess.fuzzySearchProjectFiles({
@@ -199,10 +236,10 @@ export class FileBrowserManager {
         })
     }
 
-    private async readFileViaProduct(absolutePath: string): Promise<DescribePathResponse | null> {
+    private async readFileViaProduct(absolutePath: string, scope: ProductFileBrowserScope): Promise<DescribePathResponse | null> {
         const productAccess = this.productAccess
-        const productContext = this.productContext
-        const relativePath = this.relativePathForProduct(absolutePath)
+        const productContext = scope.productContext
+        const relativePath = this.relativePathForProduct(absolutePath, scope)
         if (!productAccess || !productContext || relativePath === null) return null
 
         const result = await productAccess.readProjectFile({
@@ -211,6 +248,7 @@ export class FileBrowserManager {
             path: relativePath,
             maxBytes: MAX_FILE_READ_SIZE,
         })
+        if (!result) return null
         return this.productFileReadToDescribePath(absolutePath, result)
     }
 
@@ -220,11 +258,22 @@ export class FileBrowserManager {
             this.expandedPaths.clear()
             this.directoryContents.clear()
             this.loadingPaths.clear()
+            this.directoryLoadTokens.clear()
             this.searchQuery = ""
+            this.searchResults = []
+            this.searchLoading = false
+            this.searchGeneration++
+            if (this.searchDebounceTimer) {
+                clearTimeout(this.searchDebounceTimer)
+                this.searchDebounceTimer = null
+            }
             this.openTabs = []
             this.activeFile = null
             this.activeFileData = null
             this.activeLine = null
+            this.fileLoading = false
+            this.fileError = null
+            this.fileGeneration++
             // Auto-expand root
             this.expandedPaths.add(path)
             this.loadDirectoryContents(path)
@@ -244,12 +293,15 @@ export class FileBrowserManager {
         if (this.directoryContents.has(dirPath)) return
 
         this.loadingPaths.add(dirPath)
+        const scope = this.scopeFor(this.workingDir)
+        const loadToken = ++this.nextDirectoryLoadToken
+        this.directoryLoadTokens.set(dirPath, loadToken)
 
         try {
             // Always request hidden files, we filter infra dirs (like .git) on frontend
             // The showHidden toggle controls whether user sees dotfiles like .env
             const result =
-                (await this.listDirectoryViaProduct(dirPath)) ??
+                (await this.listDirectoryViaProduct(dirPath, scope)) ??
                 (this.shouldUseLegacyFilesApi
                     ? await filesApi.describePath({
                           path: dirPath,
@@ -258,12 +310,16 @@ export class FileBrowserManager {
                     : null)
             if (!result) {
                 runInAction(() => {
+                    if (this.directoryLoadTokens.get(dirPath) !== loadToken) return
+                    this.directoryLoadTokens.delete(dirPath)
                     this.loadingPaths.delete(dirPath)
                 })
                 return
             }
             runInAction(() => {
-                if (result.type === "dir") {
+                if (this.directoryLoadTokens.get(dirPath) !== loadToken) return
+                this.directoryLoadTokens.delete(dirPath)
+                if (result.type === "dir" && this.scopeMatches(scope)) {
                     // Filter out infrastructure directories (always hidden)
                     // and dotfiles if showHidden is false
                     const filtered = result.entries.filter((e) => {
@@ -279,6 +335,8 @@ export class FileBrowserManager {
             })
         } catch {
             runInAction(() => {
+                if (this.directoryLoadTokens.get(dirPath) !== loadToken) return
+                this.directoryLoadTokens.delete(dirPath)
                 this.loadingPaths.delete(dirPath)
             })
         }
@@ -340,7 +398,13 @@ export class FileBrowserManager {
         if (query) {
             this.performSearch(query)
         } else {
+            this.searchGeneration++
             this.searchResults = []
+            this.searchLoading = false
+            if (this.searchDebounceTimer) {
+                clearTimeout(this.searchDebounceTimer)
+                this.searchDebounceTimer = null
+            }
         }
     }
 
@@ -350,19 +414,24 @@ export class FileBrowserManager {
         }
 
         this.searchDebounceTimer = setTimeout(async () => {
+            const scope = this.scopeFor(this.workingDir)
+            const searchGeneration = ++this.searchGeneration
             runInAction(() => {
                 this.searchLoading = true
             })
             try {
                 const result =
-                    (await this.fuzzySearchViaProduct({
-                        query,
-                        matchDirs: false,
-                        limit: 50,
-                    })) ??
+                    (await this.fuzzySearchViaProduct(
+                        {
+                            query,
+                            matchDirs: false,
+                            limit: 50,
+                        },
+                        scope
+                    )) ??
                     (this.shouldUseLegacyFilesApi
                         ? await filesApi.fuzzySearch({
-                              dir: this.workingDir,
+                              dir: scope.workingDir,
                               query,
                               matchDirs: false,
                               limit: 50,
@@ -370,12 +439,18 @@ export class FileBrowserManager {
                         : null)
                 if (!result) {
                     runInAction(() => {
+                        if (this.searchGeneration !== searchGeneration) return
                         this.searchResults = []
                         this.searchLoading = false
                     })
                     return
                 }
                 runInAction(() => {
+                    if (this.searchGeneration !== searchGeneration) return
+                    if (this.searchQuery !== query || !this.scopeMatches(scope)) {
+                        this.searchLoading = false
+                        return
+                    }
                     // Filter out paths inside infra dirs like .git/
                     this.searchResults = result.results.filter((path) => {
                         const firstSegment = splitPath(path)[0]
@@ -385,6 +460,7 @@ export class FileBrowserManager {
                 })
             } catch {
                 runInAction(() => {
+                    if (this.searchGeneration !== searchGeneration) return
                     this.searchResults = []
                     this.searchLoading = false
                 })
@@ -429,38 +505,43 @@ export class FileBrowserManager {
 
         const query = this.fileReferenceSearchQuery(referencePath)
         if (!query) return null
+        const scope = this.scopeFor(this.workingDir)
 
         try {
             const result =
-                (await this.fuzzySearchViaProduct({
-                    query,
-                    matchDirs,
-                    limit: FILE_REFERENCE_SEARCH_LIMIT,
-                })) ??
+                (await this.fuzzySearchViaProduct(
+                    {
+                        query,
+                        matchDirs,
+                        limit: FILE_REFERENCE_SEARCH_LIMIT,
+                    },
+                    scope
+                )) ??
                 (this.shouldUseLegacyFilesApi
                     ? await filesApi.fuzzySearch({
-                          dir: this.workingDir,
+                          dir: scope.workingDir,
                           query,
                           matchDirs,
                           limit: FILE_REFERENCE_SEARCH_LIMIT,
                       })
                     : null)
             if (!result) return null
+            if (!this.scopeMatches(scope)) return null
             const match = chooseBestFuzzyReferenceMatch(result.results, query)
-            return match ? joinPath(this.workingDir, match) : null
+            return match ? joinPath(scope.workingDir, match) : null
         } catch {
             return null
         }
     }
 
     private async describePath(path: string): Promise<DescribePathResponse | null> {
-        const hasProductAccess = this.productAccess !== null
-        const productFile = await this.readFileViaProduct(path).catch(() => null)
-        if (productFile) return productFile
+        const scope = this.scopeFor(this.workingDir)
+        const productFile = await this.readFileViaProduct(path, scope).catch(() => null)
+        if (productFile && this.scopeMatches(scope)) return productFile
 
-        const productDirectory = await this.listDirectoryViaProduct(path).catch(() => null)
-        if (productDirectory) return productDirectory
-        if (hasProductAccess) return null
+        const productDirectory = await this.listDirectoryViaProduct(path, scope).catch(() => null)
+        if (productDirectory && this.scopeMatches(scope)) return productDirectory
+        if (!this.shouldUseLegacyFilesApi) return null
 
         try {
             return await filesApi.describePath({ path })
@@ -538,10 +619,12 @@ export class FileBrowserManager {
         this.fileLoading = true
         this.activeFileData = null
         this.fileError = null
+        const scope = this.scopeFor(this.workingDir)
+        const fileGeneration = ++this.fileGeneration
 
         try {
             const result =
-                (await this.readFileViaProduct(absolutePath)) ??
+                (await this.readFileViaProduct(absolutePath, scope)) ??
                 (this.shouldUseLegacyFilesApi
                     ? await filesApi.describePath({
                           path: absolutePath,
@@ -551,6 +634,7 @@ export class FileBrowserManager {
                     : null)
             if (!result) {
                 runInAction(() => {
+                    if (this.fileGeneration !== fileGeneration) return
                     if (this.activeFile !== absolutePath) return
                     this.fileError = "File not found"
                     this.fileLoading = false
@@ -558,7 +642,12 @@ export class FileBrowserManager {
                 return
             }
             runInAction(() => {
+                if (this.fileGeneration !== fileGeneration) return
                 if (this.activeFile !== absolutePath) return
+                if (!this.scopeMatches(scope)) {
+                    this.fileLoading = false
+                    return
+                }
                 if (result.type === "file") {
                     this.activeFileData = result
                     this.fileError = null
@@ -573,6 +662,7 @@ export class FileBrowserManager {
             })
         } catch (err) {
             runInAction(() => {
+                if (this.fileGeneration !== fileGeneration) return
                 if (this.activeFile !== absolutePath) return
                 this.fileError = err instanceof Error ? err.message : "Failed to load file"
                 this.fileLoading = false

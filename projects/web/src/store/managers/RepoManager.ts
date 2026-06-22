@@ -7,8 +7,9 @@
  */
 
 import { computed, makeAutoObservable, runInAction } from "mobx"
+import { OPENADE_METHOD, type OpenADEMethod } from "../../../../openade-client/src"
+import type { OpenADERepoCreateRequest, OpenADETaskGitChangedFile } from "../../../../openade-module/src"
 import { type BranchInfo, type GitFileInfo, type GitSummaryResponse, gitApi } from "../../electronAPI/git"
-import type { OpenADETaskGitChangedFile } from "../../../../openade-module/src"
 import type { Repo } from "../../types"
 import type { CodeStore } from "../store"
 
@@ -92,28 +93,67 @@ export class RepoManager {
         return this.repos.find((r) => r.id === id)
     }
 
-    async addRepo(params: { name: string; path: string }): Promise<Repo | null> {
+    async addRepo(params: Pick<OpenADERepoCreateRequest, "name" | "path" | "createDirectory" | "initializeGit">): Promise<Repo | null> {
         return this.createRepo(params)
     }
 
-    async createRepo(params: { name: string; path: string }): Promise<Repo | null> {
-        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductAPI()) return null
+    private canUseProductMethod(method: OpenADEMethod): boolean {
+        return this.store.canUseProductMethod(method)
+    }
+
+    private async canUseProductMethodAfterConnect(method: OpenADEMethod): Promise<boolean> {
+        return this.store.canUseProductMethodAfterConnect(method)
+    }
+
+    private async canUseRuntimeOwnedProductMethod(method: OpenADEMethod): Promise<boolean> {
+        if (this.store.usesCoreOwnedProductRuntime()) return this.canUseProductMethodAfterConnect(method)
+        if (this.store.shouldUseRuntimeProductAPI()) return this.canUseProductMethod(method)
+        return this.canUseProductMethodAfterConnect(method)
+    }
+
+    private get productRuntimeOwnsHostReads(): boolean {
+        return this.store.shouldUseRuntimeProductAPI() || this.store.usesCoreOwnedProductRuntime()
+    }
+
+    private get productRuntimeOwnsRepoMutations(): boolean {
+        return this.store.shouldUseRuntimeProductAPI() || this.store.usesCoreOwnedProductRuntime()
+    }
+
+    private hasRepoMutationBackend(): boolean {
+        return Boolean(this.store.repoStore) || this.productRuntimeOwnsRepoMutations
+    }
+
+    private async canUseRepoMutationMethod(method: OpenADEMethod): Promise<boolean> {
+        if (!this.productRuntimeOwnsRepoMutations) return this.canUseProductMethod(method)
+        return this.canUseRuntimeOwnedProductMethod(method)
+    }
+
+    private shouldRefreshLegacyRepoAfterMutation(): boolean {
+        return !this.store.shouldUseRuntimeProductAPI() && !this.store.usesCoreOwnedProductRuntime()
+    }
+
+    async createRepo(params: Pick<OpenADERepoCreateRequest, "name" | "path" | "createDirectory" | "initializeGit">): Promise<Repo | null> {
+        if (!this.hasRepoMutationBackend()) return null
+        if (!(await this.canUseRepoMutationMethod(OPENADE_METHOD.repoCreate))) return null
 
         const result = await this.store.createProductRepo({
             name: params.name,
             path: params.path,
             createdBy: this.store.currentUser,
+            createDirectory: params.createDirectory,
+            initializeGit: params.initializeGit,
         })
 
         const repo = this.getRepo(result.repoId)
-        if (repo || this.store.shouldUseRuntimeProductAPI()) return repo ?? null
+        if (repo || this.productRuntimeOwnsRepoMutations) return repo ?? null
 
-        await this.store.refreshProductStateAfterRepoMutation()
+        if (this.shouldRefreshLegacyRepoAfterMutation()) await this.store.refreshProductStateAfterRepoMutation()
         return this.getRepo(result.repoId) ?? null
     }
 
-    async updateRepo(id: string, updates: Partial<Pick<Repo, "name" | "path">>): Promise<Repo | null> {
-        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductAPI()) return null
+    async updateRepo(id: string, updates: Partial<Pick<Repo, "name" | "path">> & { initializeGit?: boolean }): Promise<Repo | null> {
+        if (!this.hasRepoMutationBackend()) return null
+        if (!(await this.canUseRepoMutationMethod(OPENADE_METHOD.repoUpdate))) return null
 
         // Clear git info cache if path changed
         if (updates.path !== undefined) {
@@ -121,19 +161,20 @@ export class RepoManager {
         }
 
         await this.store.updateProductRepo({ repoId: id, ...updates })
-        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterRepoMutation()
+        if (this.shouldRefreshLegacyRepoAfterMutation()) await this.store.refreshProductStateAfterRepoMutation()
 
         const repo = this.getRepo(id)
-        if (repo || this.store.shouldUseRuntimeProductAPI()) return repo ?? null
+        if (repo || this.productRuntimeOwnsRepoMutations) return repo ?? null
 
-        await this.store.refreshProductStateAfterRepoMutation()
+        if (this.shouldRefreshLegacyRepoAfterMutation()) await this.store.refreshProductStateAfterRepoMutation()
         return this.getRepo(id) ?? null
     }
 
     async setRepoArchived(id: string, archived: boolean): Promise<void> {
-        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductAPI()) return
+        if (!this.hasRepoMutationBackend()) return
+        if (!(await this.canUseRepoMutationMethod(OPENADE_METHOD.repoUpdate))) return
         await this.store.updateProductRepo({ repoId: id, archived })
-        if (!this.store.shouldUseRuntimeProductAPI()) {
+        if (this.shouldRefreshLegacyRepoAfterMutation()) {
             await this.store.refreshProductStateAfterRepoMutation()
         }
     }
@@ -143,13 +184,14 @@ export class RepoManager {
     }
 
     async deleteRepo(id: string): Promise<boolean> {
-        if (!this.store.repoStore && !this.store.shouldUseRuntimeProductAPI()) return false
+        if (!this.hasRepoMutationBackend()) return false
+        if (!(await this.canUseRepoMutationMethod(OPENADE_METHOD.repoDelete))) return false
 
         // Clean up cache
         this.clearGitInfoCache(id)
 
         await this.store.deleteProductRepo({ repoId: id })
-        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterRepoMutation()
+        if (this.shouldRefreshLegacyRepoAfterMutation()) await this.store.refreshProductStateAfterRepoMutation()
         return true
     }
 
@@ -161,7 +203,11 @@ export class RepoManager {
      */
     async getGitInfo(repoId: string): Promise<GitInfo | null> {
         const repo = this.getRepo(repoId)
-        if (!repo && !this.store.shouldUseRuntimeProductAPI()) return null
+        if (!repo && !this.productRuntimeOwnsHostReads) return null
+        if (this.productRuntimeOwnsHostReads) {
+            const canRead = await this.canUseRuntimeOwnedProductMethod(OPENADE_METHOD.projectGitInfoRead)
+            if (!canRead) return null
+        }
 
         // Check cache
         if (this.gitInfoCache.has(repoId)) {
@@ -171,16 +217,29 @@ export class RepoManager {
         const existing = this.gitInfoInFlight.get(repoId)
         if (existing) return existing
 
-        const request = this.loadGitInfo(repoId, repo?.path ?? "").finally(() => {
-            this.gitInfoInFlight.delete(repoId)
+        const useRuntimeProductAPI = this.productRuntimeOwnsHostReads || this.store.shouldUseRuntimeProductAPI()
+        const request = this.loadGitInfo({ repoId, repoPath: repo?.path ?? "", useRuntimeProductAPI }).finally(() => {
+            runInAction(() => {
+                this.gitInfoInFlight.delete(repoId)
+            })
         })
-        this.gitInfoInFlight.set(repoId, request)
+        runInAction(() => {
+            this.gitInfoInFlight.set(repoId, request)
+        })
         return request
     }
 
-    private async loadGitInfo(repoId: string, repoPath: string): Promise<GitInfo | null> {
+    private async loadGitInfo({
+        repoId,
+        repoPath,
+        useRuntimeProductAPI,
+    }: {
+        repoId: string
+        repoPath: string
+        useRuntimeProductAPI: boolean
+    }): Promise<GitInfo | null> {
         try {
-            const response = this.store.shouldUseRuntimeProductAPI()
+            const response = useRuntimeProductAPI
                 ? await this.store.readProductProjectGitInfo({ repoId })
                 : await gitApi.isGitDirectory({ directory: repoPath })
             const gitInfo: GitInfo | null =
@@ -204,11 +263,15 @@ export class RepoManager {
                         }
                       : null
 
-            this.gitInfoCache.set(repoId, gitInfo)
+            runInAction(() => {
+                this.gitInfoCache.set(repoId, gitInfo)
+            })
             return gitInfo
         } catch (err) {
             console.error(`[RepoManager] Failed to detect git info for ${repoId}:`, err)
-            this.gitInfoCache.set(repoId, null)
+            runInAction(() => {
+                this.gitInfoCache.set(repoId, null)
+            })
             return null
         }
     }
@@ -220,8 +283,10 @@ export class RepoManager {
 
     /** Clear cached git info for a repo */
     clearGitInfoCache(repoId: string): void {
-        this.gitInfoCache.delete(repoId)
-        this.gitInfoInFlight.delete(repoId)
+        runInAction(() => {
+            this.gitInfoCache.delete(repoId)
+            this.gitInfoInFlight.delete(repoId)
+        })
     }
 
     /**
@@ -229,15 +294,23 @@ export class RepoManager {
      * Returns the fresh hasGhCli value.
      */
     async refreshGhCliStatus(repoId: string): Promise<boolean> {
+        if (this.productRuntimeOwnsHostReads) {
+            const canRead = await this.canUseRuntimeOwnedProductMethod(OPENADE_METHOD.projectGitInfoRead)
+            if (!canRead) return false
+        }
+
         try {
-            const hasGhCli = this.store.shouldUseRuntimeProductAPI()
+            const useRuntimeProductAPI = this.productRuntimeOwnsHostReads || this.store.shouldUseRuntimeProductAPI()
+            const hasGhCli = useRuntimeProductAPI
                 ? await this.store.readProductProjectGitInfo({ repoId }).then((result) => (result.isGitRepo === true ? result.hasGhCli : false))
                 : await gitApi.checkGhCli().then((result) => result.hasGhCli)
 
             // Update the cached git info entry if it exists
             const cached = this.gitInfoCache.get(repoId)
             if (cached) {
-                cached.hasGhCli = hasGhCli
+                runInAction(() => {
+                    this.gitInfoCache.set(repoId, { ...cached, hasGhCli })
+                })
             }
 
             return hasGhCli
@@ -251,7 +324,7 @@ export class RepoManager {
 
     /**
      * List branches for a repo.
-     * Requires git info to be fetched first.
+     * Legacy host reads require git info first; product reads resolve scope server-side.
      */
     async listBranches(
         repoId: string,
@@ -260,17 +333,19 @@ export class RepoManager {
         branches: BranchInfo[]
         defaultBranch: string
     }> {
-        const gitInfo = await this.getGitInfo(repoId)
-        if (!gitInfo) {
-            return { branches: [], defaultBranch: "main" }
-        }
-
-        if (this.store.shouldUseRuntimeProductAPI()) {
+        if (this.productRuntimeOwnsHostReads) {
+            const canRead = await this.canUseRuntimeOwnedProductMethod(OPENADE_METHOD.projectGitBranchesRead)
+            if (!canRead) return { branches: [], defaultBranch: "main" }
             const result = await this.store.readProductProjectGitBranches({ repoId, includeRemote })
             return {
                 branches: result.branches,
                 defaultBranch: result.defaultBranch,
             }
+        }
+
+        const gitInfo = await this.getGitInfo(repoId)
+        if (!gitInfo) {
+            return { branches: [], defaultBranch: "main" }
         }
 
         if (!gitApi.isAvailable()) {
@@ -285,15 +360,12 @@ export class RepoManager {
 
     /**
      * Get git status for a repo.
-     * Requires git info to be fetched first.
+     * Legacy host reads require git info first; product reads resolve scope server-side.
      */
     async getGitSummary(repoId: string): Promise<GitSummaryResponse> {
-        const gitInfo = await this.getGitInfo(repoId)
-        if (!gitInfo) {
-            return emptyGitSummary()
-        }
-
-        if (this.store.shouldUseRuntimeProductAPI()) {
+        if (this.productRuntimeOwnsHostReads) {
+            const canRead = await this.canUseRuntimeOwnedProductMethod(OPENADE_METHOD.projectGitSummaryRead)
+            if (!canRead) return emptyGitSummary()
             const result = await this.store.readProductProjectGitSummary({ repoId })
             return {
                 branch: result.branch,
@@ -310,6 +382,11 @@ export class RepoManager {
                 },
                 untracked: gitSummaryFiles(result.untracked),
             }
+        }
+
+        const gitInfo = await this.getGitInfo(repoId)
+        if (!gitInfo) {
+            return emptyGitSummary()
         }
 
         if (!gitApi.isAvailable()) {
@@ -332,7 +409,7 @@ export class RepoManager {
         try {
             // Initialize stores if not done
             await this.store.initializeStores()
-            if (this.store.shouldUseRuntimeProductProjectListProjection()) {
+            if (this.store.shouldUseRuntimeProductProjectListProjection() && this.store.runtimeProductStoreStatus !== "ready") {
                 await this.store.loadRuntimeProductProjects()
             }
             this.store.trackRepoListFallbackIfNeeded()

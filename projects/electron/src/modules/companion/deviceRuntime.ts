@@ -5,6 +5,7 @@ import type {
     RemoteDeviceRevokeResult,
     RemoteDeviceSelfRevokeResult,
 } from "../../../../shared/companion/src"
+import { OPENADE_NOTIFICATION, OPENADE_REMOTE_METHOD } from "../../../../openade-client/src"
 import { RuntimeHandlerError, type RuntimeHandlerContext, type RuntimeServer } from "../../../../runtime/src"
 import { dropAllDevices, listDevices, revokeDevice } from "./auth"
 import { closeRemoteDeviceStreams } from "./runtimeDeviceStreams"
@@ -25,7 +26,7 @@ function parseRevokeRequest(params: unknown): RemoteDeviceRevokeRequest {
 }
 
 function notifyDevicesChanged(server: RuntimeServer): void {
-    server.notify("remote/device/changed", { type: "devices_changed", at: new Date().toISOString() })
+    server.notify(OPENADE_NOTIFICATION.remoteDeviceChanged, { type: "devices_changed", at: new Date().toISOString() })
 }
 
 function closeRemoteDeviceStreamsAfterResponse(server: RuntimeServer, deviceId?: string): void {
@@ -45,9 +46,9 @@ function selfDeviceId(context: RuntimeHandlerContext): string {
 }
 
 export function registerRemoteDeviceRuntimeMethods(server: RuntimeServer): void {
-    server.register("remote/device/list", (): RemoteDeviceListResult => ({ devices: listDevices() }))
+    server.register(OPENADE_REMOTE_METHOD.remoteDeviceList, (): RemoteDeviceListResult => ({ devices: listDevices() }))
 
-    server.register("remote/device/revoke", (params): RemoteDeviceRevokeResult => {
+    server.register(OPENADE_REMOTE_METHOD.remoteDeviceRevoke, (params): RemoteDeviceRevokeResult => {
         const { deviceId } = parseRevokeRequest(params)
         const revoked = revokeDevice(deviceId)
         if (revoked) {
@@ -57,14 +58,14 @@ export function registerRemoteDeviceRuntimeMethods(server: RuntimeServer): void 
         return { ok: true, revoked, devices: listDevices() }
     })
 
-    server.register("remote/device/dropAll", (): RemoteDeviceDropAllResult => {
+    server.register(OPENADE_REMOTE_METHOD.remoteDeviceDropAll, (): RemoteDeviceDropAllResult => {
         dropAllDevices()
         notifyDevicesChanged(server)
         closeRemoteDeviceStreams()
         return { ok: true, devices: listDevices() }
     })
 
-    server.register("remote/device/selfRevoke", (_params, context): RemoteDeviceSelfRevokeResult => {
+    server.register(OPENADE_REMOTE_METHOD.remoteDeviceSelfRevoke, (_params, context): RemoteDeviceSelfRevokeResult => {
         const deviceId = selfDeviceId(context)
         const revoked = revokeDevice(deviceId)
         closeRemoteDeviceStreamsAfterResponse(server, deviceId)

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest"
+import { OPENADE_METHOD } from "../../../openade-client/src"
+import type { OpenADEProjectFileReadResult, OpenADEProjectFilesTreeResult, OpenADEProjectSearchResult } from "../../../openade-module/src"
 import { DEFAULT_MODEL, getDefaultModelForHarness } from "../constants"
+import { type DescribePathResponse, filesApi } from "../electronAPI/files"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import type { ActionEvent, SetupEnvironmentEvent, Task } from "../types"
 import { TaskModel } from "./TaskModel"
@@ -64,7 +67,65 @@ function createStore(task: Task): CodeStore {
             getTask: (taskId: string) => (taskId === task.id ? task : null),
         },
         shouldUseRuntimeProductAPI: () => false,
+        usesCoreOwnedProductRuntime: () => false,
+        shouldUseRuntimeProductTaskRoute: () => false,
     } as unknown as CodeStore
+}
+
+function legacyFileResponse(path: string, content = "legacy file"): Extract<DescribePathResponse, { type: "file" }> {
+    return {
+        type: "file",
+        path,
+        size: content.length,
+        mode: 0o100644,
+        content,
+        tooLarge: false,
+        isReadable: true,
+        isBinary: false,
+    }
+}
+
+function productFileResponse(args: { repoId: string; taskId?: string; path: string }): OpenADEProjectFileReadResult {
+    return {
+        repoId: args.repoId,
+        taskId: args.taskId,
+        path: args.path,
+        encoding: "utf8",
+        content: `product file: ${args.path}`,
+        size: 24,
+        tooLarge: false,
+        isReadable: true,
+        isBinary: false,
+        mediaType: "text/plain",
+        previewKind: null,
+    }
+}
+
+function productTreeResponse(args: { repoId: string; taskId?: string; path?: string }): OpenADEProjectFilesTreeResult {
+    return {
+        repoId: args.repoId,
+        taskId: args.taskId,
+        path: args.path ?? "",
+        entries: [],
+        truncated: false,
+    }
+}
+
+function productSearchResponse(args: { repoId: string; taskId?: string }): OpenADEProjectSearchResult {
+    return {
+        repoId: args.repoId,
+        taskId: args.taskId,
+        matches: [
+            {
+                path: "README.md",
+                line: 1,
+                content: "needle",
+                matchStart: 0,
+                matchEnd: 6,
+            },
+        ],
+        truncated: false,
+    }
 }
 
 describe("TaskModel harness lock", () => {
@@ -90,6 +151,8 @@ describe("TaskModel harness lock", () => {
         const store = {
             ...createStore(task),
             shouldUseRuntimeProductAPI: () => true,
+            shouldUseRuntimeProductTaskRoute: () => true,
+            canUseProductMethod: () => true,
             readProductTaskGitSummary,
         } as unknown as CodeStore
         const model = new TaskModel(store, task.id)
@@ -101,6 +164,533 @@ describe("TaskModel harness lock", () => {
         expect(readProductTaskGitSummary).toHaveBeenCalledTimes(2)
         expect(readProductTaskGitSummary).toHaveBeenNthCalledWith(1, { repoId: "repo-1", taskId: "task-1" }, { bypassCache: false })
         expect(readProductTaskGitSummary).toHaveBeenNthCalledWith(2, { repoId: "repo-1", taskId: "task-1" }, { bypassCache: true })
+    })
+
+    it("does not refresh runtime git summary when the capability is absent", async () => {
+        const task = createTask([])
+        const readProductTaskGitSummary = vi.fn()
+        const store = {
+            ...createStore(task),
+            shouldUseRuntimeProductAPI: () => true,
+            shouldUseRuntimeProductTaskRoute: () => true,
+            canUseProductMethod: () => false,
+            readProductTaskGitSummary,
+        } as unknown as CodeStore
+        const model = new TaskModel(store, task.id)
+
+        await model.refreshGitState({ force: true })
+
+        expect(readProductTaskGitSummary).not.toHaveBeenCalled()
+        expect(model.gitStatus).toBeNull()
+    })
+
+    it("attaches Core-owned task git summary on explicit runtime git refresh", async () => {
+        const task = createTask([])
+        let runtimeProductAPIAvailable = false
+        const canUseProductMethodAfterConnect = vi.fn(async (method: string) => {
+            if (method !== OPENADE_METHOD.taskGitSummaryRead) return false
+            runtimeProductAPIAvailable = true
+            return true
+        })
+        const readProductTaskGitSummary = vi.fn().mockResolvedValue({
+            branch: "main",
+            headCommit: "abc123",
+            ahead: 1,
+            hasChanges: true,
+            staged: { files: [], stats: { added: 0, deleted: 0 } },
+            unstaged: { files: [], stats: { added: 0, deleted: 0 } },
+            untracked: [],
+        })
+        const store = {
+            ...createStore(task),
+            shouldUseRuntimeProductAPI: () => runtimeProductAPIAvailable,
+            usesCoreOwnedProductRuntime: () => true,
+            shouldUseRuntimeProductTaskRoute: () => true,
+            canUseProductMethod: vi.fn((method: string) => runtimeProductAPIAvailable && method === OPENADE_METHOD.taskGitSummaryRead),
+            canUseProductMethodAfterConnect,
+            readProductTaskGitSummary,
+        } as unknown as CodeStore
+        const model = new TaskModel(store, task.id)
+
+        await model.refreshGitState({ force: true })
+
+        expect(canUseProductMethodAfterConnect).toHaveBeenCalledWith(OPENADE_METHOD.taskGitSummaryRead)
+        expect(readProductTaskGitSummary).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1" }, { bypassCache: true })
+        expect(model.gitStatus).toMatchObject({ branch: "main", ahead: 1, hasChanges: true })
+    })
+
+    it("uses route-owned task git summary before broad runtime projection is active", async () => {
+        const task = createTask([])
+        const getGitInfo = vi.fn(async () => {
+            throw new Error("route-owned git refresh should not load legacy repo git info")
+        })
+        const readProductTaskGitSummary = vi.fn().mockResolvedValue({
+            branch: "feature/core-route",
+            headCommit: "def456",
+            ahead: 0,
+            hasChanges: true,
+            staged: { files: [], stats: { added: 0, deleted: 0 } },
+            unstaged: { files: [{ path: "src/app.ts", status: "modified" as const, binary: false }], stats: { added: 3, deleted: 1 } },
+            untracked: [],
+        })
+        const store = {
+            ...createStore(task),
+            shouldUseRuntimeProductAPI: () => false,
+            shouldUseRuntimeProductTaskRoute: () => true,
+            canUseProductMethod: vi.fn((method: string) => method === OPENADE_METHOD.taskGitSummaryRead),
+            readProductTaskGitSummary,
+            repos: {
+                getRepo: vi.fn(),
+                getGitInfo,
+            },
+        } as unknown as CodeStore
+        const model = new TaskModel(store, task.id)
+
+        await model.refreshGitState({ force: true })
+
+        expect(readProductTaskGitSummary).toHaveBeenCalledWith({ repoId: "repo-1", taskId: "task-1" }, { bypassCache: true })
+        expect(getGitInfo).not.toHaveBeenCalled()
+        expect(model.gitStatus).toMatchObject({ branch: "feature/core-route", hasChanges: true })
+    })
+
+    it("does not fall back to legacy git refresh before Core-owned repo context is attached", async () => {
+        const task = { ...createTask([]), repoId: "" }
+        const getGitInfo = vi.fn(async () => null)
+        const readProductTaskGitSummary = vi.fn()
+        const store = {
+            ...createStore(task),
+            shouldUseRuntimeProductAPI: () => false,
+            usesCoreOwnedProductRuntime: () => true,
+            shouldUseRuntimeProductTaskRoute: () => true,
+            canUseProductMethod: vi.fn(() => true),
+            readProductTaskGitSummary,
+            repos: {
+                getRepo: vi.fn(),
+                getGitInfo,
+            },
+        } as unknown as CodeStore
+        const model = new TaskModel(store, task.id)
+
+        await model.refreshGitState({ force: true })
+
+        expect(getGitInfo).not.toHaveBeenCalled()
+        expect(readProductTaskGitSummary).not.toHaveBeenCalled()
+        expect(model.gitStatus).toBeNull()
+    })
+
+    it("does not run legacy after-event git refreshes before a Core-owned product store is attached", () => {
+        const task = createTask([])
+        const afterEventCallbacks: Array<(taskId: string) => void> = []
+        const getGitInfo = vi.fn(async () => null)
+        const readProductTaskGitSummary = vi.fn()
+        const store = {
+            ...createStore(task),
+            execution: {
+                onAfterEvent: vi.fn((callback: (taskId: string) => void) => {
+                    afterEventCallbacks.push(callback)
+                    return () => undefined
+                }),
+            },
+            shouldUseRuntimeProductAPI: () => false,
+            usesCoreOwnedProductRuntime: () => true,
+            shouldUseRuntimeProductTaskRoute: () => true,
+            canUseProductMethod: vi.fn(() => true),
+            readProductTaskGitSummary,
+            repos: {
+                getRepo: vi.fn(),
+                getGitInfo,
+            },
+        } as unknown as CodeStore
+
+        new TaskModel(store, task.id)
+        afterEventCallbacks[0]?.(task.id)
+
+        expect(getGitInfo).not.toHaveBeenCalled()
+        expect(readProductTaskGitSummary).not.toHaveBeenCalled()
+    })
+
+    it("does not expose runtime SDK capabilities when project SDK reads are unavailable", () => {
+        const task = createTask([])
+        const readProductProjectSdkCapabilities = vi.fn()
+        const canUseProductMethod = vi.fn((method: string) => method !== OPENADE_METHOD.projectSdkCapabilitiesRead)
+        const store = {
+            ...createStore(task),
+            shouldUseRuntimeProductAPI: () => true,
+            shouldUseRuntimeProductTaskRoute: () => true,
+            canUseProductMethod,
+            readProductProjectSdkCapabilities,
+        } as unknown as CodeStore
+        const model = new TaskModel(store, task.id)
+
+        expect(model.sdkCapabilities).toBeUndefined()
+        expect(canUseProductMethod).toHaveBeenCalledWith(OPENADE_METHOD.projectSdkCapabilitiesRead)
+        expect(readProductProjectSdkCapabilities).not.toHaveBeenCalled()
+    })
+
+    it("attaches Core-owned queued-turn cancel before cancelling queued turns", async () => {
+        const task = createTask([])
+        let runtimeProductAPIAvailable = false
+        const canUseProductMethodAfterConnect = vi.fn(async (method: string) => {
+            if (method !== OPENADE_METHOD.queuedTurnCancel) return false
+            runtimeProductAPIAvailable = true
+            return true
+        })
+        const cancelProductQueuedTurn = vi.fn(async () => ({
+            repoId: "repo-1",
+            taskId: "task-1",
+            queuedTurnId: "queued-1",
+            cancelled: true,
+        }))
+        const refreshProductStateAfterTaskMutation = vi.fn(async () => undefined)
+        const store = {
+            ...createStore(task),
+            shouldUseRuntimeProductAPI: () => runtimeProductAPIAvailable,
+            usesCoreOwnedProductRuntime: () => true,
+            shouldUseRuntimeProductTaskRoute: () => true,
+            canUseProductMethod: vi.fn((method: string) => runtimeProductAPIAvailable && method === OPENADE_METHOD.queuedTurnCancel),
+            canUseProductMethodAfterConnect,
+            cancelProductQueuedTurn,
+            refreshProductStateAfterTaskMutation,
+        } as unknown as CodeStore
+        const model = new TaskModel(store, task.id)
+
+        await expect(model.cancelQueuedTurn("queued-1")).resolves.toBe(true)
+
+        expect(canUseProductMethodAfterConnect).toHaveBeenCalledWith(OPENADE_METHOD.queuedTurnCancel)
+        expect(cancelProductQueuedTurn).toHaveBeenCalledWith({
+            repoId: "repo-1",
+            taskId: "task-1",
+            queuedTurnId: "queued-1",
+        })
+        expect(refreshProductStateAfterTaskMutation).not.toHaveBeenCalled()
+    })
+
+    it("replaces a legacy SDK capability manager when runtime product ownership appears", async () => {
+        const task = createTask([])
+        let runtimeProductActive = false
+        const readProductProjectSdkCapabilities = vi.fn().mockResolvedValue({
+            slash_commands: ["/runtime"],
+            skills: ["runtime-skill"],
+            plugins: [],
+            cachedAt: 1_779_811_200_000,
+        })
+        const store = {
+            ...createStore(task),
+            shouldUseRuntimeProductAPI: () => runtimeProductActive,
+            shouldUseRuntimeProductTaskRoute: () => runtimeProductActive,
+            canUseProductMethod: (method: string) => method === OPENADE_METHOD.projectSdkCapabilitiesRead,
+            readProductProjectSdkCapabilities,
+        } as unknown as CodeStore
+        const model = new TaskModel(store, task.id)
+
+        const legacyManager = model.sdkCapabilities
+        runtimeProductActive = true
+        const runtimeManager = model.sdkCapabilities
+
+        expect(runtimeManager).toBeDefined()
+        expect(runtimeManager).not.toBe(legacyManager)
+        await runtimeManager?.loadCapabilities("/repo")
+        expect(readProductProjectSdkCapabilities).toHaveBeenCalledWith({
+            repoId: "repo-1",
+            taskId: "task-1",
+            harnessId: "claude-code",
+        })
+        expect(runtimeManager?.slashCommands).toEqual(["/runtime"])
+    })
+
+    it("attaches Core-owned SDK capability reads from the lazy slash-command manager", async () => {
+        const task = createTask([])
+        let runtimeProductAPIAvailable = false
+        const canUseProductMethodAfterConnect = vi.fn(async (method: string) => {
+            if (method !== OPENADE_METHOD.projectSdkCapabilitiesRead) return false
+            runtimeProductAPIAvailable = true
+            return true
+        })
+        const readProductProjectSdkCapabilities = vi.fn().mockResolvedValue({
+            slash_commands: ["/core"],
+            skills: ["core-skill"],
+            plugins: [],
+            cachedAt: 1_779_811_200_000,
+        })
+        const store = {
+            ...createStore(task),
+            shouldUseRuntimeProductAPI: () => runtimeProductAPIAvailable,
+            usesCoreOwnedProductRuntime: () => true,
+            shouldUseRuntimeProductTaskRoute: () => true,
+            canUseProductMethod: vi.fn((method: string) => runtimeProductAPIAvailable && method === OPENADE_METHOD.projectSdkCapabilitiesRead),
+            canUseProductMethodAfterConnect,
+            readProductProjectSdkCapabilities,
+        } as unknown as CodeStore
+        const model = new TaskModel(store, task.id)
+
+        const manager = model.sdkCapabilities
+        expect(manager).toBeDefined()
+        await manager?.loadCapabilities("/repo")
+
+        expect(canUseProductMethodAfterConnect).toHaveBeenCalledWith(OPENADE_METHOD.projectSdkCapabilitiesRead)
+        expect(readProductProjectSdkCapabilities).toHaveBeenCalledWith({
+            repoId: "repo-1",
+            taskId: "task-1",
+            harnessId: "claude-code",
+        })
+        expect(manager?.slashCommands).toEqual(["/core"])
+        expect(manager?.skills).toEqual(["core-skill"])
+    })
+
+    it("keeps legacy file and content search managers on the raw files API", async () => {
+        const task = createTask([])
+        const describePath = vi.spyOn(filesApi, "describePath").mockResolvedValue(legacyFileResponse("/repo/README.md"))
+        const contentSearch = vi.spyOn(filesApi, "contentSearch").mockResolvedValue({
+            matches: [
+                {
+                    file: "README.md",
+                    line: 1,
+                    content: "needle",
+                    matchStart: 0,
+                    matchEnd: 6,
+                },
+            ],
+            truncated: false,
+        })
+        const readProductProjectFile = vi.fn(async (args: { repoId: string; taskId?: string; path: string }) => productFileResponse(args))
+        const searchProductProject = vi.fn(async (args: { repoId: string; taskId?: string }) => productSearchResponse(args))
+        const store = {
+            ...createStore(task),
+            readProductProjectFile,
+            searchProductProject,
+        } as unknown as CodeStore
+        const model = new TaskModel(store, task.id)
+
+        try {
+            await model.fileBrowser.openFile("/repo/README.md")
+            model.contentSearch.setWorkingDir("/repo")
+            model.contentSearch.setQuery("needle")
+
+            await vi.waitFor(() => expect(contentSearch).toHaveBeenCalled(), { timeout: 1000, interval: 10 })
+
+            expect(describePath).toHaveBeenCalledWith({
+                path: "/repo/README.md",
+                readContents: true,
+                maxReadSize: 5 * 1024 * 1024,
+            })
+            expect(model.fileBrowser.activeFileData?.content).toBe("legacy file")
+            expect(model.contentSearch.contentResults).toEqual([
+                {
+                    path: "README.md",
+                    line: 1,
+                    content: "needle",
+                    matchStart: 0,
+                    matchEnd: 6,
+                },
+            ])
+            expect(readProductProjectFile).not.toHaveBeenCalled()
+            expect(searchProductProject).not.toHaveBeenCalled()
+        } finally {
+            describePath.mockRestore()
+            contentSearch.mockRestore()
+        }
+    })
+
+    it("routes runtime file and content search managers through product APIs without raw file fallback", async () => {
+        const task = createTask([])
+        const describePath = vi.spyOn(filesApi, "describePath").mockRejectedValue(new Error("legacy files API should not be used"))
+        const contentSearch = vi.spyOn(filesApi, "contentSearch").mockRejectedValue(new Error("legacy content search should not be used"))
+        const listProductProjectFiles = vi.fn(async (args: { repoId: string; taskId?: string; path?: string }) => productTreeResponse(args))
+        const readProductProjectFile = vi.fn(async (args: { repoId: string; taskId?: string; path: string }) => productFileResponse(args))
+        const fuzzySearchProductProjectFiles = vi.fn(async (args: { repoId: string; taskId?: string }) => ({
+            repoId: args.repoId,
+            taskId: args.taskId,
+            results: ["README.md"],
+            truncated: false,
+            source: "filesystem" as const,
+        }))
+        const searchProductProject = vi.fn(async (args: { repoId: string; taskId?: string }) => productSearchResponse(args))
+        const store = {
+            ...createStore(task),
+            shouldUseRuntimeProductAPI: () => true,
+            shouldUseRuntimeProductTaskRoute: () => true,
+            canUseProductMethod: () => true,
+            repos: {
+                getRepo: (repoId: string) =>
+                    repoId === "repo-1"
+                        ? {
+                              id: "repo-1",
+                              name: "Repo",
+                              path: "/repo",
+                              tasks: [],
+                          }
+                        : null,
+            },
+            listProductProjectFiles,
+            readProductProjectFile,
+            fuzzySearchProductProjectFiles,
+            searchProductProject,
+        } as unknown as CodeStore
+        const model = new TaskModel(store, task.id)
+
+        try {
+            await model.fileBrowser.openFile("/repo/README.md")
+            model.contentSearch.setQuery("needle")
+
+            await vi.waitFor(() => expect(searchProductProject).toHaveBeenCalled(), { timeout: 1000, interval: 10 })
+
+            expect(readProductProjectFile).toHaveBeenCalledWith({
+                repoId: "repo-1",
+                taskId: "task-1",
+                path: "README.md",
+                maxBytes: 5 * 1024 * 1024,
+            })
+            expect(searchProductProject).toHaveBeenCalledWith({
+                repoId: "repo-1",
+                taskId: "task-1",
+                query: "needle",
+                limit: 100,
+                caseSensitive: false,
+            })
+            expect(listProductProjectFiles).toHaveBeenCalled()
+            expect(fuzzySearchProductProjectFiles).not.toHaveBeenCalled()
+            expect(describePath).not.toHaveBeenCalled()
+            expect(contentSearch).not.toHaveBeenCalled()
+            expect(model.fileBrowser.activeFileData?.content).toBe("product file: README.md")
+            expect(model.contentSearch.previewData?.content).toBe("product file: README.md")
+        } finally {
+            describePath.mockRestore()
+            contentSearch.mockRestore()
+        }
+    })
+
+    it("attaches Core-owned file and content search capabilities before product file requests", async () => {
+        const task = createTask([])
+        let runtimeProductAPIAvailable = false
+        const attachedMethods = new Set<string>()
+        const describePath = vi.spyOn(filesApi, "describePath").mockRejectedValue(new Error("legacy files API should not be used"))
+        const contentSearch = vi.spyOn(filesApi, "contentSearch").mockRejectedValue(new Error("legacy content search should not be used"))
+        const listProductProjectFiles = vi.fn(async (args: { repoId: string; taskId?: string; path?: string }) => productTreeResponse(args))
+        const readProductProjectFile = vi.fn(async (args: { repoId: string; taskId?: string; path: string }) => productFileResponse(args))
+        const fuzzySearchProductProjectFiles = vi.fn()
+        const searchProductProject = vi.fn(async (args: { repoId: string; taskId?: string }) => productSearchResponse(args))
+        const canUseProductMethodAfterConnect = vi.fn(async (method: string) => {
+            runtimeProductAPIAvailable = true
+            attachedMethods.add(method)
+            return (
+                method === OPENADE_METHOD.projectFilesTree ||
+                method === OPENADE_METHOD.projectFileRead ||
+                method === OPENADE_METHOD.projectSearch
+            )
+        })
+        const store = {
+            ...createStore(task),
+            shouldUseRuntimeProductAPI: () => runtimeProductAPIAvailable,
+            usesCoreOwnedProductRuntime: () => true,
+            shouldUseRuntimeProductTaskRoute: () => true,
+            canUseProductMethod: vi.fn((method: string) => attachedMethods.has(method)),
+            canUseProductMethodAfterConnect,
+            repos: {
+                getRepo: (repoId: string) =>
+                    repoId === "repo-1"
+                        ? {
+                              id: "repo-1",
+                              name: "Repo",
+                              path: "/repo",
+                              tasks: [],
+                          }
+                        : null,
+            },
+            listProductProjectFiles,
+            readProductProjectFile,
+            fuzzySearchProductProjectFiles,
+            searchProductProject,
+        } as unknown as CodeStore
+        const model = new TaskModel(store, task.id)
+
+        try {
+            await model.fileBrowser.openFile("/repo/README.md")
+            model.contentSearch.setQuery("needle")
+
+            await vi.waitFor(() => expect(searchProductProject).toHaveBeenCalled(), { timeout: 1000, interval: 10 })
+
+            expect(canUseProductMethodAfterConnect).toHaveBeenCalledWith(OPENADE_METHOD.projectFilesTree)
+            expect(canUseProductMethodAfterConnect).toHaveBeenCalledWith(OPENADE_METHOD.projectFileRead)
+            expect(canUseProductMethodAfterConnect).toHaveBeenCalledWith(OPENADE_METHOD.projectSearch)
+            expect(readProductProjectFile).toHaveBeenCalledWith({
+                repoId: "repo-1",
+                taskId: "task-1",
+                path: "README.md",
+                maxBytes: 5 * 1024 * 1024,
+            })
+            expect(searchProductProject).toHaveBeenCalledWith({
+                repoId: "repo-1",
+                taskId: "task-1",
+                query: "needle",
+                limit: 100,
+                caseSensitive: false,
+            })
+            expect(listProductProjectFiles).toHaveBeenCalled()
+            expect(fuzzySearchProductProjectFiles).not.toHaveBeenCalled()
+            expect(describePath).not.toHaveBeenCalled()
+            expect(contentSearch).not.toHaveBeenCalled()
+        } finally {
+            describePath.mockRestore()
+            contentSearch.mockRestore()
+        }
+    })
+
+    it("fails closed without product or raw file requests when runtime file/search capabilities are absent", async () => {
+        const task = createTask([])
+        const describePath = vi.spyOn(filesApi, "describePath").mockRejectedValue(new Error("legacy files API should not be used"))
+        const contentSearch = vi.spyOn(filesApi, "contentSearch").mockRejectedValue(new Error("legacy content search should not be used"))
+        const listProductProjectFiles = vi.fn(async (args: { repoId: string; taskId?: string; path?: string }) => productTreeResponse(args))
+        const readProductProjectFile = vi.fn(async (args: { repoId: string; taskId?: string; path: string }) => productFileResponse(args))
+        const fuzzySearchProductProjectFiles = vi.fn(async (args: { repoId: string; taskId?: string }) => ({
+            repoId: args.repoId,
+            taskId: args.taskId,
+            results: ["README.md"],
+            truncated: false,
+            source: "filesystem" as const,
+        }))
+        const searchProductProject = vi.fn(async (args: { repoId: string; taskId?: string }) => productSearchResponse(args))
+        const canUseProductMethod = vi.fn(() => false)
+        const store = {
+            ...createStore(task),
+            shouldUseRuntimeProductAPI: () => true,
+            shouldUseRuntimeProductTaskRoute: () => true,
+            canUseProductMethod,
+            repos: {
+                getRepo: (repoId: string) =>
+                    repoId === "repo-1"
+                        ? {
+                              id: "repo-1",
+                              name: "Repo",
+                              path: "/repo",
+                              tasks: [],
+                          }
+                        : null,
+            },
+            listProductProjectFiles,
+            readProductProjectFile,
+            fuzzySearchProductProjectFiles,
+            searchProductProject,
+        } as unknown as CodeStore
+        const model = new TaskModel(store, task.id)
+
+        try {
+            await model.fileBrowser.openFile("/repo/README.md")
+            model.contentSearch.setQuery("needle")
+
+            await vi.waitFor(() => expect(canUseProductMethod).toHaveBeenCalledWith(OPENADE_METHOD.projectSearch), { timeout: 1000, interval: 10 })
+
+            expect(model.fileBrowser.fileError).toBe("File not found")
+            expect(model.contentSearch.contentResults).toEqual([])
+            expect(listProductProjectFiles).not.toHaveBeenCalled()
+            expect(readProductProjectFile).not.toHaveBeenCalled()
+            expect(fuzzySearchProductProjectFiles).not.toHaveBeenCalled()
+            expect(searchProductProject).not.toHaveBeenCalled()
+            expect(describePath).not.toHaveBeenCalled()
+            expect(contentSearch).not.toHaveBeenCalled()
+        } finally {
+            describePath.mockRestore()
+            contentSearch.mockRestore()
+        }
     })
 
     it("hydrates harness/model from latest action event", () => {
@@ -495,6 +1085,7 @@ describe("TaskModel stats", () => {
                 getTask: (taskId: string) => (taskId === task.id ? task : null),
             },
             shouldUseRuntimeProductAPI: () => true,
+            shouldUseRuntimeProductTaskRoute: () => true,
             getRuntimeProductTaskPreviewDto,
         } as unknown as CodeStore
 
@@ -533,6 +1124,9 @@ describe("TaskModel environment loading", () => {
                 getRepo: (repoId: string) => (repoId === repo.id ? repo : undefined),
                 getGitInfo: vi.fn(async () => null),
             },
+            shouldUseRuntimeProductAPI: () => false,
+            usesCoreOwnedProductRuntime: () => false,
+            shouldUseRuntimeProductTaskRoute: () => false,
         } as unknown as CodeStore
 
         localStorage.setItem("openade-device-id", "test-device")
@@ -586,6 +1180,9 @@ describe("TaskModel environment loading", () => {
                 getRepo: (repoId: string) => (repoId === repo.id ? repo : undefined),
                 getGitInfo: vi.fn(async () => ({ isGitRepo: true, repoRoot: "/tmp/repo", relativePath: "packages/web", mainBranch: "main", hasGhCli: false })),
             },
+            shouldUseRuntimeProductAPI: () => false,
+            usesCoreOwnedProductRuntime: () => false,
+            shouldUseRuntimeProductTaskRoute: () => false,
         } as unknown as CodeStore
 
         localStorage.setItem("openade-device-id", "test-device")
@@ -596,6 +1193,124 @@ describe("TaskModel environment loading", () => {
 
             expect(model.needsEnvironmentSetup).toBe(false)
             expect(env?.taskWorkingDir).toBe("/tmp/openade-worktrees/task-1/packages/web")
+        } finally {
+            localStorage.removeItem("openade-device-id")
+        }
+    })
+
+    it("builds runtime worktree environments from setup workingDir without loading project git info", async () => {
+        const setupEvent: SetupEnvironmentEvent = {
+            id: "setup-1",
+            type: "setup_environment",
+            status: "completed",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            completedAt: "2026-01-01T00:00:00.000Z",
+            userInput: "Environment setup",
+            worktreeId: "task-1",
+            deviceId: "test-device",
+            workingDir: "/tmp/openade-worktrees/task-1/packages/web",
+            setupOutput: "Working directory: /tmp/openade-worktrees/task-1/packages/web",
+        }
+        const task: Task = {
+            ...createTask([]),
+            isolationStrategy: { type: "worktree", sourceBranch: "main" },
+            deviceEnvironments: [
+                {
+                    id: "device-1",
+                    deviceId: "test-device",
+                    setupComplete: true,
+                    worktreeDir: "/tmp/openade-worktrees/task-1",
+                    createdAt: "2026-01-01T00:00:00.000Z",
+                    lastUsedAt: "2026-01-01T00:00:00.000Z",
+                },
+            ],
+            events: [setupEvent],
+        }
+        const getGitInfo = vi.fn(async () => {
+            throw new Error("project git info should not be loaded for a prepared runtime worktree")
+        })
+        const store = {
+            execution: {
+                onAfterEvent: () => () => {},
+            },
+            tasks: {
+                getTask: (taskId: string) => (taskId === task.id ? task : null),
+            },
+            repos: {
+                getRepo: () => undefined,
+                getGitInfo,
+            },
+            shouldUseRuntimeProductAPI: () => true,
+            usesCoreOwnedProductRuntime: () => false,
+            shouldUseRuntimeProductTaskRoute: () => true,
+            findProductRepoIdForTask: () => task.repoId,
+        } as unknown as CodeStore
+
+        localStorage.setItem("openade-device-id", "test-device")
+
+        try {
+            const model = new TaskModel(store, task.id)
+            const env = await model.loadEnvironment()
+
+            expect(env?.taskWorkingDir).toBe("/tmp/openade-worktrees/task-1/packages/web")
+            expect(env?.hasGit).toBe(true)
+            expect(getGitInfo).not.toHaveBeenCalled()
+        } finally {
+            localStorage.removeItem("openade-device-id")
+        }
+    })
+
+    it("builds runtime head environments from projected repos without loading project git info", async () => {
+        const task: Task = {
+            ...createTask([]),
+            isolationStrategy: { type: "head" },
+            deviceEnvironments: [
+                {
+                    id: "device-1",
+                    deviceId: "test-device",
+                    setupComplete: true,
+                    createdAt: "2026-01-01T00:00:00.000Z",
+                    lastUsedAt: "2026-01-01T00:00:00.000Z",
+                },
+            ],
+        }
+        const repo = {
+            id: "repo-1",
+            name: "Repo",
+            path: "/tmp/repo",
+            createdBy: { id: "u1", email: "u1@example.com" },
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+        }
+        const getGitInfo = vi.fn(async () => {
+            throw new Error("project git info should not be loaded for a runtime head task with repo projection")
+        })
+        const store = {
+            execution: {
+                onAfterEvent: () => () => {},
+            },
+            tasks: {
+                getTask: (taskId: string) => (taskId === task.id ? task : null),
+            },
+            repos: {
+                getRepo: (repoId: string) => (repoId === repo.id ? repo : undefined),
+                getGitInfo,
+            },
+            shouldUseRuntimeProductAPI: () => true,
+            usesCoreOwnedProductRuntime: () => false,
+            shouldUseRuntimeProductTaskRoute: () => true,
+            findProductRepoIdForTask: () => task.repoId,
+        } as unknown as CodeStore
+
+        localStorage.setItem("openade-device-id", "test-device")
+
+        try {
+            const model = new TaskModel(store, task.id)
+            const env = await model.loadEnvironment()
+
+            expect(env?.taskWorkingDir).toBe("/tmp/repo")
+            expect(env?.hasGit).toBe(false)
+            expect(getGitInfo).not.toHaveBeenCalled()
         } finally {
             localStorage.removeItem("openade-device-id")
         }
@@ -640,6 +1355,9 @@ describe("TaskModel environment loading", () => {
                 getRepo: (repoId: string) => (repoId === repo.id ? repo : undefined),
                 getGitInfo,
             },
+            shouldUseRuntimeProductAPI: () => false,
+            usesCoreOwnedProductRuntime: () => false,
+            shouldUseRuntimeProductTaskRoute: () => false,
         } as unknown as CodeStore
 
         localStorage.setItem("openade-device-id", "test-device")

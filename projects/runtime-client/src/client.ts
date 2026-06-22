@@ -33,6 +33,10 @@ export interface RuntimeClientOptions {
     reconnect?: boolean
 }
 
+export interface RuntimeRequestOptions {
+    requestId?: RuntimeRequestId
+}
+
 type NotificationListener = (notification: RuntimeNotification) => void
 
 export interface RuntimeLocalTransport {
@@ -76,16 +80,20 @@ export class RuntimeClient {
     }
 
     async request<T>(method: string, params?: unknown): Promise<T> {
+        return this.requestWithOptions<T>(method, params)
+    }
+
+    async requestWithOptions<T>(method: string, params?: unknown, options: RuntimeRequestOptions = {}): Promise<T> {
         await this.connect()
 
         const socket = this.socket
         if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error("Runtime socket is not connected")
 
-        return this.sendRequest<T>(socket, method, params)
+        return this.sendRequest<T>(socket, method, params, options)
     }
 
-    private sendRequest<T>(socket: WebSocket, method: string, params?: unknown): Promise<T> {
-        const id = this.nextId++
+    private sendRequest<T>(socket: WebSocket, method: string, params?: unknown, options: RuntimeRequestOptions = {}): Promise<T> {
+        const id = options.requestId ?? this.nextId++
         const message = params === undefined ? { id, method } : { id, method, params }
 
         return new Promise<T>((resolve, reject) => {
@@ -292,8 +300,14 @@ export class RuntimeLocalClient {
         return this.requestRaw<T>(method, params)
     }
 
-    private async requestRaw<T>(method: string, params?: unknown): Promise<T> {
-        const request: RuntimeRequest = params === undefined ? { id: this.nextId++, method } : { id: this.nextId++, method, params }
+    async requestWithOptions<T>(method: string, params?: unknown, options: RuntimeRequestOptions = {}): Promise<T> {
+        await this.connect()
+        return this.requestRaw<T>(method, params, options)
+    }
+
+    private async requestRaw<T>(method: string, params?: unknown, options: RuntimeRequestOptions = {}): Promise<T> {
+        const id = options.requestId ?? this.nextId++
+        const request: RuntimeRequest = params === undefined ? { id, method } : { id, method, params }
         const response = validateRuntimeResponse(await this.transport.request(request))
         if (!response.ok) throw new RuntimeClientError(response.error.code, response.error.message, { path: response.error.path })
         if (response.value.error) throw new RuntimeClientError(response.value.error.code, response.value.error.message, response.value.error.data)
@@ -313,17 +327,27 @@ export class RuntimeLocalClient {
 
     private async connectOnce(): Promise<void> {
         await this.transport.connect()
-        this.disposeMessageListener = this.transport.onMessage((message) => {
+        const disposeMessageListener = this.transport.onMessage((message) => {
             if (!isRuntimeNotification(message)) return
             for (const listener of this.listeners) listener(message)
         })
-        this.initializeResult = await this.requestRaw<RuntimeInitializeResult>("initialize", {
-            clientName: this.options.clientName ?? "Runtime Local Client",
-            clientPlatform: this.options.clientPlatform ?? "desktop",
-            ...(this.options.clientVersion ? { clientVersion: this.options.clientVersion } : {}),
-            protocolVersion: this.options.protocolVersion ?? 1,
-        })
-        this.connected = true
+        this.disposeMessageListener = disposeMessageListener
+        try {
+            this.initializeResult = await this.requestRaw<RuntimeInitializeResult>("initialize", {
+                clientName: this.options.clientName ?? "Runtime Local Client",
+                clientPlatform: this.options.clientPlatform ?? "desktop",
+                ...(this.options.clientVersion ? { clientVersion: this.options.clientVersion } : {}),
+                protocolVersion: this.options.protocolVersion ?? 1,
+            })
+            this.connected = true
+        } catch (error) {
+            disposeMessageListener()
+            if (this.disposeMessageListener === disposeMessageListener) this.disposeMessageListener = null
+            this.initializeResult = null
+            this.connected = false
+            await this.transport.disconnect()
+            throw error
+        }
     }
 
     subscribe(listener: NotificationListener): () => void {

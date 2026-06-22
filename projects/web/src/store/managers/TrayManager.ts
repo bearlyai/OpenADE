@@ -33,26 +33,42 @@ export class TrayManager {
         return this.taskModel.workspaceId
     }
 
+    canOpen(tray: TrayType): boolean {
+        const config = getTrayConfig(tray)
+        return config?.isVisible?.(this) ?? true
+    }
+
+    get visibleOpenTray(): TrayType | null {
+        if (!this.openTray) return null
+        return this.canOpen(this.openTray) ? this.openTray : null
+    }
+
+    ensureOpenTrayVisible(): void {
+        if (!this.openTray || this.canOpen(this.openTray)) return
+        this.close()
+    }
+
     toggle(tray: TrayType): void {
         const previousTray = this.openTray
         const closing = previousTray === tray
+        if (!closing && !this.canOpen(tray)) return
         this.openTray = closing ? null : tray
         if (previousTray) {
             getTrayConfig(previousTray)?.onClose?.(this)
         }
         if (!closing) {
-            console.debug("[TrayManager] toggle: calling onOpen for", tray)
             getTrayConfig(tray)?.onOpen?.(this)
         }
     }
 
     open(tray: TrayType): void {
+        if (!this.canOpen(tray)) return
         const previousTray = this.openTray
+        if (previousTray === tray) return
         this.openTray = tray
-        if (previousTray && previousTray !== tray) {
+        if (previousTray) {
             getTrayConfig(previousTray)?.onClose?.(this)
         }
-        console.debug("[TrayManager] open: calling onOpen for", tray)
         getTrayConfig(tray)?.onOpen?.(this)
     }
 
@@ -65,6 +81,6 @@ export class TrayManager {
     }
 
     get isOpen(): boolean {
-        return this.openTray !== null
+        return this.visibleOpenTray !== null
     }
 }

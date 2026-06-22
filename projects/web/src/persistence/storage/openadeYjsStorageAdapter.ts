@@ -1,5 +1,5 @@
 import * as Y from "yjs"
-import type { OpenADEYjsStorageAdapter } from "../../../../openade-module/src/yjsProjection"
+import type { OpenADEYjsDocumentOperationOptions, OpenADEYjsStorageAdapter } from "../../../../openade-module/src/yjsProjection"
 import { listYjsDocs, loadYjsDoc } from "../../electronAPI/yjsStorage"
 
 type JsonPrimitive = string | number | boolean | null
@@ -8,7 +8,7 @@ type JsonRecord = { [key: string]: JsonValue }
 
 export interface ElectronOpenADEYjsDocumentApi {
     listYjsDocs(): Promise<string[]>
-    loadYjsDoc(id: string): Promise<Uint8Array | null>
+    loadYjsDoc(id: string, options?: OpenADEYjsDocumentOperationOptions): Promise<Uint8Array | null>
 }
 
 const defaultDocumentApi: ElectronOpenADEYjsDocumentApi = {
@@ -90,21 +90,21 @@ function readOrderedArrayFromDoc<T extends Record<string, unknown>>(doc: Y.Doc, 
     return rows
 }
 
-async function loadDoc(api: ElectronOpenADEYjsDocumentApi, id: string): Promise<Y.Doc | null> {
-    const data = await api.loadYjsDoc(id)
+async function loadDoc(api: ElectronOpenADEYjsDocumentApi, id: string, operation: string): Promise<Y.Doc | null> {
+    const data = await api.loadYjsDoc(id, { operation })
     return data ? applyYjsUpdate(data) : null
 }
 
 export function createElectronOpenADEYjsStorageAdapter(api: ElectronOpenADEYjsDocumentApi = defaultDocumentApi): OpenADEYjsStorageAdapter {
     return {
         listDocuments: () => api.listYjsDocs(),
-        readDocumentUpdate: (id) => api.loadYjsDoc(id),
-        async readDocumentBase64(id) {
-            const data = await api.loadYjsDoc(id)
+        readDocumentUpdate: (id, options) => api.loadYjsDoc(id, options),
+        async readDocumentBase64(id, options) {
+            const data = await api.loadYjsDoc(id, options ?? { operation: "OpenADEYjsStorageAdapter.readDocumentBase64" })
             return data ? { id, data: uint8ArrayToBase64(data) } : null
         },
         async readMapObject(documentId, mapName) {
-            const doc = await loadDoc(api, documentId)
+            const doc = await loadDoc(api, documentId, `OpenADEYjsStorageAdapter.readMapObject:${mapName}`)
             if (!doc) return null
             try {
                 return readMapObjectFromDoc(doc, mapName)
@@ -113,7 +113,7 @@ export function createElectronOpenADEYjsStorageAdapter(api: ElectronOpenADEYjsDo
             }
         },
         async readOrderedArray<T extends Record<string, unknown>>(documentId: string, name: string): Promise<T[] | null> {
-            const doc = await loadDoc(api, documentId)
+            const doc = await loadDoc(api, documentId, `OpenADEYjsStorageAdapter.readOrderedArray:${name}`)
             if (!doc) return null
             try {
                 return readOrderedArrayFromDoc<T>(doc, name)

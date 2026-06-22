@@ -697,7 +697,7 @@ describe("OpenADE runtime turn start integration", () => {
         expect(harnessMock.startRuntimeHarnessQuery).toHaveBeenCalledTimes(1)
     })
 
-    it("rejects non-do and non-ask turns while a task has a running server-owned turn", async () => {
+    it("rejects non-queueable turns while a task has a running server-owned turn", async () => {
         await seedExistingTaskWithCompletedPlan("task-with-active-turn")
         harnessMock.startRuntimeHarnessQuery.mockResolvedValue({ ok: true })
 
@@ -715,7 +715,7 @@ describe("OpenADE runtime turn start integration", () => {
 
         expect(rejected.error).toMatchObject({
             code: "handler_error",
-            message: expect.stringContaining("Only Do and Ask turns can be queued"),
+            message: expect.stringContaining("Only Do, Ask, and HyperPlan turns can be queued"),
         })
         expect(harnessMock.startRuntimeHarnessQuery).toHaveBeenCalledTimes(1)
     })
@@ -746,7 +746,15 @@ describe("OpenADE runtime turn start integration", () => {
         ])
 
         const runtime = getRuntimeServer()
-        const task = await runtime.handleRequest({ id: 1, method: "openade/task/read", params: { repoId: "repo-1", taskId: "task-with-session" } }, connection())
+        const defaultTask = await runtime.handleRequest({ id: 1, method: "openade/task/read", params: { repoId: "repo-1", taskId: "task-with-session" } }, connection())
+        expect(defaultTask.error).toBeUndefined()
+        const defaultEvents = (defaultTask.result as { events: Array<{ execution: { events: Array<Record<string, unknown>> } }> }).events[0].execution.events
+        expect(defaultEvents).toEqual([])
+
+        const task = await runtime.handleRequest(
+            { id: 2, method: "openade/task/read", params: { repoId: "repo-1", taskId: "task-with-session", hydrateSessionEvents: true } },
+            connection()
+        )
 
         expect(task.error).toBeUndefined()
         const events = (task.result as { events: Array<{ execution: { events: Array<Record<string, unknown>> } }> }).events[0].execution.events

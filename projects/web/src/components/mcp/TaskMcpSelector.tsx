@@ -8,6 +8,7 @@
 import NiceModal from "@ebay/nice-modal-react"
 import { Plug, Settings } from "lucide-react"
 import { observer } from "mobx-react"
+import { useEffect } from "react"
 import type { McpServerItem } from "../../persistence/mcpServerStore"
 import { useCodeStore } from "../../store/context"
 import { SettingsModal } from "../settings/SettingsModal"
@@ -68,18 +69,23 @@ const ServerChip = observer(
 export const TaskMcpSelector = observer(
     ({ selectedServerIds, onSelectionChange, compact = false, iconOnly = false, vertical = false }: TaskMcpSelectorProps) => {
         const store = useCodeStore()
+        const mcpServers = store.mcpServers
 
-        const enabledServers = store.mcpServers.enabledServers
+        useEffect(() => {
+            void mcpServers.initializeProductSettingsProjection()
+        }, [mcpServers])
+
+        const enabledServers = mcpServers.enabledServers
         const hasServers = enabledServers.length > 0
 
-        const isServerChecking = (serverId: string) => store.mcpServers.testingServerId === serverId || store.mcpServers.isOAuthPending(serverId)
+        const isServerChecking = (serverId: string) => mcpServers.testingServerId === serverId || mcpServers.isOAuthPending(serverId)
 
         const handleToggle = async (server: McpServerItem) => {
             const isCurrentlySelected = selectedServerIds.includes(server.id)
 
             // Cancel ongoing OAuth check
             if (isServerChecking(server.id)) {
-                await store.mcpServers.cancelOAuth(server.id)
+                await mcpServers.cancelOAuth(server.id)
                 return
             }
 
@@ -96,17 +102,25 @@ export const TaskMcpSelector = observer(
             }
 
             // HTTP connector - check auth and initiate OAuth if needed (skip for healthy servers with valid tokens)
-            if (server.transportType === "http" && (server.healthStatus !== "healthy" || !store.mcpServers.hasValidOAuthTokens(server.id))) {
+            if (server.transportType === "http" && (server.healthStatus !== "healthy" || !mcpServers.hasValidOAuthTokens(server.id))) {
                 try {
-                    const result = await store.mcpServers.testConnection(server.id)
+                    const result = await mcpServers.testConnection(server.id)
                     if (result.requiresAuth) {
-                        const oauthStarted = await store.mcpServers.initiateOAuth(server.id)
+                        const oauthStarted = await mcpServers.initiateOAuth(server.id)
                         if (oauthStarted) {
                             return
                         }
+                        handleManage()
+                        return
+                    }
+                    if (!result.success) {
+                        handleManage()
+                        return
                     }
                 } catch (err) {
                     console.error("[TaskMcpSelector] Failed to check connection:", err)
+                    handleManage()
+                    return
                 }
             }
 

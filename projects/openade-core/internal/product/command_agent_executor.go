@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/openade/openade/projects/openade-core/internal/core"
 )
 
 const (
@@ -30,6 +32,20 @@ type commandAgentWorkerStartEnvelope struct {
 	Type            string                         `json:"type"`
 	ProtocolVersion int                            `json:"protocolVersion"`
 	Request         commandAgentWorkerStartRequest `json:"request"`
+}
+
+type commandAgentWorkerSDKCapabilitiesEnvelope struct {
+	Type            string                                   `json:"type"`
+	ProtocolVersion int                                      `json:"protocolVersion"`
+	Request         commandAgentWorkerSDKCapabilitiesRequest `json:"request"`
+}
+
+type commandAgentWorkerSDKCapabilitiesRequest struct {
+	RepoID    string `json:"repoId"`
+	RepoPath  string `json:"repoPath"`
+	Cwd       string `json:"cwd"`
+	TaskID    string `json:"taskId,omitempty"`
+	HarnessID string `json:"harnessId"`
 }
 
 type commandAgentWorkerStartRequest struct {
@@ -54,6 +70,7 @@ type commandAgentWorkerStartRequest struct {
 	FastMode            *bool            `json:"fastMode,omitempty"`
 	Source              json.RawMessage  `json:"source,omitempty"`
 	Images              *json.RawMessage `json:"images,omitempty"`
+	HyperPlanStrategy   json.RawMessage  `json:"hyperplanStrategy,omitempty"`
 }
 
 type commandAgentWorkerMessage struct {
@@ -66,6 +83,22 @@ type commandAgentWorkerMessage struct {
 	Success         *bool           `json:"success,omitempty"`
 	Error           string          `json:"error,omitempty"`
 	CompletedAt     string          `json:"completedAt,omitempty"`
+}
+
+type commandAgentWorkerSDKPluginCapability struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+type commandAgentWorkerSDKCapabilitiesMessage struct {
+	Type          string                                  `json:"type"`
+	SlashCommands []string                                `json:"slash_commands,omitempty"`
+	Skills        []string                                `json:"skills,omitempty"`
+	Plugins       []commandAgentWorkerSDKPluginCapability `json:"plugins,omitempty"`
+	CachedAt      int64                                   `json:"cachedAt,omitempty"`
+	Status        string                                  `json:"status,omitempty"`
+	Success       *bool                                   `json:"success,omitempty"`
+	Error         string                                  `json:"error,omitempty"`
 }
 
 func NewCommandAgentExecutor(command []string) CommandAgentExecutor {
@@ -160,6 +193,65 @@ func (executor CommandAgentExecutor) Run(ctx context.Context, request AgentExecu
 	return result
 }
 
+func (executor CommandAgentExecutor) DiscoverSDKCapabilities(ctx context.Context, request SDKCapabilitiesRequest) (SDKCapabilitiesResult, *core.RuntimeError) {
+	command := normalizedCommand(executor.Command)
+	if len(command) == 0 {
+		return SDKCapabilitiesResult{}, handlerError(errors.New("agent worker command is not configured"))
+	}
+
+	execCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(execCtx, command[0], command[1:]...)
+	if request.RepoPath != "" {
+		cmd.Dir = request.RepoPath
+	}
+	configureCommandAgentProcess(cmd)
+	cmd.Env = environmentWithOverrides(os.Environ(), request.EnvVars, executor.Env...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return SDKCapabilitiesResult{}, handlerError(errors.New("agent worker stdin unavailable"))
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return SDKCapabilitiesResult{}, handlerError(errors.New("agent worker stdout unavailable"))
+	}
+	stderr := &limitedStringWriter{limit: commandAgentWorkerMaxStderrBytes}
+	cmd.Stderr = stderr
+
+	if err := cmd.Start(); err != nil {
+		return SDKCapabilitiesResult{}, handlerError(errors.New("agent worker failed to start"))
+	}
+	if err := json.NewEncoder(stdin).Encode(commandAgentSDKCapabilitiesEnvelope(request)); err != nil {
+		_ = stdin.Close()
+		cancel()
+		_ = cmd.Wait()
+		return SDKCapabilitiesResult{}, handlerError(errors.New("agent worker SDK capabilities request write failed"))
+	}
+	_ = stdin.Close()
+
+	result, settled, runtimeErr := readCommandAgentWorkerSDKCapabilities(execCtx, stdout)
+	if runtimeErr != nil {
+		cancel()
+		_ = cmd.Wait()
+		return SDKCapabilitiesResult{}, runtimeErr
+	}
+	waitErr := cmd.Wait()
+	if ctx.Err() != nil {
+		return SDKCapabilitiesResult{}, handlerError(ctx.Err())
+	}
+	if waitErr != nil {
+		message := "agent worker SDK capabilities failed"
+		if stderr.String() != "" {
+			message = message + ": " + stderr.String()
+		}
+		return SDKCapabilitiesResult{}, handlerError(errors.New(message))
+	}
+	if !settled {
+		return SDKCapabilitiesResult{}, handlerError(errors.New("agent worker exited without SDK capabilities"))
+	}
+	return result, nil
+}
+
 func readCommandAgentWorkerMessages(ctx context.Context, stdoutReader io.Reader, emitter AgentExecutionEmitter) (AgentExecutionResult, bool) {
 	scanner := bufio.NewScanner(stdoutReader)
 	scanner.Buffer(make([]byte, 0, 64*1024), commandAgentWorkerMaxLineBytes)
@@ -232,6 +324,52 @@ func readCommandAgentWorkerMessages(ctx context.Context, stdoutReader io.Reader,
 	return result, settled
 }
 
+func readCommandAgentWorkerSDKCapabilities(ctx context.Context, stdoutReader io.Reader) (SDKCapabilitiesResult, bool, *core.RuntimeError) {
+	scanner := bufio.NewScanner(stdoutReader)
+	scanner.Buffer(make([]byte, 0, 64*1024), commandAgentWorkerMaxLineBytes)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		message := commandAgentWorkerSDKCapabilitiesMessage{}
+		if err := json.Unmarshal(line, &message); err != nil {
+			return SDKCapabilitiesResult{}, false, handlerError(errors.New("agent worker emitted invalid JSON"))
+		}
+		switch message.Type {
+		case "sdkCapabilities":
+			plugins := make([]SDKPluginCapability, 0, len(message.Plugins))
+			for _, plugin := range message.Plugins {
+				plugins = append(plugins, SDKPluginCapability{Name: plugin.Name, Path: plugin.Path})
+			}
+			cachedAt := time.Now().UTC()
+			if message.CachedAt > 0 {
+				cachedAt = time.Unix(0, message.CachedAt*int64(time.Millisecond)).UTC()
+			}
+			return SDKCapabilitiesResult{
+				SlashCommands: append([]string(nil), message.SlashCommands...),
+				Skills:        append([]string(nil), message.Skills...),
+				Plugins:       plugins,
+				CachedAt:      cachedAt,
+			}, true, nil
+		case "result":
+			if message.Status == "failed" {
+				return SDKCapabilitiesResult{}, false, handlerError(errors.New(firstNonEmptyString(strings.TrimSpace(message.Error), "agent worker SDK capabilities failed")))
+			}
+			return SDKCapabilitiesResult{}, false, handlerError(errors.New("agent worker SDK capabilities result is invalid"))
+		default:
+			return SDKCapabilitiesResult{}, false, handlerError(errors.New("agent worker SDK capabilities message type is invalid"))
+		}
+	}
+	if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
+		if ctx.Err() != nil {
+			return SDKCapabilitiesResult{}, false, handlerError(ctx.Err())
+		}
+		return SDKCapabilitiesResult{}, false, handlerError(errors.New("agent worker SDK capabilities output read failed"))
+	}
+	return SDKCapabilitiesResult{}, false, nil
+}
+
 func commandAgentStartEnvelope(request AgentExecutionRequest) commandAgentWorkerStartEnvelope {
 	return commandAgentWorkerStartEnvelope{
 		Type:            "start",
@@ -258,6 +396,25 @@ func commandAgentStartEnvelope(request AgentExecutionRequest) commandAgentWorker
 			FastMode:            request.FastMode,
 			Source:              append(json.RawMessage(nil), request.Source...),
 			Images:              cloneRawMessagePointer(request.Images),
+			HyperPlanStrategy:   append(json.RawMessage(nil), request.HyperPlanStrategy...),
+		},
+	}
+}
+
+func commandAgentSDKCapabilitiesEnvelope(request SDKCapabilitiesRequest) commandAgentWorkerSDKCapabilitiesEnvelope {
+	cwd := request.Cwd
+	if cwd == "" {
+		cwd = request.RepoPath
+	}
+	return commandAgentWorkerSDKCapabilitiesEnvelope{
+		Type:            "sdkCapabilities",
+		ProtocolVersion: commandAgentWorkerProtocolVersion,
+		Request: commandAgentWorkerSDKCapabilitiesRequest{
+			RepoID:    request.RepoID,
+			RepoPath:  request.RepoPath,
+			Cwd:       cwd,
+			TaskID:    request.TaskID,
+			HarnessID: request.HarnessID,
 		},
 	}
 }

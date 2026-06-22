@@ -20,9 +20,11 @@ export type PlatformInfo = HostPlatformInfo
 // ============================================================================
 
 let cachedPlatformInfo: PlatformInfo | null = null
+let platformInfoRequestInFlight: Promise<PlatformInfo> | null = null
 
 export function resetPlatformInfoForTests(): void {
     cachedPlatformInfo = null
+    platformInfoRequestInFlight = null
 }
 
 /**
@@ -48,6 +50,7 @@ const defaultPlatformInfo: PlatformInfo = {
  */
 export async function fetchPlatformInfo(): Promise<PlatformInfo> {
     if (cachedPlatformInfo) return cachedPlatformInfo
+    if (platformInfoRequestInFlight) return platformInfoRequestInFlight
 
     if (!window.openadeAPI?.runtime) {
         console.warn("[PlatformAPI] Not running in Electron, using default platform info")
@@ -55,15 +58,21 @@ export async function fetchPlatformInfo(): Promise<PlatformInfo> {
         return cachedPlatformInfo
     }
 
-    try {
-        const response = await localRuntimeClient.request<PlatformInfo>("host/platform/info")
-        cachedPlatformInfo = response
-        return response
-    } catch (error) {
-        console.error("[PlatformAPI] Failed to fetch platform info:", error)
-        cachedPlatformInfo = defaultPlatformInfo
-        return cachedPlatformInfo
-    }
+    platformInfoRequestInFlight = localRuntimeClient
+        .request<PlatformInfo>("host/platform/info")
+        .then((response) => {
+            cachedPlatformInfo = response
+            return response
+        })
+        .catch((error) => {
+            console.error("[PlatformAPI] Failed to fetch platform info:", error)
+            cachedPlatformInfo = defaultPlatformInfo
+            return cachedPlatformInfo
+        })
+        .finally(() => {
+            platformInfoRequestInFlight = null
+        })
+    return platformInfoRequestInFlight
 }
 
 /**

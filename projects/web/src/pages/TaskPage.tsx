@@ -12,6 +12,7 @@ import { ScrollArea } from "../components/ui/ScrollArea"
 import { Z_INDEX } from "../constants"
 import { useImageDropZone } from "../hooks/useImageDropZone"
 import { useShortcutHintsVisible } from "../hooks/useShortcutHintsVisible"
+import { OPENADE_METHOD, type OpenADEMethod } from "../../../openade-client/src"
 import { useTaskThreadScroll } from "../shell/task/useTaskThreadScroll"
 import type { TaskModel } from "../store/TaskModel"
 import { useCodeStore } from "../store/context"
@@ -48,11 +49,34 @@ interface TaskPageProps {
 
 export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPageProps) => {
     const codeStore = useCodeStore()
+    const productRuntimeOwnsTaskRoute = codeStore.shouldUseRuntimeProductTaskRoute()
+
+    return (
+        <TaskPageContent
+            workspaceId={workspaceId}
+            taskId={taskId}
+            taskModel={taskModel}
+            productRuntimeOwnsTaskRoute={productRuntimeOwnsTaskRoute}
+        />
+    )
+})
+
+interface TaskPageContentProps extends TaskPageProps {
+    productRuntimeOwnsTaskRoute: boolean
+}
+
+const TaskPageContent = observer(({ workspaceId, taskId, taskModel, productRuntimeOwnsTaskRoute }: TaskPageContentProps) => {
+    const codeStore = useCodeStore()
     const showKeyboardHints = useShortcutHintsVisible()
     const { input, tray } = taskModel
     const rawTask = codeStore.tasks.getTask(taskId)
     const events = rawTask?.events ?? []
-    const useRuntimeProductAPI = codeStore.shouldUseRuntimeProductAPI()
+    const canPersistTaskViewed = codeStore.canUseProductMethod(OPENADE_METHOD.taskMetadataUpdate)
+    const canReadTaskDetails = codeStore.canUseProductMethod(OPENADE_METHOD.taskRead)
+    const canReadMcpServers = !productRuntimeOwnsTaskRoute || codeStore.canUseProductMethod(OPENADE_METHOD.settingsMcpServersRead)
+    const canUseFileMentions = productRuntimeOwnsTaskRoute ? codeStore.canUseProductMethod(OPENADE_METHOD.projectFilesFuzzySearch) : true
+    const canUseSlashCommands = productRuntimeOwnsTaskRoute ? codeStore.canUseProductMethod(OPENADE_METHOD.projectSdkCapabilitiesRead) : true
+    const canResolveSmartEditorWorkingDir = productRuntimeOwnsTaskRoute ? canUseFileMentions || canUseSlashCommands : true
     const { viewportRef: scrollViewportRef } = useTaskThreadScroll({
         changeKey: `${taskId}:${events.length}`,
         resetKey: taskId,
@@ -68,6 +92,13 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
             behavior: "smooth",
         })
     }, [])
+    const canUseTaskRouteMethodAfterConnect = useCallback(
+        async (method: OpenADEMethod): Promise<boolean> => {
+            if (codeStore.usesCoreOwnedProductRuntime()) return codeStore.canUseProductMethodAfterConnect(method)
+            return codeStore.canUseProductMethod(method)
+        },
+        [codeStore]
+    )
 
     // Tray keyboard shortcuts - single handler that dispatches based on key
     useHotkeys(
@@ -111,19 +142,24 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
 
     // Mark task as viewed when navigating to it
     useEffect(() => {
-        codeStore.tasks.markTaskViewed(taskId, { defer: useRuntimeProductAPI })
-    }, [taskId, useRuntimeProductAPI])
+        if (productRuntimeOwnsTaskRoute) {
+            codeStore.tasks.markTaskViewed(taskId, { defer: true })
+            return
+        }
+
+        if (canPersistTaskViewed) codeStore.tasks.markTaskViewed(taskId, { defer: false })
+    }, [taskId, productRuntimeOwnsTaskRoute, canPersistTaskViewed, codeStore.tasks])
 
     // Legacy path keeps the existing eager status refresh; runtime/Core sessions keep task open on task DTOs only.
     useEffect(() => {
-        if (useRuntimeProductAPI) return
+        if (productRuntimeOwnsTaskRoute) return
         return scheduleTaskGitRefresh(() => {
             void taskModel.refreshGitState()
         })
-    }, [taskModel, useRuntimeProductAPI])
+    }, [taskModel, productRuntimeOwnsTaskRoute])
 
     useEffect(() => {
-        if (useRuntimeProductAPI) return
+        if (productRuntimeOwnsTaskRoute) return
         if (taskModel.needsEnvironmentSetup) return
 
         let cancelled = false
@@ -141,11 +177,11 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
         return () => {
             cancelled = true
         }
-    }, [taskModel, taskModel.needsEnvironmentSetup, useRuntimeProductAPI])
+    }, [taskModel, taskModel.needsEnvironmentSetup, productRuntimeOwnsTaskRoute])
 
     // Legacy path refreshes git on focus. Runtime/Core sessions refresh from explicit tray/user actions.
     useEffect(() => {
-        if (useRuntimeProductAPI) return
+        if (productRuntimeOwnsTaskRoute) return
         let cancelScheduledRefresh: (() => void) | null = null
         const handleFocus = () => {
             cancelScheduledRefresh?.()
@@ -159,11 +195,11 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
             window.removeEventListener("focus", handleFocus)
             cancelScheduledRefresh?.()
         }
-    }, [taskModel, useRuntimeProductAPI])
+    }, [taskModel, productRuntimeOwnsTaskRoute])
 
     // Poll git status every 20s while task is working
     useEffect(() => {
-        if (useRuntimeProductAPI) return
+        if (productRuntimeOwnsTaskRoute) return
         if (!taskModel.isWorking) return
 
         const interval = setInterval(() => {
@@ -171,35 +207,43 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
         }, 20_000)
 
         return () => clearInterval(interval)
-    }, [taskModel, taskModel.isWorking, useRuntimeProductAPI])
+    }, [taskModel, taskModel.isWorking, productRuntimeOwnsTaskRoute])
 
     // Update file browser and content search when the task's working directory becomes available
     // (may load late for worktree tasks during environment setup)
     const taskWorkingDir = taskModel.environment?.taskWorkingDir
     const taskWorkingDirHint = taskModel.taskWorkingDirHint
     const resolveTaskWorkingDir = useCallback(() => taskModel.ensureTaskWorkingDirHint(), [taskModel])
+    const resolveSdkCapabilities = useCallback(() => taskModel.sdkCapabilities, [taskModel])
     useEffect(() => {
+        if (productRuntimeOwnsTaskRoute) return
         if (taskWorkingDir) {
             taskModel.fileBrowser.setWorkingDir(taskWorkingDir)
             taskModel.contentSearch.setWorkingDir(taskWorkingDir)
         }
-    }, [taskWorkingDir, taskModel])
+    }, [taskWorkingDir, taskModel, productRuntimeOwnsTaskRoute])
 
     const handleSetupComplete = useCallback(() => {
+        if (productRuntimeOwnsTaskRoute) return
         taskModel.refreshGitState()
-    }, [taskModel])
+    }, [taskModel, productRuntimeOwnsTaskRoute])
 
     const handleRequestFullHistory = useCallback(() => {
-        if (!codeStore.shouldUseRuntimeProductAPI()) return
-        void codeStore.loadRuntimeProductTask(workspaceId, taskId, { hydrateSessionEvents: true }).catch((err) => {
+        if (!productRuntimeOwnsTaskRoute) return
+        void (async () => {
+            if (!(await canUseTaskRouteMethodAfterConnect(OPENADE_METHOD.taskRead))) return
+            await codeStore.loadRuntimeProductTask(workspaceId, taskId, { hydrateSessionEvents: true })
+        })().catch((err) => {
             console.warn("[TaskPage] Failed to hydrate task history:", err)
         })
-    }, [codeStore, workspaceId, taskId])
+    }, [codeStore, workspaceId, taskId, productRuntimeOwnsTaskRoute, canUseTaskRouteMethodAfterConnect])
+    const requestFullHistory = productRuntimeOwnsTaskRoute && canReadTaskDetails ? handleRequestFullHistory : undefined
 
+    const canAttachImages = input.canAttachImages
     const persistImage = useCallback((payload: ImagePersistencePayload) => input.persistImage(payload), [input])
 
     // Page-level drop zone for images
-    const { isDragOver, dragHandlers } = useImageDropZone(editorManager, persistImage)
+    const { isDragOver, dragHandlers } = useImageDropZone(canAttachImages ? editorManager : null, persistImage)
 
     // Show environment setup UI if needed
     if (taskModel.needsEnvironmentSetup) {
@@ -211,7 +255,7 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
             {isDragOver && <ImageDropOverlay />}
             <InputWrapper trayOpen={tray.isOpen} onClose={() => tray.close()}>
                 <ScrollArea viewportRef={scrollViewportRef} viewportClassName="pb-56">
-                    <EventLog taskId={taskId} events={events} onRequestFullHistory={handleRequestFullHistory} />
+                    <EventLog taskId={taskId} events={events} isLoading={false} onRequestFullHistory={requestFullHistory} />
                 </ScrollArea>
             </InputWrapper>
             {showKeyboardHints && (
@@ -226,10 +270,10 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
                 tray={tray}
                 gitStatus={taskModel.gitStatus}
                 pullRequest={taskModel.pullRequest}
-                fileMentionsDir={taskWorkingDirHint}
-                slashCommandsDir={taskWorkingDirHint}
-                resolveWorkingDir={resolveTaskWorkingDir}
-                sdkCapabilities={taskModel.sdkCapabilities}
+                fileMentionsDir={canUseFileMentions ? taskWorkingDirHint : null}
+                slashCommandsDir={canUseSlashCommands ? taskWorkingDirHint : null}
+                resolveWorkingDir={canResolveSmartEditorWorkingDir ? resolveTaskWorkingDir : undefined}
+                resolveSdkCapabilities={canUseSlashCommands ? resolveSdkCapabilities : undefined}
                 unsubmittedComments={codeStore.comments.getUnsubmittedComments(taskId)}
                 selectedModel={taskModel.model}
                 onModelChange={(m) => taskModel.setModel(m)}
@@ -240,8 +284,8 @@ export const TaskPage = observer(({ workspaceId, taskId, taskModel }: TaskPagePr
                 harnessId={taskModel.harnessId}
                 allowHarnessSwitch={false}
                 hideTray={codeStore.personalSettingsStore?.settings.current.devHideTray}
-                enabledMcpServerIds={taskModel.enabledMcpServerIds}
-                onMcpServerIdsChange={(ids) => taskModel.setEnabledMcpServerIds(ids)}
+                enabledMcpServerIds={canReadMcpServers ? taskModel.enabledMcpServerIds : undefined}
+                onMcpServerIdsChange={canReadMcpServers ? (ids) => taskModel.setEnabledMcpServerIds(ids) : undefined}
                 autoFocusKey={taskId}
             />
         </div>

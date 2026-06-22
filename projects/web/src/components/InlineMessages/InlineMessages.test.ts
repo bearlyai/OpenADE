@@ -75,11 +75,11 @@ describe("InlineMessages", () => {
         })
 
         try {
-            expect(container.textContent).toContain("Show 80 earlier stream events")
+            expect(container.textContent).toContain("Show 320 earlier stream events")
             expect(container.textContent).not.toContain("stderr 0")
             expect(container.textContent).toContain("stderr 219")
 
-            const showEarlier = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Show 80 earlier stream events"))
+            const showEarlier = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Show 320 earlier stream events"))
             if (!showEarlier) throw new Error("Missing show-earlier control")
 
             act(() => {
@@ -117,6 +117,18 @@ describe("InlineMessages", () => {
 
             expect(fullHistoryRequests).toBe(1)
             expect(container.textContent).toContain("Loading 45 earlier stream events...")
+        } finally {
+            cleanup()
+        }
+    })
+
+    it("does not offer omitted runtime history when no full-history callback is available", () => {
+        const events = Array.from({ length: 20 }, (_, index) => stderrEvent(index))
+        const { container, cleanup } = renderInlineMessages(events, undefined, 45)
+
+        try {
+            expect(container.textContent).not.toContain("Show 45 earlier stream events")
+            expect(container.textContent).not.toContain("Loading 45 earlier stream events")
         } finally {
             cleanup()
         }

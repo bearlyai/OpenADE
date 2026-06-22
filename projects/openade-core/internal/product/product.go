@@ -9,8 +9,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,13 +24,16 @@ import (
 )
 
 type Options struct {
-	Version          string
-	HostName         string
-	BlobDir          string
-	WorktreeBaseDir  string
-	ProcessOutputDir string
-	AgentExecutor    AgentExecutor
+	Version                 string
+	HostName                string
+	BlobDir                 string
+	WorktreeBaseDir         string
+	ProcessOutputDir        string
+	AgentExecutor           AgentExecutor
+	SDKCapabilitiesExecutor SDKCapabilitiesExecutor
 }
+
+const lightweightStreamEventTailCount = 120
 
 type Service struct {
 	runtime             *core.Runtime
@@ -36,6 +41,15 @@ type Service struct {
 	options             Options
 	mu                  sync.Mutex
 	idempotentMutations map[string]*idempotentMutationEntry
+	resourceMu          sync.Mutex
+	taskEventImageRefs  map[string]taskEventImageReferenceCacheEntry
+	gitMu               sync.Mutex
+	projectGitInfoCache map[string]projectGitInfoCacheEntry
+	projectGitInfoReads map[string]*projectGitInfoRead
+	projectGitCache     map[string]projectGitSummaryCacheEntry
+	projectGitReads     map[string]*projectGitSummaryRead
+	taskGitCache        map[string]taskGitSummaryCacheEntry
+	taskGitReads        map[string]*taskGitSummaryRead
 	processMu           sync.Mutex
 	processes           map[string]*projectProcessState
 	terminalMu          sync.Mutex
@@ -57,11 +71,53 @@ type idempotentMutationEntry struct {
 }
 
 const idempotentMutationRetention = 10 * time.Minute
+const taskEventImageReferenceCacheTTL = 5 * time.Second
+const gitReadCacheTTL = 5 * time.Second
+const gitReadCacheSeparator = "\x00"
 const headlessRuntimeDeviceID = "headless-runtime"
-const taskDeleteCleanupPermission = "openade/task/delete/cleanup"
+const taskDeleteCleanupPermission = openADEMethodTaskDelete + "/cleanup"
 
 type mutationOKDTO struct {
 	OK bool `json:"ok"`
+}
+
+type taskEventImageReferenceCacheEntry struct {
+	taskUpdatedAt time.Time
+	expiresAt     time.Time
+	images        map[string]taskImageReferenceDTO
+}
+
+type projectGitInfoCacheEntry struct {
+	result    projectGitInfoDTO
+	expiresAt time.Time
+}
+
+type projectGitInfoRead struct {
+	done       chan struct{}
+	result     projectGitInfoDTO
+	runtimeErr *core.RuntimeError
+}
+
+type projectGitSummaryCacheEntry struct {
+	result    projectGitSummaryDTO
+	expiresAt time.Time
+}
+
+type projectGitSummaryRead struct {
+	done       chan struct{}
+	result     projectGitSummaryDTO
+	runtimeErr *core.RuntimeError
+}
+
+type taskGitSummaryCacheEntry struct {
+	result    taskGitSummaryDTO
+	expiresAt time.Time
+}
+
+type taskGitSummaryRead struct {
+	done       chan struct{}
+	result     taskGitSummaryDTO
+	runtimeErr *core.RuntimeError
 }
 
 type snapshotDTO struct {
@@ -88,6 +144,11 @@ type projectDTO struct {
 	Path     string           `json:"path"`
 	Archived bool             `json:"archived,omitempty"`
 	Tasks    []taskPreviewDTO `json:"tasks"`
+}
+
+type projectProjectionOptions struct {
+	WorkingTaskIDs []string
+	PinnedTaskIDs  []string
 }
 
 type projectFileTreeEntryDTO struct {
@@ -160,6 +221,18 @@ type projectSearchDTO struct {
 	TaskID    string                  `json:"taskId,omitempty"`
 	Matches   []projectSearchMatchDTO `json:"matches"`
 	Truncated bool                    `json:"truncated"`
+}
+
+type sdkPluginCapabilityDTO struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+type sdkCapabilitiesDTO struct {
+	SlashCommands []string                 `json:"slash_commands"`
+	Skills        []string                 `json:"skills"`
+	Plugins       []sdkPluginCapabilityDTO `json:"plugins"`
+	CachedAt      int64                    `json:"cachedAt,omitempty"`
 }
 
 type projectGitInfoDTO struct {
@@ -473,6 +546,53 @@ type taskDTO struct {
 	Events               []taskEventDTO         `json:"events"`
 	Comments             []commentDTO           `json:"comments"`
 	QueuedTurns          []queuedTurnDTO        `json:"queuedTurns,omitempty"`
+	Preview              *taskPreviewDTO        `json:"preview,omitempty"`
+	RuntimeState         taskRuntimeStateDTO    `json:"runtimeState"`
+}
+
+type taskRuntimeStateDTO struct {
+	IsRunning  bool     `json:"isRunning"`
+	RuntimeIDs []string `json:"runtimeIds,omitempty"`
+	UpdatedAt  string   `json:"updatedAt,omitempty"`
+}
+
+type taskEventsReadResult struct {
+	Events     []storage.TaskEvent
+	RuntimeErr *core.RuntimeError
+}
+
+type taskPreviewReadResult struct {
+	Preview    *taskPreviewDTO
+	RuntimeErr *core.RuntimeError
+}
+
+type taskCommentsReadResult struct {
+	Comments   []storage.Comment
+	RuntimeErr *core.RuntimeError
+}
+
+type taskDeviceEnvironmentsReadResult struct {
+	DeviceEnvironments []storage.TaskDeviceEnvironment
+	RuntimeErr         *core.RuntimeError
+}
+
+type taskQueuedTurnsReadResult struct {
+	QueuedTurns []storage.QueuedTurn
+	RuntimeErr  *core.RuntimeError
+}
+
+type taskRuntimeStateReadResult struct {
+	RuntimeState taskRuntimeStateDTO
+	RuntimeErr   *core.RuntimeError
+}
+
+type taskReadDetailParts struct {
+	Events             []storage.TaskEvent
+	Preview            *taskPreviewDTO
+	Comments           []storage.Comment
+	DeviceEnvironments []storage.TaskDeviceEnvironment
+	QueuedTurns        []storage.QueuedTurn
+	RuntimeState       taskRuntimeStateDTO
 }
 
 type deviceEnvironmentDTO struct {
@@ -555,6 +675,7 @@ type queuedTurnDTO struct {
 	Label               string           `json:"label,omitempty"`
 	IncludeComments     *bool            `json:"includeComments,omitempty"`
 	Images              *json.RawMessage `json:"images,omitempty"`
+	HyperPlanStrategy   json.RawMessage  `json:"hyperplanStrategy,omitempty"`
 	Thinking            string           `json:"thinking,omitempty"`
 	FastMode            *bool            `json:"fastMode,omitempty"`
 }
@@ -569,6 +690,7 @@ type queuedTurnPayloadDTO struct {
 	Label               string           `json:"label"`
 	IncludeComments     *bool            `json:"includeComments"`
 	Images              *json.RawMessage `json:"images"`
+	HyperPlanStrategy   json.RawMessage  `json:"hyperplanStrategy,omitempty"`
 	Thinking            string           `json:"thinking"`
 	FastMode            *bool            `json:"fastMode"`
 }
@@ -764,13 +886,13 @@ type taskResourceInventoryDTO struct {
 }
 
 type taskResourceEventPayload struct {
-	ID                     string            `json:"id"`
-	Type                   string            `json:"type"`
-	PatchFileID            string            `json:"patchFileId"`
-	FullPatch              string            `json:"fullPatch"`
-	Images                 []json.RawMessage `json:"images"`
-	Execution              json.RawMessage   `json:"execution"`
-	HyperPlanSubExecutions []json.RawMessage `json:"hyperplanSubExecutions"`
+	ID                     string                         `json:"id"`
+	Type                   string                         `json:"type"`
+	PatchFileID            string                         `json:"patchFileId"`
+	FullPatch              string                         `json:"fullPatch"`
+	Images                 []json.RawMessage              `json:"images"`
+	Execution              taskResourceExecutionPayload   `json:"execution"`
+	HyperPlanSubExecutions []taskResourceExecutionPayload `json:"hyperplanSubExecutions"`
 }
 
 type taskResourceExecutionPayload struct {
@@ -838,6 +960,19 @@ type repoCreateResultDTO struct {
 	CreatedAt string `json:"createdAt"`
 }
 
+type repoPathInspectDTO struct {
+	Path         string `json:"path"`
+	ResolvedPath string `json:"resolvedPath"`
+	Exists       bool   `json:"exists"`
+	IsDirectory  bool   `json:"isDirectory"`
+	IsGitRepo    bool   `json:"isGitRepo"`
+	RepoRoot     string `json:"repoRoot,omitempty"`
+	RelativePath string `json:"relativePath,omitempty"`
+	MainBranch   string `json:"mainBranch,omitempty"`
+	HasGhCLI     bool   `json:"hasGhCli,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
 type commentCreateResultDTO struct {
 	CommentID string `json:"commentId"`
 	CreatedAt string `json:"createdAt"`
@@ -862,20 +997,27 @@ func Register(runtime *core.Runtime, store *storage.Store, options Options) *Ser
 		store:               store,
 		options:             options,
 		idempotentMutations: map[string]*idempotentMutationEntry{},
+		taskEventImageRefs:  map[string]taskEventImageReferenceCacheEntry{},
+		projectGitInfoCache: map[string]projectGitInfoCacheEntry{},
+		projectGitInfoReads: map[string]*projectGitInfoRead{},
+		projectGitCache:     map[string]projectGitSummaryCacheEntry{},
+		projectGitReads:     map[string]*projectGitSummaryRead{},
+		taskGitCache:        map[string]taskGitSummaryCacheEntry{},
+		taskGitReads:        map[string]*taskGitSummaryRead{},
 		processes:           map[string]*projectProcessState{},
 		terminals:           map[string]*taskTerminalState{},
 		agentExecutions:     map[string]*agentExecutionState{},
 		runningCrons:        map[string]bool{},
 	}
-	runtime.RegisterNotification("openade/snapshotChanged")
-	runtime.RegisterNotification("openade/repo/updated")
-	runtime.RegisterNotification("openade/repo/deleted")
-	runtime.RegisterNotification("openade/task/previewChanged")
-	runtime.RegisterNotification("openade/task/updated")
-	runtime.RegisterNotification("openade/task/deleted")
-	runtime.RegisterNotification("openade/queuedTurn/updated")
-	runtime.RegisterNotification("openade/workingTasks")
-	runtime.RegisterNotification("remote/device/changed")
+	runtime.RegisterNotification(openADENotificationSnapshotChanged)
+	runtime.RegisterNotification(openADENotificationRepoUpdated)
+	runtime.RegisterNotification(openADENotificationRepoDeleted)
+	runtime.RegisterNotification(openADENotificationTaskPreviewChanged)
+	runtime.RegisterNotification(openADENotificationTaskUpdated)
+	runtime.RegisterNotification(openADENotificationTaskDeleted)
+	runtime.RegisterNotification(openADENotificationQueuedTurnUpdated)
+	runtime.RegisterNotification(openADENotificationWorkingTasks)
+	runtime.RegisterNotification(openADENotificationRemoteDeviceChanged)
 	runtime.RegisterNotification("process/started")
 	runtime.RegisterNotification("process/output")
 	runtime.RegisterNotification("process/exit")
@@ -896,98 +1038,112 @@ func Register(runtime *core.Runtime, store *storage.Store, options Options) *Ser
 	runtime.Register("runtime/read", service.handleRuntimeRead)
 	runtime.Register("runtime/reconcile", service.handleRuntimeReconcile)
 	runtime.Register("runtime/stop", service.handleRuntimeStop)
-	runtime.Register("remote/pairing/start", service.handleRemotePairingStart)
-	runtime.Register("remote/device/list", service.handleRemoteDeviceList)
-	runtime.Register("remote/device/revoke", service.handleRemoteDeviceRevoke)
-	runtime.Register("remote/device/dropAll", service.handleRemoteDeviceDropAll)
-	runtime.Register("remote/device/selfRevoke", service.handleRemoteDeviceSelfRevoke)
-	runtime.Register("openade/import/legacyResources", service.handleLegacyResourcesImport)
-	runtime.Register("openade/settings/mcpServers/read", service.handleMCPServersRead)
-	runtime.Register("openade/settings/mcpServers/replace", service.handleMCPServersReplace)
-	runtime.Register("openade/settings/mcpServers/upsert", service.handleMCPServerUpsert)
-	runtime.Register("openade/settings/mcpServers/delete", service.handleMCPServerDelete)
-	runtime.Register("openade/settings/personal/read", service.handlePersonalSettingsRead)
-	runtime.Register("openade/settings/personal/replace", service.handlePersonalSettingsReplace)
-	runtime.Register("openade/snapshot/read", service.handleSnapshotRead)
-	runtime.Register("openade/project/list", service.handleProjectList)
-	runtime.Register("openade/project/files/tree", service.handleProjectFilesTree)
-	runtime.Register("openade/project/file/read", service.handleProjectFileRead)
-	runtime.Register("openade/project/file/write", service.handleProjectFileWrite)
-	runtime.Register("openade/project/files/fuzzySearch", service.handleProjectFilesFuzzySearch)
-	runtime.Register("openade/project/search", service.handleProjectSearch)
-	runtime.Register("openade/project/git/info/read", service.handleProjectGitInfoRead)
-	runtime.Register("openade/project/git/branches/read", service.handleProjectGitBranchesRead)
-	runtime.Register("openade/project/git/summary/read", service.handleProjectGitSummaryRead)
-	runtime.Register("openade/task/git/summary/read", service.handleTaskGitSummaryRead)
-	runtime.Register("openade/task/git/scopes/read", service.handleTaskGitScopesRead)
-	runtime.Register("openade/task/changes/read", service.handleTaskChangesRead)
-	runtime.Register("openade/task/diff/read", service.handleTaskDiffRead)
-	runtime.Register("openade/task/filePair/read", service.handleTaskFilePairRead)
-	runtime.Register("openade/task/git/log", service.handleTaskGitLog)
-	runtime.Register("openade/task/git/commit/files/read", service.handleTaskGitCommitFiles)
-	runtime.Register("openade/task/git/fileAtTreeish/read", service.handleTaskGitFileAtTreeish)
-	runtime.Register("openade/task/git/commit/filePatch/read", service.handleTaskGitCommitFilePatch)
-	runtime.Register("openade/task/git/commit", service.handleTaskGitCommit)
-	runtime.Register("openade/project/process/list", service.handleProjectProcessList)
-	runtime.Register("openade/cron/definitions/read", service.handleCronDefinitionsRead)
-	runtime.Register("openade/project/process/start", service.handleProjectProcessStart)
-	runtime.Register("openade/project/process/reconnect", service.handleProjectProcessReconnect)
-	runtime.Register("openade/project/process/stop", service.handleProjectProcessStop)
-	runtime.Register("openade/cron/installState/read", service.handleCronInstallStateRead)
-	runtime.Register("openade/cron/installState/replace", service.handleCronInstallStateReplace)
-	runtime.Register("openade/task/terminal/start", service.handleTaskTerminalStart)
-	runtime.Register("openade/task/terminal/reconnect", service.handleTaskTerminalReconnect)
-	runtime.Register("openade/task/terminal/write", service.handleTaskTerminalWrite)
-	runtime.Register("openade/task/terminal/resize", service.handleTaskTerminalResize)
-	runtime.Register("openade/task/terminal/stop", service.handleTaskTerminalStop)
-	runtime.Register("openade/task/resourceInventory/read", service.handleTaskResourceInventoryRead)
-	runtime.Register("openade/task/image/read", service.handleTaskImageRead)
-	runtime.Register("openade/task/image/staged/read", service.handleTaskImageStagedRead)
-	runtime.Register("openade/task/image/write", service.handleTaskImageWrite)
-	runtime.Register("openade/task/image/importLegacy", service.handleTaskImageImportLegacy)
-	runtime.Register("openade/task/images/importLegacy", service.handleTaskImagesImportLegacy)
-	runtime.Register("openade/task/images/gcStaged", service.handleTaskImagesGCStaged)
-	runtime.Register("openade/task/snapshot/patch/read", service.handleTaskSnapshotPatchRead)
-	runtime.Register("openade/task/snapshot/index/read", service.handleTaskSnapshotIndexRead)
-	runtime.Register("openade/task/snapshot/patch/readSlice", service.handleTaskSnapshotPatchSliceRead)
-	runtime.Register("openade/task/snapshots/importLegacy", service.handleTaskSnapshotsImportLegacy)
-	runtime.Register("openade/task/sessions/importLegacy", service.handleTaskHarnessSessionsImportLegacy)
-	runtime.Register("openade/snapshot/create", service.handleSnapshotCreate)
-	runtime.Register("openade/task/list", service.handleTaskList)
-	runtime.Register("openade/task/read", service.handleTaskRead)
-	runtime.Register("openade/task/create", service.handleTaskCreate)
-	runtime.Register("openade/task/metadata/update", service.handleTaskMetadataUpdate)
-	runtime.Register("openade/task/usage/recalculate", service.handleTaskUsageRecalculate)
-	runtime.Register("openade/task/usage/backfill", service.handleTaskUsageBackfill)
-	runtime.Register("openade/task/title/generate", service.handleTaskTitleGenerate)
-	runtime.Register("openade/task/environment/setup", service.handleTaskEnvironmentSetup)
-	runtime.Register("openade/task/environment/prepare", service.handleTaskEnvironmentPrepare)
-	runtime.Register("openade/turn/start", service.handleTurnStart)
-	runtime.Register("openade/turn/interrupt", service.handleTurnInterrupt)
-	runtime.Register("openade/review/start", service.handleReviewStart)
-	runtime.Register("openade/repo/create", service.handleRepoCreate)
-	runtime.Register("openade/repo/update", service.handleRepoUpdate)
-	runtime.Register("openade/repo/delete", service.handleRepoDelete)
-	runtime.Register("openade/comment/create", service.handleCommentCreate)
-	runtime.Register("openade/comment/edit", service.handleCommentEdit)
-	runtime.Register("openade/comment/delete", service.handleCommentDelete)
-	runtime.Register("openade/task/delete", service.handleTaskDelete)
-	runtime.Register("openade/action/create", service.handleActionCreate)
-	runtime.Register("openade/action/stream/append", service.handleActionStreamAppend)
-	runtime.Register("openade/action/complete", service.handleActionComplete)
-	runtime.Register("openade/action/error", service.handleActionError)
-	runtime.Register("openade/action/stopped", service.handleActionStopped)
-	runtime.Register("openade/action/reconcileRuntime", service.handleActionReconcileRuntime)
-	runtime.Register("openade/action/execution/update", service.handleActionExecutionUpdate)
-	runtime.Register("openade/hyperplan/subExecution/add", service.handleHyperPlanSubExecutionAdd)
-	runtime.Register("openade/hyperplan/subExecution/stream/append", service.handleHyperPlanSubExecutionStreamAppend)
-	runtime.Register("openade/hyperplan/subExecution/update", service.handleHyperPlanSubExecutionUpdate)
-	runtime.Register("openade/hyperplan/reconcileLabels/set", service.handleHyperPlanReconcileLabelsSet)
-	runtime.Register("openade/queued-turn/enqueue", service.handleQueuedTurnEnqueue)
-	runtime.Register("openade/queued-turn/importLegacy", service.handleQueuedTurnImportLegacy)
-	runtime.Register("openade/queued-turn/reorder", service.handleQueuedTurnReorder)
-	runtime.Register("openade/queued-turn/cancel", service.handleQueuedTurnCancel)
+	service.registerOpenADEContractMethod(runtime, openADERemoteMethodRemotePairingStart, service.handleRemotePairingStart)
+	service.registerOpenADEContractMethod(runtime, openADERemoteMethodRemoteDeviceList, service.handleRemoteDeviceList)
+	service.registerOpenADEContractMethod(runtime, openADERemoteMethodRemoteDeviceRevoke, service.handleRemoteDeviceRevoke)
+	service.registerOpenADEContractMethod(runtime, openADERemoteMethodRemoteDeviceDropAll, service.handleRemoteDeviceDropAll)
+	service.registerOpenADEContractMethod(runtime, openADERemoteMethodRemoteDeviceSelfRevoke, service.handleRemoteDeviceSelfRevoke)
+	service.registerOpenADEContractMethod(runtime, openADEMethodImportLegacyResources, service.handleLegacyResourcesImport)
+	service.registerOpenADEContractMethod(runtime, openADEMethodSettingsMcpServersRead, service.handleMCPServersRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodSettingsMcpServersReplace, service.handleMCPServersReplace)
+	service.registerOpenADEContractMethod(runtime, openADEMethodSettingsMcpServersUpsert, service.handleMCPServerUpsert)
+	service.registerOpenADEContractMethod(runtime, openADEMethodSettingsMcpServersDelete, service.handleMCPServerDelete)
+	service.registerOpenADEContractMethod(runtime, openADEMethodSettingsPersonalRead, service.handlePersonalSettingsRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodSettingsPersonalReplace, service.handlePersonalSettingsReplace)
+	service.registerOpenADEContractMethod(runtime, openADEMethodSnapshotRead, service.handleSnapshotRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodProjectList, service.handleProjectList)
+	service.registerOpenADEContractMethod(runtime, openADEMethodProjectFilesTree, service.handleProjectFilesTree)
+	service.registerOpenADEContractMethod(runtime, openADEMethodProjectFileRead, service.handleProjectFileRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodProjectFileWrite, service.handleProjectFileWrite)
+	service.registerOpenADEContractMethod(runtime, openADEMethodProjectFilesFuzzySearch, service.handleProjectFilesFuzzySearch)
+	service.registerOpenADEContractMethod(runtime, openADEMethodProjectSearch, service.handleProjectSearch)
+	service.registerOpenADEContractMethod(runtime, openADEMethodProjectSdkCapabilitiesRead, service.handleProjectSdkCapabilitiesRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodProjectGitInfoRead, service.handleProjectGitInfoRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodProjectGitBranchesRead, service.handleProjectGitBranchesRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodProjectGitSummaryRead, service.handleProjectGitSummaryRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskGitSummaryRead, service.handleTaskGitSummaryRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskGitScopesRead, service.handleTaskGitScopesRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskChangesRead, service.handleTaskChangesRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskDiffRead, service.handleTaskDiffRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskFilePairRead, service.handleTaskFilePairRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskGitLog, service.handleTaskGitLog)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskGitCommitFilesRead, service.handleTaskGitCommitFiles)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskGitFileAtTreeishRead, service.handleTaskGitFileAtTreeish)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskGitCommitFilePatchRead, service.handleTaskGitCommitFilePatch)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskGitCommit, service.handleTaskGitCommit)
+	service.registerOpenADEContractMethod(runtime, openADEMethodProjectProcessList, service.handleProjectProcessList)
+	service.registerOpenADEContractMethod(runtime, openADEMethodCronDefinitionsRead, service.handleCronDefinitionsRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodCronRun, service.handleCronRun)
+	service.registerOpenADEContractMethod(runtime, openADEMethodProjectProcessStart, service.handleProjectProcessStart)
+	service.registerOpenADEContractMethod(runtime, openADEMethodProjectProcessReconnect, service.handleProjectProcessReconnect)
+	service.registerOpenADEContractMethod(runtime, openADEMethodProjectProcessStop, service.handleProjectProcessStop)
+	service.registerOpenADEContractMethod(runtime, openADEMethodCronInstallStateList, service.handleCronInstallStateList)
+	service.registerOpenADEContractMethod(runtime, openADEMethodCronInstallStateRead, service.handleCronInstallStateRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodCronInstallStateReplace, service.handleCronInstallStateReplace)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskTerminalStart, service.handleTaskTerminalStart)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskTerminalReconnect, service.handleTaskTerminalReconnect)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskTerminalWrite, service.handleTaskTerminalWrite)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskTerminalResize, service.handleTaskTerminalResize)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskTerminalStop, service.handleTaskTerminalStop)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskResourceInventoryRead, service.handleTaskResourceInventoryRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskImageRead, service.handleTaskImageRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskImageStagedRead, service.handleTaskImageStagedRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskImageWrite, service.handleTaskImageWrite)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskImageImportLegacy, service.handleTaskImageImportLegacy)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskImagesImportLegacy, service.handleTaskImagesImportLegacy)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskImagesGcStaged, service.handleTaskImagesGCStaged)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskSnapshotPatchRead, service.handleTaskSnapshotPatchRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskSnapshotIndexRead, service.handleTaskSnapshotIndexRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskSnapshotPatchReadSlice, service.handleTaskSnapshotPatchSliceRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskSnapshotsImportLegacy, service.handleTaskSnapshotsImportLegacy)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskSessionsImportLegacy, service.handleTaskHarnessSessionsImportLegacy)
+	service.registerOpenADEContractMethod(runtime, openADEMethodSnapshotCreate, service.handleSnapshotCreate)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskList, service.handleTaskList)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskRead, service.handleTaskRead)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskCreate, service.handleTaskCreate)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskMetadataUpdate, service.handleTaskMetadataUpdate)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskUsageRecalculate, service.handleTaskUsageRecalculate)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskUsageBackfill, service.handleTaskUsageBackfill)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskTitleGenerate, service.handleTaskTitleGenerate)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskEnvironmentSetup, service.handleTaskEnvironmentSetup)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskEnvironmentPrepare, service.handleTaskEnvironmentPrepare)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTurnStart, service.handleTurnStart)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTurnInterrupt, service.handleTurnInterrupt)
+	service.registerOpenADEContractMethod(runtime, openADEMethodReviewStart, service.handleReviewStart)
+	service.registerOpenADEContractMethod(runtime, openADEMethodRepoPathInspect, service.handleRepoPathInspect)
+	service.registerOpenADEContractMethod(runtime, openADEMethodRepoCreate, service.handleRepoCreate)
+	service.registerOpenADEContractMethod(runtime, openADEMethodRepoUpdate, service.handleRepoUpdate)
+	service.registerOpenADEContractMethod(runtime, openADEMethodRepoDelete, service.handleRepoDelete)
+	service.registerOpenADEContractMethod(runtime, openADEMethodCommentCreate, service.handleCommentCreate)
+	service.registerOpenADEContractMethod(runtime, openADEMethodCommentEdit, service.handleCommentEdit)
+	service.registerOpenADEContractMethod(runtime, openADEMethodCommentDelete, service.handleCommentDelete)
+	service.registerOpenADEContractMethod(runtime, openADEMethodTaskDelete, service.handleTaskDelete)
+	service.registerOpenADEContractMethod(runtime, openADEMethodActionCreate, service.handleActionCreate)
+	service.registerOpenADEContractMethod(runtime, openADEMethodActionStreamAppend, service.handleActionStreamAppend)
+	service.registerOpenADEContractMethod(runtime, openADEMethodActionComplete, service.handleActionComplete)
+	service.registerOpenADEContractMethod(runtime, openADEMethodActionError, service.handleActionError)
+	service.registerOpenADEContractMethod(runtime, openADEMethodActionStopped, service.handleActionStopped)
+	service.registerOpenADEContractMethod(runtime, openADEMethodActionReconcileRuntime, service.handleActionReconcileRuntime)
+	service.registerOpenADEContractMethod(runtime, openADEMethodActionExecutionUpdate, service.handleActionExecutionUpdate)
+	service.registerOpenADEContractMethod(runtime, openADEMethodHyperplanSubExecutionAdd, service.handleHyperPlanSubExecutionAdd)
+	service.registerOpenADEContractMethod(runtime, openADEMethodHyperplanSubExecutionStreamAppend, service.handleHyperPlanSubExecutionStreamAppend)
+	service.registerOpenADEContractMethod(runtime, openADEMethodHyperplanSubExecutionUpdate, service.handleHyperPlanSubExecutionUpdate)
+	service.registerOpenADEContractMethod(runtime, openADEMethodHyperplanReconcileLabelsSet, service.handleHyperPlanReconcileLabelsSet)
+	service.registerOpenADEContractMethod(runtime, openADEMethodQueuedTurnEnqueue, service.handleQueuedTurnEnqueue)
+	service.registerOpenADEContractMethod(runtime, openADEMethodQueuedTurnImportLegacy, service.handleQueuedTurnImportLegacy)
+	service.registerOpenADEContractMethod(runtime, openADEMethodQueuedTurnReorder, service.handleQueuedTurnReorder)
+	service.registerOpenADEContractMethod(runtime, openADEMethodQueuedTurnCancel, service.handleQueuedTurnCancel)
 	return service
+}
+
+func (service *Service) registerOpenADEContractMethod(runtime *core.Runtime, method string, handler core.Handler) {
+	runtime.Register(method, func(ctx context.Context, conn *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
+		normalized, message := normalizeOpenADEContractRequest(method, raw)
+		if message != "" {
+			return nil, invalidParams(message)
+		}
+		return handler(ctx, conn, normalized)
+	})
 }
 
 func (service *Service) runIdempotentMutation(scope string, raw json.RawMessage, action func() (core.JSONPayload, *core.RuntimeError)) (core.JSONPayload, *core.RuntimeError) {
@@ -1034,7 +1190,15 @@ func (service *Service) cleanupIdempotentMutationsLocked(now time.Time) {
 }
 
 func (service *Service) handleSnapshotRead(ctx context.Context, _ *core.Connection, _ json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	projects, runtimeErr := service.projects(ctx)
+	settings, runtimeErr := service.loadPersonalSettings(ctx)
+	if runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	workingTaskIDs, runtimeErr := service.listActiveOpenADETaskIDs(ctx)
+	if runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	projects, runtimeErr := service.projects(ctx, projectProjectionOptions{WorkingTaskIDs: workingTaskIDs, PinnedTaskIDs: settings.PinnedTaskIDs})
 	if runtimeErr != nil {
 		return nil, runtimeErr
 	}
@@ -1050,19 +1214,15 @@ func (service *Service) handleSnapshotRead(ctx context.Context, _ *core.Connecti
 		Server: snapshotServerDTO{
 			Version:  version,
 			HostName: hostName,
-			Theme: snapshotTheme{
-				Setting:   "system",
-				ClassName: "code-theme-light",
-				Label:     "Light",
-			},
+			Theme:    snapshotThemeFromPersonalSettings(settings),
 		},
 		Repos:          projects,
-		WorkingTaskIDs: []string{},
+		WorkingTaskIDs: workingTaskIDs,
 	}, nil
 }
 
 func (service *Service) handleSnapshotCreate(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/snapshot/create", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodSnapshotCreate, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.createSnapshot(ctx, raw)
 	})
 }
@@ -1188,36 +1348,42 @@ func (service *Service) createSnapshot(ctx context.Context, raw json.RawMessage)
 		return nil, taskEventWriteRuntimeError(err)
 	}
 	if created {
-		service.runtime.Notify("openade/task/updated", map[string]string{"repoId": task.RepoID, "taskId": task.ID})
-		service.runtime.Notify("openade/snapshotChanged", map[string]string{"repoId": task.RepoID})
+		service.runtime.Notify(openADENotificationTaskUpdated, map[string]string{"repoId": task.RepoID, "taskId": task.ID})
+		service.runtime.Notify(openADENotificationSnapshotChanged, map[string]string{"repoId": task.RepoID})
 	}
 	return snapshotCreateResultDTO{EventID: eventID, CreatedAt: formatTime(createdAt)}, nil
 }
 
 func (service *Service) taskHasActionEvent(ctx context.Context, taskID string, eventID string) (bool, *core.RuntimeError) {
-	events, err := service.store.ListTaskEvents(ctx, taskID, true)
+	event, ok, err := service.store.GetTaskEvent(ctx, taskID, eventID)
 	if err != nil {
 		return false, handlerError(err)
 	}
-	for _, event := range events {
-		payload, ok := taskResourcePayload(event)
-		eventType := event.Type
-		if ok && payload.Type != "" {
-			eventType = payload.Type
-		}
-		payloadID := event.ID
-		if ok && payload.ID != "" {
-			payloadID = payload.ID
-		}
-		if eventType == "action" && payloadID == eventID {
-			return true, nil
-		}
+	if !ok {
+		return false, nil
 	}
-	return false, nil
+	payload, payloadOK := taskResourcePayload(event)
+	eventType := event.Type
+	if payloadOK && payload.Type != "" {
+		eventType = payload.Type
+	}
+	payloadID := event.ID
+	if payloadOK && payload.ID != "" {
+		payloadID = payload.ID
+	}
+	return eventType == "action" && payloadID == eventID, nil
 }
 
 func (service *Service) handleProjectList(ctx context.Context, _ *core.Connection, _ json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.projects(ctx)
+	settings, runtimeErr := service.loadPersonalSettings(ctx)
+	if runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	workingTaskIDs, runtimeErr := service.listActiveOpenADETaskIDs(ctx)
+	if runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	return service.projects(ctx, projectProjectionOptions{WorkingTaskIDs: workingTaskIDs, PinnedTaskIDs: settings.PinnedTaskIDs})
 }
 
 func (service *Service) handleProjectFilesTree(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
@@ -1283,7 +1449,7 @@ func (service *Service) handleProjectFileRead(ctx context.Context, _ *core.Conne
 }
 
 func (service *Service) handleProjectFileWrite(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/project/file/write", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodProjectFileWrite, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.writeProjectFile(ctx, raw)
 	})
 }
@@ -1381,26 +1547,199 @@ func (service *Service) handleProjectSearch(ctx context.Context, _ *core.Connect
 	return projectSearchToDTO(repo.ID, params.TaskID, result), nil
 }
 
+func (service *Service) handleProjectSdkCapabilitiesRead(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
+	var params struct {
+		RepoID    string `json:"repoId"`
+		TaskID    string `json:"taskId"`
+		HarnessID string `json:"harnessId"`
+	}
+	if runtimeErr := decodeObject(raw, &params); runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	harnessID, runtimeErr := normalizeSDKCapabilitiesHarnessID(params.HarnessID)
+	if runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	executor := service.options.SDKCapabilitiesExecutor
+	if executor == nil {
+		return nil, handlerError(errorString("SDK capabilities executor is not configured"))
+	}
+	repo, root, runtimeErr := service.projectHostRoot(ctx, params.RepoID, params.TaskID)
+	if runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	result, runtimeErr := executor.DiscoverSDKCapabilities(ctx, SDKCapabilitiesRequest{
+		RepoID:    repo.ID,
+		RepoPath:  root,
+		TaskID:    params.TaskID,
+		Cwd:       root,
+		HarnessID: harnessID,
+		EnvVars:   service.personalSettingsEnvVarsOrEmpty(ctx),
+	})
+	if runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	return sdkCapabilitiesToDTO(result), nil
+}
+
+func gitProjectCacheKey(repo storage.Repo) string {
+	return repo.ID + gitReadCacheSeparator + repo.Path
+}
+
+func gitTaskCacheKey(repoID string, taskID string, workDir string) string {
+	return repoID + gitReadCacheSeparator + taskID + gitReadCacheSeparator + workDir
+}
+
+func (service *Service) readProjectGitInfoCached(ctx context.Context, key string, read func() (projectGitInfoDTO, *core.RuntimeError)) (projectGitInfoDTO, *core.RuntimeError) {
+	now := time.Now()
+	for {
+		service.gitMu.Lock()
+		if cached, ok := service.projectGitInfoCache[key]; ok && cached.expiresAt.After(now) {
+			service.gitMu.Unlock()
+			return cached.result, nil
+		}
+		if activeRead, ok := service.projectGitInfoReads[key]; ok {
+			done := activeRead.done
+			service.gitMu.Unlock()
+			select {
+			case <-done:
+				return activeRead.result, activeRead.runtimeErr
+			case <-ctx.Done():
+				return projectGitInfoDTO{}, handlerError(ctx.Err())
+			}
+		}
+		activeRead := &projectGitInfoRead{done: make(chan struct{})}
+		service.projectGitInfoReads[key] = activeRead
+		service.gitMu.Unlock()
+
+		result, runtimeErr := read()
+		service.gitMu.Lock()
+		activeRead.result = result
+		activeRead.runtimeErr = runtimeErr
+		if runtimeErr == nil {
+			service.projectGitInfoCache[key] = projectGitInfoCacheEntry{result: result, expiresAt: time.Now().Add(gitReadCacheTTL)}
+		}
+		delete(service.projectGitInfoReads, key)
+		close(activeRead.done)
+		service.gitMu.Unlock()
+		return result, runtimeErr
+	}
+}
+
+func (service *Service) readProjectGitSummaryCached(ctx context.Context, key string, read func() (projectGitSummaryDTO, *core.RuntimeError)) (projectGitSummaryDTO, *core.RuntimeError) {
+	now := time.Now()
+	for {
+		service.gitMu.Lock()
+		if cached, ok := service.projectGitCache[key]; ok && cached.expiresAt.After(now) {
+			service.gitMu.Unlock()
+			return cached.result, nil
+		}
+		if activeRead, ok := service.projectGitReads[key]; ok {
+			done := activeRead.done
+			service.gitMu.Unlock()
+			select {
+			case <-done:
+				return activeRead.result, activeRead.runtimeErr
+			case <-ctx.Done():
+				return projectGitSummaryDTO{}, handlerError(ctx.Err())
+			}
+		}
+		activeRead := &projectGitSummaryRead{done: make(chan struct{})}
+		service.projectGitReads[key] = activeRead
+		service.gitMu.Unlock()
+
+		result, runtimeErr := read()
+		service.gitMu.Lock()
+		activeRead.result = result
+		activeRead.runtimeErr = runtimeErr
+		if runtimeErr == nil {
+			service.projectGitCache[key] = projectGitSummaryCacheEntry{result: result, expiresAt: time.Now().Add(gitReadCacheTTL)}
+		}
+		delete(service.projectGitReads, key)
+		close(activeRead.done)
+		service.gitMu.Unlock()
+		return result, runtimeErr
+	}
+}
+
+func (service *Service) readTaskGitSummaryCached(ctx context.Context, key string, read func() (taskGitSummaryDTO, *core.RuntimeError)) (taskGitSummaryDTO, *core.RuntimeError) {
+	now := time.Now()
+	for {
+		service.gitMu.Lock()
+		if cached, ok := service.taskGitCache[key]; ok && cached.expiresAt.After(now) {
+			service.gitMu.Unlock()
+			return cached.result, nil
+		}
+		if activeRead, ok := service.taskGitReads[key]; ok {
+			done := activeRead.done
+			service.gitMu.Unlock()
+			select {
+			case <-done:
+				return activeRead.result, activeRead.runtimeErr
+			case <-ctx.Done():
+				return taskGitSummaryDTO{}, handlerError(ctx.Err())
+			}
+		}
+		activeRead := &taskGitSummaryRead{done: make(chan struct{})}
+		service.taskGitReads[key] = activeRead
+		service.gitMu.Unlock()
+
+		result, runtimeErr := read()
+		service.gitMu.Lock()
+		activeRead.result = result
+		activeRead.runtimeErr = runtimeErr
+		if runtimeErr == nil {
+			service.taskGitCache[key] = taskGitSummaryCacheEntry{result: result, expiresAt: time.Now().Add(gitReadCacheTTL)}
+		}
+		delete(service.taskGitReads, key)
+		close(activeRead.done)
+		service.gitMu.Unlock()
+		return result, runtimeErr
+	}
+}
+
+func (service *Service) clearGitSummaryCache(repoID string, taskID string) {
+	service.gitMu.Lock()
+	projectPrefix := repoID + gitReadCacheSeparator
+	for key := range service.projectGitCache {
+		if strings.HasPrefix(key, projectPrefix) {
+			delete(service.projectGitCache, key)
+		}
+	}
+	taskPrefix := repoID + gitReadCacheSeparator
+	if taskID != "" {
+		taskPrefix += taskID + gitReadCacheSeparator
+	}
+	for key := range service.taskGitCache {
+		if strings.HasPrefix(key, taskPrefix) {
+			delete(service.taskGitCache, key)
+		}
+	}
+	service.gitMu.Unlock()
+}
+
 func (service *Service) handleProjectGitInfoRead(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
 	repo, runtimeErr := service.repoByRequest(ctx, raw)
 	if runtimeErr != nil {
 		return nil, runtimeErr
 	}
-	info, isGitRepo, reason, err := host.ReadGitRepositoryInfo(ctx, repo.Path)
-	if err != nil {
-		return nil, handlerError(err)
-	}
-	if !isGitRepo {
-		return projectGitInfoDTO{RepoID: repo.ID, IsGitRepo: false, Error: reason}, nil
-	}
-	return projectGitInfoDTO{
-		RepoID:       repo.ID,
-		IsGitRepo:    true,
-		RepoRoot:     info.RepoRoot,
-		RelativePath: info.RelativePath,
-		MainBranch:   info.DefaultBranch,
-		HasGhCLI:     info.HasGhCLI,
-	}, nil
+	return service.readProjectGitInfoCached(ctx, gitProjectCacheKey(repo), func() (projectGitInfoDTO, *core.RuntimeError) {
+		info, isGitRepo, reason, err := host.ReadGitRepositoryInfo(ctx, repo.Path)
+		if err != nil {
+			return projectGitInfoDTO{}, handlerError(err)
+		}
+		if !isGitRepo {
+			return projectGitInfoDTO{RepoID: repo.ID, IsGitRepo: false, Error: reason}, nil
+		}
+		return projectGitInfoDTO{
+			RepoID:       repo.ID,
+			IsGitRepo:    true,
+			RepoRoot:     info.RepoRoot,
+			RelativePath: info.RelativePath,
+			MainBranch:   info.DefaultBranch,
+			HasGhCLI:     info.HasGhCLI,
+		}, nil
+	})
 }
 
 func (service *Service) handleProjectGitBranchesRead(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
@@ -1434,14 +1773,16 @@ func (service *Service) handleProjectGitSummaryRead(ctx context.Context, _ *core
 	if runtimeErr != nil {
 		return nil, runtimeErr
 	}
-	summary, isGitRepo, _, err := host.ReadGitSummary(ctx, repo.Path)
-	if err != nil {
-		return nil, handlerError(err)
-	}
-	if !isGitRepo {
-		return emptyProjectGitSummaryDTO(repo.ID), nil
-	}
-	return projectGitSummaryToDTO(repo.ID, summary), nil
+	return service.readProjectGitSummaryCached(ctx, gitProjectCacheKey(repo), func() (projectGitSummaryDTO, *core.RuntimeError) {
+		summary, isGitRepo, _, err := host.ReadGitSummary(ctx, repo.Path)
+		if err != nil {
+			return projectGitSummaryDTO{}, handlerError(err)
+		}
+		if !isGitRepo {
+			return emptyProjectGitSummaryDTO(repo.ID), nil
+		}
+		return projectGitSummaryToDTO(repo.ID, summary), nil
+	})
 }
 
 func (service *Service) handleTaskGitSummaryRead(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
@@ -1456,14 +1797,16 @@ func (service *Service) handleTaskGitSummaryRead(ctx context.Context, _ *core.Co
 	if runtimeErr != nil {
 		return nil, runtimeErr
 	}
-	summary, isGitRepo, _, err := host.ReadGitSummary(ctx, workDir)
-	if err != nil {
-		return nil, handlerError(err)
-	}
-	if !isGitRepo {
-		return emptyTaskGitSummaryDTO(repo.ID, params.TaskID), nil
-	}
-	return taskGitSummaryToDTO(repo.ID, params.TaskID, summary), nil
+	return service.readTaskGitSummaryCached(ctx, gitTaskCacheKey(repo.ID, params.TaskID, workDir), func() (taskGitSummaryDTO, *core.RuntimeError) {
+		summary, isGitRepo, _, err := host.ReadGitSummary(ctx, workDir)
+		if err != nil {
+			return taskGitSummaryDTO{}, handlerError(err)
+		}
+		if !isGitRepo {
+			return emptyTaskGitSummaryDTO(repo.ID, params.TaskID), nil
+		}
+		return taskGitSummaryToDTO(repo.ID, params.TaskID, summary), nil
+	})
 }
 
 func (service *Service) handleTaskGitScopesRead(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
@@ -1479,18 +1822,39 @@ func (service *Service) handleTaskGitScopesRead(ctx context.Context, _ *core.Con
 	if runtimeErr != nil {
 		return nil, runtimeErr
 	}
-	branches, isGitRepo, _, err := host.ListGitBranches(ctx, workDir, params.IncludeRemote)
-	if err != nil {
-		return nil, handlerError(err)
+	type taskGitBranchesRead struct {
+		branches  host.GitBranches
+		isGitRepo bool
+		err       error
 	}
-	worktrees, worktreesAreGitRepo, _, err := host.ListGitWorktrees(ctx, workDir)
-	if err != nil {
-		return nil, handlerError(err)
+	type taskGitWorktreesRead struct {
+		worktrees []host.GitWorktree
+		isGitRepo bool
+		err       error
 	}
-	if !worktreesAreGitRepo {
+	branchesCh := make(chan taskGitBranchesRead, 1)
+	worktreesCh := make(chan taskGitWorktreesRead, 1)
+	go func() {
+		branches, isGitRepo, _, err := host.ListGitBranches(ctx, workDir, params.IncludeRemote)
+		branchesCh <- taskGitBranchesRead{branches: branches, isGitRepo: isGitRepo, err: err}
+	}()
+	go func() {
+		worktrees, isGitRepo, _, err := host.ListGitWorktrees(ctx, workDir)
+		worktreesCh <- taskGitWorktreesRead{worktrees: worktrees, isGitRepo: isGitRepo, err: err}
+	}()
+	branchesRead := <-branchesCh
+	worktreesRead := <-worktreesCh
+	if branchesRead.err != nil {
+		return nil, handlerError(branchesRead.err)
+	}
+	if worktreesRead.err != nil {
+		return nil, handlerError(worktreesRead.err)
+	}
+	worktrees := worktreesRead.worktrees
+	if !worktreesRead.isGitRepo {
 		worktrees = []host.GitWorktree{}
 	}
-	if !isGitRepo {
+	if !branchesRead.isGitRepo {
 		return taskGitScopesDTO{
 			RepoID:        repo.ID,
 			TaskID:        params.TaskID,
@@ -1501,8 +1865,8 @@ func (service *Service) handleTaskGitScopesRead(ctx context.Context, _ *core.Con
 	return taskGitScopesDTO{
 		RepoID:        repo.ID,
 		TaskID:        params.TaskID,
-		DefaultBranch: branches.DefaultBranch,
-		Scopes:        taskGitScopesDTOs(branches.Branches, worktrees),
+		DefaultBranch: branchesRead.branches.DefaultBranch,
+		Scopes:        taskGitScopesDTOs(branchesRead.branches.Branches, worktrees),
 	}, nil
 }
 
@@ -1784,7 +2148,7 @@ func (service *Service) handleTaskGitCommitFilePatch(ctx context.Context, _ *cor
 }
 
 func (service *Service) handleTaskGitCommit(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/git/commit", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskGitCommit, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			RepoID  string `json:"repoId"`
 			TaskID  string `json:"taskId"`
@@ -1807,6 +2171,9 @@ func (service *Service) handleTaskGitCommit(ctx context.Context, _ *core.Connect
 		}
 		if !isGitRepo {
 			result = host.GitCommitResult{Committed: false, Status: "failed", Error: firstNonEmptyString(reason, "not a git repository")}
+		}
+		if result.Committed {
+			service.clearGitSummaryCache(repo.ID, params.TaskID)
 		}
 		return taskGitCommitToDTO(repo.ID, params.TaskID, result), nil
 	})
@@ -1845,7 +2212,7 @@ func (service *Service) handleCronDefinitionsRead(ctx context.Context, _ *core.C
 	if runtimeErr != nil {
 		return nil, runtimeErr
 	}
-	result, err := host.ListProjectProcesses(ctx, root)
+	result, err := host.ListProjectCronDefinitions(ctx, root)
 	if err != nil {
 		return nil, handlerError(err)
 	}
@@ -1874,9 +2241,10 @@ func (service *Service) handleTaskList(ctx context.Context, _ *core.Connection, 
 
 func (service *Service) handleTaskRead(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
 	var params struct {
-		RepoID               string `json:"repoId"`
-		TaskID               string `json:"taskId"`
-		HydrateSessionEvents bool   `json:"hydrateSessionEvents"`
+		RepoID               string   `json:"repoId"`
+		TaskID               string   `json:"taskId"`
+		HydrateSessionEvents bool     `json:"hydrateSessionEvents"`
+		EventLimit           *float64 `json:"eventLimit"`
 	}
 	if len(raw) == 0 {
 		return nil, invalidParams("params are required")
@@ -1890,6 +2258,17 @@ func (service *Service) handleTaskRead(ctx context.Context, _ *core.Connection, 
 	if params.TaskID == "" {
 		return nil, invalidParams("taskId is required")
 	}
+	lightweightEventLimit := storage.LightweightTaskEventLimit
+	if params.EventLimit != nil {
+		limit := *params.EventLimit
+		if params.HydrateSessionEvents {
+			return nil, invalidParams("eventLimit cannot be used when hydrateSessionEvents is true")
+		}
+		if limit < 1 || limit > float64(storage.LightweightTaskEventLimit) || limit != math.Trunc(limit) {
+			return nil, invalidParams("eventLimit must be a positive integer within the lightweight task event limit")
+		}
+		lightweightEventLimit = int(limit)
+	}
 
 	task, ok, err := service.store.GetTask(ctx, params.TaskID)
 	if err != nil {
@@ -1898,23 +2277,122 @@ func (service *Service) handleTaskRead(ctx context.Context, _ *core.Connection, 
 	if !ok || task.RepoID != params.RepoID {
 		return nil, &core.RuntimeError{Code: "not_found", Message: "Task not found"}
 	}
-	events, err := service.store.ListTaskEvents(ctx, params.TaskID, params.HydrateSessionEvents)
-	if err != nil {
-		return nil, handlerError(err)
+	parts, runtimeErr := service.loadTaskReadDetailParts(ctx, params.TaskID, params.HydrateSessionEvents, lightweightEventLimit)
+	if runtimeErr != nil {
+		return nil, runtimeErr
 	}
-	comments, err := service.store.ListComments(ctx, params.TaskID)
-	if err != nil {
-		return nil, handlerError(err)
+	return taskToDTO(
+		task,
+		parts.Events,
+		parts.Comments,
+		parts.DeviceEnvironments,
+		parts.QueuedTurns,
+		params.HydrateSessionEvents,
+		parts.Preview,
+		parts.RuntimeState,
+	), nil
+}
+
+func (service *Service) loadTaskReadDetailParts(
+	ctx context.Context,
+	taskID string,
+	hydrateSessionEvents bool,
+	lightweightEventLimit int,
+) (taskReadDetailParts, *core.RuntimeError) {
+	eventsCh := make(chan taskEventsReadResult, 1)
+	previewCh := make(chan taskPreviewReadResult, 1)
+	commentsCh := make(chan taskCommentsReadResult, 1)
+	deviceEnvironmentsCh := make(chan taskDeviceEnvironmentsReadResult, 1)
+	queuedTurnsCh := make(chan taskQueuedTurnsReadResult, 1)
+	runtimeStateCh := make(chan taskRuntimeStateReadResult, 1)
+
+	go func() {
+		events, err := service.store.ListTaskEventsWithLimit(ctx, taskID, hydrateSessionEvents, lightweightEventLimit)
+		if err != nil {
+			eventsCh <- taskEventsReadResult{RuntimeErr: handlerError(err)}
+			return
+		}
+		eventsCh <- taskEventsReadResult{Events: events}
+	}()
+
+	go func() {
+		preview, hasPreview, err := service.store.GetTaskPreview(ctx, taskID)
+		if err != nil {
+			previewCh <- taskPreviewReadResult{RuntimeErr: handlerError(err)}
+			return
+		}
+		previewCh <- taskPreviewReadResult{Preview: optionalTaskPreviewDTO(preview, hasPreview)}
+	}()
+
+	go func() {
+		comments, err := service.store.ListComments(ctx, taskID)
+		if err != nil {
+			commentsCh <- taskCommentsReadResult{RuntimeErr: handlerError(err)}
+			return
+		}
+		commentsCh <- taskCommentsReadResult{Comments: comments}
+	}()
+
+	go func() {
+		deviceEnvironments, err := service.store.ListTaskDeviceEnvironments(ctx, taskID)
+		if err != nil {
+			deviceEnvironmentsCh <- taskDeviceEnvironmentsReadResult{RuntimeErr: handlerError(err)}
+			return
+		}
+		deviceEnvironmentsCh <- taskDeviceEnvironmentsReadResult{DeviceEnvironments: deviceEnvironments}
+	}()
+
+	go func() {
+		queuedTurns, err := service.store.ListQueuedTurns(ctx, taskID)
+		if err != nil {
+			queuedTurnsCh <- taskQueuedTurnsReadResult{RuntimeErr: handlerError(err)}
+			return
+		}
+		queuedTurnsCh <- taskQueuedTurnsReadResult{QueuedTurns: queuedTurns}
+	}()
+
+	go func() {
+		activeRuntimes, runtimeErr := service.listActiveOpenADETaskRuntimeRecords(ctx, taskID)
+		if runtimeErr != nil {
+			runtimeStateCh <- taskRuntimeStateReadResult{RuntimeErr: runtimeErr}
+			return
+		}
+		runtimeStateCh <- taskRuntimeStateReadResult{RuntimeState: taskRuntimeStateDTOFromActiveRecords(activeRuntimes)}
+	}()
+
+	events := <-eventsCh
+	if events.RuntimeErr != nil {
+		return taskReadDetailParts{}, events.RuntimeErr
 	}
-	deviceEnvironments, err := service.store.ListTaskDeviceEnvironments(ctx, params.TaskID)
-	if err != nil {
-		return nil, handlerError(err)
+	preview := <-previewCh
+	if preview.RuntimeErr != nil {
+		return taskReadDetailParts{}, preview.RuntimeErr
 	}
-	queuedTurns, err := service.store.ListQueuedTurns(ctx, params.TaskID)
-	if err != nil {
-		return nil, handlerError(err)
+	comments := <-commentsCh
+	if comments.RuntimeErr != nil {
+		return taskReadDetailParts{}, comments.RuntimeErr
 	}
-	return taskToDTO(task, events, comments, deviceEnvironments, queuedTurns), nil
+	deviceEnvironments := <-deviceEnvironmentsCh
+	if deviceEnvironments.RuntimeErr != nil {
+		return taskReadDetailParts{}, deviceEnvironments.RuntimeErr
+	}
+	queuedTurns := <-queuedTurnsCh
+	if queuedTurns.RuntimeErr != nil {
+		return taskReadDetailParts{}, queuedTurns.RuntimeErr
+	}
+	runtimeState := <-runtimeStateCh
+	if runtimeState.RuntimeErr != nil {
+		return taskReadDetailParts{}, runtimeState.RuntimeErr
+	}
+
+	return taskReadDetailParts{
+		Events:             events.Events,
+		Preview:            preview.Preview,
+		Comments:           comments.Comments,
+		DeviceEnvironments: deviceEnvironments.DeviceEnvironments,
+		QueuedTurns:        queuedTurns.QueuedTurns,
+		RuntimeState:       runtimeState.RuntimeState,
+	}, nil
 }
 
 func (service *Service) handleTaskResourceInventoryRead(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
@@ -1943,12 +2421,16 @@ func (service *Service) handleTaskResourceInventoryRead(ctx context.Context, _ *
 	if err != nil {
 		return nil, handlerError(err)
 	}
+	queuedTurns, err := service.store.ListQueuedTurns(ctx, params.TaskID)
+	if err != nil {
+		return nil, handlerError(err)
+	}
 	isRunning, runtimeErr := service.taskHasActiveRuntime(ctx, params.TaskID)
 	if runtimeErr != nil {
 		return nil, runtimeErr
 	}
 	branchMerged := taskResourceInventoryBranchMerged(ctx, repo, task)
-	return taskResourceInventoryToDTO(task, events, isRunning, branchMerged), nil
+	return taskResourceInventoryToDTO(task, events, queuedTurns, isRunning, branchMerged), nil
 }
 
 func (service *Service) handleTaskImageRead(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
@@ -1982,15 +2464,17 @@ func (service *Service) handleTaskImageRead(ctx context.Context, _ *core.Connect
 	if !ok || task.RepoID != params.RepoID {
 		return nil, &core.RuntimeError{Code: "not_found", Message: "Task not found"}
 	}
-	events, err := service.store.ListTaskEvents(ctx, params.TaskID, true)
-	if err != nil {
-		return nil, handlerError(err)
+	image, runtimeErr := service.taskEventImageReference(ctx, task, params.ImageID, params.Ext)
+	if runtimeErr != nil {
+		return nil, runtimeErr
 	}
-	queuedTurns, err := service.store.ListQueuedTurns(ctx, params.TaskID)
-	if err != nil {
-		return nil, handlerError(err)
+	if image == nil {
+		queuedTurns, err := service.store.ListQueuedTurns(ctx, params.TaskID)
+		if err != nil {
+			return nil, handlerError(err)
+		}
+		image = taskQueuedTurnImageReference(queuedTurns, params.ImageID, params.Ext)
 	}
-	image := taskImageReference(events, queuedTurns, params.ImageID, params.Ext)
 	if image == nil {
 		return emptyTaskImageReadDTO(params.RepoID, params.TaskID, params.ImageID, params.Ext), nil
 	}
@@ -2020,7 +2504,7 @@ func (service *Service) handleTaskImageRead(ctx context.Context, _ *core.Connect
 }
 
 func (service *Service) handleTaskImageWrite(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/image/write", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskImageWrite, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.writeTaskImage(ctx, raw)
 	})
 }
@@ -2045,31 +2529,31 @@ func (service *Service) handleTaskImageStagedRead(ctx context.Context, _ *core.C
 }
 
 func (service *Service) handleTaskImageImportLegacy(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/image/importLegacy", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskImageImportLegacy, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.importLegacyTaskImage(ctx, raw)
 	})
 }
 
 func (service *Service) handleTaskImagesImportLegacy(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/images/importLegacy", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskImagesImportLegacy, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.importLegacyTaskImages(ctx, raw)
 	})
 }
 
 func (service *Service) handleTaskImagesGCStaged(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/images/gcStaged", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskImagesGcStaged, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.gcStagedTaskImages(ctx, raw)
 	})
 }
 
 func (service *Service) handleLegacyResourcesImport(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/import/legacyResources", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodImportLegacyResources, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.importLegacyResources(ctx, raw)
 	})
 }
 
 func (service *Service) handleTaskHarnessSessionsImportLegacy(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/sessions/importLegacy", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskSessionsImportLegacy, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.importLegacyHarnessSessions(ctx, raw)
 	})
 }
@@ -2648,7 +3132,7 @@ func (service *Service) handleTaskSnapshotPatchSliceRead(ctx context.Context, _ 
 }
 
 func (service *Service) handleTaskSnapshotsImportLegacy(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/snapshots/importLegacy", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskSnapshotsImportLegacy, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.importLegacySnapshotPatches(ctx, raw)
 	})
 }
@@ -2727,7 +3211,7 @@ func (service *Service) importLegacySnapshotPatchesFromDir(ctx context.Context, 
 }
 
 func (service *Service) handleTaskCreate(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/create", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskCreate, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.createTask(ctx, raw)
 	})
 }
@@ -2835,9 +3319,9 @@ func (service *Service) createTask(ctx context.Context, raw json.RawMessage) (co
 	}
 	notification := map[string]string{"repoId": task.RepoID, "taskId": task.ID}
 	if created {
-		service.runtime.Notify("openade/task/updated", notification)
-		service.runtime.Notify("openade/task/previewChanged", notification)
-		service.runtime.Notify("openade/snapshotChanged", notification)
+		service.runtime.Notify(openADENotificationTaskUpdated, notification)
+		service.runtime.Notify(openADENotificationTaskPreviewChanged, notification)
+		service.runtime.Notify(openADENotificationSnapshotChanged, notification)
 	}
 	return taskCreateResultDTO{
 		TaskID:    task.ID,
@@ -2848,13 +3332,13 @@ func (service *Service) createTask(ctx context.Context, raw json.RawMessage) (co
 }
 
 func (service *Service) handleTaskMetadataUpdate(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/metadata/update", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskMetadataUpdate, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.updateTaskMetadata(ctx, raw)
 	})
 }
 
 func (service *Service) handleTaskEnvironmentSetup(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/environment/setup", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskEnvironmentSetup, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			TaskID            string                        `json:"taskId"`
 			DeviceEnvironment deviceEnvironmentDTO          `json:"deviceEnvironment"`
@@ -2878,14 +3362,14 @@ func (service *Service) handleTaskEnvironmentSetup(ctx context.Context, _ *core.
 			return nil, &core.RuntimeError{Code: "not_found", Message: "Task not found"}
 		}
 		notification := map[string]string{"repoId": task.RepoID, "taskId": task.ID}
-		service.runtime.Notify("openade/task/updated", notification)
-		service.runtime.Notify("openade/task/previewChanged", notification)
+		service.runtime.Notify(openADENotificationTaskUpdated, notification)
+		service.runtime.Notify(openADENotificationTaskPreviewChanged, notification)
 		return mutationOKDTO{OK: true}, nil
 	})
 }
 
 func (service *Service) handleTaskEnvironmentPrepare(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/environment/prepare", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskEnvironmentPrepare, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			RepoID string `json:"repoId"`
 			TaskID string `json:"taskId"`
@@ -2914,20 +3398,20 @@ func (service *Service) handleTaskEnvironmentPrepare(ctx context.Context, _ *cor
 			return nil, &core.RuntimeError{Code: "not_found", Message: "Task not found"}
 		}
 		notification := map[string]string{"repoId": repo.ID, "taskId": task.ID}
-		service.runtime.Notify("openade/task/updated", notification)
-		service.runtime.Notify("openade/task/previewChanged", notification)
+		service.runtime.Notify(openADENotificationTaskUpdated, notification)
+		service.runtime.Notify(openADENotificationTaskPreviewChanged, notification)
 		return result, nil
 	})
 }
 
 func (service *Service) handleQueuedTurnCancel(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/queued-turn/cancel", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodQueuedTurnCancel, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.cancelQueuedTurn(ctx, raw)
 	})
 }
 
 func (service *Service) handleQueuedTurnEnqueue(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/queued-turn/enqueue", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodQueuedTurnEnqueue, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.enqueueQueuedTurn(ctx, raw)
 	})
 }
@@ -2948,6 +3432,7 @@ func (service *Service) enqueueQueuedTurn(ctx context.Context, raw json.RawMessa
 		Label               string          `json:"label"`
 		IncludeComments     *bool           `json:"includeComments"`
 		Images              json.RawMessage `json:"images"`
+		HyperPlanStrategy   json.RawMessage `json:"hyperplanStrategy"`
 		Thinking            string          `json:"thinking"`
 		FastMode            *bool           `json:"fastMode"`
 	}
@@ -2958,11 +3443,15 @@ func (service *Service) enqueueQueuedTurn(ctx context.Context, raw json.RawMessa
 		return nil, runtimeErr
 	}
 	params.Type = strings.TrimSpace(params.Type)
-	if params.Type != "do" && params.Type != "ask" {
-		return nil, invalidParams("type must be do or ask")
+	if params.Type != "do" && params.Type != "ask" && params.Type != "hyperplan" {
+		return nil, invalidParams("type must be do, ask, or hyperplan")
 	}
 	if params.Input == "" {
 		return nil, invalidParams("input is required")
+	}
+	hyperPlanStrategy, _, runtimeErr := compactTurnStartHyperPlanStrategy(params.Type, params.HyperPlanStrategy)
+	if runtimeErr != nil {
+		return nil, runtimeErr
 	}
 	clientRequestID := clientRequestIDFromRaw(raw)
 	queuedTurnID := strings.TrimSpace(params.QueuedTurnID)
@@ -2991,6 +3480,7 @@ func (service *Service) enqueueQueuedTurn(ctx context.Context, raw json.RawMessa
 		IncludeComments:     params.IncludeComments,
 		Thinking:            strings.TrimSpace(params.Thinking),
 		FastMode:            params.FastMode,
+		HyperPlanStrategy:   hyperPlanStrategy,
 	}, params.Images)
 	if runtimeErr != nil {
 		return nil, runtimeErr
@@ -3014,8 +3504,8 @@ func (service *Service) enqueueQueuedTurn(ctx context.Context, raw json.RawMessa
 		if clientRequestID != "" {
 			notification["clientRequestId"] = clientRequestID
 		}
-		service.runtime.Notify("openade/task/updated", notification)
-		service.runtime.Notify("openade/queuedTurn/updated", queuedTurnUpdatedNotificationDTO{
+		service.runtime.Notify(openADENotificationTaskUpdated, notification)
+		service.runtime.Notify(openADENotificationQueuedTurnUpdated, queuedTurnUpdatedNotificationDTO{
 			RepoID:          params.RepoID,
 			TaskID:          params.TaskID,
 			Turn:            dto,
@@ -3033,7 +3523,7 @@ func (service *Service) enqueueQueuedTurn(ctx context.Context, raw json.RawMessa
 }
 
 func (service *Service) handleQueuedTurnImportLegacy(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/queued-turn/importLegacy", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodQueuedTurnImportLegacy, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.importLegacyQueuedTurn(ctx, raw)
 	})
 }
@@ -3056,11 +3546,15 @@ func (service *Service) importLegacyQueuedTurn(ctx context.Context, raw json.Raw
 		return nil, invalidParams("turn.id is required")
 	}
 	turnType := strings.TrimSpace(params.Turn.Type)
-	if turnType != "do" && turnType != "ask" {
-		return nil, invalidParams("turn.type must be do or ask")
+	if turnType != "do" && turnType != "ask" && turnType != "hyperplan" {
+		return nil, invalidParams("turn.type must be do, ask, or hyperplan")
 	}
 	if params.Turn.Input == "" {
 		return nil, invalidParams("turn.input is required")
+	}
+	hyperPlanStrategy, _, runtimeErr := compactTurnStartHyperPlanStrategy(turnType, params.Turn.HyperPlanStrategy)
+	if runtimeErr != nil {
+		return nil, runtimeErr
 	}
 	status := strings.TrimSpace(params.Turn.Status)
 	if !validQueuedTurnStatus(status) {
@@ -3092,6 +3586,7 @@ func (service *Service) importLegacyQueuedTurn(ctx context.Context, raw json.Raw
 		Images:              params.Turn.Images,
 		Thinking:            strings.TrimSpace(params.Turn.Thinking),
 		FastMode:            params.Turn.FastMode,
+		HyperPlanStrategy:   hyperPlanStrategy,
 	})
 	if runtimeErr != nil {
 		return nil, runtimeErr
@@ -3113,8 +3608,8 @@ func (service *Service) importLegacyQueuedTurn(ctx context.Context, raw json.Raw
 	dto := queuedTurnToDTO(turn)
 	if imported {
 		notification := map[string]string{"repoId": params.RepoID, "taskId": params.TaskID}
-		service.runtime.Notify("openade/task/updated", notification)
-		service.runtime.Notify("openade/queuedTurn/updated", queuedTurnUpdatedNotificationDTO{
+		service.runtime.Notify(openADENotificationTaskUpdated, notification)
+		service.runtime.Notify(openADENotificationQueuedTurnUpdated, queuedTurnUpdatedNotificationDTO{
 			RepoID: params.RepoID,
 			TaskID: params.TaskID,
 			Turn:   dto,
@@ -3130,7 +3625,7 @@ func (service *Service) importLegacyQueuedTurn(ctx context.Context, raw json.Raw
 }
 
 func (service *Service) handleQueuedTurnReorder(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/queued-turn/reorder", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodQueuedTurnReorder, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.reorderQueuedTurns(ctx, raw)
 	})
 }
@@ -3174,9 +3669,9 @@ func (service *Service) reorderQueuedTurns(ctx context.Context, raw json.RawMess
 		if clientRequestID != "" {
 			notification["clientRequestId"] = clientRequestID
 		}
-		service.runtime.Notify("openade/task/updated", notification)
+		service.runtime.Notify(openADENotificationTaskUpdated, notification)
 		for _, dto := range dtos {
-			service.runtime.Notify("openade/queuedTurn/updated", queuedTurnUpdatedNotificationDTO{
+			service.runtime.Notify(openADENotificationQueuedTurnUpdated, queuedTurnUpdatedNotificationDTO{
 				RepoID:          params.RepoID,
 				TaskID:          params.TaskID,
 				Turn:            dto,
@@ -3233,8 +3728,8 @@ func (service *Service) cancelQueuedTurn(ctx context.Context, raw json.RawMessag
 		if params.ClientRequestID != "" {
 			notification["clientRequestId"] = params.ClientRequestID
 		}
-		service.runtime.Notify("openade/task/updated", notification)
-		service.runtime.Notify("openade/queuedTurn/updated", queuedTurnUpdatedNotificationDTO{
+		service.runtime.Notify(openADENotificationTaskUpdated, notification)
+		service.runtime.Notify(openADENotificationQueuedTurnUpdated, queuedTurnUpdatedNotificationDTO{
 			RepoID:          params.RepoID,
 			TaskID:          params.TaskID,
 			Turn:            queuedTurnToDTO(turn),
@@ -3253,7 +3748,7 @@ func (service *Service) updateTaskMetadata(ctx context.Context, raw json.RawMess
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return nil, invalidParams("params must be an object")
 	}
-	for _, unsupported := range []string{"enabledMcpServerIds", "queuedTurns"} {
+	for _, unsupported := range []string{"queuedTurns"} {
 		if _, ok := fields[unsupported]; ok {
 			return nil, invalidParams(unsupported + " is not supported by OpenADE Core yet")
 		}
@@ -3307,6 +3802,7 @@ func (service *Service) updateTaskMetadata(ctx context.Context, raw json.RawMess
 		if err != nil {
 			return nil, err
 		}
+		update.UpdatedAtSet = true
 		update.UpdatedAt = parsed
 	}
 	if usage, runtimeErr := compactOptionalObjectJSON("usage", params.Usage); runtimeErr != nil {
@@ -3324,7 +3820,16 @@ func (service *Service) updateTaskMetadata(ctx context.Context, raw json.RawMess
 		}
 		sessionIDs = parsed
 	}
-	if params.CancelledPlanEventID != nil || sessionIDsSet {
+	enabledMCPServerIDsRaw, enabledMCPServerIDsSet := fields["enabledMcpServerIds"]
+	var enabledMCPServerIDs []string
+	if enabledMCPServerIDsSet {
+		parsed, runtimeErr := taskMetadataEnabledMCPServerIDsParam(enabledMCPServerIDsRaw)
+		if runtimeErr != nil {
+			return nil, runtimeErr
+		}
+		enabledMCPServerIDs = parsed
+	}
+	if params.CancelledPlanEventID != nil || sessionIDsSet || enabledMCPServerIDsSet {
 		task, ok, err := service.store.GetTask(ctx, params.TaskID)
 		if err != nil {
 			return nil, handlerError(err)
@@ -3332,7 +3837,7 @@ func (service *Service) updateTaskMetadata(ctx context.Context, raw json.RawMess
 		if !ok {
 			return nil, &core.RuntimeError{Code: "not_found", Message: "Task not found"}
 		}
-		metadataJSON, runtimeErr := taskMetadataJSONForUpdate(task, sessionIDs, sessionIDsSet, params.CancelledPlanEventID)
+		metadataJSON, runtimeErr := taskMetadataJSONForUpdate(task, sessionIDs, sessionIDsSet, params.CancelledPlanEventID, enabledMCPServerIDs, enabledMCPServerIDsSet)
 		if runtimeErr != nil {
 			return nil, runtimeErr
 		}
@@ -3340,35 +3845,65 @@ func (service *Service) updateTaskMetadata(ctx context.Context, raw json.RawMess
 		update.MetadataJSON = metadataJSON
 	}
 
-	task, ok, err := service.store.UpdateTaskMetadata(ctx, update)
+	task, ok, changed, err := service.store.UpdateTaskMetadataIfChanged(ctx, update)
 	if err != nil {
 		return nil, handlerError(err)
 	}
 	if !ok {
 		return nil, &core.RuntimeError{Code: "not_found", Message: "Task not found"}
 	}
+	if !changed {
+		return mutationOKDTO{OK: true}, nil
+	}
 	notification := map[string]string{"repoId": task.RepoID, "taskId": task.ID}
 	if params.ClientRequestID != "" {
 		notification["clientRequestId"] = params.ClientRequestID
 	}
-	service.runtime.Notify("openade/task/updated", notification)
-	service.runtime.Notify("openade/task/previewChanged", notification)
+	service.runtime.Notify(openADENotificationTaskUpdated, notification)
+	service.runtime.Notify(openADENotificationTaskPreviewChanged, notification)
 	return mutationOKDTO{OK: true}, nil
 }
 
 func (service *Service) handleRepoCreate(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/repo/create", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodRepoCreate, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.createRepo(ctx, raw)
 	})
 }
 
+func (service *Service) handleRepoPathInspect(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
+	var params struct {
+		Path string `json:"path"`
+	}
+	if runtimeErr := decodeObject(raw, &params); runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	if strings.TrimSpace(params.Path) == "" {
+		return nil, invalidParams("path is required")
+	}
+	inspection := host.InspectRepoPath(ctx, params.Path)
+	return repoPathInspectDTO{
+		Path:         inspection.Path,
+		ResolvedPath: inspection.ResolvedPath,
+		Exists:       inspection.Exists,
+		IsDirectory:  inspection.IsDirectory,
+		IsGitRepo:    inspection.IsGitRepo,
+		RepoRoot:     inspection.RepoRoot,
+		RelativePath: inspection.RelativePath,
+		MainBranch:   inspection.MainBranch,
+		HasGhCLI:     inspection.HasGhCLI,
+		Error:        inspection.Error,
+	}, nil
+}
+
 func (service *Service) createRepo(ctx context.Context, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
 	var params struct {
-		RepoID    string  `json:"repoId"`
-		Name      string  `json:"name"`
-		Path      string  `json:"path"`
-		CreatedBy userDTO `json:"createdBy"`
-		CreatedAt string  `json:"createdAt"`
+		RepoID          string  `json:"repoId"`
+		Name            string  `json:"name"`
+		Path            string  `json:"path"`
+		CreatedBy       userDTO `json:"createdBy"`
+		CreatedAt       string  `json:"createdAt"`
+		CreateDirectory bool    `json:"createDirectory"`
+		InitializeGit   bool    `json:"initializeGit"`
 	}
 	if runtimeErr := decodeObject(raw, &params); runtimeErr != nil {
 		return nil, runtimeErr
@@ -3394,6 +3929,16 @@ func (service *Service) createRepo(ctx context.Context, raw json.RawMessage) (co
 		}
 		createdAt = parsed
 	}
+	if params.CreateDirectory {
+		if err := os.MkdirAll(params.Path, 0o755); err != nil {
+			return nil, handlerError(err)
+		}
+	}
+	if params.InitializeGit {
+		if err := host.InitializeGitRepository(ctx, params.Path); err != nil {
+			return nil, handlerError(err)
+		}
+	}
 	repo := storage.Repo{
 		ID:        repoID,
 		Name:      params.Name,
@@ -3404,24 +3949,25 @@ func (service *Service) createRepo(ctx context.Context, raw json.RawMessage) (co
 	if err := service.store.UpsertRepo(ctx, repo); err != nil {
 		return nil, handlerError(err)
 	}
-	service.runtime.Notify("openade/repo/updated", map[string]string{"repoId": repo.ID})
-	service.runtime.Notify("openade/snapshotChanged", map[string]string{"repoId": repo.ID})
+	service.runtime.Notify(openADENotificationRepoUpdated, map[string]string{"repoId": repo.ID})
+	service.runtime.Notify(openADENotificationSnapshotChanged, map[string]string{"repoId": repo.ID})
 	return repoCreateResultDTO{RepoID: repo.ID, CreatedAt: formatTime(createdAt)}, nil
 }
 
 func (service *Service) handleRepoUpdate(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/repo/update", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodRepoUpdate, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.updateRepo(ctx, raw)
 	})
 }
 
 func (service *Service) updateRepo(ctx context.Context, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
 	var params struct {
-		RepoID    string `json:"repoId"`
-		Name      string `json:"name"`
-		Path      string `json:"path"`
-		Archived  *bool  `json:"archived"`
-		UpdatedAt string `json:"updatedAt"`
+		RepoID        string `json:"repoId"`
+		Name          string `json:"name"`
+		Path          string `json:"path"`
+		Archived      *bool  `json:"archived"`
+		UpdatedAt     string `json:"updatedAt"`
+		InitializeGit bool   `json:"initializeGit"`
 	}
 	if runtimeErr := decodeObject(raw, &params); runtimeErr != nil {
 		return nil, runtimeErr
@@ -3444,6 +3990,22 @@ func (service *Service) updateRepo(ctx context.Context, raw json.RawMessage) (co
 		}
 		update.UpdatedAt = parsed
 	}
+	if params.InitializeGit {
+		existing, ok, err := service.store.GetRepo(ctx, params.RepoID)
+		if err != nil {
+			return nil, handlerError(err)
+		}
+		if !ok {
+			return nil, &core.RuntimeError{Code: "not_found", Message: "Repository not found"}
+		}
+		directory := params.Path
+		if directory == "" {
+			directory = existing.Path
+		}
+		if err := host.InitializeGitRepository(ctx, directory); err != nil {
+			return nil, handlerError(err)
+		}
+	}
 	repo, ok, err := service.store.UpdateRepo(ctx, update)
 	if err != nil {
 		return nil, handlerError(err)
@@ -3451,13 +4013,13 @@ func (service *Service) updateRepo(ctx context.Context, raw json.RawMessage) (co
 	if !ok {
 		return nil, &core.RuntimeError{Code: "not_found", Message: "Repository not found"}
 	}
-	service.runtime.Notify("openade/repo/updated", map[string]string{"repoId": repo.ID})
-	service.runtime.Notify("openade/snapshotChanged", map[string]string{"repoId": repo.ID})
+	service.runtime.Notify(openADENotificationRepoUpdated, map[string]string{"repoId": repo.ID})
+	service.runtime.Notify(openADENotificationSnapshotChanged, map[string]string{"repoId": repo.ID})
 	return mutationOKDTO{OK: true}, nil
 }
 
 func (service *Service) handleRepoDelete(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/repo/delete", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodRepoDelete, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.deleteRepo(ctx, raw)
 	})
 }
@@ -3479,13 +4041,13 @@ func (service *Service) deleteRepo(ctx context.Context, raw json.RawMessage) (co
 	if !deleted {
 		return nil, &core.RuntimeError{Code: "not_found", Message: "Repository not found"}
 	}
-	service.runtime.Notify("openade/repo/deleted", map[string]string{"repoId": params.RepoID})
-	service.runtime.Notify("openade/snapshotChanged", map[string]string{"repoId": params.RepoID})
+	service.runtime.Notify(openADENotificationRepoDeleted, map[string]string{"repoId": params.RepoID})
+	service.runtime.Notify(openADENotificationSnapshotChanged, map[string]string{"repoId": params.RepoID})
 	return mutationOKDTO{OK: true}, nil
 }
 
 func (service *Service) handleTaskDelete(ctx context.Context, conn *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/task/delete", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTaskDelete, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.deleteTask(ctx, conn, raw)
 	})
 }
@@ -3545,9 +4107,9 @@ func (service *Service) deleteTask(ctx context.Context, conn *core.Connection, r
 	removeTaskHarnessSessions(sessionsToDelete)
 	service.removeTaskWorktrees(ctx, repo.Path, worktreesToDelete)
 	notification := map[string]string{"repoId": params.RepoID, "taskId": params.TaskID}
-	service.runtime.Notify("openade/task/deleted", notification)
-	service.runtime.Notify("openade/task/previewChanged", notification)
-	service.runtime.Notify("openade/snapshotChanged", notification)
+	service.runtime.Notify(openADENotificationTaskDeleted, notification)
+	service.runtime.Notify(openADENotificationTaskPreviewChanged, notification)
+	service.runtime.Notify(openADENotificationSnapshotChanged, notification)
 	return taskDeleteResultDTO{RepoID: params.RepoID, TaskID: params.TaskID, Deleted: true}, nil
 }
 
@@ -3568,7 +4130,7 @@ func (service *Service) taskDeleteSessionCleanup(ctx context.Context, cwd string
 	if err != nil {
 		return nil, handlerError(err)
 	}
-	inventory := taskResourceInventoryToDTO(task, events, false, nil)
+	inventory := taskResourceInventoryToDTO(task, events, nil, false, nil)
 	cleanups := make([]taskHarnessSessionCleanup, 0, len(inventory.Sessions))
 	for _, session := range inventory.Sessions {
 		cleanups = append(cleanups, taskHarnessSessionCleanup{session: session, cwd: cwd})
@@ -3791,6 +4353,82 @@ func taskImageBlobIDsFromReferences(events []storage.TaskEvent, queuedTurns []st
 	return ids
 }
 
+func taskImageReferenceKey(imageID string, ext string) string {
+	return imageID + "\x00" + ext
+}
+
+func taskEventImageReferences(events []storage.TaskEvent) map[string]taskImageReferenceDTO {
+	images := map[string]taskImageReferenceDTO{}
+	for _, event := range events {
+		payload, ok := taskResourcePayload(event)
+		eventType := event.Type
+		if ok && payload.Type != "" {
+			eventType = payload.Type
+		}
+		if eventType != "action" || !ok {
+			continue
+		}
+		for _, image := range taskImageReferences(payload.Images) {
+			key := taskImageReferenceKey(image.ID, image.Ext)
+			if _, exists := images[key]; !exists {
+				images[key] = image
+			}
+		}
+	}
+	return images
+}
+
+func (service *Service) taskEventImageReference(ctx context.Context, task storage.Task, imageID string, ext string) (*taskImageReferenceDTO, *core.RuntimeError) {
+	imageKey := taskImageReferenceKey(imageID, ext)
+	now := time.Now()
+
+	service.resourceMu.Lock()
+	if entry, ok := service.taskEventImageRefs[task.ID]; ok && entry.taskUpdatedAt.Equal(task.UpdatedAt) && entry.expiresAt.After(now) {
+		image, ok := entry.images[imageKey]
+		service.resourceMu.Unlock()
+		if ok {
+			return &image, nil
+		}
+	} else {
+		service.resourceMu.Unlock()
+	}
+
+	events, err := service.store.ListTaskEvents(ctx, task.ID, true)
+	if err != nil {
+		return nil, handlerError(err)
+	}
+	images := taskEventImageReferences(events)
+	service.resourceMu.Lock()
+	for taskID, entry := range service.taskEventImageRefs {
+		if !entry.expiresAt.After(now) {
+			delete(service.taskEventImageRefs, taskID)
+		}
+	}
+	service.taskEventImageRefs[task.ID] = taskEventImageReferenceCacheEntry{
+		taskUpdatedAt: task.UpdatedAt,
+		expiresAt:     now.Add(taskEventImageReferenceCacheTTL),
+		images:        images,
+	}
+	service.resourceMu.Unlock()
+
+	image, ok := images[imageKey]
+	if !ok {
+		return nil, nil
+	}
+	return &image, nil
+}
+
+func taskQueuedTurnImageReference(queuedTurns []storage.QueuedTurn, imageID string, ext string) *taskImageReferenceDTO {
+	for _, turn := range queuedTurns {
+		for _, image := range taskImageReferencesFromQueuedTurn(turn) {
+			if image.ID == imageID && image.Ext == ext {
+				return &image
+			}
+		}
+	}
+	return nil
+}
+
 func removeBlobFiles(blobs []storage.BlobMetadata) {
 	for _, blob := range blobs {
 		_ = removeBlobFile(blob)
@@ -3814,7 +4452,7 @@ func (service *Service) removeTaskWorktrees(ctx context.Context, repoPath string
 }
 
 func (service *Service) handleCommentCreate(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/comment/create", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodCommentCreate, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.createComment(ctx, raw)
 	})
 }
@@ -3882,19 +4520,19 @@ func (service *Service) createComment(ctx context.Context, raw json.RawMessage) 
 	if task, ok, err := service.store.GetTask(ctx, params.TaskID); err != nil {
 		return nil, handlerError(err)
 	} else if ok {
-		service.runtime.Notify("openade/task/updated", taskUpdatedNotification(task.RepoID, task.ID, params.ClientRequestID))
+		service.runtime.Notify(openADENotificationTaskUpdated, taskUpdatedNotification(task.RepoID, task.ID, params.ClientRequestID))
 	} else {
 		notification := map[string]string{"taskId": params.TaskID}
 		if params.ClientRequestID != "" {
 			notification["clientRequestId"] = params.ClientRequestID
 		}
-		service.runtime.Notify("openade/task/updated", notification)
+		service.runtime.Notify(openADENotificationTaskUpdated, notification)
 	}
 	return commentCreateResultDTO{CommentID: commentID, CreatedAt: formatTime(createdAt)}, nil
 }
 
 func (service *Service) handleCommentEdit(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/comment/edit", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodCommentEdit, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.editComment(ctx, raw)
 	})
 }
@@ -3942,7 +4580,7 @@ func (service *Service) editComment(ctx context.Context, raw json.RawMessage) (c
 }
 
 func (service *Service) handleCommentDelete(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/comment/delete", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodCommentDelete, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.deleteComment(ctx, raw)
 	})
 }
@@ -3982,7 +4620,7 @@ func (service *Service) deleteComment(ctx context.Context, raw json.RawMessage) 
 	return mutationOKDTO{OK: true}, nil
 }
 
-func (service *Service) projects(ctx context.Context) ([]projectDTO, *core.RuntimeError) {
+func (service *Service) projects(ctx context.Context, options projectProjectionOptions) ([]projectDTO, *core.RuntimeError) {
 	repos, err := service.store.ListRepos(ctx)
 	if err != nil {
 		return nil, handlerError(err)
@@ -3998,7 +4636,7 @@ func (service *Service) projects(ctx context.Context) ([]projectDTO, *core.Runti
 			Name:     repo.Name,
 			Path:     repo.Path,
 			Archived: repo.Archived,
-			Tasks:    taskPreviewsDTO(previews),
+			Tasks:    sortTaskPreviewsLikeSidebar(taskPreviewsDTO(previews), options),
 		})
 	}
 	return projects, nil
@@ -4452,7 +5090,14 @@ func taskCreateMetadataJSON(createdBy userDTO, enabledMCPServerIDs []string) (sq
 	return taskMetadataJSON(payload)
 }
 
-func taskMetadataJSONForUpdate(task storage.Task, sessionIDs map[string]string, sessionIDsSet bool, cancelledPlanEventID *string) (sql.NullString, *core.RuntimeError) {
+func taskMetadataJSONForUpdate(
+	task storage.Task,
+	sessionIDs map[string]string,
+	sessionIDsSet bool,
+	cancelledPlanEventID *string,
+	enabledMCPServerIDs []string,
+	enabledMCPServerIDsSet bool,
+) (sql.NullString, *core.RuntimeError) {
 	metadata := taskMetadataFromTask(task)
 	if sessionIDsSet {
 		merged := map[string]string{}
@@ -4471,6 +5116,9 @@ func taskMetadataJSONForUpdate(task storage.Task, sessionIDs map[string]string, 
 	if cancelledPlanEventID != nil {
 		metadata.CancelledPlanEventID = strings.TrimSpace(*cancelledPlanEventID)
 	}
+	if enabledMCPServerIDsSet {
+		metadata.EnabledMCPServerIDs = enabledMCPServerIDs
+	}
 	return taskMetadataJSON(metadata)
 }
 
@@ -4484,6 +5132,26 @@ func taskMetadataSessionIDsParam(raw json.RawMessage) (map[string]string, *core.
 		return nil, invalidParams("sessionIds must be an object of strings")
 	}
 	return sessionIDs, nil
+}
+
+func taskMetadataEnabledMCPServerIDsParam(raw json.RawMessage) ([]string, *core.RuntimeError) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" || !strings.HasPrefix(trimmed, "[") {
+		return nil, invalidParams("enabledMcpServerIds must be an array of strings")
+	}
+	var ids []string
+	if err := json.Unmarshal(raw, &ids); err != nil {
+		return nil, invalidParams("enabledMcpServerIds must be an array of strings")
+	}
+	normalized := make([]string, 0, len(ids))
+	for _, id := range ids {
+		trimmedID := strings.TrimSpace(id)
+		if trimmedID == "" {
+			return nil, invalidParams("enabledMcpServerIds must not contain empty ids")
+		}
+		normalized = append(normalized, trimmedID)
+	}
+	return normalized, nil
 }
 
 func taskMetadataJSON(metadata taskCreateMetadataDTO) (sql.NullString, *core.RuntimeError) {
@@ -4529,6 +5197,13 @@ func queuedTurnPayloadJSON(payload queuedTurnPayloadDTO) (sql.NullString, *core.
 		if payload.Images == nil {
 			return sql.NullString{}, invalidParams("images must be an array")
 		}
+	}
+	if len(payload.HyperPlanStrategy) > 0 {
+		hyperPlanStrategy, runtimeErr := compactRequiredObjectRawJSON("hyperplanStrategy", payload.HyperPlanStrategy)
+		if runtimeErr != nil {
+			return sql.NullString{}, runtimeErr
+		}
+		payload.HyperPlanStrategy = hyperPlanStrategy
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -4658,32 +5333,123 @@ func taskUpdatedNotification(repoID string, taskID string, clientRequestID strin
 func (service *Service) notifyTaskUpdatedForTaskID(ctx context.Context, taskID string, clientRequestID string) {
 	task, ok, err := service.store.GetTask(ctx, taskID)
 	if err == nil && ok {
-		service.runtime.Notify("openade/task/updated", taskUpdatedNotification(task.RepoID, task.ID, clientRequestID))
+		service.runtime.Notify(openADENotificationTaskUpdated, taskUpdatedNotification(task.RepoID, task.ID, clientRequestID))
 		return
 	}
 	notification := map[string]string{"taskId": taskID}
 	if clientRequestID != "" {
 		notification["clientRequestId"] = clientRequestID
 	}
-	service.runtime.Notify("openade/task/updated", notification)
+	service.runtime.Notify(openADENotificationTaskUpdated, notification)
 }
 
 func taskPreviewsDTO(previews []storage.TaskPreview) []taskPreviewDTO {
 	result := make([]taskPreviewDTO, 0, len(previews))
 	for _, preview := range previews {
-		result = append(result, taskPreviewDTO{
-			ID:           preview.TaskID,
-			Slug:         preview.Slug,
-			Title:        preview.Title,
-			Closed:       preview.Closed,
-			CreatedAt:    formatTime(preview.CreatedAt),
-			LastEvent:    decodeNullableRawJSON(preview.LastEventJSON),
-			Usage:        decodeNullableRawJSON(preview.UsageJSON),
-			LastViewedAt: formatNullTime(preview.LastViewedAt),
-			LastEventAt:  formatNullTime(preview.LastEventAt),
-		})
+		result = append(result, taskPreviewDTOFromStorage(preview))
 	}
 	return result
+}
+
+func optionalTaskPreviewDTO(preview storage.TaskPreview, ok bool) *taskPreviewDTO {
+	if !ok {
+		return nil
+	}
+	dto := taskPreviewDTOFromStorage(preview)
+	return &dto
+}
+
+func taskPreviewDTOFromStorage(preview storage.TaskPreview) taskPreviewDTO {
+	return taskPreviewDTO{
+		ID:           preview.TaskID,
+		Slug:         preview.Slug,
+		Title:        preview.Title,
+		Closed:       preview.Closed,
+		CreatedAt:    formatTime(preview.CreatedAt),
+		LastEvent:    decodeNullableRawJSON(preview.LastEventJSON),
+		Usage:        decodeNullableRawJSON(preview.UsageJSON),
+		LastViewedAt: formatNullTime(preview.LastViewedAt),
+		LastEventAt:  formatNullTime(preview.LastEventAt),
+	}
+}
+
+func snapshotThemeFromPersonalSettings(settings personalSettingsDTO) snapshotTheme {
+	setting := strings.TrimSpace(settings.Theme)
+	if setting == "" {
+		setting = "system"
+	}
+	className := setting
+	if !strings.HasPrefix(className, "code-theme-") {
+		className = "code-theme-light"
+	}
+	labels := map[string]string{
+		"code-theme-light":     "Light",
+		"code-theme-bright":    "Bright",
+		"code-theme-clean":     "Clean",
+		"code-theme-black":     "Black",
+		"code-theme-synthwave": "Synthwave",
+		"code-theme-dracula":   "Dracula",
+	}
+	return snapshotTheme{
+		Setting:   setting,
+		ClassName: className,
+		Label:     labels[className],
+	}
+}
+
+func stringSet(values []string) map[string]bool {
+	result := make(map[string]bool, len(values))
+	for _, value := range values {
+		if value != "" {
+			result[value] = true
+		}
+	}
+	return result
+}
+
+func taskPreviewRecentTime(preview taskPreviewDTO) string {
+	if preview.LastEventAt != "" {
+		return preview.LastEventAt
+	}
+	return preview.CreatedAt
+}
+
+func taskPreviewSidebarGroup(preview taskPreviewDTO, working map[string]bool, pinned map[string]bool) int {
+	if !preview.Closed {
+		if pinned[preview.ID] {
+			if working[preview.ID] {
+				return 0
+			}
+			return 1
+		}
+		if working[preview.ID] {
+			return 2
+		}
+		return 3
+	}
+	if pinned[preview.ID] {
+		return 4
+	}
+	return 5
+}
+
+func sortTaskPreviewsLikeSidebar(previews []taskPreviewDTO, options projectProjectionOptions) []taskPreviewDTO {
+	if len(previews) < 2 {
+		return previews
+	}
+	working := stringSet(options.WorkingTaskIDs)
+	pinned := stringSet(options.PinnedTaskIDs)
+	sort.SliceStable(previews, func(leftIndex int, rightIndex int) bool {
+		left := previews[leftIndex]
+		right := previews[rightIndex]
+		leftGroup := taskPreviewSidebarGroup(left, working, pinned)
+		rightGroup := taskPreviewSidebarGroup(right, working, pinned)
+		if leftGroup != rightGroup {
+			return leftGroup < rightGroup
+		}
+		return taskPreviewRecentTime(left) > taskPreviewRecentTime(right)
+	})
+	return previews
 }
 
 func projectFilesTreeToDTO(repoID string, taskID string, result host.FileTreeResult) projectFilesTreeDTO {
@@ -4769,6 +5535,34 @@ func projectSearchToDTO(repoID string, taskID string, result host.SearchResult) 
 		})
 	}
 	return projectSearchDTO{RepoID: repoID, TaskID: taskID, Matches: matches, Truncated: result.Truncated}
+}
+
+func sdkCapabilitiesToDTO(result SDKCapabilitiesResult) sdkCapabilitiesDTO {
+	plugins := make([]sdkPluginCapabilityDTO, 0, len(result.Plugins))
+	for _, plugin := range result.Plugins {
+		plugins = append(plugins, sdkPluginCapabilityDTO{Name: plugin.Name, Path: plugin.Path})
+	}
+	cachedAt := int64(0)
+	if !result.CachedAt.IsZero() {
+		cachedAt = result.CachedAt.UnixNano() / int64(time.Millisecond)
+	}
+	return sdkCapabilitiesDTO{
+		SlashCommands: append([]string(nil), result.SlashCommands...),
+		Skills:        append([]string(nil), result.Skills...),
+		Plugins:       plugins,
+		CachedAt:      cachedAt,
+	}
+}
+
+func normalizeSDKCapabilitiesHarnessID(value string) (string, *core.RuntimeError) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "claude-code", nil
+	}
+	if trimmed == "claude-code" || trimmed == "codex" {
+		return trimmed, nil
+	}
+	return "", invalidParams("harnessId is unsupported")
 }
 
 func projectGitBranchesDTOs(branches []host.GitBranch) []projectGitBranchDTO {
@@ -5084,7 +5878,16 @@ func gitChangedFilesToDTO(files []host.GitChangedFile) []gitChangedFileDTO {
 	return result
 }
 
-func taskToDTO(task storage.Task, events []storage.TaskEvent, comments []storage.Comment, deviceEnvironments []storage.TaskDeviceEnvironment, queuedTurns []storage.QueuedTurn) taskDTO {
+func taskToDTO(
+	task storage.Task,
+	events []storage.TaskEvent,
+	comments []storage.Comment,
+	deviceEnvironments []storage.TaskDeviceEnvironment,
+	queuedTurns []storage.QueuedTurn,
+	hydrateSessionEvents bool,
+	preview *taskPreviewDTO,
+	runtimeState taskRuntimeStateDTO,
+) taskDTO {
 	metadata := taskMetadataFromTask(task)
 	return taskDTO{
 		ID:                   task.ID,
@@ -5103,9 +5906,30 @@ func taskToDTO(task storage.Task, events []storage.TaskEvent, comments []storage
 		LastViewedAt:         formatNullTime(task.LastViewedAt),
 		LastEventAt:          formatNullTime(task.LastEventAt),
 		Closed:               task.Closed,
-		Events:               taskEventsDTO(events),
+		Events:               taskEventsDTO(events, hydrateSessionEvents),
 		Comments:             commentsDTO(comments),
 		QueuedTurns:          queuedTurnsDTO(queuedTurns),
+		Preview:              preview,
+		RuntimeState:         runtimeState,
+	}
+}
+
+func taskRuntimeStateDTOFromActiveRecords(records []runtimeRecordDTO) taskRuntimeStateDTO {
+	runtimeIDs := []string{}
+	latestUpdatedAt := ""
+	for _, record := range records {
+		if record.RuntimeID == "" {
+			continue
+		}
+		runtimeIDs = append(runtimeIDs, record.RuntimeID)
+		if record.UpdatedAt > latestUpdatedAt {
+			latestUpdatedAt = record.UpdatedAt
+		}
+	}
+	return taskRuntimeStateDTO{
+		IsRunning:  len(runtimeIDs) > 0,
+		RuntimeIDs: runtimeIDs,
+		UpdatedAt:  latestUpdatedAt,
 	}
 }
 
@@ -5183,7 +6007,7 @@ func deviceEnvironmentToDTO(environment storage.TaskDeviceEnvironment) deviceEnv
 	}
 }
 
-func taskResourceInventoryToDTO(task storage.Task, events []storage.TaskEvent, isRunning bool, branchMerged *bool) taskResourceInventoryDTO {
+func taskResourceInventoryToDTO(task storage.Task, events []storage.TaskEvent, queuedTurns []storage.QueuedTurn, isRunning bool, branchMerged *bool) taskResourceInventoryDTO {
 	snapshotIDs := []string{}
 	seenSnapshots := map[string]bool{}
 	images := []taskResourceImageDTO{}
@@ -5235,14 +6059,18 @@ func taskResourceInventoryToDTO(task storage.Task, events []storage.TaskEvent, i
 		for _, image := range taskResourceImages(payload.Images) {
 			addImage(image)
 		}
-		eventExecution := taskResourceExecution(payload.Execution)
+		eventExecution := payload.Execution
 		addSession(eventExecution.SessionID, eventExecution.HarnessID)
-		for _, subExecutionRaw := range payload.HyperPlanSubExecutions {
-			subExecution := taskResourceExecution(subExecutionRaw)
+		for _, subExecution := range payload.HyperPlanSubExecutions {
 			if subExecution.HarnessID == "" {
 				subExecution.HarnessID = eventExecution.HarnessID
 			}
 			addSession(subExecution.SessionID, subExecution.HarnessID)
+		}
+	}
+	for _, turn := range queuedTurns {
+		for _, image := range taskImageReferencesFromQueuedTurn(turn) {
+			addImage(taskResourceImageDTO{ID: image.ID, Ext: image.Ext})
 		}
 	}
 
@@ -5263,29 +6091,11 @@ func taskResourceInventoryToDTO(task storage.Task, events []storage.TaskEvent, i
 }
 
 func taskImageReference(events []storage.TaskEvent, queuedTurns []storage.QueuedTurn, imageID string, ext string) *taskImageReferenceDTO {
-	for _, event := range events {
-		payload, ok := taskResourcePayload(event)
-		eventType := event.Type
-		if ok && payload.Type != "" {
-			eventType = payload.Type
-		}
-		if eventType != "action" || !ok {
-			continue
-		}
-		for _, image := range taskImageReferences(payload.Images) {
-			if image.ID == imageID && image.Ext == ext {
-				return &image
-			}
-		}
+	image, ok := taskEventImageReferences(events)[taskImageReferenceKey(imageID, ext)]
+	if ok {
+		return &image
 	}
-	for _, turn := range queuedTurns {
-		for _, image := range taskImageReferencesFromQueuedTurn(turn) {
-			if image.ID == imageID && image.Ext == ext {
-				return &image
-			}
-		}
-	}
-	return nil
+	return taskQueuedTurnImageReference(queuedTurns, imageID, ext)
 }
 
 func (service *Service) referencedTaskImages(ctx context.Context) ([]taskImageReferenceDTO, int, *core.RuntimeError) {
@@ -5386,7 +6196,7 @@ func (service *Service) referencedHarnessSessions(ctx context.Context) ([]taskHa
 		if err != nil {
 			return nil, 0, handlerError(err)
 		}
-		inventory := taskResourceInventoryToDTO(task, events, false, nil)
+		inventory := taskResourceInventoryToDTO(task, events, nil, false, nil)
 		for _, session := range inventory.Sessions {
 			addRef(session, repo.Path)
 		}
@@ -5813,30 +6623,31 @@ func (service *Service) taskSnapshotEvent(ctx context.Context, repoID string, ta
 	if !ok || task.RepoID != repoID {
 		return taskResourceEventPayload{}, &core.RuntimeError{Code: "not_found", Message: "Task not found"}
 	}
-	events, err := service.store.ListTaskEvents(ctx, taskID, true)
+	event, ok, err := service.store.GetTaskEvent(ctx, taskID, eventID)
 	if err != nil {
 		return taskResourceEventPayload{}, handlerError(err)
 	}
-	for _, event := range events {
-		payload, ok := taskResourcePayload(event)
-		eventType := event.Type
-		if ok && payload.Type != "" {
-			eventType = payload.Type
-		}
-		payloadID := event.ID
-		if ok && payload.ID != "" {
-			payloadID = payload.ID
-		}
-		if eventType == "snapshot" && payloadID == eventID {
-			payload.ID = payloadID
-			payload.Type = "snapshot"
-			if payload.PatchFileID != "" {
-				if err := validateSnapshotPatchFileID(payload.PatchFileID); err != nil {
-					return taskResourceEventPayload{}, invalidParams(err.Error())
-				}
+	if !ok {
+		return taskResourceEventPayload{}, &core.RuntimeError{Code: "not_found", Message: "Snapshot event not found"}
+	}
+	payload, payloadOK := taskResourcePayload(event)
+	eventType := event.Type
+	if payloadOK && payload.Type != "" {
+		eventType = payload.Type
+	}
+	payloadID := event.ID
+	if payloadOK && payload.ID != "" {
+		payloadID = payload.ID
+	}
+	if eventType == "snapshot" && payloadID == eventID {
+		payload.ID = payloadID
+		payload.Type = "snapshot"
+		if payload.PatchFileID != "" {
+			if err := validateSnapshotPatchFileID(payload.PatchFileID); err != nil {
+				return taskResourceEventPayload{}, invalidParams(err.Error())
 			}
-			return payload, nil
 		}
+		return payload, nil
 	}
 	return taskResourceEventPayload{}, &core.RuntimeError{Code: "not_found", Message: "Snapshot event not found"}
 }
@@ -6171,17 +6982,6 @@ func taskResourceImages(rawImages []json.RawMessage) []taskResourceImageDTO {
 	return images
 }
 
-func taskResourceExecution(rawExecution json.RawMessage) taskResourceExecutionPayload {
-	if len(rawExecution) == 0 {
-		return taskResourceExecutionPayload{}
-	}
-	var execution taskResourceExecutionPayload
-	if err := json.Unmarshal(rawExecution, &execution); err != nil {
-		return taskResourceExecutionPayload{}
-	}
-	return execution
-}
-
 func taskResourceMetadataSessionIDs(task storage.Task) []string {
 	metadata := taskMetadataFromTask(task)
 	sessions := make([]string, 0, len(metadata.SessionIDs))
@@ -6243,10 +7043,17 @@ func taskResourceInventoryBranchMerged(ctx context.Context, repo storage.Repo, t
 	return merged
 }
 
-func taskEventsDTO(events []storage.TaskEvent) []taskEventDTO {
+func taskEventsDTO(events []storage.TaskEvent, hydrateSessionEvents bool) []taskEventDTO {
 	result := make([]taskEventDTO, 0, len(events))
-	for _, event := range events {
+	streamTailStart := 0
+	if !hydrateSessionEvents && len(events) > storage.LightweightTaskEventPayloadTailLimit {
+		streamTailStart = len(events) - storage.LightweightTaskEventPayloadTailLimit
+	}
+	for index, event := range events {
 		if payload := decodeNullableRawJSON(event.PayloadJSON); payload != nil {
+			if !hydrateSessionEvents {
+				payload = boundedTaskEventPayload(payload, index >= streamTailStart)
+			}
 			result = append(result, taskEventDTO{raw: payload})
 			continue
 		}
@@ -6267,6 +7074,135 @@ func taskEventsDTO(events []storage.TaskEvent) []taskEventDTO {
 		result = append(result, taskEventDTO{fallback: fallback})
 	}
 	return result
+}
+
+func boundedTaskEventPayload(raw *json.RawMessage, keepStreamTail bool) *json.RawMessage {
+	if raw == nil {
+		return nil
+	}
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(*raw, &fields); err != nil {
+		return raw
+	}
+	var eventType string
+	if err := json.Unmarshal(fields["type"], &eventType); err != nil {
+		return raw
+	}
+	if eventType == "snapshot" {
+		if existing, ok := fields["fullPatch"]; ok {
+			var patch string
+			if err := json.Unmarshal(existing, &patch); err == nil && patch == "" {
+				return raw
+			}
+		}
+		fields["fullPatch"] = json.RawMessage(`""`)
+		encoded, err := json.Marshal(fields)
+		if err != nil {
+			return raw
+		}
+		result := json.RawMessage(encoded)
+		return &result
+	}
+	if eventType != "action" {
+		return raw
+	}
+
+	changed := false
+	if execution, ok := fields["execution"]; ok {
+		if bounded, didChange := boundedExecutionPayload(execution, keepStreamTail); didChange {
+			fields["execution"] = bounded
+			changed = true
+		}
+	}
+	if subExecutions, ok := fields["hyperplanSubExecutions"]; ok {
+		if bounded, didChange := boundedHyperPlanSubExecutionsPayload(subExecutions, keepStreamTail); didChange {
+			fields["hyperplanSubExecutions"] = bounded
+			changed = true
+		}
+	}
+	if !changed {
+		return raw
+	}
+
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return raw
+	}
+	result := json.RawMessage(encoded)
+	return &result
+}
+
+func boundedExecutionPayload(raw json.RawMessage, keepStreamTail bool) (json.RawMessage, bool) {
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return raw, false
+	}
+	events, ok := fields["events"]
+	if !ok {
+		return raw, false
+	}
+	boundedEvents, omittedEventCount, didChange := boundedStreamEventsPayload(events, keepStreamTail)
+	if !didChange {
+		return raw, false
+	}
+	fields["events"] = boundedEvents
+	if omittedEventCount > 0 {
+		omitted, err := json.Marshal(omittedEventCount)
+		if err != nil {
+			return raw, false
+		}
+		fields["omittedEventCount"] = json.RawMessage(omitted)
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return raw, false
+	}
+	return json.RawMessage(encoded), true
+}
+
+func boundedHyperPlanSubExecutionsPayload(raw json.RawMessage, keepStreamTail bool) (json.RawMessage, bool) {
+	subExecutions := []json.RawMessage{}
+	if err := json.Unmarshal(raw, &subExecutions); err != nil {
+		return raw, false
+	}
+	changed := false
+	for index, subExecution := range subExecutions {
+		if bounded, didChange := boundedExecutionPayload(subExecution, keepStreamTail); didChange {
+			subExecutions[index] = bounded
+			changed = true
+		}
+	}
+	if !changed {
+		return raw, false
+	}
+	encoded, err := json.Marshal(subExecutions)
+	if err != nil {
+		return raw, false
+	}
+	return json.RawMessage(encoded), true
+}
+
+func boundedStreamEventsPayload(raw json.RawMessage, keepTail bool) (json.RawMessage, int, bool) {
+	events := []json.RawMessage{}
+	if err := json.Unmarshal(raw, &events); err != nil {
+		return raw, 0, false
+	}
+	keepCount := 0
+	if keepTail {
+		keepCount = lightweightStreamEventTailCount
+	}
+	if len(events) <= keepCount {
+		return raw, 0, false
+	}
+	bounded := []json.RawMessage{}
+	if keepCount > 0 {
+		bounded = events[len(events)-keepCount:]
+	}
+	encoded, err := json.Marshal(bounded)
+	if err != nil {
+		return raw, 0, false
+	}
+	return json.RawMessage(encoded), len(events) - keepCount, true
 }
 
 func commentsDTO(comments []storage.Comment) []commentDTO {
@@ -6333,6 +7269,7 @@ func queuedTurnToDTO(turn storage.QueuedTurn) queuedTurnDTO {
 		Label:               payload.Label,
 		IncludeComments:     payload.IncludeComments,
 		Images:              compactOptionalArrayRawJSON(payload.Images),
+		HyperPlanStrategy:   compactOptionalObjectRawJSON(payload.HyperPlanStrategy),
 		Thinking:            validThinking(payload.Thinking),
 		FastMode:            payload.FastMode,
 	}
@@ -6400,6 +7337,18 @@ func decodeNullableRawJSON(value sql.NullString) *json.RawMessage {
 	}
 	raw := json.RawMessage(append([]byte(nil), compacted.Bytes()...))
 	return &raw
+}
+
+func compactOptionalObjectRawJSON(raw json.RawMessage) json.RawMessage {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" || !strings.HasPrefix(trimmed, "{") {
+		return nil
+	}
+	var compacted bytes.Buffer
+	if err := json.Compact(&compacted, raw); err != nil {
+		return nil
+	}
+	return json.RawMessage(append([]byte(nil), compacted.Bytes()...))
 }
 
 func compactOptionalObjectJSON(field string, raw json.RawMessage) (sql.NullString, *core.RuntimeError) {

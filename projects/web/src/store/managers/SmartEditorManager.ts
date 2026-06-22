@@ -67,6 +67,8 @@ interface FileUsageStat {
 type NamespaceStats = Record<string, FileUsageStat>
 type AllStats = Record<string, NamespaceStats>
 
+const MIN_REMOTE_FILE_MENTION_QUERY_LENGTH = 2
+
 export interface SmartEditorFileTreeChild {
     name: string
     isDir: boolean
@@ -89,8 +91,10 @@ interface SmartEditorProductFileContext {
 }
 
 export interface SmartEditorProductFileAccess {
+    usesRuntimeProductAPI?(): boolean
+    productRuntimeOwnsFiles?(): boolean
     getContext(id: string, workspaceId: string, dir: string): SmartEditorProductFileContext | null
-    fuzzySearchProjectFiles(args: OpenADEProjectFilesFuzzySearchRequest): Promise<OpenADEProjectFilesFuzzySearchResult>
+    fuzzySearchProjectFiles(args: OpenADEProjectFilesFuzzySearchRequest): Promise<OpenADEProjectFilesFuzzySearchResult | null>
     readStagedTaskImage?(args: OpenADETaskImageStagedReadRequest): Promise<OpenADETaskImageStagedReadResult | null>
 }
 
@@ -147,6 +151,24 @@ function decodeBase64ArrayBuffer(value: string): ArrayBuffer {
 }
 
 async function loadImagePreviewUrl(image: ImageAttachment, productAccess: SmartEditorProductFileAccess | null): Promise<string | null> {
+    const usesRuntimeProductAPI = productAccess?.usesRuntimeProductAPI?.() ?? false
+    const productRuntimeOwnsFiles = productAccess?.productRuntimeOwnsFiles?.() ?? usesRuntimeProductAPI
+
+    if (productAccess?.readStagedTaskImage && (usesRuntimeProductAPI || productRuntimeOwnsFiles)) {
+        try {
+            const result = await productAccess.readStagedTaskImage({ imageId: image.id, ext: image.ext })
+            if (result?.data) {
+                const blob = new Blob([decodeBase64ArrayBuffer(result.data)], { type: result.mediaType ?? image.mediaType })
+                return URL.createObjectURL(blob)
+            }
+        } catch (err) {
+            console.error("[SmartEditorManager] Failed to restore runtime image preview:", image.id, err)
+        }
+        return null
+    }
+
+    if (productRuntimeOwnsFiles) return null
+
     if (productAccess?.readStagedTaskImage) {
         try {
             const result = await productAccess.readStagedTaskImage({ imageId: image.id, ext: image.ext })
@@ -207,7 +229,7 @@ export class SmartEditorManager {
         this.id = id
         this.workspaceId = workspaceId
         makeAutoObservable(this)
-        void this.loadPersistedStashes()
+        this.loadPersistedStashes()
     }
 
     // === Input state ===
@@ -288,6 +310,7 @@ export class SmartEditorManager {
 
         this.persistStashedDrafts()
         this.restoreSnapshot(nextDraft.snapshot)
+        this.restoreMissingImagePreviewUrls(nextDraft.snapshot)
         return true
     }
 
@@ -360,11 +383,22 @@ export class SmartEditorManager {
         return this.productContextFor(dir) !== null || (this.shouldUseLegacyFilesApi && filesApi.isAvailable())
     }
 
+    getFileMentionFavorites(limit = 20): string[] {
+        return this.favorites.slice(0, limit).map((item) => item.path)
+    }
+
     async searchFileMentions(dir: string, query: string, limit = 20): Promise<SmartEditorFileSearchResult> {
         const normalizedQuery = query.trim()
         if (normalizedQuery === "") {
             return {
-                results: this.favorites.slice(0, limit).map((item) => item.path),
+                results: this.getFileMentionFavorites(limit),
+                treeMatch: null,
+            }
+        }
+        if (normalizedQuery.length < MIN_REMOTE_FILE_MENTION_QUERY_LENGTH) {
+            const loweredQuery = normalizedQuery.toLowerCase()
+            return {
+                results: this.getFileMentionFavorites(limit).filter((path) => path.toLowerCase().includes(loweredQuery)),
                 treeMatch: null,
             }
         }
@@ -471,8 +505,13 @@ export class SmartEditorManager {
         return this.productAccess?.getContext(this.id, this.workspaceId, dir) ?? null
     }
 
+    private get productRuntimeOwnsFiles(): boolean {
+        const usesRuntimeProductAPI = this.productAccess?.usesRuntimeProductAPI?.() ?? false
+        return this.productAccess?.productRuntimeOwnsFiles?.() ?? usesRuntimeProductAPI
+    }
+
     private get shouldUseLegacyFilesApi(): boolean {
-        return this.productAccess === null
+        return !this.productRuntimeOwnsFiles
     }
 
     private async productFileExists(context: SmartEditorProductFileContext, relPath: string): Promise<boolean> {
@@ -574,23 +613,21 @@ export class SmartEditorManager {
         }
     }
 
-    private async loadPersistedStashes(): Promise<void> {
+    private loadPersistedStashes(): void {
         const persistedDrafts = this.getPersistedStashedDrafts()
         if (persistedDrafts.length === 0) return
 
-        const drafts = await Promise.all(
-            persistedDrafts.map(async (draft) => ({
-                id: draft.id,
-                createdAt: draft.createdAt,
-                snapshot: {
-                    value: draft.snapshot.value,
-                    files: [...draft.snapshot.files],
-                    editorContent: cloneEditorContent(draft.snapshot.editorContent),
-                    pendingImages: clonePendingImages(draft.snapshot.pendingImages),
-                    pendingImageDataUrls: await this.createPreviewUrlMap(draft.snapshot.pendingImages),
-                },
-            }))
-        )
+        const drafts = persistedDrafts.map((draft) => ({
+            id: draft.id,
+            createdAt: draft.createdAt,
+            snapshot: {
+                value: draft.snapshot.value,
+                files: [...draft.snapshot.files],
+                editorContent: cloneEditorContent(draft.snapshot.editorContent),
+                pendingImages: clonePendingImages(draft.snapshot.pendingImages),
+                pendingImageDataUrls: new Map<string, string>(),
+            },
+        }))
 
         runInAction(() => {
             this.stashedDrafts = drafts
@@ -642,6 +679,30 @@ export class SmartEditorManager {
         )
 
         return new Map(entries.filter((entry): entry is readonly [string, string] => entry !== null))
+    }
+
+    private restoreMissingImagePreviewUrls(snapshot: EditorSnapshot): void {
+        const missingImages = snapshot.pendingImages.filter((image) => !snapshot.pendingImageDataUrls.has(image.id))
+        if (missingImages.length === 0) return
+
+        void this.createPreviewUrlMap(missingImages)
+            .then((previewUrls) => {
+                if (previewUrls.size === 0) return
+
+                runInAction(() => {
+                    for (const [imageId, previewUrl] of previewUrls.entries()) {
+                        const stillPending = this.pendingImages.some((image) => image.id === imageId)
+                        if (stillPending && !this.pendingImageDataUrls.has(imageId)) {
+                            this.pendingImageDataUrls.set(imageId, previewUrl)
+                        } else {
+                            URL.revokeObjectURL(previewUrl)
+                        }
+                    }
+                })
+            })
+            .catch((error: unknown) => {
+                console.error("[SmartEditorManager] Failed to hydrate restored image previews:", error)
+            })
     }
 
     private pathsToItems(paths: string[]): FileUsageItem[] {

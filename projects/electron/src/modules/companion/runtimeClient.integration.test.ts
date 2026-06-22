@@ -65,6 +65,51 @@ afterEach(async () => {
 })
 
 describe("RuntimeClient WebSocket reconnect", () => {
+    it("uses caller-provided request ids on WebSocket domain requests", async () => {
+        globalThis.WebSocket = WebSocket as unknown as typeof globalThis.WebSocket
+
+        const httpServer = createServer()
+        const wsServer = new WebSocketServer({ server: httpServer })
+        cleanupFns.push(
+            () =>
+                new Promise<void>((resolve) => {
+                    wsServer.close(() => httpServer.close(() => resolve()))
+                })
+        )
+
+        const requests: RuntimeRequest[] = []
+        wsServer.on("connection", (socket) => {
+            socket.on("message", (raw) => {
+                const request = JSON.parse(raw.toString()) as RuntimeRequest
+                requests.push(request)
+                if (request.method === "initialize") {
+                    socket.send(JSON.stringify({ id: request.id, result: runtimeInitializeResult() }))
+                    return
+                }
+                socket.send(JSON.stringify({ id: request.id, result: { ok: true } }))
+            })
+        })
+
+        const port = await listen(httpServer)
+        const client = new RuntimeClient({
+            url: `ws://127.0.0.1:${port}/v1/runtime`,
+            token: "test-token",
+            reconnect: false,
+        })
+        cleanupFns.push(() => client.close())
+
+        await expect(
+            client.requestWithOptions("runtime/list", { ownerType: "openade-task" }, { requestId: "openade-client:correlation-1" })
+        ).resolves.toEqual({ ok: true })
+
+        expect(requests.map((request) => request.method)).toEqual(["initialize", "runtime/list"])
+        expect(requests[1]).toMatchObject({
+            id: "openade-client:correlation-1",
+            method: "runtime/list",
+            params: { ownerType: "openade-task" },
+        })
+    })
+
     it("rejects instead of hanging when the socket closes before initialize completes", async () => {
         globalThis.WebSocket = WebSocket as unknown as typeof globalThis.WebSocket
 
@@ -184,11 +229,15 @@ describe("RuntimeClient WebSocket reconnect", () => {
 
         const port = await listen(httpServer)
         const statuses: RuntimeClientStatus[] = []
+        const reconnected = deferred<RuntimeClientStatus>()
         const client = new RuntimeClient({
             url: `ws://127.0.0.1:${port}/v1/runtime`,
             token: "test-token",
             reconnect: true,
-            onStatus: (status) => statuses.push(status),
+            onStatus: (status) => {
+                statuses.push(status)
+                if (statuses.includes("reconnecting") && status === "connected") reconnected.resolve(status)
+            },
         })
         cleanupFns.push(() => client.close())
 
@@ -199,6 +248,7 @@ describe("RuntimeClient WebSocket reconnect", () => {
 
         await withTimeout(firstNotification.promise, "first notification was not delivered")
         await withTimeout(replayedNotification.promise, "replayed notification was not delivered after reconnect")
+        await withTimeout(reconnected.promise, "client did not report connected after replaying notifications")
 
         expect(replayCursor).toBe("1")
         expect(connectionCount).toBeGreaterThanOrEqual(2)

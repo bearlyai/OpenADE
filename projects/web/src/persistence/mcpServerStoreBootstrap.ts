@@ -37,9 +37,6 @@ export async function connectMcpServerStore(): Promise<McpServerStoreConnection>
 
     const store = createMcpServerStore(doc)
 
-    // Fire initial sync (non-blocking)
-    sync().catch((e) => console.error("[McpServerStore] Initial sync failed:", e))
-
     return {
         store,
         sync,

@@ -32,15 +32,24 @@ function getLegacyNestedYjsStorageDir(): string {
 // Per-document save queue to prevent race conditions
 const saveQueues = new Map<string, Promise<void>>()
 const LOAD_CACHE_TTL_MS = 15_000
-const LOAD_CACHE_MAX_DOCUMENTS = 32
+const LOAD_CACHE_MAX_DOCUMENTS = 96
+const LOAD_CACHE_MAX_BYTES = 160 * 1024 * 1024
+const LOAD_CACHE_INVALIDATION_MAX_DOCUMENTS = 128
 const SLOW_YJS_LOAD_MS = 250
 const SLOW_YJS_SAVE_MS = 500
 const YJS_LOAD_BURST_WINDOW_MS = 5_000
 const YJS_LOAD_BURST_COUNT = 8
 
+type LoadCacheInvalidationReason = "save" | "delete" | "evicted" | "expired"
+
 interface LoadCacheEntry {
     data: Uint8Array | null
     expiresAt: number
+}
+
+interface LoadCacheInvalidation {
+    reason: LoadCacheInvalidationReason
+    at: number
 }
 
 interface LoadBurstEntry {
@@ -51,13 +60,17 @@ interface LoadBurstEntry {
 
 export interface YjsDocumentOperationContext {
     runtimeMethod?: string
+    runtimeRequestId?: string
     operation?: string
 }
 
 const loadQueues = new Map<string, Promise<Uint8Array | null>>()
 const loadCache = new Map<string, LoadCacheEntry>()
+let loadCacheBytes = 0
+const loadCacheInvalidations = new Map<string, LoadCacheInvalidation>()
 const loadBursts = new Map<string, LoadBurstEntry>()
 const operationContext = new AsyncLocalStorage<YjsDocumentOperationContext>()
+const PROTECTED_LOAD_CACHE_DOCUMENTS = new Set(["code:personal_settings", "code:repos", "code:mcp_servers"])
 
 // ============================================================================
 // Helper Functions
@@ -119,18 +132,48 @@ async function awaitPendingSaves(): Promise<void> {
     await Promise.all(Array.from(saveQueues.values()))
 }
 
-function clearLoadCache(id: string): void {
+function rememberLoadCacheInvalidation(id: string, reason: LoadCacheInvalidationReason): void {
+    loadCacheInvalidations.delete(id)
+    loadCacheInvalidations.set(id, { reason, at: Date.now() })
+    while (loadCacheInvalidations.size > LOAD_CACHE_INVALIDATION_MAX_DOCUMENTS) {
+        const oldestKey = loadCacheInvalidations.keys().next().value
+        if (typeof oldestKey !== "string") break
+        loadCacheInvalidations.delete(oldestKey)
+    }
+}
+
+function clearLoadCache(id: string, reason: LoadCacheInvalidationReason): void {
+    const cached = loadCache.get(id)
+    if (cached) loadCacheBytes -= cached.data?.byteLength ?? 0
     loadCache.delete(id)
     loadQueues.delete(id)
+    rememberLoadCacheInvalidation(id, reason)
+}
+
+function evictLoadCacheEntry(id: string): void {
+    const cached = loadCache.get(id)
+    if (cached) loadCacheBytes -= cached.data?.byteLength ?? 0
+    loadCache.delete(id)
+    rememberLoadCacheInvalidation(id, "evicted")
+}
+
+function oldestEvictableLoadCacheKey(): string | null {
+    for (const key of loadCache.keys()) {
+        if (!PROTECTED_LOAD_CACHE_DOCUMENTS.has(key)) return key
+    }
+    return null
 }
 
 function cacheLoadedDocument(id: string, data: Uint8Array | null): Uint8Array | null {
+    const existing = loadCache.get(id)
+    if (existing) loadCacheBytes -= existing.data?.byteLength ?? 0
     loadCache.delete(id)
     loadCache.set(id, { data, expiresAt: Date.now() + LOAD_CACHE_TTL_MS })
-    while (loadCache.size > LOAD_CACHE_MAX_DOCUMENTS) {
-        const oldestKey = loadCache.keys().next().value
-        if (typeof oldestKey !== "string") break
-        loadCache.delete(oldestKey)
+    loadCacheBytes += data?.byteLength ?? 0
+    while ((loadCache.size > LOAD_CACHE_MAX_DOCUMENTS || loadCacheBytes > LOAD_CACHE_MAX_BYTES) && loadCache.size > 1) {
+        const oldestKey = oldestEvictableLoadCacheKey()
+        if (!oldestKey) break
+        evictLoadCacheEntry(oldestKey)
     }
     return data
 }
@@ -139,7 +182,9 @@ function getCachedLoadedDocument(id: string): Uint8Array | null | undefined {
     const cached = loadCache.get(id)
     if (!cached) return undefined
     if (cached.expiresAt <= Date.now()) {
+        loadCacheBytes -= cached.data?.byteLength ?? 0
         loadCache.delete(id)
+        rememberLoadCacheInvalidation(id, "expired")
         return undefined
     }
 
@@ -159,6 +204,7 @@ function currentOperationContext(options: YjsDocumentOperationContext = {}): Yjs
     const stored = operationContext.getStore()
     return {
         runtimeMethod: sanitizeLogLabel(options.runtimeMethod ?? stored?.runtimeMethod),
+        runtimeRequestId: sanitizeLogLabel(options.runtimeRequestId ?? stored?.runtimeRequestId),
         operation: sanitizeLogLabel(options.operation ?? stored?.operation),
     }
 }
@@ -166,8 +212,33 @@ function currentOperationContext(options: YjsDocumentOperationContext = {}): Yjs
 function operationContextFields(context: YjsDocumentOperationContext): Record<string, string> {
     return {
         ...(context.runtimeMethod ? { runtimeMethod: context.runtimeMethod } : {}),
+        ...(context.runtimeRequestId ? { runtimeRequestId: context.runtimeRequestId } : {}),
         ...(context.operation ? { operation: context.operation } : {}),
     }
+}
+
+function loadCacheMissFields(id: string): Record<string, number | string> {
+    const invalidation = loadCacheInvalidations.get(id)
+    return {
+        cacheMissReason: invalidation?.reason ?? "cold",
+        cacheMissAgeMs: invalidation ? Date.now() - invalidation.at : 0,
+        loadCacheSize: loadCache.size,
+        loadCacheBytes,
+        pid: process.pid,
+    }
+}
+
+function loadLogFields(id: string, size: number, context: YjsDocumentOperationContext): Record<string, number | string> {
+    return {
+        id,
+        size,
+        ...loadCacheMissFields(id),
+        ...operationContextFields(context),
+    }
+}
+
+function loadLogDetails(id: string, size: number, context: YjsDocumentOperationContext): string {
+    return JSON.stringify(loadLogFields(id, size, context))
 }
 
 export function runWithYjsDocumentOperationContext<T>(context: YjsDocumentOperationContext, run: () => T): T {
@@ -176,9 +247,9 @@ export function runWithYjsDocumentOperationContext<T>(context: YjsDocumentOperat
 
 function recordYjsLoad(id: string, data: Uint8Array | null, durationMs: number, context: YjsDocumentOperationContext): void {
     const size = data?.length ?? 0
-    const contextFields = operationContextFields(context)
+    const fields = loadLogFields(id, size, context)
     if (durationMs >= SLOW_YJS_LOAD_MS) {
-        logger.warn("[YjsStorage] Slow document load", JSON.stringify({ id, size, durationMs, ...contextFields }))
+        logger.warn("[YjsStorage] Slow document load", JSON.stringify({ ...fields, durationMs }))
     }
 
     const now = Date.now()
@@ -191,10 +262,11 @@ function recordYjsLoad(id: string, data: Uint8Array | null, durationMs: number, 
         burst.lastWarnedCount = burst.count
         logger.warn(
             "[YjsStorage] Repeated document loads",
-            JSON.stringify({ id, count: burst.count, windowMs: now - burst.startedAt, size, ...contextFields })
+            JSON.stringify({ ...fields, count: burst.count, windowMs: now - burst.startedAt })
         )
     }
     loadBursts.set(id, burst)
+    loadCacheInvalidations.delete(id)
 }
 
 function recordYjsSave(id: string, size: number, durationMs: number, context: YjsDocumentOperationContext): void {
@@ -253,7 +325,7 @@ async function handleSave(id: string, data: Uint8Array, options: YjsDocumentOper
 
     const currentSave = prevSave.then(async () => {
         await pendingLoad
-        clearLoadCache(id)
+        clearLoadCache(id, "save")
         await ensureStorageDir()
 
         const filePath = getDocPath(id)
@@ -359,8 +431,9 @@ async function handleLoad(id: string, options: YjsDocumentOperationContext = {})
         try {
             const data = new Uint8Array(await fs.readFile(filePath))
             if (isExpectedTaskDoc(id, data)) {
-                logger.debug(`[YjsStorage] Loaded document: ${id} (${data.length} bytes)`)
-                return cacheLoadedDocument(id, data)
+                const loaded = cacheLoadedDocument(id, data)
+                logger.debug(`[YjsStorage] Loaded document: ${id} (${data.length} bytes) ${loadLogDetails(id, data.length, logContext)}`)
+                return loaded
             }
 
             try {
@@ -417,7 +490,7 @@ export async function loadYjsDocument(id: string, options: YjsDocumentOperationC
  */
 async function handleDelete(id: string): Promise<void> {
     await (loadQueues.get(id) ?? Promise.resolve())
-    clearLoadCache(id)
+    clearLoadCache(id, "delete")
     await awaitPendingSave(id)
 
     const filePath = getDocPath(id)

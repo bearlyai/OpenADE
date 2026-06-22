@@ -1,17 +1,23 @@
 import { describe, expect, it, vi } from "vitest"
-import type { OpenADEClientOptions } from "../../../openade-client/src"
-import type { RuntimeNotification } from "../../../runtime-protocol/src"
+import { OPENADE_REMOTE_METHOD, type OpenADEClientOptions } from "../../../openade-client/src"
+import type { RuntimeCapabilities, RuntimeNotification } from "../../../runtime-protocol/src"
 import type { RuntimeClientOptions } from "../../../runtime-client/src"
-import { KernelSessionManager, runtimeSocketUrl, type KernelSessionConfig } from "./session"
+import { KernelSessionManager, requestKernelRemoteMethod, runtimeSocketUrl, type KernelSessionConfig } from "./session"
 
 const runtimeClients: RuntimeClient[] = []
 const openadeClients: OpenADEClient[] = []
 
 class RuntimeClient {
+    readonly capabilities: RuntimeCapabilities = runtimeCapabilities(Object.values(OPENADE_REMOTE_METHOD))
     close = vi.fn()
+    connect = vi.fn(async () => undefined)
 
     constructor(readonly options: RuntimeClientOptions) {
         runtimeClients.push(this)
+    }
+
+    hasMethod(method: string): boolean {
+        return this.capabilities.methods.includes(method)
     }
 
     request<T>(): Promise<T> {
@@ -27,6 +33,23 @@ class OpenADEClient {
     constructor(readonly options: OpenADEClientOptions) {
         openadeClients.push(this)
     }
+}
+
+class GuardedRuntimeClient {
+    capabilities: RuntimeCapabilities | null = null
+    readonly requests: string[] = []
+    readonly connect = vi.fn(async () => {
+        this.capabilities = runtimeCapabilities([OPENADE_REMOTE_METHOD.remoteDeviceList])
+    })
+
+    async request<T>(method: string): Promise<T> {
+        this.requests.push(method)
+        return { devices: [] } as T
+    }
+}
+
+function runtimeCapabilities(methods: string[]): RuntimeCapabilities {
+    return { methods, notifications: [], agentProviders: [] }
 }
 
 function config(overrides: Partial<KernelSessionConfig> = {}): KernelSessionConfig {
@@ -74,5 +97,25 @@ describe("KernelSessionManager", () => {
 
         manager.clear()
         expect(runtimeClients[1].close).toHaveBeenCalledTimes(1)
+    })
+
+    it("fails before sending remote requests for methods missing from initialized capabilities", async () => {
+        const runtime = new GuardedRuntimeClient()
+
+        await expect(requestKernelRemoteMethod(runtime, OPENADE_REMOTE_METHOD.remoteDeviceSelfRevoke)).rejects.toThrow(
+            `Kernel runtime method unavailable: ${OPENADE_REMOTE_METHOD.remoteDeviceSelfRevoke}`
+        )
+
+        expect(runtime.connect).toHaveBeenCalledOnce()
+        expect(runtime.requests).toEqual([])
+    })
+
+    it("sends remote requests when initialized capabilities advertise the method", async () => {
+        const runtime = new GuardedRuntimeClient()
+
+        await expect(requestKernelRemoteMethod(runtime, OPENADE_REMOTE_METHOD.remoteDeviceList)).resolves.toEqual({ devices: [] })
+
+        expect(runtime.connect).toHaveBeenCalledOnce()
+        expect(runtime.requests).toEqual([OPENADE_REMOTE_METHOD.remoteDeviceList])
     })
 })

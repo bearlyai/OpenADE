@@ -1,11 +1,10 @@
-import { Base64 } from "js-base64"
 import type {
     OpenADETaskTerminalMutationResult,
     OpenADETaskTerminalOutputChunk,
     OpenADETaskTerminalReconnectResult,
     OpenADETaskTerminalStartResult,
 } from "../../../openade-module/src"
-import { PtyHandle, type PtyOutputEvent } from "../electronAPI/pty"
+import { areDesktopFallbackChunksEnabled } from "../featureFlags"
 
 type TerminalEventName = "output" | "exit"
 type TerminalOutputHandler = (data: string) => void
@@ -21,9 +20,18 @@ export interface TerminalRuntimeSession {
     cleanup(): void
 }
 
+export interface TaskTerminalCapabilities {
+    canStart: boolean
+    canReconnect: boolean
+    canWrite: boolean
+    canResize: boolean
+    canStop: boolean
+}
+
 export interface TaskTerminalProductAccess {
     repoId: string
     taskId: string
+    capabilities: TaskTerminalCapabilities
     startTaskTerminal(args: { cols: number; rows: number }): Promise<OpenADETaskTerminalStartResult>
     reconnectTaskTerminal(args: { terminalId?: string }): Promise<OpenADETaskTerminalReconnectResult>
     writeTaskTerminal(args: { terminalId: string; data: string }): Promise<OpenADETaskTerminalMutationResult>
@@ -59,14 +67,17 @@ export class ProductTaskTerminalSession implements TerminalRuntimeSession {
         options: ProductSessionOptions = {}
     ): Promise<ProductTaskTerminalSession | null> {
         const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_PRODUCT_TERMINAL_POLL_MS
-        const reconnected = await access.reconnectTaskTerminal({})
-        if (reconnected.found) {
-            const session = new ProductTaskTerminalSession(access, reconnected.terminalId, pollIntervalMs)
-            session.applyReconnectResult(reconnected)
-            session.startPolling()
-            return session
+        if (access.capabilities.canReconnect) {
+            const reconnected = await access.reconnectTaskTerminal({})
+            if (reconnected.found) {
+                const session = new ProductTaskTerminalSession(access, reconnected.terminalId, pollIntervalMs)
+                session.applyReconnectResult(reconnected)
+                session.startPolling()
+                return session
+            }
         }
 
+        if (!access.capabilities.canStart) return null
         const started = await access.startTaskTerminal({ cols, rows })
         if (!started.ok) return null
 
@@ -100,17 +111,17 @@ export class ProductTaskTerminalSession implements TerminalRuntimeSession {
     }
 
     async write(data: string): Promise<void> {
-        if (this._exited) return
+        if (this._exited || !this.access.capabilities.canWrite) return
         await this.access.writeTaskTerminal({ terminalId: this.terminalId, data })
     }
 
     async resize(cols: number, rows: number): Promise<void> {
-        if (this._exited) return
+        if (this._exited || !this.access.capabilities.canResize) return
         await this.access.resizeTaskTerminal({ terminalId: this.terminalId, cols, rows })
     }
 
     async kill(): Promise<void> {
-        if (this._exited) return
+        if (this._exited || !this.access.capabilities.canStop) return
         await this.access.stopTaskTerminal({ terminalId: this.terminalId })
         this.markExited()
     }
@@ -121,7 +132,7 @@ export class ProductTaskTerminalSession implements TerminalRuntimeSession {
     }
 
     async pollOnce(): Promise<void> {
-        if (this._exited || this.pollInFlight) return
+        if (this._exited || this.pollInFlight || !this.access.capabilities.canReconnect) return
         this.pollInFlight = true
         try {
             this.applyReconnectResult(await this.access.reconnectTaskTerminal({ terminalId: this.terminalId }))
@@ -131,7 +142,7 @@ export class ProductTaskTerminalSession implements TerminalRuntimeSession {
     }
 
     private startPolling(): void {
-        if (this.pollIntervalMs <= 0 || this._exited || this.pollTimer) return
+        if (this.pollIntervalMs <= 0 || this._exited || this.pollTimer || !this.access.capabilities.canReconnect) return
         this.pollTimer = setInterval(() => {
             void this.pollOnce()
         }, this.pollIntervalMs)
@@ -167,57 +178,6 @@ export class ProductTaskTerminalSession implements TerminalRuntimeSession {
     }
 }
 
-class RawPtyTerminalSession implements TerminalRuntimeSession {
-    private readonly outputHandlers = new Map<TerminalOutputHandler, (chunk: unknown) => void>()
-
-    private constructor(private readonly handle: PtyHandle) {}
-
-    static async connect(ptyId: string, cwd: string, cols: number, rows: number): Promise<RawPtyTerminalSession | null> {
-        const { handle, found } = await PtyHandle.reconnect(ptyId)
-        if (found && handle) return new RawPtyTerminalSession(handle)
-
-        const spawned = await PtyHandle.spawn({ ptyId, cwd, cols, rows })
-        return spawned ? new RawPtyTerminalSession(spawned) : null
-    }
-
-    get exited(): boolean {
-        return this.handle.exited
-    }
-
-    on(event: "output", handler: TerminalOutputHandler): void
-    on(event: "exit", handler: TerminalExitHandler): void
-    on(event: TerminalEventName, handler: TerminalOutputHandler | TerminalExitHandler): void {
-        if (event === "output") {
-            const outputHandler = handler as TerminalOutputHandler
-            const wrapped = (chunk: unknown) => {
-                const { data } = chunk as PtyOutputEvent
-                outputHandler(Base64.decode(data))
-            }
-            this.outputHandlers.set(outputHandler, wrapped)
-            this.handle.on("output", wrapped)
-            return
-        }
-
-        this.handle.on("exit", handler as TerminalExitHandler)
-    }
-
-    async write(data: string): Promise<void> {
-        await this.handle.write(data)
-    }
-
-    async resize(cols: number, rows: number): Promise<void> {
-        await this.handle.resize(cols, rows)
-    }
-
-    async kill(): Promise<void> {
-        await this.handle.kill()
-    }
-
-    cleanup(): void {
-        this.handle.cleanup()
-    }
-}
-
 export async function createTerminalSession(params: {
     ptyId: string
     cwd: string
@@ -226,5 +186,7 @@ export async function createTerminalSession(params: {
     productAccess?: TaskTerminalProductAccess | null
 }): Promise<TerminalRuntimeSession | null> {
     if (params.productAccess) return ProductTaskTerminalSession.connect(params.productAccess, params.cols, params.rows)
+    if (!areDesktopFallbackChunksEnabled) return null
+    const { RawPtyTerminalSession } = await import("./rawPtyTerminalSession")
     return RawPtyTerminalSession.connect(params.ptyId, params.cwd, params.cols, params.rows)
 }

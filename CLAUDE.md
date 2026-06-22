@@ -29,6 +29,7 @@
 
 - [goal.md](goal.md) defines the destination for OpenADE Core: a standalone Go product kernel with SQLite/blob storage, one typed runtime API, thin medium shells, and classic desktop UI as the canonical product surface. Future agents must consult it before changing kernel composition, durable storage architecture, runtime/OpenADE contracts, Electron product-backend ownership, shared-shell direction, or medium-specific product capability decisions.
 - [plan.md](plan.md) covers the shared shell and remote-kernel migration for bringing companion, web, and desktop onto one runtime-attached product shell. Future agents must consult it before changing runtime composition, OpenADE client/store boundaries, companion permissions, mobile companion behavior, or desktop renderer paths that move away from direct Yjs/local Electron assumptions.
+- During the current Core dogfood migration, [goal.md](goal.md) and [plan.md](plan.md) define a 90-93% process-reduction mode. Future agents must use that checkpoint cadence for this migration: one targeted orientation, one bulk implementation pass, one focused real-path proof per coherent slice, and broad gates only at push, default flips, fallback removal, storage/import changes, host-authority expansion, or release readiness.
 
 ## Engineering Commandments
 
@@ -36,11 +37,11 @@
 2. Keep solutions simple, surgical, and production-aware. Prefer the smallest robust change, but step back when a better abstraction or limited redo prevents long-term complexity.
 3. Treat production data as real. Preserve backward compatibility with tolerant readers, optional fields, migrations, and regression fixtures for old shapes.
 4. Prefer strong contracts. Use types, schemas, parsers, validators, and discriminated unions at boundaries instead of implicit object shapes or stringly typed logic.
-5. Test behavior that matters. Write high-signal unit and integration tests that exercise production paths without mocking; avoid mirror tests and brittle implementation assertions.
-6. Verify frequently. Run focused type checks, tests, linters, formatters, builds, and real requests or screenshots when they prove the changed behavior.
+5. Test behavior that matters. Write high-signal unit and integration tests that exercise production paths without mocking; avoid mirror tests and brittle implementation assertions. During the current Core dogfood migration, add or run those tests at slice checkpoints instead of after routine edits.
+6. Verify frequently, but match the cadence to the active mode. In normal work, run focused type checks, tests, linters, formatters, builds, and real requests or screenshots when they prove the changed behavior. In the current Core dogfood migration, "frequently" means one focused proof per coherent vertical slice, with broad gates batched as described in [plan.md](plan.md).
 7. Observe failure modes. Add useful logs, metrics, analytics, and operational context for important flows, and document how future maintainers can query or inspect them.
 8. Keep infrastructure boring. Prefer one clear command to run checks, centralize configuration, and avoid hidden manual steps.
 9. Handle errors precisely. Do not hide blanket failures; preserve meaningful status codes, filters, context, retries, and permission handling.
 10. Be careful with databases and destructive operations. Use read-only sessions by default, make writes explicit, prefer reversible transactions, and never risk irrecoverable data loss.
-11. Document navigational knowledge. Link durable docs from the relevant `CLAUDE.md` or `AGENT.md`, explain when future agents must consult them, and update those docs when behavior changes.
-12. See the real shape before coding. Read the files, inspect data, make test requests, and verify assumptions before designing around them.
+11. Document navigational knowledge. Link durable docs from the relevant `CLAUDE.md` or `AGENT.md`, explain when future agents must consult them, and update those docs when behavior changes. During the current Core dogfood migration, avoid documentation churn for routine patch evidence; use final handoffs and git history for that.
+12. See the real shape before coding. Read the files, inspect data, make test requests, and verify assumptions before designing around them. During the current Core dogfood migration, keep this targeted: reread only the guidance and source areas needed for the active slice, not broad repo scans by default.

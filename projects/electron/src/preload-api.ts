@@ -12,6 +12,7 @@ export type OpenADECoreRolloutReason =
     | "development-default-off"
     | "missing-core-binary"
     | "invalid-managed-command"
+    | "invalid-external-endpoint"
     | "unconfigured"
 
 export type OpenADECoreRolloutStatus = "connected" | "legacy-ipc"
@@ -31,6 +32,7 @@ export interface OpenADEAPI {
         activeWorkUnloadBlockerDisabled?: boolean
         smokeTest?: boolean
         quit: () => Promise<void>
+        restart: () => Promise<void>
         openUrl: (url: string) => Promise<void>
         applyUpdate: () => Promise<void>
         forceEnableDevTools: () => Promise<void>
@@ -75,6 +77,7 @@ export interface OpenADEAPI {
     }
     core?: {
         runtimeEndpoint?: OpenADECoreRuntimeEndpoint
+        migrationRuntimeEndpoint?: OpenADECoreRuntimeEndpoint
         rolloutState?: OpenADECoreRolloutState
     }
     runtime: {

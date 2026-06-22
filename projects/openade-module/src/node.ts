@@ -1,3 +1,4 @@
+import { OPENADE_NOTIFICATION } from "./generated/openade-contracts";
 import os from "node:os";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -96,11 +97,16 @@ import type {
 	OpenADEProjectProcessStartResult,
 	OpenADEProjectProcessStopRequest,
 	OpenADEProjectProcessStopResult,
+	OpenADERepoPathInspectRequest,
+	OpenADERepoPathInspectResult,
 	OpenADEQueuedTurn,
 	OpenADEReviewStartRequest,
-	OpenADESnapshotPatchIndex,
-	OpenADECronInstallState,
-	OpenADECronInstallStateReadRequest,
+		OpenADESnapshotPatchIndex,
+		OpenADECronInstallState,
+		OpenADECronInstallStateListResult,
+		OpenADECronDefinitionsReadRequest,
+		OpenADECronDefinitionsReadResult,
+		OpenADECronInstallStateReadRequest,
 	OpenADECronInstallStateReadResult,
 	OpenADECronInstallStateReplaceRequest,
 	OpenADECronInstallStateReplaceResult,
@@ -311,6 +317,29 @@ async function replaceNodeCronInstallState(
 	};
 }
 
+async function listNodeCronInstallStateRepos(
+	cronDir: string,
+): Promise<OpenADECronInstallStateListResult> {
+	let entries: string[];
+	try {
+		entries = await fs.readdir(cronDir);
+	} catch (error) {
+		if (nodeErrorCode(error) === "ENOENT") return { repoIds: [] };
+		throw error;
+	}
+
+	const repoIds: string[] = [];
+	for (const entry of entries) {
+		if (!entry.endsWith(".json")) continue;
+		const repoId = entry.slice(0, -".json".length);
+		if (!/^[a-zA-Z0-9_-]+$/.test(repoId)) continue;
+		if (repoId === "_index") continue;
+		const state = await readNodeCronInstallState(cronDir, { repoId });
+		if (Object.keys(state.installations).length > 0) repoIds.push(repoId);
+	}
+	return { repoIds: repoIds.sort() };
+}
+
 type ScopedGitResult = {
 	stdout: string;
 	stderr: string;
@@ -396,7 +425,10 @@ function scopedGit(args: string[], cwd: string): Promise<ScopedGitResult> {
 					stdout: String(stdout),
 					stderr: String(stderr),
 					success: !error,
-					code: typeof error?.code === "number" ? error.code : undefined,
+					code:
+						typeof error?.code === "number"
+							? error.code
+							: undefined,
 				});
 			},
 		);
@@ -473,13 +505,25 @@ function scopedTaskSummaryFiles(stdout: string): OpenADETaskGitChangedFile[] {
 type ScopedGitSummary = Omit<OpenADETaskGitSummaryResult, "repoId" | "taskId">;
 
 async function scopedGitSummary(workDir: string): Promise<ScopedGitSummary> {
-	const branchResult = await scopedGit(
-		["rev-parse", "--abbrev-ref", "HEAD"],
-		workDir,
-	);
+	const [
+		branchResult,
+		headResult,
+		stagedNameStatus,
+		unstagedNameStatus,
+		stagedNumstat,
+		unstagedNumstat,
+		untrackedResult,
+	] = await Promise.all([
+		scopedGit(["rev-parse", "--abbrev-ref", "HEAD"], workDir),
+		scopedGit(["rev-parse", "--short", "HEAD"], workDir),
+		scopedGit(["diff", "--cached", "--name-status", "-M"], workDir),
+		scopedGit(["diff", "--name-status", "-M"], workDir),
+		scopedGit(["diff", "--cached", "--numstat", "-M"], workDir),
+		scopedGit(["diff", "--numstat", "-M"], workDir),
+		scopedGit(["ls-files", "--others", "--exclude-standard"], workDir),
+	]);
 	const branchName = branchResult.success ? branchResult.stdout.trim() : "";
 	const branch = branchName && branchName !== "HEAD" ? branchName : null;
-	const headResult = await scopedGit(["rev-parse", "--short", "HEAD"], workDir);
 	const headCommit = headResult.success ? headResult.stdout.trim() : "";
 
 	let ahead: number | null = null;
@@ -490,28 +534,14 @@ async function scopedGitSummary(workDir: string): Promise<ScopedGitSummary> {
 		);
 		const fallbackAhead = upstreamAhead.success
 			? upstreamAhead
-			: await scopedGit(["rev-list", "--count", "origin/HEAD..HEAD"], workDir);
+			: await scopedGit(
+					["rev-list", "--count", "origin/HEAD..HEAD"],
+					workDir,
+				);
 		if (fallbackAhead.success)
 			ahead = Number.parseInt(fallbackAhead.stdout.trim(), 10) || 0;
 	}
 
-	const stagedNameStatus = await scopedGit(
-		["diff", "--cached", "--name-status", "-M"],
-		workDir,
-	);
-	const unstagedNameStatus = await scopedGit(
-		["diff", "--name-status", "-M"],
-		workDir,
-	);
-	const stagedNumstat = await scopedGit(
-		["diff", "--cached", "--numstat", "-M"],
-		workDir,
-	);
-	const unstagedNumstat = await scopedGit(["diff", "--numstat", "-M"], workDir);
-	const untrackedResult = await scopedGit(
-		["ls-files", "--others", "--exclude-standard"],
-		workDir,
-	);
 	const stagedFiles = stagedNameStatus.success
 		? scopedTaskSummaryFiles(stagedNameStatus.stdout)
 		: [];
@@ -620,9 +650,30 @@ function scopedTaskGitDefaultBranch(workDir: string): Promise<string> {
 	})();
 }
 
-function scopedGhAuthenticated(cwd: string): Promise<boolean> {
+function scopedTaskGitDefaultBranchFromOutput(
+	remoteHeadResult: Awaited<ReturnType<typeof scopedGit>>,
+	localBranchesOutput: string,
+): string {
+	if (remoteHeadResult.success) {
+		const remoteHead = remoteHeadResult.stdout
+			.trim()
+			.replace("refs/remotes/origin/", "");
+		if (remoteHead) return remoteHead;
+	}
+	const localBranches = new Set(
+		localBranchesOutput
+			.split("\n")
+			.map((branch) => branch.trim())
+			.filter(Boolean),
+	);
+	if (localBranches.has("main")) return "main";
+	if (localBranches.has("master")) return "master";
+	return "main";
+}
+
+function scopedGhAvailable(cwd: string): Promise<boolean> {
 	return new Promise((resolve) => {
-		execFile("gh", ["auth", "status"], { cwd, timeout: 5000 }, (error) => {
+		execFile("gh", ["--version"], { cwd, timeout: 1000 }, (error) => {
 			resolve(!error);
 		});
 	});
@@ -639,11 +690,77 @@ async function scopedProjectGitInfo(
 			repoRoot: gitInfo.repoRoot,
 			relativePath: gitInfo.relativePath,
 			mainBranch: gitInfo.defaultBranch,
-			hasGhCli: await scopedGhAuthenticated(gitInfo.repoRoot),
+			hasGhCli: await scopedGhAvailable(gitInfo.repoRoot),
 		};
 	} catch (error) {
 		return {
 			repoId: params.repoId,
+			isGitRepo: false,
+			error:
+				error instanceof Error
+					? error.message
+					: "Repository is not a git directory",
+		};
+	}
+}
+
+function resolveUserPath(rawPath: string): string {
+	let resolvedPath = rawPath.trim();
+	if (resolvedPath.startsWith("~")) {
+		resolvedPath = path.join(os.homedir(), resolvedPath.slice(1));
+	}
+	resolvedPath = resolvedPath.replace(/\$HOME|\$\{HOME\}/g, os.homedir());
+	resolvedPath = resolvedPath.replace(/%USERPROFILE%|%HOME%/gi, os.homedir());
+	return path.normalize(resolvedPath);
+}
+
+async function inspectOpenADERepoPath(
+	params: OpenADERepoPathInspectRequest,
+): Promise<OpenADERepoPathInspectResult> {
+	const resolvedPath = resolveUserPath(params.path);
+	let exists = false;
+	let isDirectory = false;
+	try {
+		const stat = await fs.stat(resolvedPath);
+		exists = true;
+		isDirectory = stat.isDirectory();
+	} catch {
+		return {
+			path: params.path,
+			resolvedPath,
+			exists,
+			isDirectory,
+			isGitRepo: false,
+		};
+	}
+	if (!isDirectory) {
+		return {
+			path: params.path,
+			resolvedPath,
+			exists,
+			isDirectory,
+			isGitRepo: false,
+		};
+	}
+	try {
+		const gitInfo = await scopedGitRepositoryInfo(resolvedPath);
+		return {
+			path: params.path,
+			resolvedPath,
+			exists,
+			isDirectory,
+			isGitRepo: true,
+			repoRoot: gitInfo.repoRoot,
+			relativePath: gitInfo.relativePath,
+			mainBranch: gitInfo.defaultBranch,
+			hasGhCli: await scopedGhAvailable(gitInfo.repoRoot),
+		};
+	} catch (error) {
+		return {
+			path: params.path,
+			resolvedPath,
+			exists,
+			isDirectory,
 			isGitRepo: false,
 			error:
 				error instanceof Error
@@ -697,7 +814,10 @@ async function scopedProjectGitBranches(
 				true,
 			)) {
 				const localName = remoteBranch.name.replace(/^origin\//, "");
-				if (!localNames.has(localName) && !localNames.has(remoteBranch.name))
+				if (
+					!localNames.has(localName) &&
+					!localNames.has(remoteBranch.name)
+				)
 					branches.push(remoteBranch);
 			}
 		}
@@ -816,11 +936,36 @@ async function scopedTaskGitScopes(
 	},
 ): Promise<OpenADETaskGitScopesReadResult> {
 	const workDir = await scopedTaskWorkDir(params.repo, params.task);
-	const defaultBranch = await scopedTaskGitDefaultBranch(workDir);
-	const localBranchesResult = await scopedGitRequire(
+	const remoteHeadPromise = scopedGit(
+		["symbolic-ref", "refs/remotes/origin/HEAD"],
+		workDir,
+	);
+	const localBranchesPromise = scopedGitRequire(
 		["branch", "--format=%(refname:short)"],
 		workDir,
 		"Failed to list task git branches",
+	);
+	const remoteBranchesPromise = params.includeRemote
+		? scopedGit(["branch", "-r", "--format=%(refname:short)"], workDir)
+		: Promise.resolve(null);
+	const worktreeScopesPromise = scopedGit(
+		["worktree", "list", "--porcelain"],
+		workDir,
+	);
+	const [
+		remoteHeadResult,
+		localBranchesResult,
+		remoteBranchesResult,
+		worktreeScopesResult,
+	] = await Promise.all([
+		remoteHeadPromise,
+		localBranchesPromise,
+		remoteBranchesPromise,
+		worktreeScopesPromise,
+	]);
+	const defaultBranch = scopedTaskGitDefaultBranchFromOutput(
+		remoteHeadResult,
+		localBranchesResult,
 	);
 	const branchScopes: OpenADETaskGitScope[] = [
 		{
@@ -834,11 +979,7 @@ async function scopedTaskGitScopes(
 		...scopedTaskGitBranchScopes(localBranchesResult, defaultBranch, false),
 	];
 
-	if (params.includeRemote) {
-		const remoteBranchesResult = await scopedGit(
-			["branch", "-r", "--format=%(refname:short)"],
-			workDir,
-		);
+	if (remoteBranchesResult) {
 		if (remoteBranchesResult.success) {
 			const localBranchNames = new Set(
 				branchScopes
@@ -864,10 +1005,6 @@ async function scopedTaskGitScopes(
 		}
 	}
 
-	const worktreeScopesResult = await scopedGit(
-		["worktree", "list", "--porcelain"],
-		workDir,
-	);
 	const worktreeScopes = worktreeScopesResult.success
 		? scopedTaskGitWorktreeScopes(worktreeScopesResult.stdout)
 		: [];
@@ -933,7 +1070,11 @@ async function generateNodeTaskTitle(
 			description || params.task.title || "Untitled task",
 		) || "Untitled task";
 	if (!description)
-		return { repoId: params.repoId, taskId: params.taskId, title: fallback };
+		return {
+			repoId: params.repoId,
+			taskId: params.taskId,
+			title: fallback,
+		};
 
 	const cwd = await scopedTaskWorkDir(params.repo, params.task);
 	const harnessId =
@@ -961,7 +1102,8 @@ async function generateNodeTaskTitle(
 				outputSchema: OPENADE_TASK_TITLE_OUTPUT_SCHEMA,
 			});
 			const title = titleFromStructuredOutput(output);
-			if (title) return { repoId: params.repoId, taskId: params.taskId, title };
+			if (title)
+				return { repoId: params.repoId, taskId: params.taskId, title };
 		} catch {
 			// Fall through to the streaming executor path.
 		}
@@ -992,7 +1134,8 @@ async function generateNodeTaskTitle(
 					},
 					{
 						onEvent(event) {
-							const title = extractOpenADETaskTitleFromStreamEvent(event);
+							const title =
+								extractOpenADETaskTitleFromStreamEvent(event);
 							if (title) generatedTitle = title;
 						},
 						onSettled(result) {
@@ -1019,7 +1162,11 @@ async function generateNodeTaskTitle(
 	);
 
 	if (!settled.ok && !generatedTitle)
-		return { repoId: params.repoId, taskId: params.taskId, title: fallback };
+		return {
+			repoId: params.repoId,
+			taskId: params.taskId,
+			title: fallback,
+		};
 	return {
 		repoId: params.repoId,
 		taskId: params.taskId,
@@ -1135,7 +1282,14 @@ async function scopedTaskEnvironmentWorktree(params: {
 	}
 
 	let added = await scopedGit(
-		["worktree", "add", "-b", worktreeBranch, worktreeDir, params.sourceBranch],
+		[
+			"worktree",
+			"add",
+			"-b",
+			worktreeBranch,
+			worktreeDir,
+			params.sourceBranch,
+		],
 		params.repoRoot,
 	);
 	if (!added.success && added.stderr.includes("already exists")) {
@@ -1381,7 +1535,10 @@ function resolveTaskGitFilePath(
 	) {
 		throw new Error("filePath is outside the task working directory");
 	}
-	return { absolutePath, relativePath: relativePath.split(path.sep).join("/") };
+	return {
+		absolutePath,
+		relativePath: relativePath.split(path.sep).join("/"),
+	};
 }
 
 function taskGitDiffPathspecs(
@@ -1389,7 +1546,10 @@ function taskGitDiffPathspecs(
 	filePath: string,
 	oldPath?: string,
 ): string[] {
-	const normalizedPath = resolveTaskGitFilePath(workDir, filePath).relativePath;
+	const normalizedPath = resolveTaskGitFilePath(
+		workDir,
+		filePath,
+	).relativePath;
 	if (oldPath && oldPath !== filePath) {
 		return [
 			resolveTaskGitFilePath(workDir, oldPath).relativePath,
@@ -1413,9 +1573,13 @@ async function scopedUntrackedTaskFilePatch(params: {
 		toTreeish: string;
 	};
 }): Promise<OpenADETaskDiffReadResult> {
-	const resolvedPath = resolveTaskGitFilePath(params.workDir, params.filePath);
+	const resolvedPath = resolveTaskGitFilePath(
+		params.workDir,
+		params.filePath,
+	);
 	const stat = await fs.stat(resolvedPath.absolutePath).catch(() => null);
-	if (!stat?.isFile()) return createEmptyTaskDiffReadResult(params.resultBase);
+	if (!stat?.isFile())
+		return createEmptyTaskDiffReadResult(params.resultBase);
 
 	const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
 	const result = await scopedGit(
@@ -1520,7 +1684,10 @@ async function readScopedTaskFileAtTreeish(
 	}
 
 	const fileSize = Number.parseInt(sizeResult.stdout.trim(), 10);
-	if (Number.isFinite(fileSize) && fileSize > MAX_SCOPED_TASK_FILE_PAIR_BYTES) {
+	if (
+		Number.isFinite(fileSize) &&
+		fileSize > MAX_SCOPED_TASK_FILE_PAIR_BYTES
+	) {
 		return { content: "", exists: true, tooLarge: true };
 	}
 
@@ -1868,7 +2035,9 @@ async function scopedTaskGitCommit(
 			committed: false,
 			status: "failed",
 			error:
-				addResult.stderr || addResult.stdout || "Failed to stage task changes",
+				addResult.stderr ||
+				addResult.stdout ||
+				"Failed to stage task changes",
 		};
 	}
 
@@ -2050,14 +2219,17 @@ async function writeNodeTaskImage(
 	};
 }
 
-type NodeProjectProcessProcsResult = {
+type NodeProjectProcsConfigResult = {
 	repoRoot: string;
 	searchRoot: string;
 	isWorktree: boolean;
 	worktreeRoot?: string;
 	configs: OpenADEProcsConfig[];
-	processes: OpenADEProjectProcessDefinition[];
 	errors: OpenADEProjectProcessConfigError[];
+};
+
+type NodeProjectProcessProcsResult = NodeProjectProcsConfigResult & {
+	processes: OpenADEProjectProcessDefinition[];
 };
 
 const NODE_PROCS_CONFIG_FILENAME = "openade.toml";
@@ -2075,9 +2247,7 @@ const NODE_PROCS_SKIP_DIRS = new Set([
 ]);
 let scopedProjectProcessRequestId = 0;
 
-async function nodeProjectProcessGitInfo(
-	searchRoot: string,
-): Promise<{
+async function nodeProjectProcessGitInfo(searchRoot: string): Promise<{
 	repoRoot: string;
 	isWorktree: boolean;
 	worktreeRoot?: string;
@@ -2088,7 +2258,8 @@ async function nodeProjectProcessGitInfo(
 	);
 	if (!repoRoot.success) return null;
 	const gitDir = await scopedGit(["rev-parse", "--git-dir"], searchRoot);
-	const isWorktree = gitDir.success && gitDir.stdout.includes(".git/worktrees");
+	const isWorktree =
+		gitDir.success && gitDir.stdout.includes(".git/worktrees");
 	return {
 		repoRoot: repoRoot.stdout.trim(),
 		isWorktree,
@@ -2146,7 +2317,10 @@ async function findNodeOpenADEProcsFiles(
 		]) {
 			const result = await scopedGit(args, repoRoot);
 			if (!result.success) continue;
-			for (const filePath of result.stdout.trim().split("\n").filter(Boolean)) {
+			for (const filePath of result.stdout
+				.trim()
+				.split("\n")
+				.filter(Boolean)) {
 				files.add(path.join(repoRoot, filePath));
 			}
 		}
@@ -2155,9 +2329,9 @@ async function findNodeOpenADEProcsFiles(
 	return walkNodeOpenADEProcsFiles(repoRoot || searchRoot);
 }
 
-async function readNodeProjectProcessDefinitions(
+async function readNodeProjectProcsConfigs(
 	searchRoot: string,
-): Promise<NodeProjectProcessProcsResult> {
+): Promise<NodeProjectProcsConfigResult> {
 	const resolvedSearchRoot = path.resolve(searchRoot);
 	const gitInfo = await nodeProjectProcessGitInfo(resolvedSearchRoot);
 	const repoRoot = path.resolve(gitInfo?.repoRoot ?? resolvedSearchRoot);
@@ -2194,19 +2368,29 @@ async function readNodeProjectProcessDefinitions(
 		}
 		configs.push(parsed.config);
 	}
-	const definitions = buildOpenADEProjectProcessDefinitions({
-		root: repoRoot,
-		configs,
-	});
-
 	return {
 		repoRoot,
 		searchRoot: resolvedSearchRoot,
 		isWorktree: gitInfo?.isWorktree ?? false,
 		worktreeRoot: gitInfo?.worktreeRoot,
 		configs,
+		errors,
+	};
+}
+
+async function readNodeProjectProcessDefinitions(
+	searchRoot: string,
+): Promise<NodeProjectProcessProcsResult> {
+	const result = await readNodeProjectProcsConfigs(searchRoot);
+	const definitions = buildOpenADEProjectProcessDefinitions({
+		root: result.repoRoot,
+		configs: result.configs,
+	});
+
+	return {
+		...result,
 		processes: definitions.processes,
-		errors: [...errors, ...definitions.errors],
+		errors: [...result.errors, ...definitions.errors],
 	};
 }
 
@@ -2217,6 +2401,29 @@ async function scopedProjectProcessSearchRoot(params: {
 	return params.task
 		? scopedTaskWorkDir(params.repo, params.task)
 		: path.resolve(params.repo.path);
+}
+
+async function readNodeCronDefinitions(
+	params: OpenADECronDefinitionsReadRequest & {
+		repo: OpenADEProject;
+		task?: OpenADETask;
+	},
+): Promise<OpenADECronDefinitionsReadResult> {
+	const searchRoot = await scopedProjectProcessSearchRoot(params);
+	const result = await readNodeProjectProcsConfigs(searchRoot);
+	return {
+		repoId: params.repoId,
+		taskId: params.taskId,
+		searchRoot: result.searchRoot,
+		repoRoot: result.repoRoot,
+		isWorktree: result.isWorktree,
+		worktreeRoot: result.worktreeRoot,
+		configs: result.configs.map((config) => ({
+			relativePath: config.relativePath,
+			crons: config.crons,
+		})),
+		errors: result.errors,
+	};
 }
 
 async function nodeRuntimeRequest(
@@ -2237,7 +2444,9 @@ async function nodeRuntimeRequest(
 		},
 		{
 			id: "openade-scoped-project-process",
-			metadata: { clientRequestPrincipal: "openade-scoped-project-process" },
+			metadata: {
+				clientRequestPrincipal: "openade-scoped-project-process",
+			},
 			send() {},
 		},
 	);
@@ -2278,7 +2487,9 @@ async function listNodeProjectProcesses(
 	for (const rawProcess of rawProcesses) {
 		const record = eventRecord(rawProcess);
 		const processId =
-			typeof record?.processId === "string" ? record.processId : undefined;
+			typeof record?.processId === "string"
+				? record.processId
+				: undefined;
 		if (!processId) continue;
 		const registration = params.registry.get(processId);
 		if (
@@ -2329,7 +2540,10 @@ async function startNodeProjectProcess(
 		await nodeRuntimeRequest(params.server, "process/script/start", {
 			script: processDef.command,
 			cwd: processDef.cwd,
-			timeoutMs: openADEProjectProcessTimeout(processDef, params.timeoutMs),
+			timeoutMs: openADEProjectProcessTimeout(
+				processDef,
+				params.timeoutMs,
+			),
 		}),
 	);
 	params.registry.set(started.processId, {
@@ -2454,7 +2668,8 @@ async function reconnectNodeTaskTerminal(
 	},
 ): Promise<OpenADETaskTerminalReconnectResult> {
 	const terminalId =
-		params.terminalId ?? openADETaskTerminalId(params.repoId, params.taskId);
+		params.terminalId ??
+		openADETaskTerminalId(params.repoId, params.taskId);
 	assertOpenADETaskTerminalId({ ...params, terminalId });
 	const result = eventRecord(
 		await nodeRuntimeRequest(params.server, "pty/reconnect", {
@@ -2473,7 +2688,8 @@ async function reconnectNodeTaskTerminal(
 		? result.output
 				.map(openADETaskTerminalOutputChunkFromUnknown)
 				.filter(
-					(chunk): chunk is OpenADETaskTerminalOutputChunk => chunk !== null,
+					(chunk): chunk is OpenADETaskTerminalOutputChunk =>
+						chunk !== null,
 				)
 		: [];
 	return {
@@ -2655,8 +2871,10 @@ function recentSnapshotFiles(task: OpenADETask, limit = 40): string[] {
 		for (const value of files) {
 			const file = eventRecord(value);
 			if (!file) continue;
-			const filePath = typeof file.path === "string" ? file.path : undefined;
-			const status = typeof file.status === "string" ? file.status : undefined;
+			const filePath =
+				typeof file.path === "string" ? file.path : undefined;
+			const status =
+				typeof file.status === "string" ? file.status : undefined;
 			if (!filePath || !status) continue;
 			const oldPath =
 				typeof file.oldPath === "string" ? file.oldPath : undefined;
@@ -2731,7 +2949,8 @@ function notifyWorkingTasks(server: RuntimeServer | undefined): void {
 			.filter(
 				(runtime) =>
 					runtime.scope.ownerId &&
-					(runtime.status === "starting" || runtime.status === "running"),
+					(runtime.status === "starting" ||
+						runtime.status === "running"),
 			)
 			.map((runtime) => runtime.scope.ownerId as string),
 		at: new Date().toISOString(),
@@ -2746,7 +2965,9 @@ async function reconcileCheckpointedOpenADEActionEvents({
 	writer: ReturnType<typeof createOpenADEYjsWriter>;
 }): Promise<void> {
 	const terminalStatuses = new Set(["completed", "failed", "stopped"]);
-	for (const runtime of server.supervisor.list({ ownerType: "openade-task" })) {
+	for (const runtime of server.supervisor.list({
+		ownerType: "openade-task",
+	})) {
 		if (!terminalStatuses.has(runtime.status)) continue;
 		const taskId = runtime.scope.ownerId;
 		if (!taskId) continue;
@@ -2875,7 +3096,10 @@ export function createRuntimeNodeOpenADEAdapters(
 			const request: OpenADETaskCreateRequest = {
 				repoId: params.repoId,
 				input: params.input,
-				createdBy: { id: "headless-runtime", email: "headless@openade.local" },
+				createdBy: {
+					id: "headless-runtime",
+					email: "headless@openade.local",
+				},
 				deviceId: "headless-runtime",
 				title: params.title ?? fallbackOpenADETaskTitle(params.input),
 				taskId: openADETaskIdForClientRequest(
@@ -3093,7 +3317,10 @@ export function createRuntimeNodeOpenADEAdapters(
 		if (!project) throw new Error(`Repository ${params.repoId} not found`);
 
 		const latestPlan = latestCompletedPlanEvent(task.events);
-		const latestPlanHarnessId = actionHarnessId(latestPlan, params.harnessId);
+		const latestPlanHarnessId = actionHarnessId(
+			latestPlan,
+			params.harnessId,
+		);
 		const planText = latestPlan
 			? (extractOpenADEPlanText(
 					executionEvents(latestPlan),
@@ -3116,7 +3343,8 @@ export function createRuntimeNodeOpenADEAdapters(
 						customInstructions: params.customInstructions,
 					});
 
-		const userLabel = params.reviewType === "plan" ? "Review Plan" : "Review";
+		const userLabel =
+			params.reviewType === "plan" ? "Review Plan" : "Review";
 		const reviewDisplayInput = params.customInstructions?.trim()
 			? `${userLabel}: ${params.customInstructions.trim()}`
 			: userLabel;
@@ -3137,7 +3365,8 @@ export function createRuntimeNodeOpenADEAdapters(
 			fastMode: params.fastMode,
 		});
 
-		const runtimeId = context?.runtimeId ?? `openade-review:${params.taskId}`;
+		const runtimeId =
+			context?.runtimeId ?? `openade-review:${params.taskId}`;
 		if (server) {
 			const runtimePatch = {
 				status: "running" as const,
@@ -3195,7 +3424,10 @@ export function createRuntimeNodeOpenADEAdapters(
 			fastMode: params.fastMode,
 			activeTaskExecutions,
 			onCompleted: async ({ events }) => {
-				const reviewText = extractOpenADEPlanText(events, params.harnessId);
+				const reviewText = extractOpenADEPlanText(
+					events,
+					params.harnessId,
+				);
 				if (!reviewText) return;
 
 				const followUpLabel = `${userLabel} Follow-up`;
@@ -3425,20 +3657,26 @@ export function createRuntimeNodeOpenADEAdapters(
 		version: () => options.version ?? "headless",
 		readSnapshot: (params) => projection.readSnapshot(params),
 		readProjects: (params) => projection.readProjects(params),
-		readTaskList: (repoId, params) => projection.readTaskList(repoId, params),
+		readTaskList: (repoId, params) =>
+			projection.readTaskList(repoId, params),
 		readTask: (repoId, taskId, params) =>
 			projection.readTask(repoId, taskId, params),
 		listDataDocuments: () => projection.listDataDocuments(),
 		readDataDocumentBase64: (id) => projection.readDataDocumentBase64(id),
+		invalidateReadCache: (invalidation) => projection.invalidateCache(invalidation),
 		readMcpServers: () => readYjsMcpServers(storage),
 		replaceMcpServers: (params) =>
 			replaceYjsMcpServers(storage, params.servers),
 		upsertMcpServer: (params) => upsertYjsMcpServer(storage, params.server),
-		deleteMcpServer: (params) => deleteYjsMcpServer(storage, params.serverId),
-		readCronInstallState: (params) => readNodeCronInstallState(cronDir, params),
+		deleteMcpServer: (params) =>
+			deleteYjsMcpServer(storage, params.serverId),
+		readCronInstallState: (params) =>
+			readNodeCronInstallState(cronDir, params),
 		replaceCronInstallState: (params) =>
 			replaceNodeCronInstallState(cronDir, params),
+		listCronInstallStateRepos: () => listNodeCronInstallStateRepos(cronDir),
 		scopedHost: {
+			inspectRepoPath: inspectOpenADERepoPath,
 			listProjectFiles: listOpenADEProjectFiles,
 			readProjectFile: readOpenADEProjectFile,
 			writeProjectFile: writeOpenADEProjectFile,
@@ -3455,30 +3693,31 @@ export function createRuntimeNodeOpenADEAdapters(
 			readTaskFilePair: scopedTaskFilePair,
 			readTaskGitLog: scopedTaskGitLog,
 			readTaskGitCommitFiles: scopedTaskGitCommitFiles,
-			readTaskGitFileAtTreeish: scopedTaskGitFileAtTreeish,
-			readTaskGitCommitFilePatch: scopedTaskGitCommitFilePatch,
-			commitTaskGit: scopedTaskGitCommit,
-			prepareTaskEnvironment: prepareScopedTaskEnvironment,
-			generateTaskTitle: (params) =>
-				generateNodeTaskTitle({ ...params, agentExecutor }),
-			listProjectProcesses: (params) =>
-				listNodeProjectProcesses({
-					...params,
-					registry: scopedProjectProcesses,
-					server,
-				}),
-			startProjectProcess: (params) =>
-				startNodeProjectProcess({
-					...params,
-					registry: scopedProjectProcesses,
-					server,
-				}),
-			reconnectProjectProcess: (params) =>
-				reconnectNodeProjectProcess({
-					...params,
-					registry: scopedProjectProcesses,
-					server,
-				}),
+				readTaskGitFileAtTreeish: scopedTaskGitFileAtTreeish,
+				readTaskGitCommitFilePatch: scopedTaskGitCommitFilePatch,
+				commitTaskGit: scopedTaskGitCommit,
+				prepareTaskEnvironment: prepareScopedTaskEnvironment,
+				generateTaskTitle: (params) =>
+					generateNodeTaskTitle({ ...params, agentExecutor }),
+				listProjectProcesses: (params) =>
+					listNodeProjectProcesses({
+						...params,
+						registry: scopedProjectProcesses,
+						server,
+					}),
+				readCronDefinitions: readNodeCronDefinitions,
+				startProjectProcess: (params) =>
+					startNodeProjectProcess({
+						...params,
+						registry: scopedProjectProcesses,
+						server,
+					}),
+				reconnectProjectProcess: (params) =>
+					reconnectNodeProjectProcess({
+						...params,
+						registry: scopedProjectProcesses,
+						server,
+					}),
 			stopProjectProcess: (params) =>
 				stopNodeProjectProcess({
 					...params,
@@ -3493,8 +3732,10 @@ export function createRuntimeNodeOpenADEAdapters(
 				writeNodeTaskTerminal({ ...params, server }),
 			resizeTaskTerminal: (params) =>
 				resizeNodeTaskTerminal({ ...params, server }),
-			stopTaskTerminal: (params) => stopNodeTaskTerminal({ ...params, server }),
-			readTaskImage: (params) => readNodeTaskImage({ ...params, imageDir }),
+			stopTaskTerminal: (params) =>
+				stopNodeTaskTerminal({ ...params, server }),
+			readTaskImage: (params) =>
+				readNodeTaskImage({ ...params, imageDir }),
 			readTaskSnapshotPatch: (params) =>
 				readOpenADETaskSnapshotPatch({
 					...params,
@@ -3533,7 +3774,7 @@ export function createRuntimeNodeOpenADEAdapters(
 		createTask: async (params) => {
 			const result = await writer.createTask(params);
 			notifyTaskChanged(server, params.repoId, result.taskId);
-			server?.notify("openade/snapshotChanged", {
+			server?.notify(OPENADE_NOTIFICATION.snapshotChanged, {
 				repoId: params.repoId,
 				taskId: result.taskId,
 			});
@@ -3566,17 +3807,25 @@ export function createRuntimeNodeOpenADEAdapters(
 					? Array.from(active.childExecutionIds)
 					: [active.executionId];
 			const results = await Promise.all(
-				executionIds.map((executionId) => agentExecutor.interrupt(executionId)),
+				executionIds.map((executionId) =>
+					agentExecutor.interrupt(executionId),
+				),
 			);
 			const firstError = results.find((result) => !result.ok);
 			return firstError ?? { ok: true };
 		},
 		enqueueQueuedTurn: async (params) => {
-			const task = await projection.readTask(params.repoId, params.taskId);
+			const task = await projection.readTask(
+				params.repoId,
+				params.taskId,
+			);
 			const createdAt = params.createdAt ?? now();
 			const queuedTurnId =
 				params.queuedTurnId ??
-				queuedTurnIdForClientRequest(params.taskId, params.clientRequestId) ??
+				queuedTurnIdForClientRequest(
+					params.taskId,
+					params.clientRequestId,
+				) ??
 				`queued-${createHash("sha256").update(`${params.taskId}\0${createdAt}\0${params.input}`).digest("hex").slice(0, 26)}`;
 			const existingTurn = task.queuedTurns?.find(
 				(turn) => turn.id === queuedTurnId,
@@ -3606,6 +3855,7 @@ export function createRuntimeNodeOpenADEAdapters(
 				label: params.label,
 				includeComments: params.includeComments,
 				images: params.images,
+				hyperplanStrategy: params.hyperplanStrategy,
 				thinking: params.thinking,
 				fastMode: params.fastMode,
 			};
@@ -3616,7 +3866,7 @@ export function createRuntimeNodeOpenADEAdapters(
 			notifyTaskChanged(server, params.repoId, params.taskId, {
 				clientRequestId: params.clientRequestId,
 			});
-			server?.notify("openade/queuedTurn/updated", {
+			server?.notify(OPENADE_NOTIFICATION.queuedTurnUpdated, {
 				repoId: params.repoId,
 				taskId: params.taskId,
 				turn,
@@ -3631,8 +3881,14 @@ export function createRuntimeNodeOpenADEAdapters(
 			};
 		},
 		reorderQueuedTurns: async (params) => {
-			const task = await projection.readTask(params.repoId, params.taskId);
-			if (new Set(params.queuedTurnIds).size !== params.queuedTurnIds.length) {
+			const task = await projection.readTask(
+				params.repoId,
+				params.taskId,
+			);
+			if (
+				new Set(params.queuedTurnIds).size !==
+				params.queuedTurnIds.length
+			) {
 				throw new RuntimeHandlerError(
 					"invalid_params",
 					"queuedTurnIds must be unique",
@@ -3644,7 +3900,10 @@ export function createRuntimeNodeOpenADEAdapters(
 			const requestedTurns = params.queuedTurnIds.map((queuedTurnId) => {
 				const turn = turnsById.get(queuedTurnId);
 				if (!turn)
-					throw new RuntimeHandlerError("not_found", "Queued turn not found");
+					throw new RuntimeHandlerError(
+						"not_found",
+						"Queued turn not found",
+					);
 				if (turn.status !== "queued")
 					throw new RuntimeHandlerError(
 						"invalid_params",
@@ -3674,7 +3933,7 @@ export function createRuntimeNodeOpenADEAdapters(
 					clientRequestId: params.clientRequestId,
 				});
 				for (const turn of requestedTurns) {
-					server?.notify("openade/queuedTurn/updated", {
+					server?.notify(OPENADE_NOTIFICATION.queuedTurnUpdated, {
 						repoId: params.repoId,
 						taskId: params.taskId,
 						turn,
@@ -3686,16 +3945,26 @@ export function createRuntimeNodeOpenADEAdapters(
 			return { taskId: params.taskId, reordered, turns: requestedTurns };
 		},
 		cancelQueuedTurn: async (params) => {
-			const task = await projection.readTask(params.repoId, params.taskId);
+			const task = await projection.readTask(
+				params.repoId,
+				params.taskId,
+			);
 			let cancelled = false;
 			const queuedTurns = (task.queuedTurns ?? []).map((turn) => {
 				if (turn.id !== params.queuedTurnId) return turn;
 				if (turn.status !== "queued") return turn;
 				cancelled = true;
-				return { ...turn, status: "cancelled" as const, updatedAt: now() };
+				return {
+					...turn,
+					status: "cancelled" as const,
+					updatedAt: now(),
+				};
 			});
 			if (cancelled) {
-				await writer.updateTaskMetadata({ taskId: params.taskId, queuedTurns });
+				await writer.updateTaskMetadata({
+					taskId: params.taskId,
+					queuedTurns,
+				});
 				notifyTaskChanged(server, params.repoId, params.taskId, {
 					clientRequestId: params.clientRequestId,
 				});
@@ -3708,13 +3977,15 @@ export function createRuntimeNodeOpenADEAdapters(
 		},
 		setupTaskEnvironment: async (params) => {
 			await writer.setupTaskEnvironment(params);
-			const project = (await projection.readProjects()).find((candidate) =>
-				candidate.tasks.some((task) => task.id === params.taskId),
+			const project = (await projection.readProjects()).find(
+				(candidate) =>
+					candidate.tasks.some((task) => task.id === params.taskId),
 			);
 			if (project) notifyTaskChanged(server, project.id, params.taskId);
 		},
 		createActionEvent: (params) => writer.createActionEvent(params),
-		appendActionStreamEvent: (params) => writer.appendActionStreamEvent(params),
+		appendActionStreamEvent: (params) =>
+			writer.appendActionStreamEvent(params),
 		completeActionEvent: (params) => writer.completeActionEvent(params),
 		errorActionEvent: (params) => writer.errorActionEvent(params),
 		stoppedActionEvent: (params) => writer.stoppedActionEvent(params),
@@ -3736,8 +4007,9 @@ export function createRuntimeNodeOpenADEAdapters(
 		createSnapshotEvent: (params) => writer.createSnapshotEvent(params),
 		createComment: async (params) => {
 			const result = await writer.createComment(params);
-			const project = (await projection.readProjects()).find((candidate) =>
-				candidate.tasks.some((task) => task.id === params.taskId),
+			const project = (await projection.readProjects()).find(
+				(candidate) =>
+					candidate.tasks.some((task) => task.id === params.taskId),
 			);
 			if (project)
 				notifyTaskChanged(server, project.id, params.taskId, {
@@ -3747,8 +4019,9 @@ export function createRuntimeNodeOpenADEAdapters(
 		},
 		editComment: async (params) => {
 			await writer.editComment(params);
-			const project = (await projection.readProjects()).find((candidate) =>
-				candidate.tasks.some((task) => task.id === params.taskId),
+			const project = (await projection.readProjects()).find(
+				(candidate) =>
+					candidate.tasks.some((task) => task.id === params.taskId),
 			);
 			if (project)
 				notifyTaskChanged(server, project.id, params.taskId, {
@@ -3757,8 +4030,9 @@ export function createRuntimeNodeOpenADEAdapters(
 		},
 		deleteComment: async (params) => {
 			await writer.deleteComment(params);
-			const project = (await projection.readProjects()).find((candidate) =>
-				candidate.tasks.some((task) => task.id === params.taskId),
+			const project = (await projection.readProjects()).find(
+				(candidate) =>
+					candidate.tasks.some((task) => task.id === params.taskId),
 			);
 			if (project)
 				notifyTaskChanged(server, project.id, params.taskId, {
@@ -3767,8 +4041,9 @@ export function createRuntimeNodeOpenADEAdapters(
 		},
 		updateTaskMetadata: async (params) => {
 			await writer.updateTaskMetadata(params);
-			const project = (await projection.readProjects()).find((candidate) =>
-				candidate.tasks.some((task) => task.id === params.taskId),
+			const project = (await projection.readProjects()).find(
+				(candidate) =>
+					candidate.tasks.some((task) => task.id === params.taskId),
 			);
 			if (project)
 				notifyTaskChanged(server, project.id, params.taskId, {
@@ -3788,7 +4063,11 @@ export function registerRuntimeNodeOpenADEModule(
 		registerRuntimeNodeAgentModule(server, agentExecutor);
 	server.registerModule(
 		createOpenADEModule(
-			createRuntimeNodeOpenADEAdapters({ ...options, server, agentExecutor }),
+			createRuntimeNodeOpenADEAdapters({
+				...options,
+				server,
+				agentExecutor,
+			}),
 		),
 	);
 }
@@ -3884,10 +4163,10 @@ async function runHeadlessHyperPlanTurn({
 			server?.notify("runtime/failed", runtime);
 		}
 
-		activeTaskExecutions.delete(taskId);
-		notifyWorkingTasks(server);
-		notifyTaskChanged(server, repoId, taskId);
-	};
+			activeTaskExecutions.delete(taskId);
+			notifyWorkingTasks(server);
+			notifyTaskChanged(server, repoId, taskId);
+		};
 
 	try {
 		for (const layer of groupOpenADEHyperPlanByDepth(strategy)) {
@@ -3935,18 +4214,22 @@ async function runHeadlessHyperPlanTurn({
 										: "HyperPlan step failed",
 							};
 				if (value.text) stepResults.set(step.id, value.text);
-				if (value.sessionId) stepSessionIds.set(step.id, value.sessionId);
+				if (value.sessionId)
+					stepSessionIds.set(step.id, value.sessionId);
 				if (value.status === "stopped") {
 					await finalize("stopped", value.error);
 					return;
 				}
 				if (step.id === strategy.terminalStepId)
-					terminalSuccess = value.status === "completed" && Boolean(value.text);
+					terminalSuccess =
+						value.status === "completed" && Boolean(value.text);
 			}
 		}
 
 		await finalize(
-			activeTaskExecutions.get(taskId)?.stopping ? "stopped" : "completed",
+			activeTaskExecutions.get(taskId)?.stopping
+				? "stopped"
+				: "completed",
 		);
 	} catch (error) {
 		await finalize(
@@ -4033,7 +4316,8 @@ async function runHeadlessHyperPlanStep({
 				if (
 					!text ||
 					!inputStep ||
-					(inputStep.primitive !== "plan" && inputStep.primitive !== "review")
+					(inputStep.primitive !== "plan" &&
+						inputStep.primitive !== "review")
 				)
 					return null;
 				return {
@@ -4041,10 +4325,14 @@ async function runHeadlessHyperPlanStep({
 					primitive: inputStep.primitive,
 					text,
 					reviewsStepId:
-						inputStep.primitive === "review" ? inputStep.inputs[0] : undefined,
+						inputStep.primitive === "review"
+							? inputStep.inputs[0]
+							: undefined,
 				};
 			})
-			.filter((input): input is NonNullable<typeof input> => input !== null);
+			.filter(
+				(input): input is NonNullable<typeof input> => input !== null,
+			);
 		if (inputs.length === 0) {
 			const error = `Reconcile step ${step.id} has no successful inputs`;
 			if (!isTerminal)
@@ -4057,7 +4345,10 @@ async function runHeadlessHyperPlanStep({
 				});
 			return { status: "error", error };
 		}
-		const reconciled = buildOpenADEReconcileStepPrompt(taskDescription, inputs);
+		const reconciled = buildOpenADEReconcileStepPrompt(
+			taskDescription,
+			inputs,
+		);
 		await writer.setHyperPlanReconcileLabels({
 			taskId,
 			eventId,
@@ -4129,7 +4420,8 @@ async function runHeadlessHyperPlanStep({
 			void (async () => {
 				await Promise.all(persistedWrites);
 				const text =
-					extractOpenADEPlanText(events, step.agent.harnessId) ?? undefined;
+					extractOpenADEPlanText(events, step.agent.harnessId) ??
+					undefined;
 				if (!isTerminal) {
 					await writer.updateHyperPlanSubExecution({
 						taskId,
@@ -4233,11 +4525,17 @@ async function runHeadlessHyperPlanStep({
 								);
 							}
 						}
-						notifyTaskChanged(server, repoId, taskId);
-					},
+							notifyTaskChanged(server, repoId, taskId, {
+								previewChanged: false,
+								eventId,
+							});
+						},
 					onSettled(result) {
 						if (result.status === "completed")
-							finish({ status: "completed", sessionId: result.sessionId });
+							finish({
+								status: "completed",
+								sessionId: result.sessionId,
+							});
 						else if (result.status === "stopped")
 							finish({
 								status: "stopped",
@@ -4338,7 +4636,11 @@ async function runHeadlessTurn({
 		await Promise.all(pendingWrites);
 
 		if (status === "completed") {
-			await writer.completeActionEvent({ taskId, eventId, success: true });
+			await writer.completeActionEvent({
+				taskId,
+				eventId,
+				success: true,
+			});
 			const runtime = server?.supervisor.update(runtimeId, {
 				status: "completed",
 			});
@@ -4364,7 +4666,10 @@ async function runHeadlessTurn({
 		notifyTaskChanged(server, repoId, taskId);
 
 		if (status === "completed" && onCompleted) {
-			await onCompleted({ events: observedEvents, sessionId: savedSessionId });
+			await onCompleted({
+				events: observedEvents,
+				sessionId: savedSessionId,
+			});
 		}
 	};
 
@@ -4419,10 +4724,15 @@ async function runHeadlessTurn({
 				if (event.type === "error")
 					void finalize(
 						event.code === "aborted" ? "stopped" : "failed",
-						typeof event.error === "string" ? event.error : undefined,
+						typeof event.error === "string"
+							? event.error
+							: undefined,
 					);
-				notifyTaskChanged(server, repoId, taskId);
-			},
+					notifyTaskChanged(server, repoId, taskId, {
+						previewChanged: false,
+						eventId,
+					});
+				},
 			onSettled(result) {
 				if (result.status === "completed") void finalize("completed");
 				else if (result.status === "stopped")

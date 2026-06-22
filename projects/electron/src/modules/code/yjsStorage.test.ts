@@ -48,6 +48,13 @@ function wait(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function parseLogDetails(message: unknown): Record<string, unknown> {
+    const text = String(message)
+    const jsonStart = text.indexOf("{")
+    if (jsonStart < 0) throw new Error(`Expected JSON details in log message: ${text}`)
+    return JSON.parse(text.slice(jsonStart)) as Record<string, unknown>
+}
+
 describe("Yjs filesystem storage", () => {
     afterEach(() => {
         vi.restoreAllMocks()
@@ -106,6 +113,43 @@ describe("Yjs filesystem storage", () => {
         expect(valueFromUpdate(loaded, "value")).toBe("before")
     })
 
+    it("keeps hot documents cached across broad refresh bursts", async () => {
+        storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "openade-yjs-storage-"))
+        process.env.OPENADE_YJS_STORAGE_DIR = storageDir
+
+        const hotId = "code:hot-refresh-loop"
+        await saveYjsDocument(hotId, updateWithValue("before"))
+
+        for (let index = 0; index < 40; index += 1) {
+            await saveYjsDocument(`code:burst-${index}`, updateWithValue(`burst-${index}`))
+        }
+
+        fs.writeFileSync(docPath(hotId), updateWithValue("external-after"))
+
+        const loaded = await loadYjsDocument(hotId)
+        if (!loaded) throw new Error("Expected hot-refresh-loop document")
+        expect(valueFromUpdate(loaded, "value")).toBe("before")
+    })
+
+    it("keeps global product documents cached across broad task-document churn", async () => {
+        storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "openade-yjs-storage-"))
+        process.env.OPENADE_YJS_STORAGE_DIR = storageDir
+        vi.spyOn(logger, "debug").mockImplementation(() => undefined)
+
+        const hotId = "code:personal_settings"
+        await saveYjsDocument(hotId, updateWithValue("before"))
+
+        for (let index = 0; index < 140; index += 1) {
+            await saveYjsDocument(`code:task:cache-churn-${index}`, updateWithValue(`task-${index}`))
+        }
+
+        fs.writeFileSync(docPath(hotId), updateWithValue("external-after"))
+
+        const loaded = await loadYjsDocument(hotId)
+        if (!loaded) throw new Error("Expected personal settings document")
+        expect(valueFromUpdate(loaded, "value")).toBe("before")
+    })
+
     it("keeps the load cache warm after an unchanged save", async () => {
         storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "openade-yjs-storage-"))
         process.env.OPENADE_YJS_STORAGE_DIR = storageDir
@@ -132,6 +176,7 @@ describe("Yjs filesystem storage", () => {
 
         const id = "code:context-load"
         fs.writeFileSync(docPath(id), updateWithValue("from-disk"))
+        const debug = vi.spyOn(logger, "debug").mockImplementation(() => undefined)
         const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined)
         let now = 1_000
         vi.spyOn(Date, "now").mockImplementation(() => {
@@ -140,19 +185,37 @@ describe("Yjs filesystem storage", () => {
             return current
         })
 
-        const loaded = await runWithYjsDocumentOperationContext({ runtimeMethod: "openade/task/read" }, () =>
+        const loaded = await runWithYjsDocumentOperationContext({ runtimeMethod: "openade/task/read", runtimeRequestId: "openade-client:42" }, () =>
             loadYjsDocument(id, { operation: "readDocumentUpdate" })
         )
 
         if (!loaded) throw new Error("Expected context-load document")
         expect(valueFromUpdate(loaded, "value")).toBe("from-disk")
+        const normalLoad = debug.mock.calls.find(([message]) => String(message).includes(`[YjsStorage] Loaded document: ${id}`))
+        expect(normalLoad).toBeDefined()
+        const normalDetails = parseLogDetails(normalLoad?.[0])
+        expect(normalDetails).toMatchObject({
+            id,
+            runtimeMethod: "openade/task/read",
+            runtimeRequestId: "openade-client:42",
+            operation: "readDocumentUpdate",
+            cacheMissReason: "cold",
+            loadCacheSize: expect.any(Number),
+            loadCacheBytes: expect.any(Number),
+            pid: process.pid,
+        })
         const slowLoad = warn.mock.calls.find(([message]) => message === "[YjsStorage] Slow document load")
         expect(slowLoad).toBeDefined()
         const details = JSON.parse(String(slowLoad?.[1]))
         expect(details).toMatchObject({
             id,
             runtimeMethod: "openade/task/read",
+            runtimeRequestId: "openade-client:42",
             operation: "readDocumentUpdate",
+            cacheMissReason: "cold",
+            loadCacheSize: expect.any(Number),
+            loadCacheBytes: expect.any(Number),
+            pid: process.pid,
         })
         expect(JSON.stringify(details)).not.toContain("from-disk")
     })

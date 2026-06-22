@@ -4,6 +4,7 @@
 
 import cx from "classnames"
 import { observer } from "mobx-react"
+import { useEffect } from "react"
 import { useShortcutHintsVisible } from "../../hooks/useShortcutHintsVisible"
 import type { TrayManager } from "../../store/managers/TrayManager"
 import { ShortcutBadge } from "../ui"
@@ -17,11 +18,11 @@ interface TrayButtonsProps {
 export const TrayButtons = observer(function TrayButtons({ tray }: TrayButtonsProps) {
     const visibleConfigs = TRAY_CONFIGS.filter((config) => config.isVisible?.(tray) !== false)
     const showKeyboardHints = useShortcutHintsVisible()
+    const visibleConfigIds = visibleConfigs.map((config) => config.id).join("\0")
 
-    // Auto-close tray if the currently open tray becomes hidden
-    if (tray.openTray && !visibleConfigs.some((c) => c.id === tray.openTray)) {
-        tray.close()
-    }
+    useEffect(() => {
+        tray.ensureOpenTrayVisible()
+    }, [tray, visibleConfigIds])
 
     return (
         <>

@@ -9,14 +9,20 @@ import { observer } from "mobx-react"
 import { useCallback, useEffect, useState } from "react"
 import type { OpenADECoreRolloutState } from "../../../../electron/src/preload-api"
 import type { OpenADELegacyResourcesImportResult } from "../../../../openade-module/src"
+import { restartApp } from "../../electronAPI/app"
 import { type ManagedBinaryStatus, ensureBinary, getStatuses } from "../../electronAPI/binaries"
 import { type HarnessStatusMap, getHarnessStatuses, isHarnessStatusApiAvailable } from "../../electronAPI/harnessStatus"
-import { selectDirectory } from "../../electronAPI/shell"
+import { isDirectorySelectionAvailable, selectDirectory } from "../../electronAPI/shell"
 import { isSystemApiAvailable } from "../../electronAPI/system"
 import { isCoreLegacyResourceImportClean, isCoreLegacyYjsImportClean, shouldAcceptCoreLegacyYjsMigration } from "../../runtime/coreMigration"
-import { resolveCoreRolloutState, resolveCoreRuntimeEndpoint } from "../../runtime/localProductRuntimeClient"
+import { resolveCoreMigrationRuntimeEndpoint, resolveCoreRolloutState, resolveCoreRuntimeEndpoint } from "../../runtime/localProductRuntimeClient"
 import type { CodeStore } from "../../store/store"
-import { formatCoreLegacyResourceImportResult, importCoreLegacyResourcesFromSelection } from "./coreResourceMigration"
+import {
+    formatCoreLegacyMigrationAcceptedNotice,
+    formatCoreLegacyResourceImportResult,
+    importCoreLegacyDataAndResourcesFromSelection,
+    importCoreLegacyResourcesFromSelection,
+} from "./coreResourceMigration"
 import { type CoreLegacyYjsImportReport, formatCoreLegacyYjsImportResult, importCoreLegacyYjsDataFromLocalStore } from "./coreYjsMigration"
 import { getHarnessAuthTypeLabel, getHarnessDisplayName, toHarnessStatusView } from "./harnessStatusUtils"
 
@@ -342,12 +348,15 @@ const ManagedBinariesSection = () => {
     )
 }
 
-function coreRolloutStatusText(state: OpenADECoreRolloutState | null, hasCoreRuntimeEndpoint: boolean): string {
+function coreRolloutStatusText(state: OpenADECoreRolloutState | null, hasCoreRuntimeEndpoint: boolean, hasCoreMigrationRuntimeEndpoint: boolean): string {
     if (hasCoreRuntimeEndpoint) {
         if (state?.source === "external") return "OpenADE Core is connected through an external endpoint."
         if (state?.reason === "legacy-yjs-migration-accepted") return "OpenADE Core is connected after accepted legacy Yjs import."
         if (state?.automatic) return "OpenADE Core is connected for this clean install."
         return "OpenADE Core is connected."
+    }
+    if (hasCoreMigrationRuntimeEndpoint) {
+        return "OpenADE Core is available for migration while this launch stays on legacy IPC."
     }
 
     switch (state?.reason) {
@@ -380,6 +389,9 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
     const personalSettings = store.personalSettingsStore
     const currentEnvVars = personalSettings?.settings.current.envVars ?? {}
     const hasCoreRuntimeEndpoint = resolveCoreRuntimeEndpoint() !== null
+    const hasCoreMigrationRuntimeEndpoint = resolveCoreMigrationRuntimeEndpoint() !== null
+    const canImportCoreLegacyData = hasCoreRuntimeEndpoint || hasCoreMigrationRuntimeEndpoint
+    const canSelectLegacyResourceDirectory = isDirectorySelectionAvailable()
     const coreRolloutState = resolveCoreRolloutState()
     const coreTone = coreRolloutTone(coreRolloutState, hasCoreRuntimeEndpoint)
     const coreStatusIconClass = coreTone === "success" ? "text-success mt-0.5" : coreTone === "warning" ? "text-warning mt-0.5" : "text-muted mt-0.5"
@@ -392,6 +404,12 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
     const [legacyYjsImportMessage, setLegacyYjsImportMessage] = useState<string | null>(null)
     const [legacyYjsImportError, setLegacyYjsImportError] = useState<string | null>(null)
     const [lastCleanLegacyYjsReport, setLastCleanLegacyYjsReport] = useState<CoreLegacyYjsImportReport | null>(null)
+    const [isImportingLegacyAll, setIsImportingLegacyAll] = useState(false)
+    const [isRevokingLegacyYjsAcceptance, setIsRevokingLegacyYjsAcceptance] = useState(false)
+    const [legacyYjsRollbackMessage, setLegacyYjsRollbackMessage] = useState<string | null>(null)
+    const [legacyYjsRollbackError, setLegacyYjsRollbackError] = useState<string | null>(null)
+    const [showCoreMigrationRestartAction, setShowCoreMigrationRestartAction] = useState(false)
+    const [coreMigrationRestartError, setCoreMigrationRestartError] = useState<string | null>(null)
     const [importSessions, setImportSessions] = useState(true)
     const [isImportingLegacyResources, setIsImportingLegacyResources] = useState(false)
     const [legacyResourceImportMessage, setLegacyResourceImportMessage] = useState<string | null>(null)
@@ -440,10 +458,14 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
     }
 
     const handleImportLegacyYjsData = async () => {
-        if (!hasCoreRuntimeEndpoint || isImportingLegacyYjs) return
+        if (!canImportCoreLegacyData || isImportingLegacyYjs || isImportingLegacyAll) return
         setIsImportingLegacyYjs(true)
         setLegacyYjsImportMessage(null)
         setLegacyYjsImportError(null)
+        setLegacyYjsRollbackMessage(null)
+        setLegacyYjsRollbackError(null)
+        setShowCoreMigrationRestartAction(false)
+        setCoreMigrationRestartError(null)
         try {
             const result = await importCoreLegacyYjsDataFromLocalStore(store)
             const cleanYjsReport = isCoreLegacyYjsImportClean(result) ? result : null
@@ -452,9 +474,8 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
             if (cleanYjsReport && cleanResourcesResult && shouldAcceptCoreLegacyYjsMigration(cleanYjsReport, cleanResourcesResult)) {
                 await store.markProductLegacyYjsMigrationAccepted(cleanYjsReport, cleanResourcesResult)
                 accepted = true
-                setLegacyResourceImportMessage(
-                    `${formatCoreLegacyResourceImportResult(cleanResourcesResult)}; Core launch accepted after clean data and resources import`
-                )
+                setShowCoreMigrationRestartAction(true)
+                setLegacyResourceImportMessage(`${formatCoreLegacyResourceImportResult(cleanResourcesResult)}; ${formatCoreLegacyMigrationAcceptedNotice()}`)
             }
             setLastCleanLegacyYjsReport(cleanYjsReport)
             const acceptedReport = { ...result, legacyYjsMigrationAccepted: accepted }
@@ -470,8 +491,31 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
         }
     }
 
+    const canRevokeLegacyYjsAcceptance = canImportCoreLegacyData && coreRolloutState?.reason === "legacy-yjs-migration-accepted"
+
+    const handleRevokeLegacyYjsAcceptance = async () => {
+        if (!canRevokeLegacyYjsAcceptance || isRevokingLegacyYjsAcceptance || isImportingLegacyAll) return
+        const confirmed = window.confirm("Use the legacy backend on the next launch while legacy Yjs data remains?")
+        if (!confirmed) return
+        setIsRevokingLegacyYjsAcceptance(true)
+        setLegacyYjsRollbackMessage(null)
+        setLegacyYjsRollbackError(null)
+        setCoreMigrationRestartError(null)
+        try {
+            await store.revokeProductLegacyYjsMigrationAcceptance()
+            setLegacyYjsRollbackMessage("Core migration acceptance revoked. Restart OpenADE to use the legacy backend.")
+            setShowCoreMigrationRestartAction(true)
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Core migration rollback failed"
+            setLegacyYjsRollbackError(message)
+            console.error("[SystemConfigTab] Failed to revoke legacy Yjs Core migration acceptance:", err)
+        } finally {
+            setIsRevokingLegacyYjsAcceptance(false)
+        }
+    }
+
     const handleImportLegacyResources = async () => {
-        if (!hasCoreRuntimeEndpoint || isImportingLegacyResources) return
+        if (!canImportCoreLegacyData || !canSelectLegacyResourceDirectory || isImportingLegacyResources || isImportingLegacyAll) return
         setIsImportingLegacyResources(true)
         setLegacyResourceImportMessage(null)
         setLegacyResourceImportError(null)
@@ -488,14 +532,17 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
                 if (cleanYjsReport && cleanResources && shouldAcceptCoreLegacyYjsMigration(cleanYjsReport, cleanResources)) {
                     await store.markProductLegacyYjsMigrationAccepted(cleanYjsReport, cleanResources)
                     accepted = true
+                    setShowCoreMigrationRestartAction(true)
                 }
                 setLastCleanLegacyResourcesResult(cleanResources)
                 const messageParts = [formatCoreLegacyResourceImportResult(result)]
                 if (accepted && cleanYjsReport) {
                     setLegacyYjsImportMessage(formatCoreLegacyYjsImportResult({ ...cleanYjsReport, legacyYjsMigrationAccepted: true }))
-                    messageParts.push("Core launch accepted after clean data and resources import")
+                    messageParts.push(formatCoreLegacyMigrationAcceptedNotice())
                 } else if (cleanResources) {
                     messageParts.push("import legacy data to accept Core launch")
+                } else if (result.sessions === null) {
+                    messageParts.push("include Claude Code and Codex transcripts to accept Core launch")
                 }
                 setLegacyResourceImportMessage(messageParts.join("; "))
             }
@@ -505,6 +552,59 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
             console.error("[SystemConfigTab] Failed to import legacy Core resources:", err)
         } finally {
             setIsImportingLegacyResources(false)
+        }
+    }
+
+    const handleImportAllLegacyData = async () => {
+        if (!canImportCoreLegacyData || !canSelectLegacyResourceDirectory || isImportingLegacyAll || isImportingLegacyYjs || isImportingLegacyResources) return
+        setIsImportingLegacyAll(true)
+        setLegacyYjsImportMessage(null)
+        setLegacyYjsImportError(null)
+        setLegacyResourceImportMessage(null)
+        setLegacyResourceImportError(null)
+        setLegacyYjsRollbackMessage(null)
+        setLegacyYjsRollbackError(null)
+        setShowCoreMigrationRestartAction(false)
+        setCoreMigrationRestartError(null)
+        try {
+            const result = await importCoreLegacyDataAndResourcesFromSelection({
+                store,
+                selectDataDir: () => selectDirectory(),
+                importSessions,
+            })
+            if (!result) return
+
+            const cleanYjsReport = isCoreLegacyYjsImportClean(result.data) ? result.data : null
+            const cleanResources = isCoreLegacyResourceImportClean(result.resources) ? result.resources : null
+            setLastCleanLegacyYjsReport(cleanYjsReport)
+            setLastCleanLegacyResourcesResult(cleanResources)
+
+            setLegacyYjsImportMessage(formatCoreLegacyYjsImportResult({ ...result.data, legacyYjsMigrationAccepted: result.accepted }))
+            const resourceMessageParts = [formatCoreLegacyResourceImportResult(result.resources)]
+            if (result.accepted) {
+                resourceMessageParts.push(formatCoreLegacyMigrationAcceptedNotice())
+                setShowCoreMigrationRestartAction(true)
+            } else {
+                resourceMessageParts.push("resolve import issues before Core launch can be accepted")
+            }
+            setLegacyResourceImportMessage(resourceMessageParts.join("; "))
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Legacy migration failed"
+            setLegacyYjsImportError(message)
+            console.error("[SystemConfigTab] Failed to import legacy data and resources into Core:", err)
+        } finally {
+            setIsImportingLegacyAll(false)
+        }
+    }
+
+    const handleRestartOpenADE = async () => {
+        setCoreMigrationRestartError(null)
+        try {
+            await restartApp()
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "OpenADE restart failed"
+            setCoreMigrationRestartError(message)
+            console.error("[SystemConfigTab] Failed to restart OpenADE after Core migration:", err)
         }
     }
 
@@ -527,21 +627,59 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
                             <Database size={16} className={coreStatusIconClass} />
                             <div className="min-w-0">
                                 <p className="text-sm font-medium text-base-content">Legacy Data Import</p>
-                                <p className="text-xs text-muted mt-1">{coreRolloutStatusText(coreRolloutState, hasCoreRuntimeEndpoint)}</p>
+                                <p className="text-xs text-muted mt-1">
+                                    {coreRolloutStatusText(coreRolloutState, hasCoreRuntimeEndpoint, hasCoreMigrationRuntimeEndpoint)}
+                                </p>
                             </div>
                         </div>
-                        <button
-                            type="button"
-                            onClick={handleImportLegacyYjsData}
-                            disabled={!hasCoreRuntimeEndpoint || isImportingLegacyYjs}
-                            className="btn px-3 py-1.5 text-sm font-medium bg-primary text-primary-content hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
-                        >
-                            {isImportingLegacyYjs ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
-                            Import
-                        </button>
+                        <div className="flex flex-wrap justify-end gap-2">
+                            {canRevokeLegacyYjsAcceptance && (
+                                <button
+                                    type="button"
+                                    onClick={handleRevokeLegacyYjsAcceptance}
+                                    disabled={isRevokingLegacyYjsAcceptance}
+                                    className="btn px-3 py-1.5 text-sm font-medium bg-warning/10 text-warning hover:bg-warning hover:text-warning-content transition-colors disabled:opacity-50 flex items-center gap-2"
+                                >
+                                    {isRevokingLegacyYjsAcceptance ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
+                                    Use Legacy Next Launch
+                                </button>
+                            )}
+                            <button
+                                type="button"
+                                onClick={handleImportLegacyYjsData}
+                                disabled={!canImportCoreLegacyData || isImportingLegacyYjs || isImportingLegacyAll}
+                                className="btn px-3 py-1.5 text-sm font-medium bg-primary text-primary-content hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
+                            >
+                                {isImportingLegacyYjs ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+                                Import
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleImportAllLegacyData}
+                                disabled={!canImportCoreLegacyData || !canSelectLegacyResourceDirectory || isImportingLegacyAll || isImportingLegacyYjs || isImportingLegacyResources}
+                                className="btn px-3 py-1.5 text-sm font-medium bg-base-300 text-base-content hover:bg-base-100 transition-colors disabled:opacity-50 flex items-center gap-2"
+                            >
+                                {isImportingLegacyAll ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />}
+                                Import All
+                            </button>
+                        </div>
                     </div>
                     {legacyYjsImportMessage && <p className="text-xs text-success">{legacyYjsImportMessage}</p>}
                     {legacyYjsImportError && <p className="text-xs text-error">{legacyYjsImportError}</p>}
+                    {legacyYjsRollbackMessage && <p className="text-xs text-warning">{legacyYjsRollbackMessage}</p>}
+                    {legacyYjsRollbackError && <p className="text-xs text-error">{legacyYjsRollbackError}</p>}
+                    {showCoreMigrationRestartAction && (
+                        <div className="flex flex-col items-start gap-2">
+                            <button
+                                type="button"
+                                onClick={handleRestartOpenADE}
+                                className="btn px-3 py-1.5 text-sm font-medium bg-warning text-warning-content hover:bg-warning/90 transition-colors"
+                            >
+                                Restart OpenADE
+                            </button>
+                            {coreMigrationRestartError && <p className="text-xs text-error">{coreMigrationRestartError}</p>}
+                        </div>
+                    )}
                 </div>
 
                 <div className="flex flex-col gap-3 p-3 bg-base-200/40 border border-border mt-3">
@@ -556,7 +694,7 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
                         <button
                             type="button"
                             onClick={handleImportLegacyResources}
-                            disabled={!hasCoreRuntimeEndpoint || isImportingLegacyResources}
+                            disabled={!canImportCoreLegacyData || !canSelectLegacyResourceDirectory || isImportingLegacyResources || isImportingLegacyAll}
                             className="btn px-3 py-1.5 text-sm font-medium bg-primary text-primary-content hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
                         >
                             {isImportingLegacyResources ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />}
@@ -568,7 +706,7 @@ export const SystemConfigTab = observer(({ store }: SystemConfigTabProps) => {
                             type="checkbox"
                             checked={importSessions}
                             onChange={(event) => setImportSessions(event.target.checked)}
-                            disabled={isImportingLegacyResources}
+                            disabled={isImportingLegacyResources || isImportingLegacyAll}
                             className="checkbox checkbox-sm bg-base-200 border-border"
                         />
                         Include Claude Code and Codex transcripts

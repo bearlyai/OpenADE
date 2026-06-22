@@ -12,7 +12,7 @@ import { InlineWrapper } from "./wrappers/InlineWrapper"
 import { PillGroup } from "./wrappers/PillGroup"
 import { RowWrapper } from "./wrappers/RowWrapper"
 
-const INITIAL_STREAM_EVENT_TAIL_COUNT = 360
+const INITIAL_STREAM_EVENT_TAIL_COUNT = 120
 
 export interface SessionInfo {
     sessionId?: string
@@ -77,7 +77,8 @@ export function InlineMessages({
     const [showAllRenderables, setShowAllRenderables] = useState(false)
     const [fullHistoryRequested, setFullHistoryRequested] = useState(false)
     const localHiddenStreamEventCount = showAllRenderables ? 0 : Math.max(0, events.length - INITIAL_STREAM_EVENT_TAIL_COUNT)
-    const hiddenStreamEventCount = omittedEventCount + localHiddenStreamEventCount
+    const canRequestFullHistory = onRequestFullHistory !== undefined
+    const hiddenStreamEventCount = (canRequestFullHistory ? omittedEventCount : 0) + localHiddenStreamEventCount
     const eventsForGrouping = useMemo(
         () => (localHiddenStreamEventCount > 0 ? events.slice(localHiddenStreamEventCount) : events),
         [events, localHiddenStreamEventCount]
@@ -139,8 +140,10 @@ export function InlineMessages({
 
     const handleShowEarlier = () => {
         setShowAllRenderables(true)
-        setFullHistoryRequested(true)
-        onRequestFullHistory?.()
+        if (canRequestFullHistory) {
+            setFullHistoryRequested(true)
+            onRequestFullHistory()
+        }
     }
 
     // 6. Render
@@ -151,9 +154,9 @@ export function InlineMessages({
                     type="button"
                     className="btn border-t border-border px-3 py-2 text-left text-xs text-muted hover:bg-base-200 hover:text-base-content"
                     onClick={handleShowEarlier}
-                    disabled={fullHistoryRequested && omittedEventCount > 0}
+                    disabled={canRequestFullHistory && fullHistoryRequested && omittedEventCount > 0}
                 >
-                    {fullHistoryRequested && omittedEventCount > 0
+                    {canRequestFullHistory && fullHistoryRequested && omittedEventCount > 0
                         ? `Loading ${omittedEventCount.toLocaleString()} earlier stream events...`
                         : `Show ${hiddenStreamEventCount.toLocaleString()} earlier stream events`}
                 </button>

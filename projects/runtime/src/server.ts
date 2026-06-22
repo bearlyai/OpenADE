@@ -73,9 +73,11 @@ export interface RuntimeSlowRequestEvent {
     durationMs: number
     queueWaitMs: number
     handlerMs: number
+    dominantPhase: "queue_wait" | "handler" | "mixed"
     connectionId: string
     failed: boolean
     errorCode?: string
+    scope?: RuntimeRequestScope
 }
 
 export interface RuntimeNotificationBurstEvent {
@@ -91,6 +93,8 @@ export interface RuntimeHandlerRunEvent {
     requestId: string
     connectionId: string
 }
+
+export type RuntimeRequestScope = Record<string, string | number | boolean>
 
 export interface RuntimeServerOptions {
     serverName: string
@@ -129,6 +133,7 @@ const DEFAULT_NOTIFICATION_LOG_SIZE = 1000
 const DEFAULT_CLIENT_REQUEST_RETENTION_MS = 2 * 60 * 1000
 const DEFAULT_NOTIFICATION_BURST_WINDOW_MS = 2 * 1000
 const DEFAULT_NOTIFICATION_BURST_COUNT = 12
+const PROTOCOL_DECODE_METHOD = "protocol/decode"
 const IDEMPOTENT_METHOD_SEGMENTS = new Set([
     "append",
     "block",
@@ -177,6 +182,38 @@ function isActiveRuntimeStatus(status: string | undefined): boolean {
 function runtimeRequestLogValue(id: RuntimeRequest["id"]): string {
     const value = String(id).replace(/[^\x20-\x7E]/g, "?")
     return value.length > 80 ? `${value.slice(0, 80)}...` : value
+}
+
+function requestIdFromDecodedMessage(message: unknown): RuntimeRequest["id"] {
+    if (typeof message !== "object" || message === null) return "invalid-message"
+    const id = (message as { id?: unknown }).id
+    return typeof id === "string" || typeof id === "number" ? id : "invalid-message"
+}
+
+function slowRequestDominantPhase(queueWaitMs: number, handlerMs: number): RuntimeSlowRequestEvent["dominantPhase"] {
+    if (queueWaitMs > handlerMs) return "queue_wait"
+    if (handlerMs > queueWaitMs) return "handler"
+    return "mixed"
+}
+
+function sanitizedScopeValue(value: unknown): string | number | boolean | undefined {
+    if (typeof value === "string") return value.length > 80 ? `${value.slice(0, 80)}...` : value
+    if (typeof value === "number" && Number.isFinite(value)) return value
+    if (typeof value === "boolean") return value
+    return undefined
+}
+
+function requestScope(params: unknown): RuntimeRequestScope | undefined {
+    if (typeof params !== "object" || params === null || Array.isArray(params)) return undefined
+    const record = params as Record<string, unknown>
+    const scope: RuntimeRequestScope = {}
+    for (const key of ["repoId", "taskId", "runtimeId", "processId", "terminalId", "provider", "harnessId", "clientRequestId"]) {
+        const value = sanitizedScopeValue(record[key])
+        if (value !== undefined) scope[key] = value
+    }
+    if (typeof record.query === "string") scope.queryLength = record.query.length
+    if (typeof record.path === "string") scope.pathDepth = record.path.split("/").filter(Boolean).length
+    return Object.keys(scope).length > 0 ? scope : undefined
 }
 
 interface RetainedRuntimeRequest {
@@ -292,24 +329,28 @@ export class RuntimeServer {
 
     async handleMessage(connection: RuntimeConnection, raw: string): Promise<void> {
         const queuedAtMs = Date.now()
+        const decodeStartedAtMs = queuedAtMs
         let message: unknown
         try {
             message = JSON.parse(raw)
         } catch (error) {
-            connection.send({
+            const response = {
                 id: "parse-error",
                 error: runtimeError("parse_error", error instanceof Error ? error.message : "Invalid JSON"),
-            })
+            }
+            this.recordSlowRequest({ id: response.id, method: PROTOCOL_DECODE_METHOD }, connection, queuedAtMs, decodeStartedAtMs, response)
+            connection.send(response)
             return
         }
 
         const request = validateRuntimeRequest(message)
         if (!request.ok) {
-            const id = typeof (message as { id?: unknown })?.id === "string" || typeof (message as { id?: unknown })?.id === "number" ? (message as { id: string | number }).id : "invalid-message"
-            connection.send({
-                id,
+            const response = {
+                id: requestIdFromDecodedMessage(message),
                 error: runtimeError(request.error.code, request.error.message, { path: request.error.path }),
-            })
+            }
+            this.recordSlowRequest({ id: response.id, method: PROTOCOL_DECODE_METHOD }, connection, queuedAtMs, decodeStartedAtMs, response)
+            connection.send(response)
             return
         }
 
@@ -318,25 +359,32 @@ export class RuntimeServer {
     }
 
     async handleRequest(request: RuntimeRequest, connection: RuntimeConnection, options: { requireInitialized?: boolean; queuedAtMs?: number } = {}): Promise<RuntimeResponse> {
+        const queuedAtMs = options.queuedAtMs ?? Date.now()
         if (options.requireInitialized && request.method !== "initialize" && !this.initializedConnections.has(connection.id)) {
-            return {
+            const response = {
                 id: request.id,
                 error: runtimeError("not_initialized", "Call initialize before invoking runtime methods"),
             }
+            this.recordSlowRequest(request, connection, queuedAtMs, Date.now(), response)
+            return response
         }
 
         const entry = this.handlers.get(request.method)
         if (!entry) {
-            return {
+            const response = {
                 id: request.id,
                 error: runtimeError("method_not_found", `Unknown runtime method ${request.method}`),
             }
+            this.recordSlowRequest(request, connection, queuedAtMs, Date.now(), response)
+            return response
         }
         if (!this.canInvoke(request.method, connection)) {
-            return {
+            const response = {
                 id: request.id,
                 error: runtimeError("permission_denied", `Not allowed to call runtime method ${request.method}`),
             }
+            this.recordSlowRequest(request, connection, queuedAtMs, Date.now(), response)
+            return response
         }
 
         const clientKey = this.clientRequestKey(request, connection)
@@ -344,7 +392,7 @@ export class RuntimeServer {
             const retained = this.clientRequests.get(clientKey)
             if (retained) return retained.promise.then((response) => this.responseWithId(response, request.id))
 
-            const requestPromise = this.invokeHandler(request, connection, entry, options.queuedAtMs).then((response) => {
+            const requestPromise = this.invokeHandler(request, connection, entry, queuedAtMs).then((response) => {
                 if ("error" in response) {
                     this.clientRequests.delete(clientKey)
                     return response
@@ -363,7 +411,7 @@ export class RuntimeServer {
             return requestPromise
         }
 
-        return this.invokeHandler(request, connection, entry, options.queuedAtMs)
+        return this.invokeHandler(request, connection, entry, queuedAtMs)
     }
 
     private responseWithId(response: RuntimeResponse, id: RuntimeRequest["id"]): RuntimeResponse {
@@ -441,16 +489,21 @@ export class RuntimeServer {
 
         const error = "error" in response ? response.error : undefined
         const errorCode = error?.code
+        const queueWaitMs = Math.max(0, handlerStartedAt - queuedAtMs)
+        const handlerMs = Math.max(0, finishedAt - handlerStartedAt)
+        const scope = requestScope(request.params)
         this.onSlowRequest({
             service: this.serverName,
             method: request.method,
             requestId: runtimeRequestLogValue(request.id),
             durationMs,
-            queueWaitMs: Math.max(0, handlerStartedAt - queuedAtMs),
-            handlerMs: Math.max(0, finishedAt - handlerStartedAt),
+            queueWaitMs,
+            handlerMs,
+            dominantPhase: slowRequestDominantPhase(queueWaitMs, handlerMs),
             connectionId: connection.id,
             failed: errorCode !== undefined,
             ...(errorCode ? { errorCode } : {}),
+            ...(scope ? { scope } : {}),
         })
     }
 

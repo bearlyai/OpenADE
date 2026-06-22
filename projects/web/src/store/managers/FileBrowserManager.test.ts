@@ -93,12 +93,21 @@ function productSearchResult(args: ProductFileSearchArgs): OpenADEProjectFilesFu
 
 function createProductAccess(overrides: Partial<FileBrowserProductAccess> = {}): FileBrowserProductAccess {
     return {
+        ownsFiles: vi.fn(() => true),
         getContext: vi.fn((_workingDir: string) => ({ repoId: "repo-1", taskId: "task-1" })),
         listProjectFiles: vi.fn(async (args: ProductFileListArgs) => productTreeResult(args)),
         readProjectFile: vi.fn(async (args: ProductFileReadArgs) => productFileResult(args)),
         fuzzySearchProjectFiles: vi.fn(async (args: ProductFileSearchArgs) => productSearchResult(args)),
         ...overrides,
     }
+}
+
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((promiseResolve) => {
+        resolve = promiseResolve
+    })
+    return { promise, resolve }
 }
 
 function mockRepoFiles(): void {
@@ -334,5 +343,190 @@ describe("FileBrowserManager file references", () => {
         expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
         expect(filesApi.describePath).not.toHaveBeenCalled()
         expect(manager.activeFile).toBe("/repo/src/runtime.ts")
+    })
+
+    it("keeps legacy file browsing when an adapter exists but does not own files", async () => {
+        const productAccess = createProductAccess({
+            ownsFiles: vi.fn(() => false),
+            getContext: vi.fn(() => {
+                throw new Error("product context should not be used")
+            }),
+            listProjectFiles: vi.fn(async () => {
+                throw new Error("product tree should not be used")
+            }),
+            readProjectFile: vi.fn(async () => {
+                throw new Error("product file read should not be used")
+            }),
+            fuzzySearchProjectFiles: vi.fn(async () => {
+                throw new Error("product fuzzy search should not be used")
+            }),
+        })
+        mockRepoFiles()
+        vi.mocked(filesApi.fuzzySearch).mockResolvedValue({
+            results: ["src/store/TaskModel.ts"],
+            truncated: false,
+            source: "git",
+        })
+
+        const manager = new FileBrowserManager(productAccess)
+        manager.workingDir = "/repo"
+        await manager.loadDirectoryContents("/repo")
+        await manager.openFileReference("TaskModel.ts", { line: 9 })
+
+        expect(productAccess.listProjectFiles).not.toHaveBeenCalled()
+        expect(productAccess.readProjectFile).not.toHaveBeenCalled()
+        expect(productAccess.fuzzySearchProjectFiles).not.toHaveBeenCalled()
+        expect(filesApi.describePath).toHaveBeenCalled()
+        expect(filesApi.fuzzySearch).toHaveBeenCalledWith({
+            dir: "/repo",
+            query: "TaskModel.ts",
+            matchDirs: false,
+            limit: 12,
+        })
+        expect(manager.directoryContents.get("/repo")).toEqual([expect.objectContaining({ name: "src", path: "/repo/src", isDir: true })])
+        expect(manager.activeFile).toBe("/repo/src/store/TaskModel.ts")
+        expect(manager.activeLine).toBe(9)
+    })
+
+    it("keeps legacy path reference resolution when an adapter exists but does not own files", async () => {
+        const productAccess = createProductAccess({
+            ownsFiles: vi.fn(() => false),
+            getContext: vi.fn(() => {
+                throw new Error("product context should not be used")
+            }),
+            listProjectFiles: vi.fn(async () => {
+                throw new Error("product tree should not be used")
+            }),
+            readProjectFile: vi.fn(async () => {
+                throw new Error("product file read should not be used")
+            }),
+            fuzzySearchProjectFiles: vi.fn(async () => {
+                throw new Error("product fuzzy search should not be used")
+            }),
+        })
+        mockRepoFiles()
+        vi.mocked(filesApi.fuzzySearch).mockResolvedValue({
+            results: ["src/store/TaskModel.ts"],
+            truncated: false,
+            source: "git",
+        })
+
+        const manager = new FileBrowserManager(productAccess)
+        manager.workingDir = "/repo"
+        await manager.openPathReference("TaskModel.ts", { line: 11 })
+
+        expect(productAccess.listProjectFiles).not.toHaveBeenCalled()
+        expect(productAccess.readProjectFile).not.toHaveBeenCalled()
+        expect(productAccess.fuzzySearchProjectFiles).not.toHaveBeenCalled()
+        expect(filesApi.fuzzySearch).toHaveBeenCalledWith({
+            dir: "/repo",
+            query: "TaskModel.ts",
+            matchDirs: false,
+            limit: 12,
+        })
+        expect(manager.activeFile).toBe("/repo/src/store/TaskModel.ts")
+        expect(manager.selectedPath).toBe("/repo/src/store/TaskModel.ts")
+        expect(manager.activeLine).toBe(11)
+    })
+
+    it("does not apply delayed product directory contents after the browser scope changes", async () => {
+        const delayedList = createDeferred<OpenADEProjectFilesTreeResult>()
+        const productAccess = createProductAccess({
+            getContext: vi.fn((workingDir: string) =>
+                workingDir === "/repo-a" ? { repoId: "repo-a", taskId: "task-a" } : { repoId: "repo-b", taskId: "task-b" }
+            ),
+            listProjectFiles: vi.fn(async (args: ProductFileListArgs) => (args.repoId === "repo-a" ? delayedList.promise : productTreeResult(args))),
+        })
+        vi.mocked(filesApi.describePath).mockRejectedValue(new Error("legacy describe should not be used"))
+
+        const manager = new FileBrowserManager(productAccess)
+        manager.setWorkingDir("/repo-a")
+        expect(manager.loadingPaths.has("/repo-a")).toBe(true)
+
+        manager.setWorkingDir("/repo-b")
+        delayedList.resolve({
+            repoId: "repo-a",
+            taskId: "task-a",
+            path: "",
+            truncated: false,
+            entries: [{ name: "stale.ts", path: "stale.ts", type: "file", size: 8 }],
+        })
+        await Promise.resolve()
+
+        expect(filesApi.describePath).not.toHaveBeenCalled()
+        expect(manager.directoryContents.get("/repo-a")).toBeUndefined()
+        expect(manager.loadingPaths.has("/repo-a")).toBe(false)
+    })
+
+    it("does not apply delayed product fuzzy search results after the browser scope changes", async () => {
+        vi.useFakeTimers()
+        const delayedSearch = createDeferred<OpenADEProjectFilesFuzzySearchResult>()
+        const productAccess = createProductAccess({
+            getContext: vi.fn((workingDir: string) =>
+                workingDir === "/repo-a" ? { repoId: "repo-a", taskId: "task-a" } : { repoId: "repo-b", taskId: "task-b" }
+            ),
+            fuzzySearchProjectFiles: vi.fn(async (args: ProductFileSearchArgs) => (args.repoId === "repo-a" ? delayedSearch.promise : productSearchResult(args))),
+        })
+        vi.mocked(filesApi.fuzzySearch).mockRejectedValue(new Error("legacy fuzzy search should not be used"))
+
+        const manager = new FileBrowserManager(productAccess)
+        try {
+            manager.setWorkingDir("/repo-a")
+            manager.setSearchQuery("runtime")
+            await vi.advanceTimersByTimeAsync(150)
+            expect(manager.searchLoading).toBe(true)
+
+            manager.setWorkingDir("/repo-b")
+            delayedSearch.resolve({
+                repoId: "repo-a",
+                taskId: "task-a",
+                results: ["stale.ts"],
+                truncated: false,
+                source: "filesystem",
+            })
+            await Promise.resolve()
+
+            expect(filesApi.fuzzySearch).not.toHaveBeenCalled()
+            expect(manager.searchResults).toEqual([])
+            expect(manager.searchLoading).toBe(false)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it("does not apply delayed product file contents after the product context changes", async () => {
+        const delayedRead = createDeferred<OpenADEProjectFileReadResult>()
+        let productContext = { repoId: "repo-a", taskId: "task-a" }
+        const productAccess = createProductAccess({
+            getContext: vi.fn((_workingDir: string) => productContext),
+            readProjectFile: vi.fn(async (args: ProductFileReadArgs) => (args.repoId === "repo-a" ? delayedRead.promise : productFileResult(args))),
+        })
+        vi.mocked(filesApi.describePath).mockRejectedValue(new Error("legacy describe should not be used"))
+
+        const manager = new FileBrowserManager(productAccess)
+        manager.setWorkingDir("/repo")
+        const opening = manager.openFile("/repo/src/stale.ts")
+        expect(manager.fileLoading).toBe(true)
+
+        productContext = { repoId: "repo-b", taskId: "task-b" }
+        delayedRead.resolve({
+            repoId: "repo-a",
+            taskId: "task-a",
+            path: "src/stale.ts",
+            encoding: "utf8",
+            content: "stale file content",
+            size: 18,
+            tooLarge: false,
+            isReadable: true,
+            isBinary: false,
+            mediaType: "text/plain",
+            previewKind: null,
+        })
+        await opening
+
+        expect(filesApi.describePath).not.toHaveBeenCalled()
+        expect(manager.activeFileData).toBeNull()
+        expect(manager.fileError).toBeNull()
+        expect(manager.fileLoading).toBe(false)
     })
 })

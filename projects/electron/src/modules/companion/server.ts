@@ -3,6 +3,7 @@ import { URL } from "node:url"
 import logger from "electron-log"
 import type { CompanionEvent, PairRequest, RemotePlatform } from "../../../../shared/companion/src"
 import { pairDevice } from "./auth"
+import { isCoreRuntimeBridgeEnabled, proxyPairRequestToCore } from "./coreBridge"
 import { getCompanionBindAddresses } from "./network"
 import { publishCompanionRuntimeEvent, resetRuntimeServer } from "./runtimeGateway"
 import { attachRuntimeSocketServer, type RuntimeSocketServer } from "./runtimeSocket"
@@ -163,7 +164,15 @@ export function createCompanionRequestHandler(): http.RequestListener {
                 }
 
                 try {
-                    const body = parsePairRequest(await readJson(request))
+                    const rawBody = await readJson(request)
+                    if (isCoreRuntimeBridgeEnabled()) {
+                        const result = await proxyPairRequestToCore(rawBody)
+                        if (result.statusCode >= 200 && result.statusCode < 300) clearPairAttempts(request)
+                        sendJson(response, result.statusCode, result.body)
+                        return
+                    }
+
+                    const body = parsePairRequest(rawBody)
                     const result = pairDevice(body)
                     clearPairAttempts(request)
                     publish({ type: "devices_changed", at: new Date().toISOString() })

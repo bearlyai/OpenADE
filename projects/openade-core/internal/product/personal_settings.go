@@ -54,11 +54,15 @@ func (service *Service) handlePersonalSettingsRead(ctx context.Context, _ *core.
 }
 
 func (service *Service) handlePersonalSettingsReplace(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/settings/personal/replace", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodSettingsPersonalReplace, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		var params struct {
 			Settings personalSettingsDTO `json:"settings"`
 		}
 		if runtimeErr := decodeObject(raw, &params); runtimeErr != nil {
+			return nil, runtimeErr
+		}
+		previous, runtimeErr := service.loadPersonalSettings(ctx)
+		if runtimeErr != nil {
 			return nil, runtimeErr
 		}
 		settings, runtimeErr := normalizePersonalSettings(params.Settings)
@@ -68,8 +72,30 @@ func (service *Service) handlePersonalSettingsReplace(ctx context.Context, _ *co
 		if runtimeErr := service.savePersonalSettings(ctx, settings); runtimeErr != nil {
 			return nil, runtimeErr
 		}
+		if personalSettingsAffectSnapshotProjection(previous, settings) {
+			notification := map[string]string{}
+			if clientRequestID := clientRequestIDFromRaw(raw); clientRequestID != "" {
+				notification["clientRequestId"] = clientRequestID
+			}
+			service.runtime.Notify(openADENotificationSnapshotChanged, notification)
+		}
 		return personalSettingsReplaceDTO{Settings: settings}, nil
 	})
+}
+
+func personalSettingsAffectSnapshotProjection(previous personalSettingsDTO, next personalSettingsDTO) bool {
+	if previous.Theme != next.Theme {
+		return true
+	}
+	if len(previous.PinnedTaskIDs) != len(next.PinnedTaskIDs) {
+		return true
+	}
+	for index, taskID := range previous.PinnedTaskIDs {
+		if next.PinnedTaskIDs[index] != taskID {
+			return true
+		}
+	}
+	return false
 }
 
 func (service *Service) loadPersonalSettings(ctx context.Context) (personalSettingsDTO, *core.RuntimeError) {

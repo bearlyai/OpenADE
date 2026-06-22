@@ -8,9 +8,9 @@ import { fileURLToPath } from "node:url"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { RuntimeClient, RuntimeClientError } from "../../../runtime-client/src"
-import { runtimeSocketUrl } from "../../../web/src/kernel/session"
-import { OpenADEClient } from "../index"
-import { OPENADE_ERROR_CODES, OPENADE_METHODS, OPENADE_NOTIFICATIONS } from "./openade-contracts"
+import { defaultKernelSessionConstructors, KernelSessionManager, runtimeSocketUrl, type KernelSessionConfig } from "../../../web/src/kernel/session"
+import { OPENADE_METHOD, OpenADEClient } from "../index"
+import { OPENADE_ERROR_CODES, OPENADE_METHODS, OPENADE_NOTIFICATIONS, OPENADE_REMOTE_METHOD, OPENADE_REMOTE_METHODS } from "./openade-contracts"
 
 const CORE_TOKEN = "openade-client-contract-test-token"
 const TEST_TIMEOUT_MS = 120_000
@@ -73,12 +73,17 @@ describe("generated OpenADE contracts", () => {
             const advertised = new Set(initialize.capabilities.methods)
             const missingMethods = OPENADE_METHODS.filter((method) => !advertised.has(method))
             const advertisedNotifications = new Set(initialize.capabilities.notifications)
+            const advertisedProductNotifications = initialize.capabilities.notifications.filter(isOpenADEContractNotification)
             const missingNotifications = OPENADE_NOTIFICATIONS.filter((notification) => !advertisedNotifications.has(notification))
 
             expect(initialize.protocolVersion).toBe(1)
             expect(initialize.serverName).toBe("openade-core")
             expect(missingMethods).toEqual([])
             expect(missingNotifications).toEqual([])
+            expect(new Set(advertisedProductNotifications)).toEqual(new Set(OPENADE_NOTIFICATIONS))
+            for (const remoteMethod of OPENADE_REMOTE_METHODS) {
+                expect(advertised.has(remoteMethod)).toBe(true)
+            }
 
             const runtime = new RuntimeClient({
                 url: runtimeUrl(core.port),
@@ -253,14 +258,16 @@ describe("generated OpenADE contracts", () => {
                 expect(pairedMethods.has("openade/task/list")).toBe(true)
                 expect(pairedMethods.has("openade/task/create")).toBe(true)
                 expect(pairedMethods.has("openade/turn/start")).toBe(true)
+                expect(pairedMethods.has(OPENADE_METHOD.taskImageWrite)).toBe(true)
                 expect(pairedMethods.has("openade/cron/definitions/read")).toBe(true)
                 expect(pairedMethods.has("openade/queued-turn/enqueue")).toBe(true)
                 expect(pairedMethods.has("openade/queued-turn/reorder")).toBe(true)
                 expect(pairedMethods.has("openade/queued-turn/cancel")).toBe(true)
-                expect(pairedMethods.has("remote/device/selfRevoke")).toBe(true)
+                expect(pairedMethods.has(OPENADE_REMOTE_METHOD.remoteDeviceSelfRevoke)).toBe(true)
                 expect(pairedMethods.has("openade/project/file/write")).toBe(false)
+                expect(pairedMethods.has("openade/cron/run")).toBe(false)
                 expect(pairedMethods.has("openade/repo/create")).toBe(false)
-                expect(pairedMethods.has("remote/pairing/start")).toBe(false)
+                expect(pairedMethods.has(OPENADE_REMOTE_METHOD.remotePairingStart)).toBe(false)
                 const pairedNotifications = new Set(pairedInitialize.capabilities.notifications)
                 expect(pairedNotifications.has("openade/task/updated")).toBe(true)
                 expect(pairedNotifications.has("remote/device/changed")).toBe(true)
@@ -285,6 +292,17 @@ describe("generated OpenADE contracts", () => {
                     const initialTaskPreviews = await pairedClient.listTasks("repo-paired-contract")
                     expect(initialTaskPreviews).toEqual([])
 
+                    const sharedSession = createSharedKernelSession(core, paired.deviceToken)
+                    const sharedEntry = sharedSession.session.entry
+                    try {
+                        const sharedSnapshot = await sharedEntry.openade.getSnapshot()
+                        expect(sharedEntry.runtime.capabilities?.methods).toContain(OPENADE_METHOD.snapshotRead)
+                        expect(sharedSnapshot.repos.map((repo) => repo.id)).toContain("repo-paired-contract")
+                        expect(await sharedEntry.openade.listTasks("repo-paired-contract")).toEqual([])
+                    } finally {
+                        sharedSession.manager.clear()
+                    }
+
                     const cronDefinitions = await pairedClient.readCronDefinitions({ repoId: "repo-paired-contract" })
                     expect(cronDefinitions.configs).toEqual([
                         expect.objectContaining({
@@ -300,6 +318,21 @@ describe("generated OpenADE contracts", () => {
                         }),
                     ])
 
+                    const imageData = Buffer.from("paired contract image").toString("base64")
+                    const writtenImage = await pairedClient.writeTaskImage({
+                        imageId: "paired-contract-image",
+                        ext: "png",
+                        mediaType: "image/png",
+                        data: imageData,
+                        clientRequestId: "paired-contract-image-write",
+                    })
+                    expect(writtenImage).toMatchObject({
+                        imageId: "paired-contract-image",
+                        ext: "png",
+                        mediaType: "image/png",
+                        size: Buffer.from("paired contract image").byteLength,
+                    })
+
                     const turn = await pairedClient.startTurn({
                         repoId: "repo-paired-contract",
                         type: "ask",
@@ -307,6 +340,7 @@ describe("generated OpenADE contracts", () => {
                         harnessId: "codex",
                         modelId: "gpt-paired-contract",
                         title: "Paired attach contract",
+                        images: [{ id: "paired-contract-image", ext: "png", mediaType: "image/png" }],
                         clientRequestId: "paired-contract-turn-start",
                     })
                     expect(turn.taskId).toMatch(/^task-/)
@@ -317,6 +351,19 @@ describe("generated OpenADE contracts", () => {
                         id: turn.eventId,
                         type: "action",
                         userInput: "Can a paired client attach through Core?",
+                        images: [expect.objectContaining({ id: "paired-contract-image", ext: "png", mediaType: "image/png" })],
+                    })
+                    await expect(
+                        pairedClient.readTaskImage({
+                            repoId: "repo-paired-contract",
+                            taskId: turn.taskId,
+                            imageId: "paired-contract-image",
+                            ext: "png",
+                        })
+                    ).resolves.toMatchObject({
+                        imageId: "paired-contract-image",
+                        mediaType: "image/png",
+                        data: imageData,
                     })
                     const pairedTaskPreviews = await pairedClient.listTasks("repo-paired-contract")
                     expect(pairedTaskPreviews).toEqual([
@@ -389,12 +436,15 @@ describe("generated OpenADE contracts", () => {
                             clientRequestId: "paired-contract-file-write-denied",
                         })
                     )
-                    expectRuntimeClientErrorCode(deniedWrite, "permission_denied")
+                    expect(deniedWrite).toBeInstanceOf(Error)
+                    expect(deniedWrite).toMatchObject({
+                        message: `OpenADE runtime method unavailable: ${OPENADE_METHOD.projectFileWrite}`,
+                    })
 
                     const unknownMethod = await rejectedError(() => pairedRuntime.request("openade/contract-test/unknown"))
                     expectRuntimeClientErrorCode(unknownMethod, "method_not_found")
 
-                    const selfRevoked = await pairedRuntime.request<{ ok: boolean; revoked: boolean }>("remote/device/selfRevoke")
+                    const selfRevoked = await pairedRuntime.request<{ ok: boolean; revoked: boolean }>(OPENADE_REMOTE_METHOD.remoteDeviceSelfRevoke)
                     expect(selfRevoked).toEqual({ ok: true, revoked: true })
                 } finally {
                     pairedClient.close()
@@ -535,7 +585,7 @@ function initializeRuntime(port: number, token = CORE_TOKEN, clientPlatform: "de
 async function pairMobileClient(core: StartedCore, trustedRuntime: RuntimeClient): Promise<PairDeviceResult> {
     const baseUrl = `http://127.0.0.1:${core.port}`
     const pairing = pairingStartResult(
-        await trustedRuntime.request("remote/pairing/start", {
+        await trustedRuntime.request(OPENADE_REMOTE_METHOD.remotePairingStart, {
             baseUrl,
             hostId: "contract-host",
         })
@@ -559,6 +609,29 @@ async function pairMobileClient(core: StartedCore, trustedRuntime: RuntimeClient
         throw new Error(`Pair device failed with HTTP ${response.status}: ${await response.text()}`)
     }
     return pairDeviceResult(await response.json())
+}
+
+function createSharedKernelSession(core: StartedCore, token: string) {
+    const manager = new KernelSessionManager(defaultKernelSessionConstructors, {
+        clientName: "OpenADE Shared Browser Contract Test",
+        clientPlatform: "web",
+        reconnect: false,
+    })
+    const session = manager.session(sharedKernelConfig(core, token))
+    return { manager, session }
+}
+
+function sharedKernelConfig(core: StartedCore, token: string): KernelSessionConfig {
+    const host = `127.0.0.1:${core.port}`
+    const now = new Date(0).toISOString()
+    return {
+        id: "shared-browser-contract-session",
+        baseUrl: `http://${host}`,
+        token,
+        host,
+        savedAt: now,
+        lastUsedAt: now,
+    }
 }
 
 async function rejectedError(action: () => Promise<unknown>): Promise<unknown> {
@@ -603,6 +676,10 @@ function stringArray(value: unknown): string[] {
         throw new Error("Expected string array")
     }
     return value
+}
+
+function isOpenADEContractNotification(notification: string): boolean {
+    return notification.startsWith("openade/") || notification === "remote/device/changed"
 }
 
 function pairingStartResult(value: unknown): PairingStartResult {

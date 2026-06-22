@@ -10,6 +10,7 @@
  */
 
 import { action, computed, observable, runInAction } from "mobx"
+import { OPENADE_METHOD, type OpenADEMethod } from "../../../openade-client/src"
 import { type SnapshotPatchIndex, snapshotsApi } from "../electronAPI/snapshots"
 import type { HyperPlanSubExecution } from "../hyperplan/types"
 import type { ActionEvent, ActionEventSource, CodeEvent, HarnessStreamEvent, SetupEnvironmentEvent, SnapshotEvent } from "../types"
@@ -214,12 +215,29 @@ export class SnapshotEventModel extends EventModel {
     }
 
     private runtimeSnapshotRequest(): { repoId: string; taskId: string; eventId: string } | null {
-        if (!this.store.shouldUseRuntimeProductAPI()) return null
+        if (!this.store.shouldUseRuntimeProductTaskRoute()) return null
 
         const repoId = this.store.findProductRepoIdForTask(this.taskId)
         if (!repoId) return null
 
         return { repoId, taskId: this.taskId, eventId: this.eventId }
+    }
+
+    private productRuntimeOwnsSnapshots(): boolean {
+        return this.store.shouldUseRuntimeProductTaskRoute()
+    }
+
+    private async runtimeSnapshotRequestAfterConnect(method: OpenADEMethod): Promise<{ repoId: string; taskId: string; eventId: string } | null> {
+        if (!this.productRuntimeOwnsSnapshots()) return null
+        const canRead = this.store.shouldUseRuntimeProductAPI()
+            ? this.store.canUseProductMethod(method)
+            : await this.store.canUseProductMethodAfterConnect(method)
+        if (!canRead) return null
+        return this.runtimeSnapshotRequest()
+    }
+
+    private canReadFullPatch(): boolean {
+        return !this.productRuntimeOwnsSnapshots() || this.store.canUseProductMethod(OPENADE_METHOD.taskSnapshotPatchRead)
     }
 
     @computed
@@ -250,6 +268,8 @@ export class SnapshotEventModel extends EventModel {
      */
     @computed
     get fullPatch(): string {
+        if (!this.canReadFullPatch()) return ""
+
         // If patch is stored inline (legacy or fallback), use it
         const inline = this.snapshotEvent?.fullPatch ?? ""
         if (inline) return inline
@@ -268,7 +288,7 @@ export class SnapshotEventModel extends EventModel {
     @computed
     get isPatchLoaded(): boolean {
         // Has inline patch
-        if (this.snapshotEvent?.fullPatch) return true
+        if (this.snapshotEvent?.fullPatch) return this.canReadFullPatch()
         // Has loaded from file
         if (this._loadedPatch !== null) return true
         // No patch file to load
@@ -295,8 +315,10 @@ export class SnapshotEventModel extends EventModel {
         const fileId = this.patchFileId
         if (!fileId) return
 
-        const runtimeRequest = this.runtimeSnapshotRequest()
-        if (!runtimeRequest && this.store.shouldUseRuntimeProductAPI()) {
+        const productRuntimeOwnsSnapshots = this.productRuntimeOwnsSnapshots()
+        const snapshotIndexMethod = OPENADE_METHOD.taskSnapshotIndexRead
+        const runtimeRequest = productRuntimeOwnsSnapshots ? await this.runtimeSnapshotRequestAfterConnect(snapshotIndexMethod) : null
+        if (!runtimeRequest && productRuntimeOwnsSnapshots) {
             console.warn("[SnapshotEventModel] Runtime snapshot context unavailable, cannot load patch index")
             return
         }
@@ -333,6 +355,9 @@ export class SnapshotEventModel extends EventModel {
         // Already loaded or loading
         if (this._loadedPatch !== null || this._loadingPatch) return
 
+        const productRuntimeOwnsSnapshots = this.productRuntimeOwnsSnapshots()
+        const snapshotPatchMethod = OPENADE_METHOD.taskSnapshotPatchRead
+
         // No file to load (inline patch or no patch)
         const fileId = this.patchFileId
         if (!fileId) return
@@ -340,8 +365,8 @@ export class SnapshotEventModel extends EventModel {
         // Has inline patch, no need to load
         if (this.snapshotEvent?.fullPatch) return
 
-        const runtimeRequest = this.runtimeSnapshotRequest()
-        if (!runtimeRequest && this.store.shouldUseRuntimeProductAPI()) {
+        const runtimeRequest = productRuntimeOwnsSnapshots ? await this.runtimeSnapshotRequestAfterConnect(snapshotPatchMethod) : null
+        if (!runtimeRequest && productRuntimeOwnsSnapshots) {
             console.warn("[SnapshotEventModel] Runtime snapshot context unavailable, cannot load patch")
             return
         }

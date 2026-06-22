@@ -375,6 +375,7 @@ async function exchangeCodeForTokens(
     return {
         accessToken: data.access_token,
         refreshToken: data.refresh_token,
+        clientId,
         expiresAt,
         tokenType: data.token_type || "Bearer",
     }
@@ -637,7 +638,7 @@ export function cancelRuntimeMcpOAuth(params: CancelMcpOAuthParams): CancelMcpOA
  * Discovers token endpoint from server URL and exchanges refresh token for new tokens.
  */
 export async function refreshRuntimeMcpOAuth(params: RefreshMcpOAuthParams): Promise<RefreshMcpOAuthResponse> {
-    const { serverUrl, refreshToken } = params
+    const { serverUrl, refreshToken, clientId } = params
 
     logger.info("[MCP:OAuth] Refreshing OAuth tokens", JSON.stringify({ serverUrl }))
 
@@ -646,16 +647,19 @@ export async function refreshRuntimeMcpOAuth(params: RefreshMcpOAuthParams): Pro
         const metadata = await discoverOAuthMetadata(serverUrl)
 
         // Exchange refresh token for new access token
+        const body = new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: refreshToken,
+        })
+        if (clientId) body.set("client_id", clientId)
+
         const response = await fetch(metadata.token_endpoint, {
             method: "POST",
             headers: {
                 "Content-Type": "application/x-www-form-urlencoded",
                 Accept: "application/json",
             },
-            body: new URLSearchParams({
-                grant_type: "refresh_token",
-                refresh_token: refreshToken,
-            }).toString(),
+            body: body.toString(),
         })
 
         if (!response.ok) {
@@ -676,6 +680,7 @@ export async function refreshRuntimeMcpOAuth(params: RefreshMcpOAuthParams): Pro
         const tokens: McpOAuthTokens = {
             accessToken: data.access_token,
             refreshToken: data.refresh_token ?? refreshToken, // Some servers don't return new refresh token
+            ...(clientId ? { clientId } : {}),
             expiresAt,
             tokenType: data.token_type || "Bearer",
         }

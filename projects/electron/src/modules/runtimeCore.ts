@@ -4,7 +4,9 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import logger from "electron-log"
+import { WebSocket, type RawData } from "ws"
 import { cleanupRuntimeIpc, loadRuntimeIpc } from "./companion/runtimeIpc"
+import { envFlag } from "./envFlag"
 import { isOpenADECoreLegacyYjsMigrationAccepted } from "./openadeCoreMigration"
 
 const DEFAULT_MANAGED_CORE_PORT = "37376"
@@ -17,6 +19,10 @@ const HARNESS_WORKER_ENTRY = "worker.js"
 const OPENADE_DIR = ".openade"
 const DATA_DIR = "data"
 const YJS_DIR = "yjs"
+const ACTIVE_WORK_PROBE_TIMEOUT_MS = 1_000
+const ACTIVE_WORK_PROBE_INITIALIZE_ID = "openade-core-active-work:init"
+const ACTIVE_WORK_PROBE_LIST_ID = "openade-core-active-work:list"
+const ACTIVE_WORK_STATUSES = ["starting", "running"] as const
 
 export interface ManagedOpenADECoreLaunchPlan {
     command: string
@@ -45,21 +51,18 @@ export type ManagedOpenADECoreRolloutReason =
     | "development-default-off"
     | "missing-core-binary"
     | "invalid-managed-command"
+    | "invalid-external-endpoint"
 
 export interface ManagedOpenADECoreLaunchDecision {
     plan: ManagedOpenADECoreLaunchPlan | null
     reason: ManagedOpenADECoreRolloutReason
     automatic: boolean
+    productRuntime: boolean
     legacyYjsDocumentsPresent: boolean
     legacyYjsMigrationAccepted: boolean
 }
 
 let managedCoreProcess: ChildProcessWithoutNullStreams | null = null
-
-function envFlag(value: string | undefined): boolean {
-    const normalized = value?.trim().toLowerCase()
-    return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on"
-}
 
 function normalizedRuntimePath(value: string | undefined): string {
     const trimmed = value?.trim()
@@ -188,8 +191,132 @@ function runtimeEndpointURL(host: string, port: string, runtimePath: string): st
     return `ws://${host}:${port}${runtimePath}`
 }
 
+function isValidRuntimeEndpointURL(value: string): boolean {
+    try {
+        const url = new URL(value)
+        return url.protocol === "ws:" || url.protocol === "wss:"
+    } catch {
+        return false
+    }
+}
+
 function generateCoreToken(): string {
     return crypto.randomBytes(24).toString("base64url")
+}
+
+function configuredOpenADECoreRuntimeURL(env: NodeJS.ProcessEnv): string | null {
+    if (envFlag(env.OPENADE_DISABLE_OPENADE_CORE)) return null
+    const endpoint = env.OPENADE_CORE_RUNTIME_URL?.trim()
+    if (!endpoint || !isValidRuntimeEndpointURL(endpoint)) return null
+    return endpoint
+}
+
+export function hasOpenADECoreRuntimeEndpoint(env: NodeJS.ProcessEnv = process.env): boolean {
+    return configuredOpenADECoreRuntimeURL(env) !== null
+}
+
+function rawDataToString(data: RawData): string {
+    if (typeof data === "string") return data
+    if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8")
+    if (Array.isArray(data)) return Buffer.concat(data).toString("utf8")
+    return data.toString("utf8")
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isActiveOpenADETaskRuntimeRecord(value: unknown): boolean {
+    if (!isObjectRecord(value)) return false
+    const scope = value.scope
+    if (!isObjectRecord(scope)) return false
+    return scope.ownerType === "openade-task" && (value.status === "starting" || value.status === "running")
+}
+
+function runtimeListResultHasActiveWork(value: unknown): boolean {
+    return Array.isArray(value) && value.some((record) => isActiveOpenADETaskRuntimeRecord(record))
+}
+
+function parseRuntimeResponse(data: RawData): Record<string, unknown> | null {
+    try {
+        const parsed: unknown = JSON.parse(rawDataToString(data))
+        return isObjectRecord(parsed) ? parsed : null
+    } catch {
+        return null
+    }
+}
+
+export function hasActiveOpenADECoreRuntimeWork(
+    env: NodeJS.ProcessEnv = process.env,
+    timeoutMs: number = ACTIVE_WORK_PROBE_TIMEOUT_MS
+): Promise<boolean> {
+    const endpoint = configuredOpenADECoreRuntimeURL(env)
+    if (!endpoint) return Promise.resolve(false)
+
+    return new Promise((resolve) => {
+        let settled = false
+        let socket: WebSocket | null = null
+        const settle = (hasActiveWork: boolean) => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+                socket.close()
+            }
+            resolve(hasActiveWork)
+        }
+        const timer = setTimeout(() => settle(false), timeoutMs)
+
+        try {
+            const token = env.OPENADE_CORE_TOKEN?.trim()
+            socket = token ? new WebSocket(endpoint, [`bearer.${token}`]) : new WebSocket(endpoint)
+        } catch {
+            clearTimeout(timer)
+            resolve(false)
+            return
+        }
+
+        const activeSocket = socket
+        activeSocket.on("open", () => {
+            activeSocket.send(
+                JSON.stringify({
+                    id: ACTIVE_WORK_PROBE_INITIALIZE_ID,
+                    method: "initialize",
+                    params: {
+                        protocolVersion: 1,
+                        clientName: "OpenADE Desktop",
+                        clientPlatform: "desktop",
+                    },
+                })
+            )
+        })
+        activeSocket.on("message", (data) => {
+            const message = parseRuntimeResponse(data)
+            if (!message) return
+            if (message.id === ACTIVE_WORK_PROBE_INITIALIZE_ID) {
+                if ("error" in message) {
+                    settle(false)
+                    return
+                }
+                activeSocket.send(
+                    JSON.stringify({
+                        id: ACTIVE_WORK_PROBE_LIST_ID,
+                        method: "runtime/list",
+                        params: {
+                            ownerType: "openade-task",
+                            statuses: ACTIVE_WORK_STATUSES,
+                        },
+                    })
+                )
+                return
+            }
+            if (message.id === ACTIVE_WORK_PROBE_LIST_ID) {
+                settle(!("error" in message) && runtimeListResultHasActiveWork(message.result))
+            }
+        })
+        activeSocket.on("close", () => settle(false))
+        activeSocket.on("error", () => settle(false))
+    })
 }
 
 function buildManagedOpenADECoreLaunchPlan({
@@ -248,22 +375,41 @@ export function decideManagedOpenADECoreLaunch(
     options: ManagedOpenADECoreLaunchOptions = {}
 ): ManagedOpenADECoreLaunchDecision {
     if (envFlag(env.OPENADE_DISABLE_OPENADE_CORE)) {
-        return { plan: null, reason: "disabled", automatic: false, legacyYjsDocumentsPresent: false, legacyYjsMigrationAccepted: false }
+        return { plan: null, reason: "disabled", automatic: false, productRuntime: false, legacyYjsDocumentsPresent: false, legacyYjsMigrationAccepted: false }
     }
-    if (env.OPENADE_CORE_RUNTIME_URL?.trim()) {
-        return { plan: null, reason: "external-endpoint", automatic: false, legacyYjsDocumentsPresent: false, legacyYjsMigrationAccepted: false }
+    const externalRuntimeEndpoint = env.OPENADE_CORE_RUNTIME_URL?.trim()
+    if (externalRuntimeEndpoint) {
+        if (!isValidRuntimeEndpointURL(externalRuntimeEndpoint)) {
+            return {
+                plan: null,
+                reason: "invalid-external-endpoint",
+                automatic: false,
+                productRuntime: false,
+                legacyYjsDocumentsPresent: false,
+                legacyYjsMigrationAccepted: false,
+            }
+        }
+        return { plan: null, reason: "external-endpoint", automatic: false, productRuntime: true, legacyYjsDocumentsPresent: false, legacyYjsMigrationAccepted: false }
     }
 
     const explicitManagedCore = envFlag(env.OPENADE_CORE_MANAGED) || envFlag(env.OPENADE_USE_OPENADE_CORE)
     let commandParts: string[]
     let automatic = false
+    let productRuntime = explicitManagedCore
     let legacyYjsDocumentsPresent = false
     let legacyYjsMigrationAccepted = false
     if (explicitManagedCore) {
         commandParts = managedCoreCommand(env, resolveBuiltCommand)
     } else {
         if (options.isDev) {
-            return { plan: null, reason: "development-default-off", automatic: false, legacyYjsDocumentsPresent: false, legacyYjsMigrationAccepted: false }
+            return {
+                plan: null,
+                reason: "development-default-off",
+                automatic: false,
+                productRuntime: false,
+                legacyYjsDocumentsPresent: false,
+                legacyYjsMigrationAccepted: false,
+            }
         }
         const hasLegacyDocuments = options.legacyYjsDocumentsExist ?? (() => managedOpenADECoreLegacyYjsDocumentsExist(env))
         legacyYjsDocumentsPresent = hasLegacyDocuments()
@@ -271,38 +417,32 @@ export function decideManagedOpenADECoreLaunch(
             const hasAcceptedMigration = options.legacyYjsMigrationAccepted ?? (() => isOpenADECoreLegacyYjsMigrationAccepted())
             legacyYjsMigrationAccepted = hasAcceptedMigration()
         }
-        if (legacyYjsDocumentsPresent && !legacyYjsMigrationAccepted) {
-            return {
-                plan: null,
-                reason: "legacy-yjs-documents",
-                automatic: false,
-                legacyYjsDocumentsPresent: true,
-                legacyYjsMigrationAccepted: false,
-            }
-        }
         const builtCommand = resolveBuiltCommand()
         if (!builtCommand) {
             return {
                 plan: null,
-                reason: "missing-core-binary",
+                reason: legacyYjsDocumentsPresent && !legacyYjsMigrationAccepted ? "legacy-yjs-documents" : "missing-core-binary",
                 automatic: false,
+                productRuntime: false,
                 legacyYjsDocumentsPresent,
                 legacyYjsMigrationAccepted,
             }
         }
         commandParts = [builtCommand]
         automatic = true
+        productRuntime = !legacyYjsDocumentsPresent || legacyYjsMigrationAccepted
     }
 
     if (commandParts.length === 0) {
-        return { plan: null, reason: "invalid-managed-command", automatic: false, legacyYjsDocumentsPresent, legacyYjsMigrationAccepted }
+        return { plan: null, reason: "invalid-managed-command", automatic: false, productRuntime: false, legacyYjsDocumentsPresent, legacyYjsMigrationAccepted }
     }
 
     const resolveAgentWorkerCommand = options.agentWorkerCommand ?? defaultAgentWorkerCommand
     return {
         plan: buildManagedOpenADECoreLaunchPlan({ env, cwd, createToken, commandParts, resolveAgentWorkerCommand }),
-        reason: legacyYjsDocumentsPresent && legacyYjsMigrationAccepted ? "legacy-yjs-migration-accepted" : "managed-core",
+        reason: legacyYjsDocumentsPresent && !legacyYjsMigrationAccepted ? "legacy-yjs-documents" : legacyYjsMigrationAccepted ? "legacy-yjs-migration-accepted" : "managed-core",
         automatic,
+        productRuntime,
         legacyYjsDocumentsPresent,
         legacyYjsMigrationAccepted,
     }
@@ -325,7 +465,11 @@ function publishManagedCoreRolloutDecision(decision: ManagedOpenADECoreLaunchDec
     process.env.OPENADE_CORE_ROLLOUT_LEGACY_YJS_MIGRATION_ACCEPTED = decision.legacyYjsMigrationAccepted ? "1" : "0"
 }
 
-function publishManagedCoreEndpoint(plan: ManagedOpenADECoreLaunchPlan): void {
+function publishManagedCoreEndpoint(plan: ManagedOpenADECoreLaunchPlan, productRuntime: boolean): void {
+    process.env.OPENADE_CORE_MIGRATION_TOKEN = plan.runtimeEndpoint.token
+    process.env.OPENADE_CORE_MIGRATION_RUNTIME_URL = plan.runtimeEndpoint.url
+    if (!productRuntime) return
+
     process.env.OPENADE_USE_OPENADE_CORE = "1"
     process.env.OPENADE_CORE_MANAGED = "1"
     process.env.OPENADE_CORE_TOKEN = plan.runtimeEndpoint.token
@@ -333,6 +477,24 @@ function publishManagedCoreEndpoint(plan: ManagedOpenADECoreLaunchPlan): void {
     process.env.OPENADE_CORE_PORT = plan.env.OPENADE_CORE_PORT
     process.env.OPENADE_CORE_RUNTIME_PATH = plan.env.OPENADE_CORE_RUNTIME_PATH
     process.env.OPENADE_CORE_RUNTIME_URL = plan.runtimeEndpoint.url
+}
+
+function managedCoreRolloutLogDetails(decision: ManagedOpenADECoreLaunchDecision): {
+    reason: ManagedOpenADECoreRolloutReason
+    automatic: boolean
+    productRuntime: boolean
+    legacyYjsDocumentsPresent: boolean
+    legacyYjsMigrationAccepted: boolean
+    willStartManagedCore: boolean
+} {
+    return {
+        reason: decision.reason,
+        automatic: decision.automatic,
+        productRuntime: decision.productRuntime,
+        legacyYjsDocumentsPresent: decision.legacyYjsDocumentsPresent,
+        legacyYjsMigrationAccepted: decision.legacyYjsMigrationAccepted,
+        willStartManagedCore: decision.plan !== null,
+    }
 }
 
 function logManagedCoreOutput(streamName: "stdout" | "stderr", data: Buffer): void {
@@ -351,13 +513,17 @@ function startManagedOpenADECore(options: ManagedOpenADECoreLaunchOptions = {}):
     const decision = decideManagedOpenADECoreLaunch(process.env, process.cwd(), generateCoreToken, defaultOpenADECoreCommand, options)
     publishManagedCoreRolloutDecision(decision)
     const plan = decision.plan
-    if (!plan) return
+    if (!plan) {
+        logger.info("[OpenADECore] managed Core not started", managedCoreRolloutLogDetails(decision))
+        return
+    }
 
-    publishManagedCoreEndpoint(plan)
+    publishManagedCoreEndpoint(plan, decision.productRuntime)
     logger.info("[OpenADECore] starting managed Core process", {
         command: path.basename(plan.command),
         port: plan.env.OPENADE_CORE_PORT,
         runtimePath: plan.env.OPENADE_CORE_RUNTIME_PATH,
+        ...managedCoreRolloutLogDetails(decision),
     })
 
     managedCoreProcess = spawn(plan.command, plan.args, {

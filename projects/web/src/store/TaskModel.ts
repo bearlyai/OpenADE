@@ -14,7 +14,9 @@ import type {
     OpenADETaskFilePairReadRequest,
     OpenADETaskFilePairReadResult,
     OpenADETaskGitSummaryResult,
+    OpenADETaskPreview,
 } from "../../../openade-module/src"
+import { OPENADE_METHOD, type OpenADEMethod } from "../../../openade-client/src"
 import { DEFAULT_MODEL, getDefaultModelForHarness, resolveModelForHarness } from "../constants"
 import type { GitSummaryResponse } from "../electronAPI/git"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
@@ -37,6 +39,10 @@ export type ThinkingLevel = "low" | "med" | "high" | "max"
 
 const GIT_STATE_FRESH_MS = 5_000
 
+function legacyExecutionHarnessId(value: unknown): HarnessId | null {
+    return value === "claude-code" || value === "codex" ? value : null
+}
+
 function legacyWorktreeDirFromSetupEvent(event: SetupEnvironmentEvent): string | null {
     const setupOutput = event.setupOutput ?? ""
     const worktreeLine = setupOutput
@@ -45,6 +51,10 @@ function legacyWorktreeDirFromSetupEvent(event: SetupEnvironmentEvent): string |
         .find((line) => line.startsWith("Worktree:"))
     const worktreeDir = worktreeLine?.slice("Worktree:".length).trim()
     return worktreeDir || event.workingDir || null
+}
+
+function setupWorkingDirFromEvent(event: SetupEnvironmentEvent): string | null {
+    return event.workingDir?.trim() || null
 }
 
 function gitSummaryFromProductSummary(summary: OpenADETaskGitSummaryResult): GitSummaryResponse {
@@ -70,10 +80,34 @@ function normalizedDirectoryPath(path: string): string {
     return path.replace(/\\/g, "/").replace(/\/+$/, "")
 }
 
+function relativePathWithinDirectory(rootPath: string, childPath: string): string | null {
+    const root = normalizedDirectoryPath(rootPath)
+    const child = normalizedDirectoryPath(childPath)
+    if (child === root) return ""
+
+    const prefix = `${root}/`
+    return child.startsWith(prefix) ? child.slice(prefix.length) : null
+}
+
 function projectPathFromGitInfo(gitInfo: GitInfo): string {
     const repoRoot = gitInfo.repoRoot.replace(/[\\/]+$/, "")
     const relativePath = gitInfo.relativePath.replace(/^[\\/]+/, "").replace(/[\\/]+$/, "")
     return relativePath ? `${repoRoot}/${relativePath}` : repoRoot
+}
+
+function runtimeWorktreeGitInfoFromSetup(task: Task, deviceEnv: TaskDeviceEnvironment, setupWorkingDir: string | null): GitInfo | null {
+    if (task.isolationStrategy.type !== "worktree" || !deviceEnv.worktreeDir || !setupWorkingDir) return null
+
+    const relativePath = relativePathWithinDirectory(deviceEnv.worktreeDir, setupWorkingDir)
+    if (relativePath === null) return null
+
+    return {
+        isGitRepo: true,
+        repoRoot: deviceEnv.worktreeDir,
+        relativePath,
+        mainBranch: task.isolationStrategy.sourceBranch || "HEAD",
+        hasGhCli: false,
+    }
 }
 
 export class TaskModel {
@@ -90,18 +124,23 @@ export class TaskModel {
     private _inputManager: InputManager | null = null
     private _trayManager: TrayManager | null = null
     private _fileBrowser: FileBrowserManager | null = null
+    private _fileBrowserUsesRuntimeProductAPI: boolean | null = null
     private _contentSearch: ContentSearchManager | null = null
+    private _contentSearchUsesRuntimeProductAPI: boolean | null = null
     private _sdkCapabilities: SdkCapabilitiesManager | null = null
+    private _sdkCapabilitiesUsesRuntimeProductAPI: boolean | null = null
     private _changes: ChangesManager | null = null
     private _eventModelCache = new Map<string, EventModel>()
     private disposers: Array<() => void> = []
 
     constructor(
         private store: CodeStore,
-        public readonly taskId: string
+        public readonly taskId: string,
+        private readonly routeRepoIdHint: string | null = null
     ) {
         makeAutoObservable(this, {
             taskId: false,
+            routeRepoIdHint: false,
             _eventModelCache: false,
         } as never)
 
@@ -151,14 +190,28 @@ export class TaskModel {
     // === File browser ===
 
     get fileBrowser(): FileBrowserManager {
-        if (!this._fileBrowser) {
-            this._fileBrowser = new FileBrowserManager({
-                getContext: (workingDir) => this.getProductFileContext(workingDir),
-                listProjectFiles: (args) => this.store.listProductProjectFiles(args),
-                readProjectFile: (args) => this.store.readProductProjectFile(args),
-                fuzzySearchProjectFiles: (args) => this.store.fuzzySearchProductProjectFiles(args),
-            })
-            const dir = this.environment?.taskWorkingDir
+        const usesRuntimeProductAPI = this.usesRuntimeProductAPI
+        if (!this._fileBrowser || this._fileBrowserUsesRuntimeProductAPI !== usesRuntimeProductAPI) {
+            this._fileBrowser = new FileBrowserManager(
+                usesRuntimeProductAPI
+                    ? {
+                          ownsFiles: () => this.usesRuntimeProductAPI,
+                          getContext: (workingDir) => this.getProductFileContext(workingDir),
+                          listProjectFiles: async (args) =>
+                              (await this.canUseRuntimeOwnedProductMethod(OPENADE_METHOD.projectFilesTree))
+                                  ? this.store.listProductProjectFiles(args)
+                                  : null,
+                          readProjectFile: async (args) =>
+                              (await this.canUseRuntimeOwnedProductMethod(OPENADE_METHOD.projectFileRead)) ? this.store.readProductProjectFile(args) : null,
+                          fuzzySearchProjectFiles: async (args) =>
+                              (await this.canUseRuntimeOwnedProductMethod(OPENADE_METHOD.projectFilesFuzzySearch))
+                                  ? this.store.fuzzySearchProductProjectFiles(args)
+                                  : null,
+                      }
+                    : null
+            )
+            this._fileBrowserUsesRuntimeProductAPI = usesRuntimeProductAPI
+            const dir = this.taskWorkingDirHint ?? this.environment?.taskWorkingDir
             if (dir) this._fileBrowser.setWorkingDir(dir)
         }
         return this._fileBrowser
@@ -167,13 +220,22 @@ export class TaskModel {
     // === Content search ===
 
     get contentSearch(): ContentSearchManager {
-        if (!this._contentSearch) {
-            this._contentSearch = new ContentSearchManager({
-                getContext: (workingDir) => this.getProductFileContext(workingDir),
-                searchProject: (args) => this.store.searchProductProject(args),
-                readProjectFile: (args) => this.store.readProductProjectFile(args),
-            })
-            const dir = this.environment?.taskWorkingDir
+        const usesRuntimeProductAPI = this.usesRuntimeProductAPI
+        if (!this._contentSearch || this._contentSearchUsesRuntimeProductAPI !== usesRuntimeProductAPI) {
+            this._contentSearch = new ContentSearchManager(
+                usesRuntimeProductAPI
+                    ? {
+                          ownsFiles: () => this.usesRuntimeProductAPI,
+                          getContext: (workingDir) => this.getProductFileContext(workingDir),
+                          searchProject: async (args) =>
+                              (await this.canUseRuntimeOwnedProductMethod(OPENADE_METHOD.projectSearch)) ? this.store.searchProductProject(args) : null,
+                          readProjectFile: async (args) =>
+                              (await this.canUseRuntimeOwnedProductMethod(OPENADE_METHOD.projectFileRead)) ? this.store.readProductProjectFile(args) : null,
+                      }
+                    : null
+            )
+            this._contentSearchUsesRuntimeProductAPI = usesRuntimeProductAPI
+            const dir = this.taskWorkingDirHint ?? this.environment?.taskWorkingDir
             if (dir) this._contentSearch.setWorkingDir(dir)
         }
         return this._contentSearch
@@ -181,9 +243,30 @@ export class TaskModel {
 
     // === SDK capabilities ===
 
-    get sdkCapabilities(): SdkCapabilitiesManager {
-        if (!this._sdkCapabilities) {
-            this._sdkCapabilities = new SdkCapabilitiesManager()
+    get sdkCapabilities(): SdkCapabilitiesManager | undefined {
+        const usesRuntimeProductAPI = this.usesRuntimeProductAPI
+        if (usesRuntimeProductAPI && !this.store.usesCoreOwnedProductRuntime() && !this.store.canUseProductMethod(OPENADE_METHOD.projectSdkCapabilitiesRead)) {
+            return undefined
+        }
+        if (!this._sdkCapabilities || this._sdkCapabilitiesUsesRuntimeProductAPI !== usesRuntimeProductAPI) {
+            this._sdkCapabilities = usesRuntimeProductAPI
+                ? new SdkCapabilitiesManager(async () => {
+                  if (!this.repoId) return null
+                  if (!(await this.canUseRuntimeOwnedProductMethod(OPENADE_METHOD.projectSdkCapabilitiesRead))) return null
+                  const result = await this.store.readProductProjectSdkCapabilities({
+                      repoId: this.repoId,
+                      taskId: this.taskId,
+                      harnessId: this.harnessId,
+                      })
+                      return {
+                          slash_commands: result.slash_commands,
+                          skills: result.skills,
+                          plugins: result.plugins,
+                          cachedAt: result.cachedAt ?? Date.now(),
+                      }
+                  })
+                : new SdkCapabilitiesManager()
+            this._sdkCapabilitiesUsesRuntimeProductAPI = usesRuntimeProductAPI
         }
         return this._sdkCapabilities
     }
@@ -241,8 +324,8 @@ export class TaskModel {
             if (event.source.type === "review") continue
 
             // v1 compat: pre-harness tasks stored `type` instead of `harnessId`
-            const harnessId: HarnessId =
-                event.execution.harnessId ?? ((event.execution as unknown as Record<string, unknown>).type as HarnessId) ?? "claude-code"
+            const legacyType = "type" in event.execution ? event.execution.type : undefined
+            const harnessId: HarnessId = event.execution.harnessId ?? legacyExecutionHarnessId(legacyType) ?? "claude-code"
             this.harnessId = harnessId
             const persistedModelId = event.execution.modelId
             this.model = persistedModelId ? this.normalizeModelForHarness(persistedModelId, harnessId) : getDefaultModelForHarness(harnessId)
@@ -259,10 +342,19 @@ export class TaskModel {
         return this.store.tasks.getTask(this.taskId) ?? undefined
     }
 
+    private get taskPreview(): OpenADETaskPreview | null {
+        const repoId = this.task?.repoId ?? this.store.findProductRepoIdForTask(this.taskId) ?? this.routeRepoIdHint
+        return repoId ? this.store.getRuntimeProductTaskPreviewDto(repoId, this.taskId) : null
+    }
+
+    private get hasRuntimeRouteSource(): boolean {
+        return this.routeRepoIdHint !== null && this.store.canUseRuntimeProductTaskRouteModelSource()
+    }
+
     // === Raw accessors ===
 
     get exists(): boolean {
-        return !!this.task
+        return this.store.hasProductTaskModelSource(this.taskId) || this.hasRuntimeRouteSource
     }
 
     get id(): string {
@@ -270,15 +362,15 @@ export class TaskModel {
     }
 
     get title(): string {
-        return this.task?.title ?? ""
+        return this.task?.title ?? this.taskPreview?.title ?? ""
     }
 
     get isClosed(): boolean {
-        return this.task?.closed ?? false
+        return this.task?.closed ?? this.taskPreview?.closed ?? false
     }
 
     get slug(): string {
-        return this.task?.slug ?? ""
+        return this.task?.slug ?? this.taskPreview?.slug ?? ""
     }
 
     get description(): string {
@@ -286,7 +378,7 @@ export class TaskModel {
     }
 
     get repoId(): string {
-        return this.task?.repoId ?? ""
+        return this.task?.repoId ?? this.store.findProductRepoIdForTask(this.taskId) ?? this.routeRepoIdHint ?? ""
     }
 
     /** Alias for repoId - prefer this in new code for consistency with routing */
@@ -295,11 +387,11 @@ export class TaskModel {
     }
 
     get usesRuntimeProductAPI(): boolean {
-        return this.store.shouldUseRuntimeProductAPI()
+        return this.store.shouldUseRuntimeProductTaskRoute()
     }
 
     get createdAt(): string {
-        return this.task?.createdAt ?? ""
+        return this.task?.createdAt ?? this.taskPreview?.createdAt ?? ""
     }
 
     get sessionIds(): Record<string, string> {
@@ -318,18 +410,36 @@ export class TaskModel {
         return this.task?.queuedTurns ?? []
     }
 
-    async cancelQueuedTurn(queuedTurnId: string): Promise<void> {
-        if (!this.repoId) return
+    private async canUseRuntimeOwnedProductMethod(method: OpenADEMethod): Promise<boolean> {
+        if (this.store.usesCoreOwnedProductRuntime()) return this.store.canUseProductMethodAfterConnect(method)
+        return this.store.canUseProductMethod(method)
+    }
+
+    async cancelQueuedTurn(queuedTurnId: string): Promise<boolean> {
+        if (!this.repoId) return false
+        const canCancel = await this.canUseRuntimeOwnedProductMethod(OPENADE_METHOD.queuedTurnCancel)
+        if (!canCancel) return false
         await this.store.cancelProductQueuedTurn({
             repoId: this.repoId,
             taskId: this.taskId,
             queuedTurnId,
         })
-        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(this.taskId)
+        if (!this.store.shouldUseRuntimeProductTaskRoute()) {
+            await this.store.refreshProductStateAfterTaskMutation(this.taskId)
+        }
+        return true
     }
 
     readProductTaskChanges(params: Omit<OpenADETaskChangesReadRequest, "repoId" | "taskId">): Promise<OpenADETaskChangesReadResult> {
         return this.store.readProductTaskChanges({ repoId: this.repoId, taskId: this.taskId, ...params })
+    }
+
+    canReadProductTaskChanges(): boolean {
+        return this.store.canUseProductMethod(OPENADE_METHOD.taskChangesRead)
+    }
+
+    canReadProductTaskChangesAfterConnect(): Promise<boolean> {
+        return this.canUseRuntimeOwnedProductMethod(OPENADE_METHOD.taskChangesRead)
     }
 
     readProductTaskGitSummary(options: { bypassCache?: boolean } = {}): Promise<OpenADETaskGitSummaryResult> {
@@ -340,8 +450,24 @@ export class TaskModel {
         return this.store.readProductTaskDiff({ repoId: this.repoId, taskId: this.taskId, ...params })
     }
 
+    canReadProductTaskDiff(): boolean {
+        return this.store.canUseProductMethod(OPENADE_METHOD.taskDiffRead)
+    }
+
+    canReadProductTaskDiffAfterConnect(): Promise<boolean> {
+        return this.canUseRuntimeOwnedProductMethod(OPENADE_METHOD.taskDiffRead)
+    }
+
     readProductTaskFilePair(params: Omit<OpenADETaskFilePairReadRequest, "repoId" | "taskId">): Promise<OpenADETaskFilePairReadResult> {
         return this.store.readProductTaskFilePair({ repoId: this.repoId, taskId: this.taskId, ...params })
+    }
+
+    canReadProductTaskFilePair(): boolean {
+        return this.store.canUseProductMethod(OPENADE_METHOD.taskFilePairRead)
+    }
+
+    canReadProductTaskFilePairAfterConnect(): Promise<boolean> {
+        return this.canUseRuntimeOwnedProductMethod(OPENADE_METHOD.taskFilePairRead)
     }
 
     setEnabledMcpServerIds(serverIds: string[]): void {
@@ -358,6 +484,9 @@ export class TaskModel {
     }
 
     get needsEnvironmentSetup(): boolean {
+        if (!this.task && this.hasRuntimeRouteSource) return false
+        if (!this.task && this.taskPreview) return false
+
         const deviceEnv = this.currentDeviceEnvironment
         if (!deviceEnv) return true
         return !deviceEnv.setupComplete
@@ -439,12 +568,32 @@ export class TaskModel {
         const environment = this.environment
         if (environment?.taskWorkingDir) return environment.taskWorkingDir
         if (!this.usesRuntimeProductAPI || !this.repoId) return null
+        if (this.task?.isolationStrategy.type === "worktree") return this.currentSetupWorkingDirHint
         return this.store.repos.getRepo(this.repoId)?.path ?? null
+    }
+
+    private get currentSetupWorkingDirHint(): string | null {
+        const task = this.task
+        const deviceEnvironment = this.currentDeviceEnvironment
+        if (!task || !deviceEnvironment?.setupComplete) return null
+
+        const deviceId = deviceEnvironment.deviceId
+        for (let index = task.events.length - 1; index >= 0; index--) {
+            const event = task.events[index]
+            if (event.type !== "setup_environment" || event.status !== "completed") continue
+            if (event.deviceId !== deviceId) continue
+            if (event.worktreeId !== task.slug) continue
+            const workingDir = setupWorkingDirFromEvent(event)
+            if (workingDir) return workingDir
+        }
+
+        return null
     }
 
     private getProductFileContext(workingDir: string): { repoId: string; taskId: string } | null {
         if (!this.usesRuntimeProductAPI || !this.repoId || !workingDir) return null
         const dir = this.environment?.taskWorkingDir ?? this.taskWorkingDirHint
+        if (!dir && this.task?.isolationStrategy.type === "worktree") return null
         if (dir && normalizedDirectoryPath(dir) !== normalizedDirectoryPath(workingDir)) return null
         return { repoId: this.repoId, taskId: this.taskId }
     }
@@ -491,8 +640,11 @@ export class TaskModel {
         }
 
         const loadPromise = (async () => {
-            // Fetch git info asynchronously
-            const gitInfo = await this.store.repos.getGitInfo(this.repoId)
+            const setupWorkingDirHint = this.usesRuntimeProductAPI ? this.currentSetupWorkingDirHint : null
+            const runtimeGitInfo = runtimeWorktreeGitInfoFromSetup(task, deviceEnv, setupWorkingDirHint)
+            const canUseProjectedHeadRepo =
+                this.usesRuntimeProductAPI && task.isolationStrategy.type === "head" && projectedRepo !== null
+            const gitInfo = runtimeGitInfo ?? (canUseProjectedHeadRepo ? null : await this.store.repos.getGitInfo(this.repoId))
             const repo = projectedRepo ?? this.createRuntimeRepoFromContext(task, deviceEnv, gitInfo)
             if (!repo) return null
 
@@ -517,7 +669,7 @@ export class TaskModel {
     }
 
     private createRuntimeRepoFromContext(task: Task, deviceEnv: TaskDeviceEnvironment, gitInfo: GitInfo | null): Repo | null {
-        const path = gitInfo ? projectPathFromGitInfo(gitInfo) : task.isolationStrategy.type === "worktree" ? (deviceEnv.worktreeDir ?? null) : null
+        const path = task.isolationStrategy.type === "worktree" ? (deviceEnv.worktreeDir ?? null) : gitInfo ? projectPathFromGitInfo(gitInfo) : null
         if (!path) return null
         return {
             id: task.repoId,
@@ -661,8 +813,22 @@ export class TaskModel {
         if (!options.force && this.gitStateLoadedAt > 0 && Date.now() - this.gitStateLoadedAt < GIT_STATE_FRESH_MS) return
         this.gitStateLoading = true
 
-        if (this.usesRuntimeProductAPI && this.repoId) {
+        if (this.usesRuntimeProductAPI) {
+            if (!this.repoId) {
+                runInAction(() => {
+                    this.gitStatus = null
+                    this.gitStateLoading = false
+                })
+                return
+            }
             try {
+                const canReadGitSummary = await this.canUseRuntimeOwnedProductMethod(OPENADE_METHOD.taskGitSummaryRead)
+                if (!canReadGitSummary) {
+                    runInAction(() => {
+                        this.gitStatus = null
+                    })
+                    return
+                }
                 const result = await this.readProductTaskGitSummary({ bypassCache: options.force === true })
                 runInAction(() => {
                     this.gitStatus = gitSummaryFromProductSummary(result)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/openade/openade/projects/openade-core/internal/core"
 )
 
 type AgentExecutionStatus string
@@ -35,6 +37,7 @@ type AgentExecutionRequest struct {
 	FastMode            *bool
 	Source              json.RawMessage
 	Images              *json.RawMessage
+	HyperPlanStrategy   json.RawMessage
 	EnvVars             map[string]string
 	OnCompleted         func(ctx context.Context, request AgentExecutionRequest, result AgentExecutionResult)
 }
@@ -66,4 +69,29 @@ type AgentExecutionEmitter interface {
 
 type AgentExecutor interface {
 	Run(ctx context.Context, request AgentExecutionRequest, emitter AgentExecutionEmitter) AgentExecutionResult
+}
+
+type SDKCapabilitiesRequest struct {
+	RepoID    string
+	RepoPath  string
+	TaskID    string
+	Cwd       string
+	HarnessID string
+	EnvVars   map[string]string
+}
+
+type SDKPluginCapability struct {
+	Name string
+	Path string
+}
+
+type SDKCapabilitiesResult struct {
+	SlashCommands []string
+	Skills        []string
+	Plugins       []SDKPluginCapability
+	CachedAt      time.Time
+}
+
+type SDKCapabilitiesExecutor interface {
+	DiscoverSDKCapabilities(ctx context.Context, request SDKCapabilitiesRequest) (SDKCapabilitiesResult, *core.RuntimeError)
 }

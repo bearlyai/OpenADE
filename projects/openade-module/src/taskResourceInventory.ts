@@ -21,15 +21,22 @@ function collectSnapshotPatchIds(task: OpenADETask): string[] {
 
 function collectTaskImages(task: OpenADETask): Array<{ id: string; ext: string }> {
     const images = new Map<string, { id: string; ext: string }>()
-    for (const rawEvent of task.events) {
-        const event = record(rawEvent)
-        if (event?.type !== "action" || !Array.isArray(event.images)) continue
-        for (const rawImage of event.images) {
+    const collect = (rawImages: unknown): void => {
+        if (!Array.isArray(rawImages)) return
+        for (const rawImage of rawImages) {
             const image = record(rawImage)
             if (typeof image?.id === "string" && typeof image.ext === "string") {
                 images.set(`${image.id}.${image.ext}`, { id: image.id, ext: image.ext })
             }
         }
+    }
+    for (const rawEvent of task.events) {
+        const event = record(rawEvent)
+        if (event?.type !== "action") continue
+        collect(event.images)
+    }
+    for (const queuedTurn of task.queuedTurns ?? []) {
+        collect(queuedTurn.images)
     }
     return [...images.values()]
 }

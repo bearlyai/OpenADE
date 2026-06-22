@@ -14,6 +14,6 @@ export function taskCommandLabel(type: TaskCommandType, options: { queued?: bool
     return "Plan"
 }
 
-export function canQueueTaskCommandWhileRunning(type: TaskCommandType): type is "do" | "ask" {
-    return type === "do" || type === "ask"
+export function canQueueTaskCommandWhileRunning(type: TaskCommandType): type is "do" | "ask" | "hyperplan" {
+    return type === "do" || type === "ask" || type === "hyperplan"
 }

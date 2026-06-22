@@ -59,12 +59,14 @@ function parseMcpOAuthTokens(value: unknown): McpOAuthTokens | null {
     const tokenType = optionalString(value, "tokenType")
     if (!accessToken || !tokenType) return null
     const refreshToken = optionalString(value, "refreshToken")
+    const clientId = optionalString(value, "clientId")
     const expiresAt = optionalString(value, "expiresAt")
 
     return {
         accessToken,
         tokenType,
         ...(refreshToken ? { refreshToken } : {}),
+        ...(clientId ? { clientId } : {}),
         ...(expiresAt ? { expiresAt } : {}),
     }
 }

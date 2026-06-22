@@ -6,22 +6,43 @@
   "scripts": {
     "start": "vite --host 0.0.0.0",
     "check:no-any": "node ../../scripts/check-no-explicit-any.mjs --self-test .",
+    "check": "npm run typecheck && npm run test",
     "typecheck": "npm run doctor && npm run check:no-any && ../electron/node_modules/.bin/tsgo --noEmit",
     "doctor": "npx --yes react-doctor@0.2.16 --no-score --fail-on error",
-    "build": "npm run typecheck && vite build",
+    "test": "vitest --config vitest.config.ts --run --reporter=verbose",
+    "check:desktop-fallback": "node scripts/check-desktop-fallback-chunks.mjs",
+    "build": "npm run check && vite build && npm run check:desktop-fallback",
     "prepare:ota": "node scripts/prepare-ota-release.mjs",
     "ios": "npm run build && npx cap sync ios && npx cap open ios"
   },
   "dependencies": {
-    "@capgo/capacitor-updater": "7.45.10",
+    "@base-ui-components/react": "1.0.0-beta.4",
     "@capacitor-mlkit/barcode-scanning": "7.5.0",
     "@capacitor/core": "^7.4.4",
     "@capacitor/ios": "^7.4.4",
+    "@capgo/capacitor-updater": "7.45.10",
+    "@floating-ui/react-dom": "^2.1.6",
+    "@tiptap/core": "^3.0.0",
+    "@tiptap/extension-document": "^3.0.0",
+    "@tiptap/extension-hard-break": "^3.0.0",
+    "@tiptap/extension-history": "^3.0.0",
+    "@tiptap/extension-mention": "^3.0.0",
+    "@tiptap/extension-paragraph": "^3.0.0",
+    "@tiptap/extension-placeholder": "^3.0.0",
+    "@tiptap/extension-text": "^3.0.0",
+    "@tiptap/extensions": "^3.0.0",
+    "@tiptap/pm": "^3.0.0",
+    "@tiptap/react": "^3.0.0",
+    "@tiptap/suggestion": "^3.0.0",
     "@vitejs/plugin-react": "^4.3.4",
     "capacitor-secure-storage-plugin": "0.12.0",
+    "jstoxml": "^7.0.1",
     "lucide-react": "^0.544.0",
+    "mobx": "^6.6.2",
+    "mobx-react": "^7.5.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "ulid": "^2.3.0",
     "vite": "^7.1.10"
   },
   "devDependencies": {
@@ -29,7 +50,10 @@
     "@tailwindcss/vite": "^4.3.0",
     "@types/react": "^18.2.74",
     "@types/react-dom": "^18.0.6",
+    "@vitest/browser": "3.2.4",
+    "playwright": "1.58.2",
     "tailwindcss": "^4.3.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "3.2.4"
   }
 }

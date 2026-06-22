@@ -13,5 +13,6 @@
     "types": ["node"],
     "typeRoots": ["../electron/node_modules/@types"]
   },
-  "include": ["src/**/*", "../runtime/src/**/*", "../runtime-protocol/src/**/*"]
+  "include": ["src/**/*", "../runtime/src/**/*", "../runtime-protocol/src/**/*"],
+  "exclude": ["../runtime/src/**/*.test.ts"]
 }

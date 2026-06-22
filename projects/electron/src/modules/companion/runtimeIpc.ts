@@ -1,5 +1,5 @@
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron"
-import type { RuntimeMessage, RuntimeRequest } from "../../../../runtime-protocol/src"
+import { validateRuntimeRequest, type RuntimeMessage } from "../../../../runtime-protocol/src"
 import type { RuntimeConnection } from "../../../../runtime/src"
 import { getRuntimeServer } from "./runtimeGateway"
 import { cloneRuntimeMessageForIpc, serializationErrorResponse } from "./runtimeIpcSerialization"
@@ -41,10 +41,25 @@ function connectionFor(webContents: WebContents): RendererRuntimeConnection {
     return entry
 }
 
-function isRuntimeRequest(value: unknown): value is RuntimeRequest {
-    if (typeof value !== "object" || value === null) return false
-    const record = value as Record<string, unknown>
-    return (typeof record.id === "string" || typeof record.id === "number") && typeof record.method === "string"
+function rawRuntimeIpcMessage(value: unknown): string {
+    try {
+        return JSON.stringify(value) ?? "undefined"
+    } catch {
+        return "{"
+    }
+}
+
+async function handleInvalidRuntimeIpcRequest(request: unknown, connection: RuntimeConnection): Promise<RuntimeMessage> {
+    let response: RuntimeMessage | null = null
+    const protocolConnection: RuntimeConnection = {
+        ...connection,
+        send(message) {
+            response = message
+        },
+    }
+    await getRuntimeServer().handleMessage(protocolConnection, rawRuntimeIpcMessage(request))
+    if (!response) throw new Error("Runtime protocol handler did not return a response")
+    return response
 }
 
 export function loadRuntimeIpc(): void {
@@ -59,13 +74,16 @@ export function loadRuntimeIpc(): void {
     })
     ipcMain.handle("runtime:request", async (event: IpcMainInvokeEvent, request: unknown) => {
         const queuedAtMs = Date.now()
-        if (!isRuntimeRequest(request)) throw new Error("Invalid runtime request")
+        const validation = validateRuntimeRequest(request)
         const { connection } = connectionFor(event.sender)
-        const response = await getRuntimeServer().handleRequest(request, connection, { requireInitialized: true, queuedAtMs })
+        const response = validation.ok
+            ? await getRuntimeServer().handleRequest(validation.value, connection, { requireInitialized: true, queuedAtMs })
+            : await handleInvalidRuntimeIpcRequest(request, connection)
         try {
             return cloneRuntimeMessageForIpc(response)
         } catch (error) {
-            return serializationErrorResponse(request.id, error)
+            const responseId = validation.ok ? validation.value.id : "serialization-error"
+            return serializationErrorResponse(responseId, error)
         }
     })
     loaded = true

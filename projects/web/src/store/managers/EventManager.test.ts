@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import { OPENADE_METHOD } from "../../../../openade-client/src"
 import type { CodeStore } from "../store"
 import { EventManager } from "./EventManager"
 
@@ -143,5 +144,89 @@ describe("EventManager.getLastEventSessionContext", () => {
 
         const manager = new EventManager(createStoreForEvents(events))
         expect(manager.getLastEventSessionContext("task-1")).toBeUndefined()
+    })
+})
+
+describe("EventManager.cancelPlan", () => {
+    it("does not issue a metadata write when task metadata update is unavailable", async () => {
+        const store = {
+            tasks: { getTask: vi.fn(() => ({ id: "task-1", events: [] })) },
+            shouldUseRuntimeProductAPI: vi.fn(() => true),
+            usesCoreOwnedProductRuntime: vi.fn(() => false),
+            shouldUseRuntimeProductTaskRoute: vi.fn(() => true),
+            canUseProductMethod: vi.fn((method: string) => method !== OPENADE_METHOD.taskMetadataUpdate),
+            updateProductTaskMetadata: vi.fn(async () => undefined),
+            refreshProductStateAfterTaskMutation: vi.fn(async () => undefined),
+        } as unknown as CodeStore
+
+        const manager = new EventManager(store)
+
+        await expect(manager.cancelPlan("task-1", "plan-1")).resolves.toBe(false)
+        expect(store.updateProductTaskMetadata).not.toHaveBeenCalled()
+        expect(store.refreshProductStateAfterTaskMutation).not.toHaveBeenCalled()
+    })
+
+    it("does not refresh legacy task storage after cancel-plan metadata writes while Core owns product state", async () => {
+        const store = {
+            tasks: { getTask: vi.fn(() => ({ id: "task-1", events: [] })) },
+            shouldUseRuntimeProductAPI: vi.fn(() => false),
+            usesCoreOwnedProductRuntime: vi.fn(() => true),
+            shouldUseRuntimeProductTaskRoute: vi.fn(() => true),
+            canUseProductMethod: vi.fn(() => true),
+            canUseProductMethodAfterConnect: vi.fn(async () => true),
+            updateProductTaskMetadata: vi.fn(async () => undefined),
+            refreshProductStateAfterTaskMutation: vi.fn(async () => undefined),
+        } as unknown as CodeStore
+
+        const manager = new EventManager(store)
+
+        await expect(manager.cancelPlan("task-1", "plan-1")).resolves.toBe(true)
+        expect(store.updateProductTaskMetadata).toHaveBeenCalledWith({ taskId: "task-1", cancelledPlanEventId: "plan-1" })
+        expect(store.refreshProductStateAfterTaskMutation).not.toHaveBeenCalled()
+    })
+
+    it("attaches Core metadata update before cancelling a plan", async () => {
+        let runtimeProductAPIAvailable = false
+        const canUseProductMethodAfterConnect = vi.fn(async (method: string) => {
+            runtimeProductAPIAvailable = method === OPENADE_METHOD.taskMetadataUpdate
+            return runtimeProductAPIAvailable
+        })
+        const updateProductTaskMetadata = vi.fn(async () => undefined)
+        const store = {
+            tasks: { getTask: vi.fn(() => ({ id: "task-1", events: [] })) },
+            shouldUseRuntimeProductAPI: vi.fn(() => runtimeProductAPIAvailable),
+            usesCoreOwnedProductRuntime: vi.fn(() => true),
+            shouldUseRuntimeProductTaskRoute: vi.fn(() => true),
+            canUseProductMethod: vi.fn((method: string) => runtimeProductAPIAvailable && method === OPENADE_METHOD.taskMetadataUpdate),
+            canUseProductMethodAfterConnect,
+            updateProductTaskMetadata,
+            refreshProductStateAfterTaskMutation: vi.fn(async () => undefined),
+        } as unknown as CodeStore
+
+        const manager = new EventManager(store)
+
+        await expect(manager.cancelPlan("task-1", "plan-1")).resolves.toBe(true)
+        expect(canUseProductMethodAfterConnect).toHaveBeenCalledWith(OPENADE_METHOD.taskMetadataUpdate)
+        expect(updateProductTaskMetadata).toHaveBeenCalledWith({ taskId: "task-1", cancelledPlanEventId: "plan-1" })
+    })
+
+    it("does not refresh legacy task storage when only the runtime task route owns metadata", async () => {
+        const updateProductTaskMetadata = vi.fn(async () => undefined)
+        const store = {
+            tasks: { getTask: vi.fn(() => ({ id: "task-1", events: [] })) },
+            shouldUseRuntimeProductAPI: vi.fn(() => false),
+            usesCoreOwnedProductRuntime: vi.fn(() => false),
+            shouldUseRuntimeProductTaskRoute: vi.fn(() => true),
+            canUseProductMethod: vi.fn(() => false),
+            canUseProductMethodAfterConnect: vi.fn(async (method: string) => method === OPENADE_METHOD.taskMetadataUpdate),
+            updateProductTaskMetadata,
+            refreshProductStateAfterTaskMutation: vi.fn(async () => undefined),
+        } as unknown as CodeStore
+
+        const manager = new EventManager(store)
+
+        await expect(manager.cancelPlan("task-1", "plan-1")).resolves.toBe(true)
+        expect(updateProductTaskMetadata).toHaveBeenCalledWith({ taskId: "task-1", cancelledPlanEventId: "plan-1" })
+        expect(store.refreshProductStateAfterTaskMutation).not.toHaveBeenCalled()
     })
 })

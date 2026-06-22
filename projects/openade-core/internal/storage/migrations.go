@@ -257,4 +257,24 @@ ON runtimes(
 WHERE scope_json IS NOT NULL AND json_valid(scope_json);
 `,
 	},
+	{
+		Version: 7,
+		Name:    "comments_task_created_index",
+		SQL: `
+CREATE INDEX IF NOT EXISTS idx_comments_task_created
+ON comments(task_id, created_at ASC, id ASC)
+WHERE deleted_at IS NULL;
+`,
+	},
+	{
+		Version: 8,
+		Name:    "task_read_side_table_order_indexes",
+		SQL: `
+CREATE INDEX IF NOT EXISTS idx_task_device_environments_task_last_used_created_id
+ON task_device_environments(task_id, last_used_at ASC, created_at ASC, id ASC);
+
+CREATE INDEX IF NOT EXISTS idx_queued_turns_task_position_created_id
+ON queued_turns(task_id, position ASC, created_at ASC, id ASC);
+`,
+	},
 }

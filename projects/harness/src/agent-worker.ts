@@ -7,7 +7,7 @@ import { promisify } from "node:util"
 import type { Harness } from "./harness.js"
 import { ClaudeCodeHarness } from "./harnesses/claude-code/index.js"
 import { CodexHarness } from "./harnesses/codex/index.js"
-import type { HarnessEvent, HarnessId, HarnessQuery, HarnessUsage, McpServerConfig, PromptPart } from "./types.js"
+import type { HarnessEvent, HarnessId, HarnessQuery, HarnessUsage, McpServerConfig, PromptPart, SlashCommand } from "./types.js"
 
 const execFileAsync = promisify(execFile)
 const WORKER_PROTOCOL_VERSION = 1
@@ -28,6 +28,7 @@ export interface CommandAgentWorkerOptions {
 
 export interface WorkerHarness {
     query(query: HarnessQuery): AsyncGenerator<HarnessEvent<unknown>>
+    discoverSlashCommands(cwd: string, signal?: AbortSignal): Promise<SlashCommand[]>
 }
 
 interface WorkerGitRefs {
@@ -39,6 +40,22 @@ interface WorkerStartEnvelope {
     type: "start"
     protocolVersion: typeof WORKER_PROTOCOL_VERSION
     request: WorkerStartRequest
+}
+
+interface WorkerSDKCapabilitiesEnvelope {
+    type: "sdkCapabilities"
+    protocolVersion: typeof WORKER_PROTOCOL_VERSION
+    request: WorkerSDKCapabilitiesRequest
+}
+
+type WorkerEnvelope = WorkerStartEnvelope | WorkerSDKCapabilitiesEnvelope
+
+interface WorkerSDKCapabilitiesRequest {
+    repoId: string
+    repoPath: string
+    cwd: string
+    taskId?: string
+    harnessId: HarnessId
 }
 
 interface WorkerStartRequest {
@@ -111,7 +128,13 @@ type WorkerStreamEvent =
 type WorkerMessage =
     | { type: "stream"; event: WorkerStreamEvent }
     | { type: "execution"; sessionId?: string; gitRefsAfter?: WorkerGitRefs }
+    | { type: "sdkCapabilities"; slash_commands: string[]; skills: string[]; plugins: WorkerPluginCapability[]; cachedAt: number }
     | { type: "result"; status: WorkerStatus; success?: boolean; error?: string; completedAt: string }
+
+interface WorkerPluginCapability {
+    name: string
+    path: string
+}
 
 interface WorkerRunState {
     sessionId?: string
@@ -141,12 +164,16 @@ export async function runCommandAgentWorker(options: CommandAgentWorkerOptions):
     const write = (message: WorkerMessage) => writeWorkerMessage(options.output, message, recoveryWriter, outputState)
 
     try {
-        let envelope: WorkerStartEnvelope
+        let envelope: WorkerEnvelope
         try {
-            envelope = parseStartEnvelope(JSON.parse(await readAll(options.input)))
+            envelope = parseWorkerEnvelope(JSON.parse(await readAll(options.input)))
         } catch (error) {
-            writeError(options.errorOutput, `Invalid worker start envelope: ${errorMessage(error)}\n`)
+            writeError(options.errorOutput, `Invalid worker envelope: ${errorMessage(error)}\n`)
             return 1
+        }
+
+        if (envelope.type === "sdkCapabilities") {
+            return runSDKCapabilitiesWorker(envelope.request, workerHarnesses(options.harnesses), write, now, options.signal)
         }
 
         const request = envelope.request
@@ -220,6 +247,46 @@ export async function runCommandAgentWorker(options: CommandAgentWorkerOptions):
     } finally {
         await recoveryWriter?.close()
     }
+}
+
+async function runSDKCapabilitiesWorker(
+    request: WorkerSDKCapabilitiesRequest,
+    harnesses: Partial<Record<HarnessId, WorkerHarness>>,
+    write: (message: WorkerMessage) => Promise<void>,
+    now: () => Date,
+    signal: AbortSignal | undefined
+): Promise<number> {
+    const harness = harnesses[request.harnessId]
+    if (!harness) {
+        await write({
+            type: "result",
+            status: "failed",
+            success: false,
+            error: `Harness is not configured: ${request.harnessId}`,
+            completedAt: now().toISOString(),
+        })
+        return 0
+    }
+
+    try {
+        const commands = await harness.discoverSlashCommands(request.cwd || request.repoPath, signal)
+        await write({
+            type: "sdkCapabilities",
+            slash_commands: commands.filter((command) => command.type === "slash_command").map((command) => command.name),
+            skills: commands.filter((command) => command.type === "skill").map((command) => command.name),
+            plugins: [],
+            cachedAt: now().getTime(),
+        })
+    } catch (error) {
+        await write({
+            type: "result",
+            status: "failed",
+            success: false,
+            error: errorMessage(error),
+            completedAt: now().toISOString(),
+        })
+    }
+    return 0
 }
 
 function commandWorkerHarnessQuery(request: WorkerStartRequest, signal: AbortSignal): HarnessQuery {
@@ -343,6 +410,9 @@ function deterministicSmokeHarnesses(): Record<HarnessId, WorkerHarness> {
 
 function deterministicSmokeHarness(harnessId: HarnessId, env: NodeJS.ProcessEnv = process.env): WorkerHarness {
     return {
+        async discoverSlashCommands(): Promise<SlashCommand[]> {
+            return []
+        },
         async *query(query: HarnessQuery): AsyncGenerator<HarnessEvent<unknown>> {
             const delayMs = deterministicSmokeDelayMs(query, env)
             if (delayMs > 0) {
@@ -390,6 +460,9 @@ function deterministicSmokeMessage(harnessId: HarnessId): unknown {
 
 function adaptHarness<M>(harness: Harness<M>): WorkerHarness {
     return {
+        discoverSlashCommands(cwd: string, signal?: AbortSignal): Promise<SlashCommand[]> {
+            return harness.discoverSlashCommands(cwd, signal)
+        },
         query(query: HarnessQuery): AsyncGenerator<HarnessEvent<unknown>> {
             return queryUnknown(harness, query)
         },
@@ -446,8 +519,13 @@ async function readGitRefsAfter(cwd: string, gitRefs: (cwd: string) => Promise<W
     return gitRefs(cwd)
 }
 
-function parseStartEnvelope(value: unknown): WorkerStartEnvelope {
+function parseWorkerEnvelope(value: unknown): WorkerEnvelope {
     const envelope = objectValue(value, "envelope")
+    if (envelope.type === "sdkCapabilities") return parseSDKCapabilitiesEnvelope(envelope)
+    return parseStartEnvelope(envelope)
+}
+
+function parseStartEnvelope(envelope: Record<string, unknown>): WorkerStartEnvelope {
     if (envelope.type !== "start") throw new Error("type must be start")
     if (envelope.protocolVersion !== WORKER_PROTOCOL_VERSION) throw new Error("protocolVersion is unsupported")
     const request = objectValue(envelope.request, "request")
@@ -476,6 +554,23 @@ function parseStartEnvelope(value: unknown): WorkerStartEnvelope {
             fastMode: optionalBoolean(request.fastMode),
             source: request.source,
             images: request.images,
+        },
+    }
+}
+
+function parseSDKCapabilitiesEnvelope(envelope: Record<string, unknown>): WorkerSDKCapabilitiesEnvelope {
+    if (envelope.protocolVersion !== WORKER_PROTOCOL_VERSION) throw new Error("protocolVersion is unsupported")
+    const request = objectValue(envelope.request, "request")
+    const repoPath = requiredString(request.repoPath, "repoPath")
+    return {
+        type: "sdkCapabilities",
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        request: {
+            repoId: requiredString(request.repoId, "repoId"),
+            repoPath,
+            cwd: optionalString(request.cwd) ?? repoPath,
+            taskId: optionalString(request.taskId),
+            harnessId: harnessIdValue(request.harnessId),
         },
     }
 }

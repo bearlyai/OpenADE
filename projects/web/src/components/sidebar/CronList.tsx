@@ -2,7 +2,8 @@ import NiceModal from "@ebay/nice-modal-react"
 import cx from "classnames"
 import { Clock, Loader2, Pause, Play, Plus, RotateCw } from "lucide-react"
 import { observer } from "mobx-react"
-import { useCallback, useEffect } from "react"
+import { useCallback } from "react"
+import { OPENADE_METHOD } from "../../../../openade-client/src"
 import { useCodeStore } from "../../store/context"
 import type { CronViewModel } from "../../store/managers/CronManager"
 import { type ProductProjectScope, createProductProjectProcessAccess } from "../../store/productProjectProcessAccess"
@@ -30,6 +31,7 @@ const CronItem = observer(({ cron, onEditConfig }: { cron: CronViewModel; onEdit
     const isActive = cron.installed && cron.enabled
 
     const handlePlayPause = useCallback(async () => {
+        if (!cron.canUpdateInstallState) return
         if (isActive) {
             await codeStore.crons.toggleCron(cron.repoId, cron.def.id, false)
         } else if (cron.installed) {
@@ -37,11 +39,12 @@ const CronItem = observer(({ cron, onEditConfig }: { cron: CronViewModel; onEdit
         } else {
             await codeStore.crons.installCron(cron.repoId, cron.def.id)
         }
-    }, [codeStore.crons, cron.repoId, cron.def.id, cron.installed, isActive])
+    }, [codeStore.crons, cron.repoId, cron.def.id, cron.installed, cron.canUpdateInstallState, isActive])
 
     const handleRunNow = useCallback(async () => {
+        if (!cron.canRunNow) return
         await codeStore.crons.runNow(cron.repoId, cron.def.id)
-    }, [codeStore.crons, cron.repoId, cron.def.id])
+    }, [codeStore.crons, cron.repoId, cron.def.id, cron.canRunNow])
 
     return (
         <div className="group flex items-center gap-2 py-1.5 pl-3 pr-2 hover:bg-base-200 cursor-pointer" onClick={() => onEditConfig(cron.configFilePath)}>
@@ -68,19 +71,21 @@ const CronItem = observer(({ cron, onEditConfig }: { cron: CronViewModel; onEdit
                         {formatNextRun(cron.nextRunAt)}
                     </span>
                 )}
-                {!cron.running && (
+                {!cron.running && cron.canRunNow && (
                     <button type="button" onClick={handleRunNow} className="btn p-1 text-muted hover:text-primary transition-colors" title="Run now">
                         <RotateCw size={11} />
                     </button>
                 )}
-                <button
-                    type="button"
-                    onClick={handlePlayPause}
-                    className={cx("btn p-1 transition-colors", isActive ? "text-muted hover:text-warning" : "text-muted hover:text-success")}
-                    title={isActive ? "Pause cron" : "Enable cron"}
-                >
-                    {isActive ? <Pause size={12} /> : <Play size={12} />}
-                </button>
+                {cron.canUpdateInstallState && (
+                    <button
+                        type="button"
+                        onClick={handlePlayPause}
+                        className={cx("btn p-1 transition-colors", isActive ? "text-muted hover:text-warning" : "text-muted hover:text-success")}
+                        title={isActive ? "Pause cron" : "Enable cron"}
+                    >
+                        {isActive ? <Pause size={12} /> : <Play size={12} />}
+                    </button>
+                )}
             </div>
         </div>
     )
@@ -98,15 +103,19 @@ export const CronsSidebarContent = observer(({ workspaceId }: CronsSidebarConten
     const codeStore = useCodeStore()
     const crons = codeStore.crons.getCronsForRepo(workspaceId)
     const repoPath = codeStore.repos.getRepo(workspaceId)?.path ?? "."
-    const productScope: ProductProjectScope | null = codeStore.shouldUseRuntimeProductAPI() ? { repoId: workspaceId } : null
+    const productRuntimeOwnsProjectConfig = codeStore.shouldUseRuntimeProductTaskRoute()
+    const canReadProductCronDefinitions =
+        !productRuntimeOwnsProjectConfig || codeStore.canUseProductMethod(OPENADE_METHOD.cronDefinitionsRead)
+    const canReadProductCronInstallState =
+        !productRuntimeOwnsProjectConfig || codeStore.canUseProductMethod(OPENADE_METHOD.cronInstallStateRead)
+    const productScope: ProductProjectScope | null = productRuntimeOwnsProjectConfig ? { repoId: workspaceId } : null
     const productAccess = productScope ? createProductProjectProcessAccess(codeStore, productScope) : null
 
-    useEffect(() => {
-        void codeStore.crons.ensureRepoConfigLoaded(workspaceId)
-    }, [codeStore.crons, workspaceId])
-
     const handleEditConfig = useCallback(
-        (filePath?: string) => {
+        async (filePath?: string) => {
+            if (!productRuntimeOwnsProjectConfig || canReadProductCronDefinitions || canReadProductCronInstallState) {
+                await codeStore.crons.ensureRepoConfigLoaded(workspaceId)
+            }
             NiceModal.show(ProcsEditorModal, {
                 workspaceId,
                 searchPath: repoPath,
@@ -117,7 +126,16 @@ export const CronsSidebarContent = observer(({ workspaceId }: CronsSidebarConten
                 productAccess,
             })
         },
-        [workspaceId, repoPath, productScope, productAccess]
+        [
+            workspaceId,
+            repoPath,
+            productScope,
+            productAccess,
+            productRuntimeOwnsProjectConfig,
+            canReadProductCronDefinitions,
+            canReadProductCronInstallState,
+            codeStore.crons,
+        ]
     )
 
     if (crons.length === 0) {

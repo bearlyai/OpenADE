@@ -1,6 +1,11 @@
-import { OpenADEClient, type OpenADEClientOptions } from "../../../openade-client/src"
+import {
+    OpenADEClient,
+    type OpenADEClientOptions,
+    type OpenADERemoteMethod,
+    type OpenADERemoteRequestForMethod,
+    type OpenADERemoteResponseForMethod,
+} from "../../../openade-client/src"
 import { RuntimeClient, type RuntimeClientOptions, type RuntimeClientStatus } from "../../../runtime-client/src"
-import type { RuntimeCapabilities } from "../../../runtime-protocol/src"
 
 export interface PairingTarget {
     baseUrl: string
@@ -20,10 +25,7 @@ export interface KernelSessionConfig {
 }
 
 export type KernelRealtimeConnectionStatus = RuntimeClientStatus | "lagged"
-export type KernelRuntimeClientLike = OpenADEClientOptions["runtime"] & {
-    readonly capabilities?: RuntimeCapabilities | null
-    hasMethod?: (method: string) => boolean
-}
+export type KernelRuntimeClientLike = OpenADEClientOptions["runtime"]
 
 export interface KernelSessionConstructors<TRuntime extends KernelRuntimeClientLike, TOpenADE> {
     RuntimeClient: new (options: RuntimeClientOptions) => TRuntime
@@ -46,7 +48,24 @@ export interface KernelSessionEntry<TRuntime extends KernelRuntimeClientLike, TO
 }
 
 export function kernelSessionHasMethod(entry: Pick<KernelSessionEntry<KernelRuntimeClientLike, unknown>, "runtime">, method: string): boolean {
-    return entry.runtime.hasMethod?.(method) ?? entry.runtime.capabilities?.methods.includes(method) === true
+    return entry.runtime.hasMethod(method)
+}
+
+type KernelRemoteRequestArgs<Method extends OpenADERemoteMethod> = undefined extends OpenADERemoteRequestForMethod<Method>
+    ? [params?: OpenADERemoteRequestForMethod<Method>]
+    : [params: OpenADERemoteRequestForMethod<Method>]
+
+export async function requestKernelRemoteMethod<Method extends OpenADERemoteMethod>(
+    runtime: Pick<KernelRuntimeClientLike, "request" | "connect" | "capabilities">,
+    method: Method,
+    ...args: KernelRemoteRequestArgs<Method>
+): Promise<OpenADERemoteResponseForMethod<Method>> {
+    if (!runtime.capabilities) await runtime.connect()
+    if (!runtime.capabilities) throw new Error(`Kernel runtime capabilities unavailable for method: ${method}`)
+    if (!runtime.capabilities.methods.includes(method)) {
+        throw new Error(`Kernel runtime method unavailable: ${method}`)
+    }
+    return runtime.request(method, ...args)
 }
 
 export interface KernelLocalSession {

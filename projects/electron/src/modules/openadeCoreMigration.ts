@@ -12,8 +12,8 @@ export interface OpenADECoreLegacyYjsMigrationAcceptance {
     version: 1
     acceptedAt: string
     source: string
-    data?: OpenADECoreLegacyYjsMigrationDataSummary
-    resources?: OpenADECoreLegacyYjsMigrationResourceSummary
+    data: OpenADECoreLegacyYjsMigrationDataSummary
+    resources: OpenADECoreLegacyYjsMigrationResourceSummary
 }
 
 export interface OpenADECoreLegacyYjsMigrationDataSummary {
@@ -49,6 +49,11 @@ export interface OpenADECoreLegacyYjsMigrationAcceptRequest {
     resources: OpenADECoreLegacyYjsMigrationResourceSummary
 }
 
+export interface OpenADECoreLegacyYjsMigrationRevokeResult {
+    revoked: boolean
+    requiresRestart: true
+}
+
 export function legacyYjsMigrationAcceptanceFilePath(homeDir: string = os.homedir()): string {
     return path.join(homeDir, OPENADE_DIR, DATA_DIR, CORE_DIR, LEGACY_YJS_ACCEPTANCE_FILE)
 }
@@ -56,7 +61,15 @@ export function legacyYjsMigrationAcceptanceFilePath(homeDir: string = os.homedi
 function isLegacyYjsMigrationAcceptance(value: unknown): value is OpenADECoreLegacyYjsMigrationAcceptance {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return false
     const record = value as Record<string, unknown>
-    return record.version === 1 && typeof record.acceptedAt === "string" && record.acceptedAt.length > 0 && typeof record.source === "string" && record.source.length > 0
+    if (record.version !== 1 || typeof record.acceptedAt !== "string" || record.acceptedAt.length === 0) return false
+    if (typeof record.source !== "string" || record.source.length === 0) return false
+    try {
+        migrationDataSummaryParam(record.data)
+        migrationResourceSummaryParam(record.resources)
+        return true
+    } catch {
+        return false
+    }
 }
 
 function objectRecord(value: unknown, label: string): Record<string, unknown> {
@@ -88,6 +101,9 @@ function migrationDataSummaryParam(value: unknown): OpenADECoreLegacyYjsMigratio
     if (summary.skipped !== 0 || summary.errors !== 0 || summary.parityMismatches !== 0) {
         throw new Error("legacy Yjs import summary is not clean")
     }
+    if (summary.importedRepos !== summary.scannedRepos || summary.importedTasks !== summary.scannedTasks) {
+        throw new Error("legacy Yjs import summary is incomplete")
+    }
     return summary
 }
 
@@ -97,7 +113,7 @@ function optionalResourceKindSummaryParam(
 ): OpenADECoreLegacyYjsMigrationResourceKindSummary | undefined {
     if (record[key] === undefined) return undefined
     const kind = objectRecord(record[key], `resources.${key}`)
-    return {
+    const summary = {
         scannedTasks: nonNegativeIntegerParam(kind, "scannedTasks", `resources.${key}.scannedTasks`),
         referenced: nonNegativeIntegerParam(kind, "referenced", `resources.${key}.referenced`),
         imported: nonNegativeIntegerParam(kind, "imported", `resources.${key}.imported`),
@@ -106,6 +122,11 @@ function optionalResourceKindSummaryParam(
         conflicted: nonNegativeIntegerParam(kind, "conflicted", `resources.${key}.conflicted`),
         failed: nonNegativeIntegerParam(kind, "failed", `resources.${key}.failed`),
     }
+    const accounted = summary.imported + summary.alreadyImported + summary.missing + summary.conflicted + summary.failed
+    if (accounted !== summary.referenced) {
+        throw new Error("legacy resource import summary is inconsistent")
+    }
+    return summary
 }
 
 function migrationResourceSummaryParam(value: unknown): OpenADECoreLegacyYjsMigrationResourceSummary {
@@ -116,6 +137,9 @@ function migrationResourceSummaryParam(value: unknown): OpenADECoreLegacyYjsMigr
         images: optionalResourceKindSummaryParam(record, "images"),
         snapshots: optionalResourceKindSummaryParam(record, "snapshots"),
         sessions: optionalResourceKindSummaryParam(record, "sessions"),
+    }
+    if (!summary.images || !summary.snapshots || !summary.sessions) {
+        throw new Error("legacy resource import summary is incomplete")
     }
     const kindIssueCount =
         (summary.images ? summary.images.missing + summary.images.conflicted + summary.images.failed : 0) +
@@ -173,4 +197,11 @@ export function markOpenADECoreLegacyYjsMigrationAcceptedFromUnknown(
     options: { acceptedAt?: string; source?: string; homeDir?: string } = {}
 ): OpenADECoreLegacyYjsMigrationAcceptance {
     return markOpenADECoreLegacyYjsMigrationAccepted(migrationAcceptRequestParam(params), options)
+}
+
+export function revokeOpenADECoreLegacyYjsMigrationAcceptance(options: { homeDir?: string } = {}): OpenADECoreLegacyYjsMigrationRevokeResult {
+    const filePath = legacyYjsMigrationAcceptanceFilePath(options.homeDir)
+    const revoked = fs.existsSync(filePath)
+    fs.rmSync(filePath, { force: true })
+    return { revoked, requiresRestart: true }
 }

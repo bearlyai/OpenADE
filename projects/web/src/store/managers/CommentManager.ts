@@ -1,29 +1,56 @@
+import { OPENADE_METHOD, type OpenADEMethod } from "../../../../openade-client/src"
 import type { ActionEvent, Comment, CommentSelectedText, CommentSource } from "../../types"
 import type { CodeStore } from "../store"
+
+function commentSourceRecord(source: CommentSource): Record<string, unknown> {
+    return { ...source }
+}
 
 export class CommentManager {
     constructor(private store: CodeStore) {}
 
+    private canUseProductMethod(method: OpenADEMethod): boolean {
+        return this.store.canUseProductMethod(method)
+    }
+
+    private productRuntimeOwnsComments(): boolean {
+        return this.store.shouldUseRuntimeProductTaskRoute()
+    }
+
+    private async canUseCommentMethodAfterConnect(method: OpenADEMethod): Promise<boolean> {
+        if (!this.productRuntimeOwnsComments()) return this.canUseProductMethod(method)
+        if (this.store.usesCoreOwnedProductRuntime()) return this.store.canUseProductMethodAfterConnect(method)
+        if (this.store.shouldUseRuntimeProductAPI()) return this.canUseProductMethod(method)
+        return this.store.canUseProductMethodAfterConnect(method)
+    }
+
+    private shouldRefreshLegacyTaskAfterMutation(): boolean {
+        return !this.store.shouldUseRuntimeProductTaskRoute()
+    }
+
     async addComment(taskId: string, source: CommentSource, content: string, selectedText: CommentSelectedText): Promise<string> {
+        if (!(await this.canUseCommentMethodAfterConnect(OPENADE_METHOD.commentCreate))) return ""
         const result = await this.store.createProductComment({
             taskId,
             content,
-            source: source as unknown as Record<string, unknown>,
+            source: commentSourceRecord(source),
             selectedText,
             author: this.store.currentUser,
         })
-        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(taskId)
+        if (this.shouldRefreshLegacyTaskAfterMutation()) await this.store.refreshProductStateAfterTaskMutation(taskId)
         return result.commentId
     }
 
     async removeComment(taskId: string, commentId: string): Promise<void> {
+        if (!(await this.canUseCommentMethodAfterConnect(OPENADE_METHOD.commentDelete))) return
         await this.store.deleteProductComment({ taskId, commentId })
-        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(taskId)
+        if (this.shouldRefreshLegacyTaskAfterMutation()) await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     async editComment(taskId: string, commentId: string, newContent: string): Promise<void> {
+        if (!(await this.canUseCommentMethodAfterConnect(OPENADE_METHOD.commentEdit))) return
         await this.store.editProductComment({ taskId, commentId, content: newContent })
-        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(taskId)
+        if (this.shouldRefreshLegacyTaskAfterMutation()) await this.store.refreshProductStateAfterTaskMutation(taskId)
     }
 
     /**

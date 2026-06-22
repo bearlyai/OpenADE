@@ -1,5 +1,6 @@
 import type { AnnotationSide, DiffLineAnnotation, LineAnnotation, SelectedLineRange } from "@pierre/diffs"
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react"
+import { OPENADE_METHOD, type OpenADEMethod } from "../../../../../openade-client/src"
 import { useCodeStore } from "../../../store/context"
 import type { Comment, CommentSelectedText, CommentSource } from "../../../types"
 import { CommentForm } from "../CommentForm"
@@ -48,6 +49,10 @@ export function useCommentAnnotations({
     const codeStore = useCodeStore()
     const [openFormRange, setOpenFormRange] = useState<{ start: number; end: number; side: AnnotationSide } | null>(null)
     const [selectedRange, setSelectedRange] = useState<SelectedLineRange | null>(null)
+    const canUseCommentMethod = useCallback((method: OpenADEMethod) => !readOnly && codeStore.canUseProductMethod(method), [codeStore, readOnly])
+    const canCreateComment = canUseCommentMethod(OPENADE_METHOD.commentCreate)
+    const canEditComment = canUseCommentMethod(OPENADE_METHOD.commentEdit)
+    const canDeleteComment = canUseCommentMethod(OPENADE_METHOD.commentDelete)
 
     // Clear form when content changes
     useEffect(() => {
@@ -96,8 +101,8 @@ export function useCommentAnnotations({
             }
         }
 
-        // Open form annotation (only if not readOnly)
-        if (!readOnly && openFormRange !== null) {
+        // Open form annotation (only if comments can be created)
+        if (canCreateComment && openFormRange !== null) {
             const formValid = !isDiffView || !isLineValid || isLineValid(openFormRange.end, openFormRange.side)
             if (formValid) {
                 const metadata: CommentAnnotationMeta = {
@@ -118,13 +123,13 @@ export function useCommentAnnotations({
         }
 
         return { lineAnnotations: lineAnns, diffLineAnnotations: diffAnns }
-    }, [comments, openFormRange, includedCommentIds, isDiffView, isLineValid, defaultSide, readOnly])
+    }, [comments, openFormRange, includedCommentIds, isDiffView, isLineValid, defaultSide, canCreateComment])
 
-    const hasOpenForm = openFormRange !== null
+    const hasOpenForm = canCreateComment && openFormRange !== null
 
     const handleLineSelectionEnd = useCallback(
         (range: SelectedLineRange | null) => {
-            if (readOnly) return
+            if (!canCreateComment) return
             setSelectedRange(range)
             if (range == null) return
             const start = Math.min(range.start, range.end)
@@ -132,12 +137,12 @@ export function useCommentAnnotations({
             const side = range.side ?? defaultSide
             setOpenFormRange({ start, end, side })
         },
-        [defaultSide, readOnly]
+        [defaultSide, canCreateComment]
     )
 
     const handleSubmitComment = useCallback(
         async (content: string) => {
-            if (readOnly || !openFormRange) return
+            if (!canCreateComment || !openFormRange) return
             const source = createSource(openFormRange.start, openFormRange.end, openFormRange.side)
             const selectedText = getSelectedText(openFormRange.start, openFormRange.end, openFormRange.side)
 
@@ -153,7 +158,7 @@ export function useCommentAnnotations({
             setOpenFormRange(null)
             setSelectedRange(null)
         },
-        [taskId, createSource, getSelectedText, openFormRange, readOnly]
+        [codeStore.comments, taskId, createSource, getSelectedText, openFormRange, canCreateComment]
     )
 
     const handleCancelComment = useCallback(() => {
@@ -163,18 +168,18 @@ export function useCommentAnnotations({
 
     const handleEditComment = useCallback(
         async (commentId: string, newContent: string) => {
-            if (readOnly) return
+            if (!canEditComment) return
             await codeStore.comments.editComment(taskId, commentId, newContent)
         },
-        [taskId, readOnly]
+        [codeStore.comments, taskId, canEditComment]
     )
 
     const handleDeleteComment = useCallback(
         async (commentId: string) => {
-            if (readOnly) return
+            if (!canDeleteComment) return
             await codeStore.comments.removeComment(taskId, commentId)
         },
-        [taskId, readOnly]
+        [codeStore.comments, taskId, canDeleteComment]
     )
 
     const renderAnnotation = useCallback(
@@ -189,12 +194,12 @@ export function useCommentAnnotations({
                     startLine={startLine}
                     endLine={endLine}
                     submitted={submitted}
-                    onEdit={readOnly ? undefined : (newContent) => handleEditComment(id, newContent)}
-                    onDelete={readOnly ? undefined : () => handleDeleteComment(id)}
+                    onEdit={canEditComment ? (newContent) => handleEditComment(id, newContent) : undefined}
+                    onDelete={canDeleteComment ? () => handleDeleteComment(id) : undefined}
                 />
             )
         },
-        [handleSubmitComment, handleCancelComment, handleEditComment, handleDeleteComment, readOnly]
+        [handleSubmitComment, handleCancelComment, handleEditComment, handleDeleteComment, canEditComment, canDeleteComment]
     )
 
     return {

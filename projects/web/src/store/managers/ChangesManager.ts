@@ -41,6 +41,7 @@ export class ChangesManager {
 
     private filePairLoadId = 0
     private filePatchLoadId = 0
+    private fromBaseLoadId = 0
     private filePatchContextLines: PatchContextLines = 3
     private filePairCache = new Map<string, GetFilePairResponse>()
     private filePatchCache = new Map<string, GetFilePatchResponse>()
@@ -49,11 +50,19 @@ export class ChangesManager {
     constructor(private taskModel: TaskModel) {
         makeAutoObservable<
             this,
-            "taskModel" | "filePairLoadId" | "filePatchLoadId" | "filePatchContextLines" | "filePairCache" | "filePatchCache" | "disposers"
+            | "taskModel"
+            | "filePairLoadId"
+            | "filePatchLoadId"
+            | "fromBaseLoadId"
+            | "filePatchContextLines"
+            | "filePairCache"
+            | "filePatchCache"
+            | "disposers"
         >(this, {
             taskModel: false,
             filePairLoadId: false,
             filePatchLoadId: false,
+            fromBaseLoadId: false,
             filePatchContextLines: false,
             filePairCache: false,
             filePatchCache: false,
@@ -69,6 +78,9 @@ export class ChangesManager {
     }
 
     dispose(): void {
+        this.invalidateFileLoads()
+        this.fromBaseLoadId++
+        this.fromBaseLoading = false
         for (const d of this.disposers) d()
         this.disposers = []
     }
@@ -116,11 +128,16 @@ export class ChangesManager {
         this.selectedFilePath = path
         this.filePair = null
         this.filePatch = null
+        this.invalidateFileLoads()
+        this.filePairLoading = false
+        this.filePatchLoading = false
     }
 
     setDiffSource(source: DiffSource): void {
         if (this.diffSource === source) return
         this.diffSource = source
+        this.fromBaseLoadId++
+        this.fromBaseLoading = false
         this.clearLoadedFiles()
         this.clearCaches()
         if (source === "from-base" && this.fromBaseFiles === null) {
@@ -129,7 +146,7 @@ export class ChangesManager {
     }
 
     refresh(): void {
-        this.taskModel.refreshGitState()
+        this.taskModel.refreshGitState({ force: true })
     }
 
     beginPatchContextTransition(contextLines: PatchContextLines): void {
@@ -155,6 +172,11 @@ export class ChangesManager {
     private onGitStatusChanged(): void {
         // Reset from-base cache (new commits may exist)
         this.fromBaseFiles = null
+        this.fromBaseLoadId++
+        this.fromBaseLoading = false
+        this.invalidateFileLoads()
+        this.filePairLoading = false
+        this.filePatchLoading = false
         this.clearCaches()
 
         if (this.diffSource === "from-base") {
@@ -181,7 +203,7 @@ export class ChangesManager {
     }
 
     private get workDir(): string | undefined {
-        return this.taskModel.environment?.taskWorkingDir
+        return this.taskModel.taskWorkingDirHint ?? undefined
     }
 
     private get usesRuntimeProductGit(): boolean {
@@ -212,7 +234,9 @@ export class ChangesManager {
     private async loadFilePair(): Promise<void> {
         const file = this.selectedFile
         const dir = this.workDir
-        if (!file || (this.usesRuntimeProductGit ? !this.usesRuntimeScopedGit : !dir)) {
+        const usesRuntimeScopedGit = this.usesRuntimeScopedGit
+        const fromTreeish = this.runtimeFromTreeish
+        if (!file || (this.usesRuntimeProductGit ? !usesRuntimeScopedGit : !dir)) {
             runInAction(() => {
                 this.filePair = null
                 this.filePairLoading = false
@@ -245,9 +269,18 @@ export class ChangesManager {
         }
 
         try {
-            const result = this.usesRuntimeScopedGit
+            if (usesRuntimeScopedGit && !(await this.taskModel.canReadProductTaskFilePairAfterConnect())) {
+                runInAction(() => {
+                    if (loadId !== this.filePairLoadId) return
+                    this.filePair = null
+                    this.filePairLoading = false
+                })
+                return
+            }
+
+            const result = usesRuntimeScopedGit
                 ? await this.taskModel.readProductTaskFilePair({
-                      fromTreeish: this.runtimeFromTreeish,
+                      fromTreeish,
                       filePath: file.path,
                       oldPath: file.oldPath,
                   })
@@ -282,7 +315,9 @@ export class ChangesManager {
     private async loadFilePatch(contextLines: PatchContextLines = this.filePatchContextLines): Promise<void> {
         const file = this.selectedFile
         const dir = this.workDir
-        if (!file || (this.usesRuntimeProductGit ? !this.usesRuntimeScopedGit : !dir)) {
+        const usesRuntimeScopedGit = this.usesRuntimeScopedGit
+        const fromTreeish = this.runtimeFromTreeish
+        if (!file || (this.usesRuntimeProductGit ? !usesRuntimeScopedGit : !dir)) {
             runInAction(() => {
                 this.filePatch = null
                 this.filePatchLoading = false
@@ -314,9 +349,18 @@ export class ChangesManager {
         this.filePatchLoading = true
 
         try {
-            const result = this.usesRuntimeScopedGit
+            if (usesRuntimeScopedGit && !(await this.taskModel.canReadProductTaskDiffAfterConnect())) {
+                runInAction(() => {
+                    if (loadId !== this.filePatchLoadId) return
+                    this.filePatch = null
+                    this.filePatchLoading = false
+                })
+                return
+            }
+
+            const result = usesRuntimeScopedGit
                 ? await this.taskModel.readProductTaskDiff({
-                      fromTreeish: this.runtimeFromTreeish,
+                      fromTreeish,
                       filePath: file.path,
                       oldPath: file.oldPath,
                       contextLines,
@@ -360,12 +404,23 @@ export class ChangesManager {
     private async loadFromBaseFiles(): Promise<void> {
         const dir = this.workDir
         const mergeBase = this.taskModel.environment?.mergeBaseCommit
-        if (this.usesRuntimeProductGit ? !this.usesRuntimeScopedGit : !dir || !mergeBase) return
+        const usesRuntimeScopedGit = this.usesRuntimeScopedGit
+        if (this.usesRuntimeProductGit ? !usesRuntimeScopedGit : !dir || !mergeBase) return
 
+        const loadId = ++this.fromBaseLoadId
         this.fromBaseLoading = true
 
         try {
-            const result = this.usesRuntimeScopedGit
+            if (usesRuntimeScopedGit && !(await this.taskModel.canReadProductTaskChangesAfterConnect())) {
+                runInAction(() => {
+                    if (loadId !== this.fromBaseLoadId) return
+                    this.fromBaseFiles = null
+                    this.fromBaseLoading = false
+                })
+                return
+            }
+
+            const result = usesRuntimeScopedGit
                 ? await this.taskModel.readProductTaskChanges({ fromTreeish: mergeBase })
                 : await gitApi.getChangedFiles({
                       workDir: dir as string,
@@ -373,6 +428,8 @@ export class ChangesManager {
                       toTreeish: "HEAD",
                   })
             runInAction(() => {
+                if (loadId !== this.fromBaseLoadId) return
+                if (this.diffSource !== "from-base") return
                 this.fromBaseFiles = result.files
                 this.fromBaseLoading = false
                 this.expandedPaths = this.buildExpandedPaths(this.fileTree)
@@ -384,6 +441,7 @@ export class ChangesManager {
         } catch (err) {
             console.error("[ChangesManager] Failed to load from-base files:", err)
             runInAction(() => {
+                if (loadId !== this.fromBaseLoadId) return
                 this.fromBaseFiles = []
                 this.fromBaseLoading = false
             })
@@ -403,10 +461,16 @@ export class ChangesManager {
     }
 
     private clearLoadedFiles(): void {
+        this.invalidateFileLoads()
         this.filePair = null
         this.filePatch = null
         this.filePairLoading = false
         this.filePatchLoading = false
+    }
+
+    private invalidateFileLoads(): void {
+        this.filePairLoadId++
+        this.filePatchLoadId++
     }
 
     private clearCaches(): void {

@@ -6,12 +6,24 @@
  * task metadata actions that go through the protocol.
  */
 
+import { OPENADE_METHOD, type OpenADEMethod } from "../../../../openade-client/src"
 import type { HarnessId, HarnessStreamEvent } from "../../electronAPI/harnessEventTypes"
 import type { ActionEvent } from "../../types"
 import type { CodeStore } from "../store"
 
 export class EventManager {
     constructor(private store: CodeStore) {}
+
+    private shouldRefreshLegacyTaskAfterMutation(): boolean {
+        return !this.store.shouldUseRuntimeProductTaskRoute()
+    }
+
+    private async canUseProductMethodAfterConnect(method: OpenADEMethod): Promise<boolean> {
+        if (!this.store.shouldUseRuntimeProductTaskRoute()) return this.store.canUseProductMethod(method)
+        if (this.store.usesCoreOwnedProductRuntime()) return this.store.canUseProductMethodAfterConnect(method)
+        if (this.store.shouldUseRuntimeProductAPI()) return this.store.canUseProductMethod(method)
+        return this.store.canUseProductMethodAfterConnect(method)
+    }
 
     /** Get the latest completed plan/revise event for a task */
     getTaskLatestCompletedPlanEvent(taskId: string): ActionEvent | null {
@@ -113,9 +125,10 @@ export class EventManager {
 
     async cancelPlan(taskId: string, planEventId: string): Promise<boolean> {
         if (!this.store.tasks.getTask(taskId)) return false
+        if (!(await this.canUseProductMethodAfterConnect(OPENADE_METHOD.taskMetadataUpdate))) return false
 
         await this.store.updateProductTaskMetadata({ taskId, cancelledPlanEventId: planEventId })
-        if (!this.store.shouldUseRuntimeProductAPI()) await this.store.refreshProductStateAfterTaskMutation(taskId)
+        if (this.shouldRefreshLegacyTaskAfterMutation()) await this.store.refreshProductStateAfterTaskMutation(taskId)
         return true
     }
 }

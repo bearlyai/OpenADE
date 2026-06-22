@@ -14,7 +14,7 @@ type turnInterruptResultDTO struct {
 }
 
 func (service *Service) handleTurnInterrupt(ctx context.Context, _ *core.Connection, raw json.RawMessage) (core.JSONPayload, *core.RuntimeError) {
-	return service.runIdempotentMutation("openade/turn/interrupt", raw, func() (core.JSONPayload, *core.RuntimeError) {
+	return service.runIdempotentMutation(openADEMethodTurnInterrupt, raw, func() (core.JSONPayload, *core.RuntimeError) {
 		return service.interruptTurn(ctx, raw)
 	})
 }

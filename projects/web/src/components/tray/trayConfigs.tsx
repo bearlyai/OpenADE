@@ -8,6 +8,13 @@
 import type { LucideIcon } from "lucide-react"
 import { FolderOpen, GitCommitHorizontal, GitCompare, NotebookPen, Play, Search, TerminalSquare } from "lucide-react"
 import type { ReactNode } from "react"
+import {
+    buildOpenADEProjectFileCapabilities,
+    buildOpenADEProjectProcessCapabilities,
+    buildOpenADEProjectSearchCapabilities,
+    buildOpenADETaskGitCapabilities,
+    buildOpenADETaskTerminalCapabilities,
+} from "../../shell/capabilities"
 import type { RunContext } from "../../electronAPI/procs"
 import type { GitInfo } from "../../store/managers/RepoManager"
 import type { TrayManager, TrayType } from "../../store/managers/TrayManager"
@@ -58,7 +65,7 @@ function getWorkspaceRepoPath(tray: TrayManager): string | null {
 async function resolveWorkspaceRepoPath(tray: TrayManager): Promise<string | null> {
     const repoPath = getWorkspaceRepoPath(tray)
     if (repoPath) return repoPath
-    if (!tray.store.shouldUseRuntimeProductAPI()) return null
+    if (!tray.store.shouldUseRuntimeProductTaskRoute()) return null
     const gitInfo = await tray.store.repos.getGitInfo(tray.workspaceId)
     return gitInfo ? projectPathFromGitInfo(gitInfo) : null
 }
@@ -77,18 +84,96 @@ function isGitBackedTrayVisible(tray: TrayManager): boolean {
     return !tray.taskModel.needsEnvironmentSetup
 }
 
+function canUseRuntimeProjectScope(tray: TrayManager): boolean {
+    return !tray.taskModel.usesRuntimeProductAPI || Boolean(tray.taskModel.repoId)
+}
+
+function canOpenFilesTray(tray: TrayManager): boolean {
+    if (!tray.taskModel.usesRuntimeProductAPI) return true
+    if (!tray.taskModel.repoId) return false
+    const capabilities = buildOpenADEProjectFileCapabilities({ has: (method) => tray.store.canUseProductMethod(method) })
+    return capabilities.canList && capabilities.canRead && capabilities.canSearch
+}
+
+function canOpenSearchTray(tray: TrayManager): boolean {
+    if (!tray.taskModel.usesRuntimeProductAPI) return true
+    if (!tray.taskModel.repoId) return false
+    const runtimeCapabilities = { has: (method: Parameters<typeof tray.store.canUseProductMethod>[0]) => tray.store.canUseProductMethod(method) }
+    const searchCapabilities = buildOpenADEProjectSearchCapabilities(runtimeCapabilities)
+    const fileCapabilities = buildOpenADEProjectFileCapabilities(runtimeCapabilities)
+    return searchCapabilities.canSearch && fileCapabilities.canRead
+}
+
+function canOpenChangesTray(tray: TrayManager): boolean {
+    if (!isGitBackedTrayVisible(tray)) return false
+    if (!tray.taskModel.usesRuntimeProductAPI) return true
+    if (!tray.taskModel.repoId) return false
+    const capabilities = buildOpenADETaskGitCapabilities({ has: (method) => tray.store.canUseProductMethod(method) })
+    return capabilities.canReadSummary && capabilities.canReadChanges && capabilities.canReadDiff && capabilities.canReadFilePair
+}
+
+function canOpenGitLogTray(tray: TrayManager): boolean {
+    if (!isGitBackedTrayVisible(tray)) return false
+    if (!tray.taskModel.usesRuntimeProductAPI) return true
+    if (!tray.taskModel.repoId) return false
+    const capabilities = buildOpenADETaskGitCapabilities({ has: (method) => tray.store.canUseProductMethod(method) })
+    return (
+        capabilities.canReadScopes &&
+        capabilities.canReadLog &&
+        capabilities.canReadCommitFiles &&
+        capabilities.canReadCommitFilePatch &&
+        capabilities.canReadFileAtTreeish
+    )
+}
+
+function canOpenTaskTerminal(tray: TrayManager): boolean {
+    if (!tray.taskModel.usesRuntimeProductAPI) return true
+    if (!tray.taskModel.repoId) return false
+    const capabilities = buildOpenADETaskTerminalCapabilities({ has: (method) => tray.store.canUseProductMethod(method) })
+    return capabilities.canStart || capabilities.canReconnect
+}
+
 function getTaskTerminalProductAccess(tray: TrayManager): TaskTerminalProductAccess | null {
     if (!tray.taskModel.usesRuntimeProductAPI || !tray.taskModel.repoId) return null
     const repoId = tray.taskModel.repoId
     const taskId = tray.taskId
+    const currentCapabilities = () => buildOpenADETaskTerminalCapabilities({ has: (method) => tray.store.canUseProductMethod(method) })
     return {
         repoId,
         taskId,
-        startTaskTerminal: (args) => tray.store.startProductTaskTerminal({ repoId, taskId, ...args }),
-        reconnectTaskTerminal: (args) => tray.store.reconnectProductTaskTerminal({ repoId, taskId, ...args }),
-        writeTaskTerminal: (args) => tray.store.writeProductTaskTerminal({ repoId, taskId, ...args }),
-        resizeTaskTerminal: (args) => tray.store.resizeProductTaskTerminal({ repoId, taskId, ...args }),
-        stopTaskTerminal: (args) => tray.store.stopProductTaskTerminal({ repoId, taskId, ...args }),
+        get capabilities() {
+            return currentCapabilities()
+        },
+        startTaskTerminal: (args) => {
+            const capabilities = currentCapabilities()
+            return capabilities.canStart
+                ? tray.store.startProductTaskTerminal({ repoId, taskId, ...args })
+                : Promise.resolve({ repoId, taskId, terminalId: "", ok: false, error: "terminal start is not permitted" })
+        },
+        reconnectTaskTerminal: (args) => {
+            const capabilities = currentCapabilities()
+            return capabilities.canReconnect
+                ? tray.store.reconnectProductTaskTerminal({ repoId, taskId, ...args })
+                : Promise.resolve({ repoId, taskId, terminalId: args.terminalId ?? "", found: false, output: [], outputCount: 0 })
+        },
+        writeTaskTerminal: (args) => {
+            const capabilities = currentCapabilities()
+            return capabilities.canWrite
+                ? tray.store.writeProductTaskTerminal({ repoId, taskId, ...args })
+                : Promise.resolve({ repoId, taskId, terminalId: args.terminalId, ok: false })
+        },
+        resizeTaskTerminal: (args) => {
+            const capabilities = currentCapabilities()
+            return capabilities.canResize
+                ? tray.store.resizeProductTaskTerminal({ repoId, taskId, ...args })
+                : Promise.resolve({ repoId, taskId, terminalId: args.terminalId, ok: false })
+        },
+        stopTaskTerminal: (args) => {
+            const capabilities = currentCapabilities()
+            return capabilities.canStop
+                ? tray.store.stopProductTaskTerminal({ repoId, taskId, ...args })
+                : Promise.resolve({ repoId, taskId, terminalId: args.terminalId, ok: false })
+        },
     }
 }
 
@@ -97,23 +182,34 @@ function getProjectProcessProductScope(tray: TrayManager): { repoId: string; tas
     return { repoId: tray.taskModel.repoId, taskId: tray.taskId }
 }
 
-function withTaskWorkingDir(tray: TrayManager, onResolved: (taskWorkingDir: string) => void): void {
+function canOpenProjectProcesses(tray: TrayManager): boolean {
+    if (!canUseRuntimeProjectScope(tray)) return false
+    if (!tray.taskModel.usesRuntimeProductAPI) return true
+    const capabilities = buildOpenADEProjectProcessCapabilities({ has: (method) => tray.store.canUseProductMethod(method) })
+    return capabilities.canRead
+}
+
+function isExpectedTrayStillOpen(tray: TrayManager, trayType: TrayType): boolean {
+    return tray.visibleOpenTray === trayType
+}
+
+function withTaskWorkingDir(tray: TrayManager, trayType: TrayType, onResolved: (taskWorkingDir: string) => void): void {
     const taskWorkingDir = getTaskWorkingDirHint(tray)
     if (taskWorkingDir) {
         onResolved(taskWorkingDir)
         return
     }
     void tray.taskModel.ensureTaskWorkingDirHint().then((resolvedDir) => {
-        if (resolvedDir) onResolved(resolvedDir)
+        if (resolvedDir && isExpectedTrayStillOpen(tray, trayType)) onResolved(resolvedDir)
     })
 }
 
-function ensureTaskWorkingDir(tray: TrayManager): void {
-    withTaskWorkingDir(tray, () => undefined)
+function ensureTaskWorkingDir(tray: TrayManager, trayType: TrayType): void {
+    withTaskWorkingDir(tray, trayType, () => undefined)
 }
 
 function openFileBrowser(tray: TrayManager): void {
-    withTaskWorkingDir(tray, (taskWorkingDir) => openFileBrowserAtDir(tray, taskWorkingDir))
+    withTaskWorkingDir(tray, "files", (taskWorkingDir) => openFileBrowserAtDir(tray, taskWorkingDir))
 }
 
 function openFileBrowserAtDir(tray: TrayManager, taskWorkingDir: string): void {
@@ -126,7 +222,12 @@ function openFileBrowserAtDir(tray: TrayManager, taskWorkingDir: string): void {
 }
 
 function openContentSearch(tray: TrayManager): void {
-    withTaskWorkingDir(tray, (taskWorkingDir) => tray.taskModel.contentSearch.setWorkingDir(taskWorkingDir))
+    withTaskWorkingDir(tray, "search", (taskWorkingDir) => tray.taskModel.contentSearch.setWorkingDir(taskWorkingDir))
+}
+
+function refreshGitStateAfterTerminalClose(tray: TrayManager): void {
+    if (tray.taskModel.usesRuntimeProductAPI) return
+    tray.taskModel.refreshGitState()
 }
 
 export const TRAY_CONFIGS: TrayConfig[] = [
@@ -135,9 +236,9 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         label: "Changes",
         icon: GitCompare,
         shortcut: { key: "mod+shift+g", display: "⌘⇧G" },
-        isVisible: isGitBackedTrayVisible,
+        isVisible: canOpenChangesTray,
         onOpen: (tray) => {
-            tray.taskModel.refreshGitState({ force: true })
+            tray.taskModel.refreshGitState()
             tray.taskModel.changes.initializeForTray()
         },
         renderBadge: (tray) => {
@@ -161,6 +262,7 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         label: "Files",
         icon: FolderOpen,
         shortcut: { key: "mod+p", display: "⌘P" },
+        isVisible: canOpenFilesTray,
         onOpen: openFileBrowser,
         renderContent: (tray) => <FilesTrayContent fileBrowser={tray.taskModel.fileBrowser} taskId={tray.taskId} onClose={() => tray.close()} />,
     },
@@ -169,8 +271,8 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         label: "Git Log",
         icon: GitCommitHorizontal,
         shortcut: { key: "mod+shift+l", display: "⌘⇧L" },
-        isVisible: isGitBackedTrayVisible,
-        onOpen: ensureTaskWorkingDir,
+        isVisible: canOpenGitLogTray,
+        onOpen: (tray) => ensureTaskWorkingDir(tray, "gitlog"),
         renderContent: (tray) => {
             const taskWorkingDir = getTaskWorkingDirHint(tray)
             if (!taskWorkingDir) {
@@ -184,6 +286,7 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         label: "Search",
         icon: Search,
         shortcut: { key: "mod+shift+f", display: "⌘⇧F" },
+        isVisible: canOpenSearchTray,
         onOpen: openContentSearch,
         renderContent: (tray) => <SearchTray contentSearch={tray.taskModel.contentSearch} taskId={tray.taskId} onEscapeClose={() => tray.close()} />,
     },
@@ -192,8 +295,9 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         label: "Terminal",
         icon: TerminalSquare,
         shortcut: { key: "mod+t", display: "⌘T" },
-        onOpen: ensureTaskWorkingDir,
-        onClose: (tray) => tray.taskModel.refreshGitState({ force: true }),
+        isVisible: canOpenTaskTerminal,
+        onOpen: (tray) => ensureTaskWorkingDir(tray, "terminal"),
+        onClose: refreshGitStateAfterTerminalClose,
         renderContent: (tray) => {
             const taskWorkingDir = getTaskWorkingDirHint(tray)
             if (!taskWorkingDir) {
@@ -230,7 +334,8 @@ export const TRAY_CONFIGS: TrayConfig[] = [
         label: "Processes",
         icon: Play,
         shortcut: { key: "mod+shift+p", display: "⌘⇧P" },
-        onOpen: ensureTaskWorkingDir,
+        isVisible: canOpenProjectProcesses,
+        onOpen: (tray) => ensureTaskWorkingDir(tray, "processes"),
         renderBadge: (tray) => {
             const context = getProcessContext(tray)
             if (!context) return null

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -77,6 +77,65 @@ async function getOpenPort(): Promise<number> {
             server.close(() => resolvePort(port))
         })
     })
+}
+
+function seedAcceptedLegacyYjsInstall(userDataDir: string, yjsStorageDir: string) {
+    mkdirSync(yjsStorageDir, { recursive: true })
+    writeFileSync(join(yjsStorageDir, "legacy-yjs-doc"), "legacy Yjs document presence marker\n")
+    const markerDir = join(userDataDir, ".openade", "data", "core")
+    mkdirSync(markerDir, { recursive: true })
+    writeFileSync(
+        join(markerDir, "legacy-yjs-import-accepted.json"),
+        `${JSON.stringify(
+            {
+                version: 1,
+                acceptedAt: "2026-06-11T00:00:00.000Z",
+                source: "packaged-smoke-accepted-legacy-import",
+                data: {
+                    scannedRepos: 1,
+                    importedRepos: 1,
+                    scannedTasks: 1,
+                    importedTasks: 1,
+                    skipped: 0,
+                    errors: 0,
+                    parityMismatches: 0,
+                },
+                resources: {
+                    skipped: 0,
+                    issues: 0,
+                    images: {
+                        scannedTasks: 1,
+                        referenced: 0,
+                        imported: 0,
+                        alreadyImported: 0,
+                        missing: 0,
+                        conflicted: 0,
+                        failed: 0,
+                    },
+                    snapshots: {
+                        scannedTasks: 1,
+                        referenced: 0,
+                        imported: 0,
+                        alreadyImported: 0,
+                        missing: 0,
+                        conflicted: 0,
+                        failed: 0,
+                    },
+                    sessions: {
+                        scannedTasks: 1,
+                        referenced: 0,
+                        imported: 0,
+                        alreadyImported: 0,
+                        missing: 0,
+                        conflicted: 0,
+                        failed: 0,
+                    },
+                },
+            },
+            null,
+            2
+        )}\n`
+    )
 }
 
 test("packaged app launches and loads the bundled web UI", async () => {
@@ -457,6 +516,8 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
     const smokeId = `managed-core-smoke-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
     const repoId = `${smokeId}-repo`
     const liveRecoveryPrompt = "managed Core live recovery smoke"
+    // Keep this above the close timeout so completion must happen after relaunch.
+    const liveRecoveryDelayMs = 20_000
     let app: Awaited<ReturnType<typeof electron.launch>> | undefined
     let passed = false
 
@@ -473,7 +534,7 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
                 OPENADE_CORE_TOKEN: "managed-core-smoke-token",
                 OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER: "1",
                 OPENADE_SMOKE_DETERMINISTIC_HARNESS: "1",
-                OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_MS: "6000",
+                OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_MS: String(liveRecoveryDelayMs),
                 OPENADE_SMOKE_DETERMINISTIC_HARNESS_DELAY_PROMPT: liveRecoveryPrompt,
                 OPENADE_SMOKE_TEST: "1",
                 OPENADE_YJS_STORAGE_DIR: yjsStorageDir,
@@ -620,6 +681,10 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
                     runtimeProductStoreEnabled?: boolean
                     runtimeProductStoreStatus?: string
                     runtimeProductStoreHasSnapshot?: boolean
+                    runtimeProductStoreHasProjectProjection?: boolean
+                    runtimeProductStoreRepoCount?: number
+                    runtimeProductStoreTaskPreviewCount?: number
+                    runtimeProductStoreCachedTaskCount?: number
                     coreRolloutStatus?: string
                     coreRolloutSource?: string
                     coreRolloutReason?: string
@@ -649,7 +714,7 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
                             candidate.event_type === "app_opened" &&
                             props?.runtimeProductStoreEnabled === true &&
                             props.runtimeProductStoreStatus === "ready" &&
-                            props.runtimeProductStoreHasSnapshot === true
+                            props.runtimeProductStoreHasProjectProjection === true
                         )
                     })
                     if (event) return event
@@ -1194,7 +1259,7 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
         expect(coreSmoke.appOpened.event_properties).toMatchObject({
             runtimeProductStoreEnabled: true,
             runtimeProductStoreStatus: "ready",
-            runtimeProductStoreHasSnapshot: true,
+            runtimeProductStoreHasProjectProjection: true,
             coreRolloutStatus: "connected",
             coreRolloutSource: "managed",
             coreRolloutReason: "managed-core",
@@ -1559,6 +1624,8 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
         await expect(relaunchedClassicCoreTask).toContainText(liveRecoveryPrompt)
         await expect(relaunched.page.locator('[data-openade-surface="desktop-shared-project"]')).toHaveCount(0)
         await expect(relaunched.page.locator('[data-openade-surface="desktop-shared-task"]')).toHaveCount(0)
+        const rawRelaunchSmokeTelemetry = await relaunched.page.evaluate((storageKey) => window.localStorage.getItem(storageKey), SMOKE_ANALYTICS_STORAGE_KEY)
+        await reviewSmokeTelemetry(test.info(), rawRelaunchSmokeTelemetry, userDataDir, "managed-core-runtime-product-relaunch-telemetry")
 
         passed = true
     } finally {
@@ -1568,6 +1635,330 @@ test("packaged app launches managed OpenADE Core and exposes the Core runtime en
             rmSync(repoDir, { recursive: true, force: true })
         } else {
             console.log(`OPENADE_SMOKE_KEEP_ARTIFACTS retained managed Core userDataDir=${userDataDir} repoDir=${repoDir}`)
+        }
+    }
+})
+
+test("packaged app auto-starts managed Core for accepted legacy Yjs imports", async () => {
+    test.setTimeout(120_000)
+    const executablePath = resolveBinary()
+    const userDataDir = mkdtempSync(join(tmpdir(), "openade-core-accepted-smoke-"))
+    const repoDir = mkdtempSync(join(tmpdir(), "openade-core-accepted-repo-"))
+    const yjsStorageDir = join(userDataDir, ".openade", "data", "yjs")
+    const coreDataDir = join(userDataDir, ".openade", "core")
+    const corePort = await getOpenPort()
+    const smokeId = `accepted-core-smoke-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+    const repoId = `${smokeId}-repo`
+    let app: Awaited<ReturnType<typeof electron.launch>> | undefined
+    let passed = false
+
+    try {
+        seedAcceptedLegacyYjsInstall(userDataDir, yjsStorageDir)
+        writeFileSync(join(repoDir, "README.md"), "OpenADE accepted legacy-import Core smoke fixture\n")
+        execFileSync("git", ["init"], { cwd: repoDir, stdio: "ignore" })
+        execFileSync("git", ["config", "user.email", "accepted-core-smoke@example.com"], { cwd: repoDir, stdio: "ignore" })
+        execFileSync("git", ["config", "user.name", "OpenADE Accepted Core Smoke"], { cwd: repoDir, stdio: "ignore" })
+        execFileSync("git", ["add", "README.md"], { cwd: repoDir, stdio: "ignore" })
+        execFileSync("git", ["commit", "-m", "Initial accepted Core smoke fixture"], { cwd: repoDir, stdio: "ignore" })
+
+        app = await electron.launch({
+            executablePath,
+            timeout: 60_000,
+            args: [`--user-data-dir=${userDataDir}`],
+            env: {
+                ...process.env,
+                HOME: userDataDir,
+                OPENADE_CORE_DATA_DIR: coreDataDir,
+                OPENADE_CORE_PORT: String(corePort),
+                OPENADE_CORE_TOKEN: "accepted-core-smoke-token",
+                OPENADE_DISABLE_ACTIVE_WORK_UNLOAD_BLOCKER: "1",
+                OPENADE_SMOKE_DETERMINISTIC_HARNESS: "1",
+                OPENADE_SMOKE_TEST: "1",
+                OPENADE_YJS_STORAGE_DIR: yjsStorageDir,
+                USERPROFILE: userDataDir,
+            },
+        })
+
+        const page = await app.firstWindow({ timeout: 30_000 })
+        await page.waitForURL(/dist\/web\/index\.html|web\/index\.html/, { timeout: 30_000 })
+        await page.waitForFunction(() => "openadeAPI" in window, null, { timeout: 30_000 })
+
+        const acceptedSmoke = await page.evaluate(async ({ expectedEndpointUrl, smokeRepoId, smokeRepoPath }) => {
+            type RuntimeResponse<T> = { id: number; result?: T; error?: { code?: string; message?: string } }
+            type InitializeResult = {
+                serverName: string
+                protocolVersion: number
+                capabilities: { methods: string[]; notifications: string[] }
+            }
+            type SnapshotResult = {
+                server: { version?: string }
+                repos: unknown[]
+                workingTaskIds: unknown[]
+            }
+            type RepoCreateResult = { repoId: string; createdAt: string }
+            type TaskCreateResult = { taskId: string; title: string; createdAt: string }
+            type TaskEvent = {
+                id?: string
+                status?: string
+                source?: { type?: string }
+                userInput?: string
+            }
+            type TaskReadResult = {
+                id: string
+                repoId: string
+                title: string
+                events: TaskEvent[]
+            }
+            type TurnStartResult = { taskId: string; eventId?: string; queued?: boolean }
+            type SmokeTelemetryEvent = {
+                event_type?: string
+                event_properties?: {
+                    runtimeProductStoreEnabled?: boolean
+                    runtimeProductStoreStatus?: string
+                    runtimeProductStoreHasSnapshot?: boolean
+                    runtimeProductStoreHasProjectProjection?: boolean
+                    runtimeProductStoreRepoCount?: number
+                    runtimeProductStoreTaskPreviewCount?: number
+                    runtimeProductStoreCachedTaskCount?: number
+                    coreRolloutStatus?: string
+                    coreRolloutSource?: string
+                    coreRolloutReason?: string
+                    coreRolloutAutomatic?: boolean
+                    coreLegacyYjsDocumentsPresent?: boolean
+                    coreLegacyYjsMigrationAccepted?: boolean
+                }
+            }
+
+            const endpoint = window.openadeAPI?.core?.runtimeEndpoint
+            if (!endpoint) throw new Error("openadeAPI.core.runtimeEndpoint is not available for accepted legacy import")
+            if (endpoint.url !== expectedEndpointUrl) {
+                throw new Error(`Unexpected accepted-import endpoint: ${endpoint.url}`)
+            }
+            const rolloutState = window.openadeAPI?.core?.rolloutState
+            if (!rolloutState) throw new Error("openadeAPI.core.rolloutState is not available for accepted legacy import")
+
+            const readSmokeEvents = (): SmokeTelemetryEvent[] => {
+                const raw = window.localStorage.getItem("openade-smoke-analytics-events")
+                if (!raw) return []
+                const parsed: unknown = JSON.parse(raw)
+                return Array.isArray(parsed) ? (parsed as SmokeTelemetryEvent[]) : []
+            }
+
+            const waitForAcceptedAppOpened = async (): Promise<SmokeTelemetryEvent> => {
+                for (let attempt = 0; attempt < 120; attempt++) {
+                    const event = readSmokeEvents().find((candidate) => {
+                        const props = candidate.event_properties
+                        return (
+                            candidate.event_type === "app_opened" &&
+                            props?.runtimeProductStoreEnabled === true &&
+                            props.runtimeProductStoreStatus === "ready" &&
+                            props.runtimeProductStoreHasProjectProjection === true &&
+                            props.coreRolloutReason === "legacy-yjs-migration-accepted" &&
+                            props.coreLegacyYjsDocumentsPresent === true &&
+                            props.coreLegacyYjsMigrationAccepted === true
+                        )
+                    })
+                    if (event) return event
+                    await new Promise((resolveDelay) => window.setTimeout(resolveDelay, 250))
+                }
+                throw new Error(`Renderer did not report accepted legacy-import Core readiness; events: ${JSON.stringify(readSmokeEvents())}`)
+            }
+
+            const socket = new WebSocket(endpoint.url, [`bearer.${endpoint.token}`])
+            await new Promise<void>((resolveSocket, rejectSocket) => {
+                const timeout = window.setTimeout(() => rejectSocket(new Error("Accepted-import Core WebSocket timed out")), 3_000)
+                socket.addEventListener(
+                    "open",
+                    () => {
+                        window.clearTimeout(timeout)
+                        resolveSocket()
+                    },
+                    { once: true }
+                )
+                socket.addEventListener(
+                    "error",
+                    () => {
+                        window.clearTimeout(timeout)
+                        rejectSocket(new Error("Accepted-import Core WebSocket connection failed"))
+                    },
+                    { once: true }
+                )
+            })
+
+            let nextId = 1
+            const request = async <T>(method: string, params?: unknown): Promise<T> => {
+                const id = nextId++
+                const responsePromise = new Promise<RuntimeResponse<T>>((resolveResponse, rejectResponse) => {
+                    const timeout = window.setTimeout(() => rejectResponse(new Error(`Timed out waiting for ${method}`)), 10_000)
+                    const onMessage = (event: MessageEvent<string>) => {
+                        const parsed = JSON.parse(event.data) as RuntimeResponse<T> | { method?: string }
+                        if (!("id" in parsed) || parsed.id !== id) return
+                        window.clearTimeout(timeout)
+                        socket.removeEventListener("message", onMessage)
+                        resolveResponse(parsed)
+                    }
+                    socket.addEventListener("message", onMessage)
+                })
+                socket.send(JSON.stringify(params === undefined ? { id, method } : { id, method, params }))
+                const response = await responsePromise
+                if (response.error) throw new Error(response.error.message ?? `Accepted-import Core request failed: ${method}`)
+                return response.result as T
+            }
+            const sleep = (ms: number) => new Promise((resolveDelay) => window.setTimeout(resolveDelay, ms))
+            const waitForAcceptedTurnCompletion = async (taskId: string, eventId: string): Promise<TaskReadResult> => {
+                let lastEventStates: Array<{ id?: string; status?: string; sourceType?: string }> = []
+                for (let attempt = 0; attempt < 80; attempt++) {
+                    const result = await request<TaskReadResult>("openade/task/read", {
+                        repoId: smokeRepoId,
+                        taskId,
+                        hydrateSessionEvents: true,
+                    })
+                    lastEventStates = result.events.map((candidate) => ({
+                        id: candidate.id,
+                        status: candidate.status,
+                        sourceType: candidate.source?.type,
+                    }))
+                    const event = result.events.find((candidate) => candidate.id === eventId)
+                    if (event?.status === "completed") return result
+                    if (event?.status === "failed" || event?.status === "interrupted") {
+                        throw new Error(`Accepted-import Core turn event ${eventId} ended as ${event.status}`)
+                    }
+                    await sleep(250)
+                }
+                throw new Error(`Accepted-import Core turn event ${eventId} did not complete; last events: ${JSON.stringify(lastEventStates)}`)
+            }
+
+            const createdBy = { id: "accepted-core-smoke-user", email: "accepted-core-smoke@example.com" }
+            const initialize = await request<InitializeResult>("initialize", {
+                clientName: "OpenADE packaged accepted legacy-import smoke",
+                clientPlatform: "desktop",
+                protocolVersion: 1,
+            })
+            const snapshot = await request<SnapshotResult>("openade/snapshot/read")
+            const repoCreate = await request<RepoCreateResult>("openade/repo/create", {
+                repoId: smokeRepoId,
+                name: "Accepted Core Smoke Repo",
+                path: smokeRepoPath,
+                createdBy,
+                clientRequestId: `${smokeRepoId}-repo-create`,
+            })
+            const taskCreate = await request<TaskCreateResult>("openade/task/create", {
+                repoId: repoCreate.repoId,
+                input: "Accepted legacy import classic desktop task smoke",
+                title: "Accepted Core Classic Task",
+                createdBy,
+                deviceId: "accepted-core-smoke-device",
+                clientRequestId: `${smokeRepoId}-task-create`,
+            })
+            const createdTask = await request<TaskReadResult>("openade/task/read", {
+                repoId: repoCreate.repoId,
+                taskId: taskCreate.taskId,
+                hydrateSessionEvents: false,
+            })
+            const turnStart = await request<TurnStartResult>("openade/turn/start", {
+                repoId: repoCreate.repoId,
+                inTaskId: taskCreate.taskId,
+                type: "ask",
+                input: "Run accepted legacy import classic desktop task smoke",
+                harnessId: "codex",
+                modelId: "gpt-smoke",
+                clientRequestId: `${smokeRepoId}-turn-start`,
+            })
+            if (!turnStart.eventId) {
+                throw new Error(`Accepted-import Core turn did not return an event id${turnStart.queued ? " because it queued" : ""}`)
+            }
+            const task = await waitForAcceptedTurnCompletion(taskCreate.taskId, turnStart.eventId)
+            socket.close()
+            const appOpened = await waitForAcceptedAppOpened()
+            return {
+                endpointHasToken: endpoint.token.length > 0,
+                rolloutState,
+                initialize,
+                snapshot,
+                repoCreate,
+                taskCreate,
+                createdTask,
+                turnStart,
+                task,
+                appOpened,
+            }
+        }, { expectedEndpointUrl: `ws://127.0.0.1:${corePort}/v1/runtime`, smokeRepoId: repoId, smokeRepoPath: repoDir })
+
+        expect(acceptedSmoke.endpointHasToken).toBe(true)
+        expect(acceptedSmoke.rolloutState).toEqual({
+            status: "connected",
+            source: "managed",
+            reason: "legacy-yjs-migration-accepted",
+            automatic: true,
+            legacyYjsDocumentsPresent: true,
+            legacyYjsMigrationAccepted: true,
+        })
+        expect(acceptedSmoke.initialize.serverName).toBe("openade-core")
+        expect(acceptedSmoke.initialize.protocolVersion).toBe(1)
+        expect(acceptedSmoke.initialize.capabilities.methods).toEqual(
+            expect.arrayContaining([
+                "initialize",
+                "openade/snapshot/read",
+                "openade/repo/create",
+                "openade/task/create",
+                "openade/task/read",
+                "openade/turn/start",
+            ])
+        )
+        expect(acceptedSmoke.repoCreate.repoId).toBe(repoId)
+        expect(acceptedSmoke.taskCreate).toMatchObject({ title: "Accepted Core Classic Task" })
+        expect(acceptedSmoke.createdTask).toMatchObject({
+            id: acceptedSmoke.taskCreate.taskId,
+            repoId,
+            title: "Accepted Core Classic Task",
+        })
+        expect(acceptedSmoke.turnStart).toMatchObject({ taskId: acceptedSmoke.taskCreate.taskId })
+        expect(acceptedSmoke.turnStart.eventId).toBeTruthy()
+        expect(acceptedSmoke.task.events).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: acceptedSmoke.turnStart.eventId,
+                    status: "completed",
+                    userInput: "Run accepted legacy import classic desktop task smoke",
+                }),
+            ])
+        )
+        expect(Array.isArray(acceptedSmoke.snapshot.repos)).toBe(true)
+        expect(Array.isArray(acceptedSmoke.snapshot.workingTaskIds)).toBe(true)
+        expect(acceptedSmoke.appOpened.event_properties).toMatchObject({
+            runtimeProductStoreEnabled: true,
+            runtimeProductStoreStatus: "ready",
+            runtimeProductStoreHasProjectProjection: true,
+            coreRolloutStatus: "connected",
+            coreRolloutSource: "managed",
+            coreRolloutReason: "legacy-yjs-migration-accepted",
+            coreRolloutAutomatic: true,
+            coreLegacyYjsDocumentsPresent: true,
+            coreLegacyYjsMigrationAccepted: true,
+        })
+
+        const rawSmokeTelemetry = await page.evaluate((storageKey) => window.localStorage.getItem(storageKey), SMOKE_ANALYTICS_STORAGE_KEY)
+        await reviewSmokeTelemetry(test.info(), rawSmokeTelemetry, userDataDir, "accepted-legacy-import-runtime-product-smoke-telemetry")
+
+        await page.evaluate(({ smokeRepoId, smokeTaskId }) => {
+            window.location.hash = `/dashboard/code/workspace/${smokeRepoId}/task/${smokeTaskId}`
+        }, { smokeRepoId: repoId, smokeTaskId: acceptedSmoke.taskCreate.taskId })
+        const classicAcceptedTask = page.locator('[data-openade-surface="desktop-classic-task"]')
+        await expect(classicAcceptedTask).toBeVisible({ timeout: 30_000 })
+        await expect(classicAcceptedTask).toContainText("Run accepted legacy import classic desktop task smoke")
+        await expect(page.locator('[data-openade-surface="desktop-shared-project"]')).toHaveCount(0)
+        await expect(page.locator('[data-openade-surface="desktop-shared-task"]')).toHaveCount(0)
+
+        passed = true
+    } finally {
+        if (app) {
+            await app.close().catch(() => undefined)
+        }
+        if (passed || process.env.OPENADE_SMOKE_KEEP_ARTIFACTS !== "1") {
+            rmSync(userDataDir, { recursive: true, force: true })
+            rmSync(repoDir, { recursive: true, force: true })
+        } else {
+            console.log(`OPENADE_SMOKE_KEEP_ARTIFACTS retained accepted legacy-import userDataDir=${userDataDir} repoDir=${repoDir}`)
         }
     }
 })

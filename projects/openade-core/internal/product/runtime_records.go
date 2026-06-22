@@ -143,6 +143,24 @@ func (service *Service) listActiveOpenADETaskRuntimeRecords(ctx context.Context,
 	return results, nil
 }
 
+func (service *Service) listActiveOpenADETaskIDs(ctx context.Context) ([]string, *core.RuntimeError) {
+	records, runtimeErr := service.listActiveOpenADETaskRuntimeRecords(ctx, "")
+	if runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	seen := map[string]bool{}
+	taskIDs := []string{}
+	for _, record := range records {
+		taskID := strings.TrimSpace(record.Scope.OwnerID)
+		if taskID == "" || seen[taskID] {
+			continue
+		}
+		seen[taskID] = true
+		taskIDs = append(taskIDs, taskID)
+	}
+	return taskIDs, nil
+}
+
 func normalizeRuntimeStatusList(values []string) ([]string, *core.RuntimeError) {
 	if len(values) == 0 {
 		return nil, nil

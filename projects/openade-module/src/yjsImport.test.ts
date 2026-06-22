@@ -242,6 +242,13 @@ describe("importOpenADELegacyYjsData", () => {
                     errors: [],
                 })
                 expect(parity).toMatchObject({ scannedRepos: 1, scannedTasks: 1, mismatches: [] })
+                const workingTaskMismatchReport = await compareOpenADELegacyYjsToCore(sourceProjection, client, { workingTaskIds: ["task-legacy"] })
+                expect(workingTaskMismatchReport.mismatches).toContainEqual({
+                    scope: "snapshot",
+                    field: "workingTaskIds",
+                    legacy: ["task-legacy"],
+                    core: [],
+                })
 
                 const snapshot = await client.getSnapshot()
                 expect(snapshot.repos).toEqual([
@@ -326,7 +333,6 @@ describe("importOpenADELegacyYjsData", () => {
                     taskTitle: "Legacy Task",
                     isRunning: false,
                     snapshotIds: ["snapshot-legacy"],
-                    images: [expect.objectContaining({ id: "action-image", ext: "png" })],
                     sessions: expect.arrayContaining([
                         expect.objectContaining({ sessionId: "session-legacy", harnessId: "codex" }),
                         expect.objectContaining({ sessionId: "session-sub-legacy", harnessId: "claude-code" }),
@@ -334,6 +340,64 @@ describe("importOpenADELegacyYjsData", () => {
                     ]),
                     worktree: null,
                 })
+                expect(inventory.images).toHaveLength(2)
+                expect(inventory.images).toEqual(
+                    expect.arrayContaining([
+                        expect.objectContaining({ id: "action-image", ext: "png" }),
+                        expect.objectContaining({ id: "queued-image", ext: "png" }),
+                    ]),
+                )
+
+                const extraCoreRepoPath = tempRoot("openade-yjs-import-extra-core-repo-")
+                await client.createRepo({
+                    repoId: "repo-extra-core",
+                    name: "Extra Core Repo",
+                    path: extraCoreRepoPath,
+                    createdBy: { id: "user-legacy", email: "legacy@example.com" },
+                    createdAt: "2026-06-01T00:06:00.000Z",
+                })
+                await client.createTask({
+                    repoId: "repo-legacy",
+                    taskId: "task-extra-core",
+                    slug: "extra-core-task",
+                    title: "Extra Core Task",
+                    input: "Unexpected Core-only task",
+                    createdBy: { id: "user-legacy", email: "legacy@example.com" },
+                    deviceId: "device-legacy",
+                    createdAt: "2026-06-01T00:06:30.000Z",
+                    isolationStrategy: { type: "head" },
+                })
+                const extraCoreRowsReport = await compareOpenADELegacyYjsToCore(sourceProjection, client)
+                expect(extraCoreRowsReport.mismatches).toContainEqual({
+                    scope: "repo",
+                    repoId: "repo-extra-core",
+                    field: "repo",
+                    legacy: undefined,
+                    core: {
+                        id: "repo-extra-core",
+                        name: "Extra Core Repo",
+                        path: extraCoreRepoPath,
+                    },
+                })
+                expect(extraCoreRowsReport.mismatches).toContainEqual(
+                    expect.objectContaining({
+                        scope: "taskPreview",
+                        repoId: "repo-legacy",
+                        taskId: "task-extra-core",
+                        field: "taskPreview",
+                        legacy: undefined,
+                        core: expect.objectContaining({
+                            id: "task-extra-core",
+                            slug: "extra-core-task",
+                            title: "Extra Core Task",
+                        }),
+                    })
+                )
+                const filteredExtraCoreRowsReport = await compareOpenADELegacyYjsToCore(sourceProjection, client, {
+                    repoIds: ["repo-legacy"],
+                    taskIds: ["task-legacy"],
+                })
+                expect(filteredExtraCoreRowsReport.mismatches).toEqual([])
 
                 await client.updateTaskMetadata({ taskId: "task-legacy", title: "Changed after import", clientRequestId: "parity-negative-title" })
                 const mismatchReport = await compareOpenADELegacyYjsToCore(sourceProjection, client)

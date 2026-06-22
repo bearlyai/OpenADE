@@ -197,6 +197,56 @@ async function installLargeSessionTaskFixture(): Promise<void> {
     }
 }
 
+async function installTinyTaskFixture(taskId: string): Promise<void> {
+    const updatedAt = "2026-05-08T00:00:00.000Z"
+    const reposDoc = new Y.Doc()
+    const reposData = await storage.readDocumentUpdate("code:repos")
+    if (!reposData) throw new Error("Fixture repo document is missing")
+    Y.applyUpdate(reposDoc, reposData)
+
+    try {
+        const repoMap = reposDoc.getMap<Y.Map<unknown>>("repos:data").get("repo-fixture")
+        if (!(repoMap instanceof Y.Map)) throw new Error("Fixture repo is missing")
+        const tasks = repoMap.get("tasks")
+        if (!(tasks instanceof Y.Array)) throw new Error("Fixture repo tasks are missing")
+
+        reposDoc.transact(() => {
+            tasks.push([
+                toYValue({
+                    id: taskId,
+                    slug: taskId,
+                    title: `Task ${taskId}`,
+                    createdAt: updatedAt,
+                    lastEventAt: updatedAt,
+                }),
+            ])
+            repoMap.set("updatedAt", updatedAt)
+        })
+        await storage.saveDocumentUpdate("code:repos", Y.encodeStateAsUpdate(reposDoc))
+    } finally {
+        reposDoc.destroy()
+    }
+
+    const taskDoc = new Y.Doc()
+    try {
+        const meta = taskDoc.getMap<unknown>("task:meta")
+        taskDoc.transact(() => {
+            meta.set("id", taskId)
+            meta.set("repoId", "repo-fixture")
+            meta.set("slug", taskId)
+            meta.set("title", `Task ${taskId}`)
+            meta.set("description", "")
+            meta.set("isolationStrategy", toYValue({ type: "head" }))
+            meta.set("createdAt", updatedAt)
+            meta.set("updatedAt", updatedAt)
+            meta.set("lastEventAt", updatedAt)
+        })
+        await storage.saveDocumentUpdate(`code:task:${taskId}`, Y.encodeStateAsUpdate(taskDoc))
+    } finally {
+        taskDoc.destroy()
+    }
+}
+
 describe("createOpenADEYjsProjection fixtures", () => {
     beforeEach(async () => {
         storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "openade-module-projection-fixture-"))
@@ -265,19 +315,24 @@ describe("createOpenADEYjsProjection fixtures", () => {
         })
     })
 
-    it("keeps snapshot, project, and task-list reads on the same preview contract", async () => {
+    it("keeps project and task-list reads on the same lightweight preview contract", async () => {
         const projection = createOpenADEYjsProjection(storage)
 
         const snapshot = await projection.readSnapshot({ workingTaskIds: ["task-action"] })
         const projects = await projection.readProjects({ workingTaskIds: ["task-action"] })
         const taskList = await projection.readTaskList("repo-fixture", { workingTaskIds: ["task-action"] })
 
-        expect(projects).toEqual(snapshot.repos)
-        expect(taskList).toEqual(snapshot.repos[0].tasks)
+        expect(projects[0]).toMatchObject({
+            id: snapshot.repos[0].id,
+            name: snapshot.repos[0].name,
+            path: snapshot.repos[0].path,
+            archived: snapshot.repos[0].archived,
+        })
+        expect(taskList).toEqual(projects[0].tasks)
         expect(taskList.map((task) => task.id)).toEqual([
             "task-action",
-            "task-missing",
             "task-mismatch",
+            "task-missing",
             "task-old-open",
             "task-closed",
         ])
@@ -290,6 +345,41 @@ describe("createOpenADEYjsProjection fixtures", () => {
                 sourceLabel: "Do",
             },
         })
+    })
+
+    it("keeps project-list reads on the lightweight repos document path", async () => {
+        const rawUpdateReads: string[] = []
+        const mapReads: string[] = []
+        const arrayReads: string[] = []
+        const projection = createOpenADEYjsProjection({
+            ...storage,
+            readDocumentUpdate: async (id) => {
+                rawUpdateReads.push(id)
+                return storage.readDocumentUpdate(id)
+            },
+            readMapObject: async (documentId, mapName) => {
+                mapReads.push(`${documentId}:${mapName}`)
+                return storage.readMapObject(documentId, mapName)
+            },
+            readOrderedArray: async <T extends Record<string, unknown>>(documentId: string, name: string): Promise<T[] | null> => {
+                arrayReads.push(`${documentId}:${name}`)
+                return storage.readOrderedArray<T>(documentId, name)
+            },
+        })
+
+        const projects = await projection.readProjects({ workingTaskIds: ["task-action"] })
+
+        expect(projects.map((project) => project.id)).toEqual(["repo-fixture"])
+        expect(projects[0].tasks.map((task) => task.id)).toEqual([
+            "task-action",
+            "task-mismatch",
+            "task-missing",
+            "task-old-open",
+            "task-closed",
+        ])
+        expect(rawUpdateReads).toEqual(["code:repos"])
+        expect(arrayReads).toEqual([])
+        expect(mapReads).toEqual([])
     })
 
     it("projects task detail while preserving missing and mismatched task behavior", async () => {
@@ -388,11 +478,121 @@ describe("createOpenADEYjsProjection fixtures", () => {
         expect(arrayReads.filter((read) => read.startsWith("code:task:task-action:"))).toHaveLength(0)
     })
 
+    it("reuses fresh projected task documents without repeated raw reads", async () => {
+        const rawUpdateReads: string[] = []
+        const projection = createOpenADEYjsProjection({
+            ...storage,
+            readDocumentUpdate: async (id) => {
+                rawUpdateReads.push(id)
+                const data = await storage.readDocumentUpdate(id)
+                return data ? new Uint8Array(data) : data
+            },
+        })
+
+        const first = await projection.readTask("repo-fixture", "task-action", { hydrateSessionEvents: true })
+        const second = await projection.readTask("repo-fixture", "task-action", { hydrateSessionEvents: true })
+
+        expect(rawUpdateReads).toEqual(["code:task:task-action"])
+        expect(second.events).toBe(first.events)
+        expect(second.comments).toBe(first.comments)
+        expect(second.deviceEnvironments).toBe(first.deviceEnvironments)
+
+        projection.invalidateCache()
+        await projection.readTask("repo-fixture", "task-action", { hydrateSessionEvents: true })
+        expect(rawUpdateReads).toEqual(["code:task:task-action", "code:task:task-action"])
+    })
+
+    it("scopes projected document cache invalidation to changed documents", async () => {
+        const rawUpdateReads: string[] = []
+        const projection = createOpenADEYjsProjection({
+            ...storage,
+            readDocumentUpdate: async (id) => {
+                rawUpdateReads.push(id)
+                const data = await storage.readDocumentUpdate(id)
+                return data ? new Uint8Array(data) : data
+            },
+        })
+
+        await projection.readPersonalSettings()
+        await projection.readProjects()
+        await projection.readTask("repo-fixture", "task-action", { hydrateSessionEvents: true })
+        rawUpdateReads.length = 0
+
+        projection.invalidateCache({ documentIds: ["code:task:task-action"] })
+        await projection.readPersonalSettings()
+        await projection.readProjects()
+        await projection.readTask("repo-fixture", "task-action", { hydrateSessionEvents: true })
+        expect(rawUpdateReads).toEqual(["code:task:task-action"])
+
+        rawUpdateReads.length = 0
+        projection.invalidateCache()
+        await projection.readPersonalSettings()
+        await projection.readProjects()
+        expect(rawUpdateReads).toEqual(["code:personal_settings", "code:repos"])
+    })
+
+    it("keeps projected task documents through a broad task-open burst", async () => {
+        for (let index = 0; index < 80; index++) {
+            await installTinyTaskFixture(`task-cache-burst-${index}`)
+        }
+        const projection = createOpenADEYjsProjection({
+            ...storage,
+            readDocumentUpdate: async (id) => {
+                const data = await storage.readDocumentUpdate(id)
+                return data ? new Uint8Array(data) : data
+            },
+        })
+
+        const first = await projection.readTask("repo-fixture", "task-action", { hydrateSessionEvents: true })
+        for (let index = 0; index < 80; index++) {
+            await projection.readTask("repo-fixture", `task-cache-burst-${index}`, { hydrateSessionEvents: true })
+        }
+        const second = await projection.readTask("repo-fixture", "task-action", { hydrateSessionEvents: true })
+
+        expect(second.events).toBe(first.events)
+        expect(second.comments).toBe(first.comments)
+        expect(second.deviceEnvironments).toBe(first.deviceEnvironments)
+    })
+
+    it("projects repo and settings documents from raw updates without collection fallback reads", async () => {
+        const rawUpdateReads: string[] = []
+        const mapReads: string[] = []
+        const arrayReads: string[] = []
+        const projection = createOpenADEYjsProjection({
+            ...storage,
+            readDocumentUpdate: async (id) => {
+                rawUpdateReads.push(id)
+                const data = await storage.readDocumentUpdate(id)
+                return data ? new Uint8Array(data) : data
+            },
+            readMapObject: async (documentId, mapName) => {
+                mapReads.push(`${documentId}:${mapName}`)
+                return storage.readMapObject(documentId, mapName)
+            },
+            readOrderedArray: async <T extends Record<string, unknown>>(documentId: string, name: string): Promise<T[] | null> => {
+                arrayReads.push(`${documentId}:${name}`)
+                return storage.readOrderedArray<T>(documentId, name)
+            },
+        })
+
+        await projection.readSnapshot({ version: "fixture-version" })
+        await projection.readProjects()
+        await projection.readTaskList("repo-fixture")
+
+        expect(rawUpdateReads).toContain("code:personal_settings")
+        expect(rawUpdateReads).toContain("code:repos")
+        expect(rawUpdateReads.filter((id) => id === "code:personal_settings")).toHaveLength(1)
+        expect(rawUpdateReads.filter((id) => id === "code:repos")).toHaveLength(1)
+        expect(mapReads.filter((read) => read.startsWith("code:personal_settings:"))).toHaveLength(0)
+        expect(arrayReads.filter((read) => read.startsWith("code:repos:"))).toHaveLength(0)
+    })
+
     it("bounds stored session arrays on lightweight task reads and restores them when explicitly hydrated", async () => {
         await installLargeSessionTaskFixture()
         const projection = createOpenADEYjsProjection(storage)
 
         const lightweightTask = await projection.readTask("repo-fixture", "task-large-session", { hydrateSessionEvents: false })
+        const limitedTask = await projection.readTask("repo-fixture", "task-large-session", { hydrateSessionEvents: false, eventLimit: 12 })
         const hydratedTask = await projection.readTask("repo-fixture", "task-large-session", { hydrateSessionEvents: true })
 
         const olderAction = record(lightweightTask.events[0])
@@ -400,10 +600,18 @@ describe("createOpenADEYjsProjection fixtures", () => {
         expect(Array.isArray(olderExecution?.events) ? olderExecution.events : []).toHaveLength(0)
         expect(olderExecution?.omittedEventCount).toBe(1)
 
+        const middleAction = record(lightweightTask.events[40])
+        const middleExecution = record(middleAction?.execution)
+        expect(Array.isArray(middleExecution?.events) ? middleExecution.events : []).toHaveLength(0)
+        expect(middleExecution?.omittedEventCount).toBe(1)
+
         const latestAction = record(lightweightTask.events[81])
         const latestExecution = record(latestAction?.execution)
-        expect(Array.isArray(latestExecution?.events) ? latestExecution.events : []).toHaveLength(360)
-        expect(latestExecution?.omittedEventCount).toBe(5)
+        expect(Array.isArray(latestExecution?.events) ? latestExecution.events : []).toHaveLength(120)
+        expect(latestExecution?.omittedEventCount).toBe(245)
+
+        expect(limitedTask.events).toHaveLength(12)
+        expect(limitedTask.events.map(eventId)).toEqual(Array.from({ length: 12 }, (_, index) => `event-${index + 70}`))
 
         const hydratedLatestAction = record(hydratedTask.events[81])
         const hydratedLatestExecution = record(hydratedLatestAction?.execution)

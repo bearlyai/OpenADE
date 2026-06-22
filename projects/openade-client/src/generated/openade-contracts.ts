@@ -20,10 +20,13 @@ import type {
     OpenADECommentEditRequest,
     OpenADECronDefinitionsReadRequest,
     OpenADECronDefinitionsReadResult,
+    OpenADECronInstallStateListResult,
     OpenADECronInstallStateReadRequest,
     OpenADECronInstallStateReadResult,
     OpenADECronInstallStateReplaceRequest,
     OpenADECronInstallStateReplaceResult,
+    OpenADECronRunRequest,
+    OpenADECronRunResult,
     OpenADEHyperPlanReconcileLabelsSetRequest,
     OpenADEHyperPlanSubExecutionAddRequest,
     OpenADEHyperPlanSubExecutionStreamAppendRequest,
@@ -63,6 +66,7 @@ import type {
     OpenADEProjectProcessStartResult,
     OpenADEProjectProcessStopRequest,
     OpenADEProjectProcessStopResult,
+    OpenADEProjectSdkCapabilitiesReadRequest,
     OpenADEProjectSearchRequest,
     OpenADEProjectSearchResult,
     OpenADEQueuedTurnCancelRequest,
@@ -76,9 +80,12 @@ import type {
     OpenADERepoCreateRequest,
     OpenADERepoCreateResult,
     OpenADERepoDeleteRequest,
+    OpenADERepoPathInspectRequest,
+    OpenADERepoPathInspectResult,
     OpenADERepoUpdateRequest,
     OpenADEReviewStartRequest,
     OpenADEReviewStartResult,
+    OpenADESdkCapabilities,
     OpenADESnapshot,
     OpenADESnapshotEventCreateRequest,
     OpenADESnapshotEventCreateResult,
@@ -155,6 +162,15 @@ import type {
     OpenADETurnStartResult,
 } from "../../../openade-module/src/types"
 
+import type {
+    PairingPayload,
+    RemoteDeviceDropAllResult,
+    RemoteDeviceListResult,
+    RemoteDeviceRevokeRequest,
+    RemoteDeviceRevokeResult,
+    RemoteDeviceSelfRevokeResult,
+} from "../../../shared/companion/src"
+
 export type OpenADEEmptyRequest = Record<string, never>
 
 export type OpenADETaskReadRequest = { repoId: string; taskId: string } & OpenADETaskReadOptions
@@ -162,6 +178,8 @@ export type OpenADETaskReadRequest = { repoId: string; taskId: string } & OpenAD
 export type OpenADETaskListRequest = { repoId: string }
 
 export type OpenADETurnInterruptRequest = OpenADEClientRequest & { taskId: string }
+
+export type OpenADERemotePairingStartRequest = { baseUrl: string; hostId?: string }
 
 export const OPENADE_METHODS = [
     "openade/snapshot/read",
@@ -173,6 +191,7 @@ export const OPENADE_METHODS = [
     "openade/project/files/fuzzySearch",
     "openade/project/file/write",
     "openade/project/search",
+    "openade/project/sdkCapabilities/read",
     "openade/project/git/info/read",
     "openade/project/git/branches/read",
     "openade/project/git/summary/read",
@@ -181,8 +200,10 @@ export const OPENADE_METHODS = [
     "openade/project/process/start",
     "openade/project/process/reconnect",
     "openade/project/process/stop",
+    "openade/cron/installState/list",
     "openade/cron/installState/read",
     "openade/cron/installState/replace",
+    "openade/cron/run",
     "openade/task/changes/read",
     "openade/task/git/summary/read",
     "openade/task/git/scopes/read",
@@ -218,6 +239,7 @@ export const OPENADE_METHODS = [
     "openade/task/snapshot/index/read",
     "openade/task/snapshot/patch/readSlice",
     "openade/task/snapshots/importLegacy",
+    "openade/repo/path/inspect",
     "openade/repo/create",
     "openade/task/create",
     "openade/repo/update",
@@ -254,6 +276,99 @@ export const OPENADE_METHODS = [
 
 export type OpenADEMethod = (typeof OPENADE_METHODS)[number]
 
+export const OPENADE_METHOD = {
+    snapshotRead: "openade/snapshot/read",
+    projectList: "openade/project/list",
+    taskList: "openade/task/list",
+    taskRead: "openade/task/read",
+    projectFileRead: "openade/project/file/read",
+    projectFilesTree: "openade/project/files/tree",
+    projectFilesFuzzySearch: "openade/project/files/fuzzySearch",
+    projectFileWrite: "openade/project/file/write",
+    projectSearch: "openade/project/search",
+    projectSdkCapabilitiesRead: "openade/project/sdkCapabilities/read",
+    projectGitInfoRead: "openade/project/git/info/read",
+    projectGitBranchesRead: "openade/project/git/branches/read",
+    projectGitSummaryRead: "openade/project/git/summary/read",
+    projectProcessList: "openade/project/process/list",
+    cronDefinitionsRead: "openade/cron/definitions/read",
+    projectProcessStart: "openade/project/process/start",
+    projectProcessReconnect: "openade/project/process/reconnect",
+    projectProcessStop: "openade/project/process/stop",
+    cronInstallStateList: "openade/cron/installState/list",
+    cronInstallStateRead: "openade/cron/installState/read",
+    cronInstallStateReplace: "openade/cron/installState/replace",
+    cronRun: "openade/cron/run",
+    taskChangesRead: "openade/task/changes/read",
+    taskGitSummaryRead: "openade/task/git/summary/read",
+    taskGitScopesRead: "openade/task/git/scopes/read",
+    taskDiffRead: "openade/task/diff/read",
+    taskFilePairRead: "openade/task/filePair/read",
+    taskGitLog: "openade/task/git/log",
+    taskGitCommitFilesRead: "openade/task/git/commit/files/read",
+    taskGitFileAtTreeishRead: "openade/task/git/fileAtTreeish/read",
+    taskGitCommitFilePatchRead: "openade/task/git/commit/filePatch/read",
+    taskGitCommit: "openade/task/git/commit",
+    taskTerminalStart: "openade/task/terminal/start",
+    taskTerminalReconnect: "openade/task/terminal/reconnect",
+    taskTerminalWrite: "openade/task/terminal/write",
+    taskTerminalResize: "openade/task/terminal/resize",
+    taskTerminalStop: "openade/task/terminal/stop",
+    importLegacyResources: "openade/import/legacyResources",
+    settingsMcpServersRead: "openade/settings/mcpServers/read",
+    settingsMcpServersReplace: "openade/settings/mcpServers/replace",
+    settingsMcpServersUpsert: "openade/settings/mcpServers/upsert",
+    settingsMcpServersDelete: "openade/settings/mcpServers/delete",
+    settingsPersonalRead: "openade/settings/personal/read",
+    settingsPersonalReplace: "openade/settings/personal/replace",
+    taskImageRead: "openade/task/image/read",
+    taskImageStagedRead: "openade/task/image/staged/read",
+    taskImageWrite: "openade/task/image/write",
+    taskImageImportLegacy: "openade/task/image/importLegacy",
+    taskImagesImportLegacy: "openade/task/images/importLegacy",
+    taskImagesGcStaged: "openade/task/images/gcStaged",
+    taskSessionsImportLegacy: "openade/task/sessions/importLegacy",
+    taskResourceInventoryRead: "openade/task/resourceInventory/read",
+    taskTitleGenerate: "openade/task/title/generate",
+    taskSnapshotPatchRead: "openade/task/snapshot/patch/read",
+    taskSnapshotIndexRead: "openade/task/snapshot/index/read",
+    taskSnapshotPatchReadSlice: "openade/task/snapshot/patch/readSlice",
+    taskSnapshotsImportLegacy: "openade/task/snapshots/importLegacy",
+    repoPathInspect: "openade/repo/path/inspect",
+    repoCreate: "openade/repo/create",
+    taskCreate: "openade/task/create",
+    repoUpdate: "openade/repo/update",
+    repoDelete: "openade/repo/delete",
+    turnStart: "openade/turn/start",
+    reviewStart: "openade/review/start",
+    turnInterrupt: "openade/turn/interrupt",
+    queuedTurnCancel: "openade/queued-turn/cancel",
+    queuedTurnEnqueue: "openade/queued-turn/enqueue",
+    queuedTurnImportLegacy: "openade/queued-turn/importLegacy",
+    queuedTurnReorder: "openade/queued-turn/reorder",
+    actionCreate: "openade/action/create",
+    actionStreamAppend: "openade/action/stream/append",
+    actionComplete: "openade/action/complete",
+    actionError: "openade/action/error",
+    actionStopped: "openade/action/stopped",
+    actionReconcileRuntime: "openade/action/reconcileRuntime",
+    actionExecutionUpdate: "openade/action/execution/update",
+    hyperplanSubExecutionAdd: "openade/hyperplan/subExecution/add",
+    hyperplanSubExecutionStreamAppend: "openade/hyperplan/subExecution/stream/append",
+    hyperplanSubExecutionUpdate: "openade/hyperplan/subExecution/update",
+    hyperplanReconcileLabelsSet: "openade/hyperplan/reconcileLabels/set",
+    snapshotCreate: "openade/snapshot/create",
+    commentCreate: "openade/comment/create",
+    commentEdit: "openade/comment/edit",
+    commentDelete: "openade/comment/delete",
+    taskMetadataUpdate: "openade/task/metadata/update",
+    taskUsageBackfill: "openade/task/usage/backfill",
+    taskUsageRecalculate: "openade/task/usage/recalculate",
+    taskDelete: "openade/task/delete",
+    taskEnvironmentSetup: "openade/task/environment/setup",
+    taskEnvironmentPrepare: "openade/task/environment/prepare",
+} as const satisfies Record<string, OpenADEMethod>
+
 export const OPENADE_NOTIFICATIONS = [
     "openade/snapshotChanged",
     "openade/repo/updated",
@@ -267,6 +382,36 @@ export const OPENADE_NOTIFICATIONS = [
 ] as const
 
 export type OpenADENotificationMethod = (typeof OPENADE_NOTIFICATIONS)[number]
+
+export const OPENADE_NOTIFICATION = {
+    snapshotChanged: "openade/snapshotChanged",
+    repoUpdated: "openade/repo/updated",
+    repoDeleted: "openade/repo/deleted",
+    taskPreviewChanged: "openade/task/previewChanged",
+    taskUpdated: "openade/task/updated",
+    taskDeleted: "openade/task/deleted",
+    queuedTurnUpdated: "openade/queuedTurn/updated",
+    workingTasks: "openade/workingTasks",
+    remoteDeviceChanged: "remote/device/changed",
+} as const satisfies Record<string, OpenADENotificationMethod>
+
+export const OPENADE_REMOTE_METHODS = [
+    "remote/pairing/start",
+    "remote/device/list",
+    "remote/device/revoke",
+    "remote/device/dropAll",
+    "remote/device/selfRevoke",
+] as const
+
+export type OpenADERemoteMethod = (typeof OPENADE_REMOTE_METHODS)[number]
+
+export const OPENADE_REMOTE_METHOD = {
+    remotePairingStart: "remote/pairing/start",
+    remoteDeviceList: "remote/device/list",
+    remoteDeviceRevoke: "remote/device/revoke",
+    remoteDeviceDropAll: "remote/device/dropAll",
+    remoteDeviceSelfRevoke: "remote/device/selfRevoke",
+} as const satisfies Record<string, OpenADERemoteMethod>
 
 export const OPENADE_ERROR_CODES = [
     "conflict",
@@ -295,11 +440,13 @@ export const OPENADE_READ_METHODS_TO_COALESCE = [
     "openade/project/files/tree",
     "openade/project/files/fuzzySearch",
     "openade/project/search",
+    "openade/project/sdkCapabilities/read",
     "openade/project/git/info/read",
     "openade/project/git/branches/read",
     "openade/project/git/summary/read",
     "openade/project/process/list",
     "openade/cron/definitions/read",
+    "openade/cron/installState/list",
     "openade/cron/installState/read",
     "openade/task/changes/read",
     "openade/task/git/summary/read",
@@ -318,6 +465,62 @@ export const OPENADE_READ_METHODS_TO_COALESCE = [
     "openade/task/snapshot/patch/readSlice",
 ] as const satisfies readonly OpenADEMethod[]
 
+export const OPENADE_PERMISSION_PROFILE_PAIRED_PERMISSIONS = [
+    "initialize",
+    "server/status/read",
+    "subscription/update",
+    "remote/device/selfRevoke",
+    "openade/snapshot/read",
+    "openade/project/list",
+    "openade/project/files/tree",
+    "openade/project/files/fuzzySearch",
+    "openade/project/file/read",
+    "openade/project/search",
+    "openade/project/sdkCapabilities/read",
+    "openade/project/git/info/read",
+    "openade/project/git/branches/read",
+    "openade/project/git/summary/read",
+    "openade/project/process/list",
+    "openade/project/process/reconnect",
+    "openade/cron/definitions/read",
+    "openade/settings/mcpServers/read",
+    "openade/task/list",
+    "openade/task/read",
+    "openade/task/create",
+    "openade/task/changes/read",
+    "openade/task/diff/read",
+    "openade/task/filePair/read",
+    "openade/task/git/summary/read",
+    "openade/task/git/log",
+    "openade/task/git/scopes/read",
+    "openade/task/git/commit/files/read",
+    "openade/task/git/fileAtTreeish/read",
+    "openade/task/git/commit/filePatch/read",
+    "openade/task/image/read",
+    "openade/task/image/write",
+    "openade/task/resourceInventory/read",
+    "openade/task/snapshot/patch/read",
+    "openade/task/snapshot/index/read",
+    "openade/task/snapshot/patch/readSlice",
+    "openade/turn/start",
+    "openade/review/start",
+    "openade/turn/interrupt",
+    "openade/queued-turn/enqueue",
+    "openade/queued-turn/reorder",
+    "openade/queued-turn/cancel",
+    "openade/comment/create",
+    "openade/comment/edit",
+    "openade/comment/delete",
+    "openade/task/metadata/update",
+    "openade/task/delete",
+] as const
+
+export const OPENADE_PERMISSION_PROFILE_PAIRED_NOTIFICATION_PERMISSIONS = [
+    "connection/*",
+    "remote/device/changed",
+    "openade/*",
+] as const
+
 export interface OpenADERequestByMethod {
     "openade/snapshot/read": undefined
     "openade/project/list": undefined
@@ -328,6 +531,7 @@ export interface OpenADERequestByMethod {
     "openade/project/files/fuzzySearch": OpenADEProjectFilesFuzzySearchRequest
     "openade/project/file/write": OpenADEProjectFileWriteRequest
     "openade/project/search": OpenADEProjectSearchRequest
+    "openade/project/sdkCapabilities/read": OpenADEProjectSdkCapabilitiesReadRequest
     "openade/project/git/info/read": OpenADEProjectGitInfoRequest
     "openade/project/git/branches/read": OpenADEProjectGitBranchesReadRequest
     "openade/project/git/summary/read": OpenADEProjectGitSummaryReadRequest
@@ -336,8 +540,10 @@ export interface OpenADERequestByMethod {
     "openade/project/process/start": OpenADEProjectProcessStartRequest
     "openade/project/process/reconnect": OpenADEProjectProcessReconnectRequest
     "openade/project/process/stop": OpenADEProjectProcessStopRequest
+    "openade/cron/installState/list": undefined
     "openade/cron/installState/read": OpenADECronInstallStateReadRequest
     "openade/cron/installState/replace": OpenADECronInstallStateReplaceRequest
+    "openade/cron/run": OpenADECronRunRequest
     "openade/task/changes/read": OpenADETaskChangesReadRequest
     "openade/task/git/summary/read": OpenADETaskGitSummaryRequest
     "openade/task/git/scopes/read": OpenADETaskGitScopesReadRequest
@@ -373,6 +579,7 @@ export interface OpenADERequestByMethod {
     "openade/task/snapshot/index/read": OpenADETaskSnapshotIndexReadRequest
     "openade/task/snapshot/patch/readSlice": OpenADETaskSnapshotPatchSliceReadRequest
     "openade/task/snapshots/importLegacy": OpenADETaskSnapshotsImportLegacyRequest
+    "openade/repo/path/inspect": OpenADERepoPathInspectRequest
     "openade/repo/create": OpenADERepoCreateRequest
     "openade/task/create": OpenADETaskCreateRequest
     "openade/repo/update": OpenADERepoUpdateRequest
@@ -417,6 +624,7 @@ export interface OpenADEResponseByMethod {
     "openade/project/files/fuzzySearch": OpenADEProjectFilesFuzzySearchResult
     "openade/project/file/write": OpenADEProjectFileWriteResult
     "openade/project/search": OpenADEProjectSearchResult
+    "openade/project/sdkCapabilities/read": OpenADESdkCapabilities
     "openade/project/git/info/read": OpenADEProjectGitInfoResult
     "openade/project/git/branches/read": OpenADEProjectGitBranchesReadResult
     "openade/project/git/summary/read": OpenADEProjectGitSummaryReadResult
@@ -425,8 +633,10 @@ export interface OpenADEResponseByMethod {
     "openade/project/process/start": OpenADEProjectProcessStartResult
     "openade/project/process/reconnect": OpenADEProjectProcessReconnectResult
     "openade/project/process/stop": OpenADEProjectProcessStopResult
+    "openade/cron/installState/list": OpenADECronInstallStateListResult
     "openade/cron/installState/read": OpenADECronInstallStateReadResult
     "openade/cron/installState/replace": OpenADECronInstallStateReplaceResult
+    "openade/cron/run": OpenADECronRunResult
     "openade/task/changes/read": OpenADETaskChangesReadResult
     "openade/task/git/summary/read": OpenADETaskGitSummaryResult
     "openade/task/git/scopes/read": OpenADETaskGitScopesReadResult
@@ -462,6 +672,7 @@ export interface OpenADEResponseByMethod {
     "openade/task/snapshot/index/read": OpenADETaskSnapshotIndexReadResult
     "openade/task/snapshot/patch/readSlice": OpenADETaskSnapshotPatchSliceReadResult
     "openade/task/snapshots/importLegacy": OpenADETaskSnapshotsImportLegacyResult
+    "openade/repo/path/inspect": OpenADERepoPathInspectResult
     "openade/repo/create": OpenADERepoCreateResult
     "openade/task/create": OpenADETaskCreateResult
     "openade/repo/update": void
@@ -498,3 +709,22 @@ export interface OpenADEResponseByMethod {
 
 export type OpenADERequestForMethod<Method extends OpenADEMethod> = OpenADERequestByMethod[Method]
 export type OpenADEResponseForMethod<Method extends OpenADEMethod> = OpenADEResponseByMethod[Method]
+
+export interface OpenADERemoteRequestByMethod {
+    "remote/pairing/start": OpenADERemotePairingStartRequest
+    "remote/device/list": undefined
+    "remote/device/revoke": RemoteDeviceRevokeRequest
+    "remote/device/dropAll": undefined
+    "remote/device/selfRevoke": undefined
+}
+
+export interface OpenADERemoteResponseByMethod {
+    "remote/pairing/start": PairingPayload
+    "remote/device/list": RemoteDeviceListResult
+    "remote/device/revoke": RemoteDeviceRevokeResult
+    "remote/device/dropAll": RemoteDeviceDropAllResult
+    "remote/device/selfRevoke": RemoteDeviceSelfRevokeResult
+}
+
+export type OpenADERemoteRequestForMethod<Method extends OpenADERemoteMethod> = OpenADERemoteRequestByMethod[Method]
+export type OpenADERemoteResponseForMethod<Method extends OpenADERemoteMethod> = OpenADERemoteResponseByMethod[Method]

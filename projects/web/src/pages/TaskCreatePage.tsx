@@ -12,6 +12,7 @@ import {
     ImagePlus,
     Loader2,
     MessageCircle,
+    RefreshCw,
     RotateCcw,
     Settings,
     Star,
@@ -20,6 +21,7 @@ import {
 } from "lucide-react"
 import { observer } from "mobx-react"
 import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { OPENADE_METHOD } from "../../../openade-client/src"
 import { FastModeToggle } from "../components/FastModeToggle"
 import { HarnessPicker } from "../components/HarnessPicker"
 import { ImageDropOverlay } from "../components/ImageDropOverlay"
@@ -37,6 +39,7 @@ import { usePortalContainer } from "../hooks/usePortalContainer"
 import { useShortcutHintsVisible } from "../hooks/useShortcutHintsVisible"
 import { useCodeNavigate } from "../routing"
 import { useCodeStore } from "../store/context"
+import { projectPathFromGitInfo } from "../store/managers/RepoManager"
 import { SdkCapabilitiesManager } from "../store/managers/SdkCapabilitiesManager"
 import type { StashedDraft } from "../store/managers/SmartEditorManager"
 import type { TaskCreation } from "../store/managers/TaskCreationManager"
@@ -70,6 +73,18 @@ const WORKTREE_SHORTCUT_LABEL = "⌥W"
 
 const getLastBranchKey = (workspaceId: string) => `code:lastBranch:${workspaceId}`
 const getCreateMoreKey = (workspaceId: string) => `code:createMore:${workspaceId}`
+const CORE_TASK_CREATE_METHODS = [
+    OPENADE_METHOD.taskCreate,
+    OPENADE_METHOD.turnStart,
+    OPENADE_METHOD.taskTitleGenerate,
+    OPENADE_METHOD.taskImageWrite,
+    OPENADE_METHOD.projectSdkCapabilitiesRead,
+    OPENADE_METHOD.projectFilesFuzzySearch,
+    OPENADE_METHOD.projectGitInfoRead,
+    OPENADE_METHOD.projectGitBranchesRead,
+    OPENADE_METHOD.projectGitSummaryRead,
+    OPENADE_METHOD.settingsMcpServersRead,
+] as const
 
 function PendingTaskItem({
     creation,
@@ -173,6 +188,13 @@ function formatDraftTime(createdAt: string): string {
         hour: "numeric",
         minute: "2-digit",
     }).format(new Date(createdAt))
+}
+
+function taskCreateEditorPlaceholder({ canUseFileMentions, canUseSlashCommands }: { canUseFileMentions: boolean; canUseSlashCommands: boolean }): string {
+    if (canUseFileMentions && canUseSlashCommands) return "Describe your task... Use @ to reference files, / for commands"
+    if (canUseFileMentions) return "Describe your task... Use @ to reference files"
+    if (canUseSlashCommands) return "Describe your task... Use / for commands"
+    return "Describe your task..."
 }
 
 function StashedDraftItem({ draft, onPop, onDelete }: { draft: StashedDraft; onPop: () => void; onDelete: () => void }) {
@@ -307,6 +329,12 @@ export const TaskCreateDraftsMenu = observer(({ workspaceId }: { workspaceId: st
 export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePageProps) => {
     const codeStore = useCodeStore()
     const navigate = useCodeNavigate()
+    const [, bumpCoreRuntimeCapabilityRevision] = useState(0)
+    const useRuntimeProductAPI = codeStore.shouldUseRuntimeProductAPI()
+    const productRuntimeOwnsTaskCreation = useRuntimeProductAPI || codeStore.usesCoreOwnedProductRuntime()
+    const canStartTurns = codeStore.canUseProductMethod(OPENADE_METHOD.turnStart)
+    const canCreateTasks = productRuntimeOwnsTaskCreation ? codeStore.canUseProductMethod(OPENADE_METHOD.taskCreate) : canStartTurns
+    const canCreateWithoutTurn = productRuntimeOwnsTaskCreation && canCreateTasks && !canStartTurns
     const portalContainer = usePortalContainer()
     const [branches, setBranches] = useState<BranchInfo[]>([])
     const [selectedBranch, setSelectedBranch] = useState<string>("")
@@ -322,16 +350,62 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
     const fileInputRef = useRef<HTMLInputElement>(null)
     const [showHyperPlan, setShowHyperPlan] = useState(false)
     const showKeyboardHints = useShortcutHintsVisible()
+    const canAttachImages = canCreateTasks && canStartTurns && codeStore.canUseProductMethod(OPENADE_METHOD.taskImageWrite)
+    const canReadProjectSdkCapabilities = codeStore.canUseProductMethod(OPENADE_METHOD.projectSdkCapabilitiesRead)
+    const canSearchProjectFiles = codeStore.canUseProductMethod(OPENADE_METHOD.projectFilesFuzzySearch)
+    const canLoadProductBranches = productRuntimeOwnsTaskCreation && codeStore.canUseProductMethod(OPENADE_METHOD.projectGitBranchesRead)
+    const canUseWorktreeCreation = productRuntimeOwnsTaskCreation ? canLoadProductBranches : true
+    const canReadMcpServers = productRuntimeOwnsTaskCreation ? codeStore.canUseProductMethod(OPENADE_METHOD.settingsMcpServersRead) : true
+    const canUseFileMentions = productRuntimeOwnsTaskCreation ? canSearchProjectFiles : true
+    const canResolveSmartEditorWorkingDir = productRuntimeOwnsTaskCreation && (canUseFileMentions || canReadProjectSdkCapabilities)
+
+    useEffect(() => {
+        if (!codeStore.usesCoreOwnedProductRuntime() || useRuntimeProductAPI) return
+        let cancelled = false
+        void codeStore
+            .ensureCoreOwnedProductMethodsAvailable(CORE_TASK_CREATE_METHODS)
+            .catch((err: unknown) => {
+                console.warn("[TaskCreatePage] Failed to load Core task creation capabilities:", err)
+            })
+            .finally(() => {
+                if (!cancelled) bumpCoreRuntimeCapabilityRevision((revision) => revision + 1)
+            })
+
+        return () => {
+            cancelled = true
+        }
+    }, [codeStore, useRuntimeProductAPI, workspaceId])
 
     // Get SmartEditorManager for task creation
     const editorManager = codeStore.smartEditors.getManager("task-create", workspaceId)
-    const persistImage = useCallback((payload: ImagePersistencePayload) => codeStore.persistProductTaskImage(payload), [codeStore])
+    const persistImage = useCallback(
+        (payload: ImagePersistencePayload) => {
+            if (!canAttachImages) throw new Error("Task image upload is not available from this runtime")
+            return codeStore.persistProductTaskImage(payload)
+        },
+        [canAttachImages, codeStore]
+    )
 
     // Page-level drop zone for images
-    const { isDragOver, dragHandlers } = useImageDropZone(editorManager, persistImage)
+    const { isDragOver, dragHandlers } = useImageDropZone(canAttachImages ? editorManager : null, persistImage)
 
-    // SDK capabilities for slash command autocomplete
-    const sdkCapabilities = useMemo(() => new SdkCapabilitiesManager(), [])
+    const sdkCapabilities = useMemo(() => {
+        if (productRuntimeOwnsTaskCreation) {
+            if (!canReadProjectSdkCapabilities) return undefined
+            return new SdkCapabilitiesManager(async () => {
+                const result = await codeStore.readProductProjectSdkCapabilities({ repoId: workspaceId })
+                return {
+                    slash_commands: result.slash_commands,
+                    skills: result.skills,
+                    plugins: result.plugins,
+                    cachedAt: result.cachedAt ?? Date.now(),
+                }
+            })
+        }
+
+        return new SdkCapabilitiesManager()
+    }, [canReadProjectSdkCapabilities, codeStore, productRuntimeOwnsTaskCreation, workspaceId])
+    const editorPlaceholder = taskCreateEditorPlaceholder({ canUseFileMentions, canUseSlashCommands: sdkCapabilities !== undefined })
     const focusEditorAtEnd = useCallback(() => {
         requestAnimationFrame(() => {
             editorRef.current?.focusEnd()
@@ -343,90 +417,145 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
         event.preventDefault()
         editorRef.current?.blur()
     }, [])
+    const resolveCreateRepoPath = useCallback(async () => {
+        if (repo?.path) return repo.path
+        if (!productRuntimeOwnsTaskCreation) return null
+        const gitInfo = await codeStore.repos.getGitInfo(workspaceId)
+        return gitInfo ? projectPathFromGitInfo(gitInfo) : null
+    }, [codeStore.repos, productRuntimeOwnsTaskCreation, repo?.path, workspaceId])
 
     // Track if git info has been loaded
     const [gitInfoLoaded, setGitInfoLoaded] = useState(false)
 
-    // Load git info and branches on mount
-    useEffect(() => {
-        const loadGitInfo = async () => {
-            setBranchesLoading(true)
-            try {
-                // Fetch git info (async, from cache or Electron)
+    const loadBranches = useCallback(async () => {
+        if (branchesLoading) return
+
+        setBranchesLoading(true)
+        try {
+            if (productRuntimeOwnsTaskCreation) {
+                if (!canLoadProductBranches) {
+                    setGitInfoLoaded(true)
+                    setBranches([])
+                    setSelectedBranch("")
+                    setDefaultBranch("")
+                    return
+                }
+            } else {
                 const gitInfo = await codeStore.repos.getGitInfo(workspaceId)
                 setGitInfoLoaded(true)
 
                 if (!gitInfo) {
-                    setBranchesLoading(false)
+                    setBranches([])
+                    setSelectedBranch("")
+                    setDefaultBranch("")
                     return
                 }
-
-                // Load branches using RepoManager
-                const result = await codeStore.repos.listBranches(workspaceId)
-                setBranches(result.branches)
-                setDefaultBranch(result.defaultBranch)
-
-                const storedLastBranch = localStorage.getItem(getLastBranchKey(workspaceId))
-                const branchExists = result.branches.some((b) => b.name === storedLastBranch)
-
-                if (storedLastBranch && branchExists) {
-                    setLastUsedBranch(storedLastBranch)
-                    setSelectedBranch(storedLastBranch)
-                } else {
-                    setSelectedBranch(result.defaultBranch)
-                }
-            } catch (err) {
-                console.error("[TaskCreatePage] Failed to load git info/branches:", err)
-            } finally {
-                setBranchesLoading(false)
             }
+
+            const result = await codeStore.repos.listBranches(workspaceId)
+            setGitInfoLoaded(true)
+            setBranches(result.branches)
+            setDefaultBranch(result.defaultBranch)
+
+            const storedLastBranch = localStorage.getItem(getLastBranchKey(workspaceId))
+            const branchExists = result.branches.some((b) => b.name === storedLastBranch)
+            const fallbackBranch = result.branches.find((branch) => branch.name === result.defaultBranch)?.name ?? result.branches[0]?.name ?? ""
+
+            if (storedLastBranch && branchExists) {
+                setLastUsedBranch(storedLastBranch)
+                setSelectedBranch(storedLastBranch)
+            } else {
+                setSelectedBranch(fallbackBranch)
+            }
+        } catch (err) {
+            setGitInfoLoaded(true)
+            console.error("[TaskCreatePage] Failed to load git branches:", err)
+        } finally {
+            setBranchesLoading(false)
+        }
+    }, [branchesLoading, canLoadProductBranches, codeStore.repos, productRuntimeOwnsTaskCreation, workspaceId])
+
+    // Legacy local task creation keeps its historical eager branch picker. Runtime/Core-backed
+    // task creation loads branches only after the user asks for Worktree.
+    useEffect(() => {
+        if (productRuntimeOwnsTaskCreation || gitInfoLoaded || branchesLoading) return
+        void loadBranches()
+    }, [branchesLoading, gitInfoLoaded, loadBranches, productRuntimeOwnsTaskCreation])
+
+    // Check for uncommitted changes only when worktree creation can show the warning.
+    useEffect(() => {
+        if (!gitInfoLoaded || !canUseWorktreeCreation || !useWorktree) {
+            setUncommittedChanges(null)
+            return
         }
 
-        loadGitInfo()
-    }, [workspaceId, codeStore.repos])
-
-    // Check for uncommitted changes when git info is loaded
-    useEffect(() => {
-        if (!gitInfoLoaded) return
+        let cancelled = false
 
         const checkUncommitted = async () => {
             try {
                 const result = await codeStore.repos.getGitSummary(workspaceId)
-                setUncommittedChanges(result)
+                if (!cancelled) setUncommittedChanges(result)
             } catch (err) {
                 console.error("[TaskCreatePage] Failed to check uncommitted changes:", err)
             }
         }
 
         checkUncommitted()
-    }, [gitInfoLoaded, workspaceId, codeStore.repos])
+
+        return () => {
+            cancelled = true
+        }
+    }, [canUseWorktreeCreation, gitInfoLoaded, useWorktree, workspaceId, codeStore.repos])
 
     // Refresh uncommitted changes when window regains focus
     useEffect(() => {
-        if (!gitInfoLoaded) return
+        if (!gitInfoLoaded || !canUseWorktreeCreation || !useWorktree) return
+
+        let cancelled = false
 
         const handleFocus = async () => {
             try {
                 const result = await codeStore.repos.getGitSummary(workspaceId)
-                setUncommittedChanges(result)
+                if (!cancelled) setUncommittedChanges(result)
             } catch (err) {
                 console.error("[TaskCreatePage] Failed to refresh uncommitted changes:", err)
             }
         }
 
         window.addEventListener("focus", handleFocus)
-        return () => window.removeEventListener("focus", handleFocus)
-    }, [gitInfoLoaded, workspaceId, codeStore.repos])
+        return () => {
+            cancelled = true
+            window.removeEventListener("focus", handleFocus)
+        }
+    }, [canUseWorktreeCreation, gitInfoLoaded, useWorktree, workspaceId, codeStore.repos])
 
     useEffect(() => {
         localStorage.setItem(getCreateMoreKey(workspaceId), String(createMore))
     }, [createMore, workspaceId])
+
+    useEffect(() => {
+        if (!canReadMcpServers && selectedMcpServerIds.length > 0) setSelectedMcpServerIds([])
+    }, [canReadMcpServers, selectedMcpServerIds.length])
 
     const handleBranchSelect = (branchName: string) => {
         setSelectedBranch(branchName)
         localStorage.setItem(getLastBranchKey(workspaceId), branchName)
         setLastUsedBranch(branchName)
     }
+
+    const handleUseWorktreeChange = useCallback(
+        (checked: boolean) => {
+            if (checked && !canUseWorktreeCreation) {
+                setUseWorktree(false)
+                return
+            }
+            setUseWorktree(checked)
+            if (checked && canLoadProductBranches && branches.length === 0 && !branchesLoading) {
+                void loadBranches()
+            }
+        },
+        [branches.length, branchesLoading, canLoadProductBranches, canUseWorktreeCreation, loadBranches]
+    )
 
     useEffect(() => {
         if (shouldSuppressEditorAutoFocusForKeyboardNavigation()) return
@@ -460,38 +589,39 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
 
     // Prune favorites that reference deleted files
     useEffect(() => {
+        if (productRuntimeOwnsTaskCreation) return
         if (repo?.path) {
             editorManager.validateFiles(repo.path)
         }
-    }, [repo?.path, editorManager])
+    }, [repo?.path, editorManager, productRuntimeOwnsTaskCreation])
 
     const handleCreate = useCallback(
         (mode: CreateMode) => {
-            if (!editorManager.value.trim() || !workspaceId) return
+            const submitWorktree = canUseWorktreeCreation && useWorktree
+            if (!canCreateTasks || !editorManager.value.trim() || !workspaceId || branchesLoading || (submitWorktree && !selectedBranch)) return
 
             const description = editorManager.value.trim()
             const images = [...editorManager.pendingImages]
 
-            console.log("[TaskCreatePage] Creating task with MCP servers", {
-                selectedMcpServerIds,
-                enabledServersCount: codeStore.mcpServers.enabledServers.length,
-            })
+            const submittedMcpServerIds = canReadMcpServers ? selectedMcpServerIds : []
 
-            const creationId = codeStore.creation.newTask({
+            const taskInput: Parameters<typeof codeStore.creation.newTask>[0] = {
                 repoId: workspaceId,
                 description,
                 mode,
-                isolationStrategy: useWorktree && selectedBranch ? { type: "worktree", sourceBranch: selectedBranch } : { type: "head" },
+                isolationStrategy: submitWorktree && selectedBranch ? { type: "worktree", sourceBranch: selectedBranch } : { type: "head" },
                 images,
-                enabledMcpServerIds: selectedMcpServerIds.length > 0 ? selectedMcpServerIds : undefined,
                 harnessId: codeStore.defaultHarnessId,
                 modelId: codeStore.defaultModel,
                 thinking: codeStore.defaultThinking,
                 fastMode: codeStore.defaultFastMode,
-            })
+            }
+            if (submittedMcpServerIds.length > 0) taskInput.enabledMcpServerIds = submittedMcpServerIds
+
+            const creationId = codeStore.creation.newTask(taskInput)
 
             editorManager.clear()
-            if (mode === "do" || mode === "ask") {
+            if (canStartTurns && (mode === "do" || mode === "ask")) {
                 navigate.go("CodeWorkspaceTaskCreating", { workspaceId, creationId })
             } else if (createMore) {
                 editorRef.current?.focus()
@@ -499,11 +629,27 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                 setPendingNavigationCreationId(creationId)
             }
         },
-        [codeStore, createMore, editorManager, navigate, selectedBranch, selectedMcpServerIds, useWorktree, workspaceId]
+        [
+            branchesLoading,
+            canCreateTasks,
+            canReadMcpServers,
+            canStartTurns,
+            canUseWorktreeCreation,
+            codeStore,
+            createMore,
+            editorManager,
+            navigate,
+            selectedBranch,
+            selectedMcpServerIds,
+            useWorktree,
+            workspaceId,
+        ]
     )
 
-    const isDisabled = !editorManager.value.trim()
+    const isWorktreeBranchMissing = canUseWorktreeCreation && useWorktree && !selectedBranch
+    const isDisabled = !canCreateTasks || !editorManager.value.trim() || isWorktreeBranchMissing || branchesLoading
     const showBranchSelector = gitInfoLoaded && branches.length > 0
+    const showWorktreeControls = productRuntimeOwnsTaskCreation ? canLoadProductBranches : showBranchSelector
 
     useEffect(() => {
         const handleCreateShortcut = (event: KeyboardEvent) => {
@@ -511,6 +657,13 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
             if (shortcutIndex === null || isDisabled || showHyperPlan) return
 
             const shortcutNumber = shortcutIndex + 1
+            if (canCreateWithoutTurn) {
+                if (shortcutNumber !== CREATE_MODE_SHORTCUTS.do) return
+                event.preventDefault()
+                handleCreate("do")
+                return
+            }
+
             const mode = (Object.entries(CREATE_MODE_SHORTCUTS) as Array<[CreateMode, number]>).find(([, number]) => number === shortcutNumber)?.[0]
             if (!mode) return
 
@@ -525,7 +678,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
 
         window.addEventListener("keydown", handleCreateShortcut, true)
         return () => window.removeEventListener("keydown", handleCreateShortcut, true)
-    }, [handleCreate, isDisabled, showHyperPlan])
+    }, [canCreateWithoutTurn, handleCreate, isDisabled, showHyperPlan])
 
     useEffect(() => {
         const handleOptionShortcut = (event: KeyboardEvent) => {
@@ -537,15 +690,15 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                 return
             }
 
-            if (showBranchSelector && isMetaShortcut(event, "KeyW", { alt: true })) {
+            if (showWorktreeControls && isMetaShortcut(event, "KeyW", { alt: true })) {
                 event.preventDefault()
-                setUseWorktree((value) => !value)
+                handleUseWorktreeChange(!useWorktree)
             }
         }
 
         window.addEventListener("keydown", handleOptionShortcut, true)
         return () => window.removeEventListener("keydown", handleOptionShortcut, true)
-    }, [showBranchSelector, showHyperPlan])
+    }, [handleUseWorktreeChange, showHyperPlan, showWorktreeControls, useWorktree])
 
     const creations = codeStore.creation.getCreationsForRepo(workspaceId)
     const pendingCreations = creations.filter((c) => c.completedTaskId === null)
@@ -567,7 +720,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
     }
 
     // Check for uncommitted changes warning condition
-    const showUncommittedWarning = uncommittedChanges?.hasChanges && useWorktree
+    const showUncommittedWarning = uncommittedChanges?.hasChanges && canUseWorktreeCreation && useWorktree
 
     const handleEditorAreaClick = () => {
         editorRef.current?.focus()
@@ -583,13 +736,16 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                     key={`${editorManager.workspaceId}:${editorManager.id}`}
                     ref={editorRef}
                     manager={editorManager}
-                    fileMentionsDir={repo?.path ?? null}
+                    fileMentionsDir={canUseFileMentions ? (repo?.path ?? null) : null}
+                    enableFileMentions={canUseFileMentions}
                     slashCommandsDir={repo?.path ?? null}
+                    resolveWorkingDir={canResolveSmartEditorWorkingDir ? resolveCreateRepoPath : undefined}
                     sdkCapabilities={sdkCapabilities}
-                    persistImage={persistImage}
+                    persistImage={canAttachImages ? persistImage : undefined}
+                    enableImagePasteDrop={canAttachImages}
                     onKeyDown={handleEditorKeyDown}
                     allowGlobalShortcutsWhenEmpty
-                    placeholder="Describe your task... Use @ to reference files, / for commands"
+                    placeholder={editorPlaceholder}
                     className="h-full text-base border-0 bg-transparent [&>div]:h-full [&>div]:border-0 [&>div]:border-l-2 [&>div]:border-l-transparent [&>div:focus-within]:border-l-primary [&>div]:transition-colors"
                     editorClassName="h-full"
                 />
@@ -597,7 +753,7 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
             </div>
 
             {/* Favorites bar - outside bottom bar, same bg as editor */}
-            {editorManager.favorites.length > 0 && (
+            {canUseFileMentions && editorManager.favorites.length > 0 && (
                 <div className="flex-shrink-0 flex items-center gap-2 px-6 py-2">
                     <Star size={12} className="text-muted" />
                     {editorManager.favorites.map((file) => (
@@ -660,38 +816,44 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                 {/* Main toolbar row */}
                 <div className="flex flex-wrap items-center gap-4 px-4 py-3">
                     {/* Left section: Connectors - scrollable */}
-                    <div className="flex-1 min-w-0 overflow-x-auto">
-                        <div className="flex items-center gap-2">
-                            <TaskMcpSelector selectedServerIds={selectedMcpServerIds} onSelectionChange={setSelectedMcpServerIds} compact iconOnly />
+                    {canReadMcpServers && (
+                        <div className="flex-1 min-w-0 overflow-x-auto">
+                            <div className="flex items-center gap-2">
+                                <TaskMcpSelector selectedServerIds={selectedMcpServerIds} onSelectionChange={setSelectedMcpServerIds} compact iconOnly />
+                            </div>
                         </div>
-                    </div>
+                    )}
 
                     {/* Image attach + Model picker */}
                     <div className="flex items-center gap-1">
-                        <input
-                            ref={fileInputRef}
-                            type="file"
-                            aria-label="Attach image"
-                            accept="image/jpeg,image/png,image/gif,image/webp"
-                            className="hidden"
-                            onChange={(e) => {
-                                const file = e.target.files?.[0]
-                                if (file) {
-                                    processImageBlob(file, { persistImage }).then(({ attachment, dataUrl }) => {
-                                        editorManager.addImage(attachment, dataUrl)
-                                    })
-                                    e.target.value = ""
-                                }
-                            }}
-                        />
-                        <button
-                            type="button"
-                            className="btn p-2 text-muted hover:text-base-content hover:bg-base-200 transition-colors"
-                            onClick={() => fileInputRef.current?.click()}
-                            title="Attach image"
-                        >
-                            <ImagePlus size={16} />
-                        </button>
+                        {canAttachImages && (
+                            <>
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    aria-label="Attach image"
+                                    accept="image/jpeg,image/png,image/gif,image/webp"
+                                    className="hidden"
+                                    onChange={(e) => {
+                                        const file = e.target.files?.[0]
+                                        if (file) {
+                                            processImageBlob(file, { persistImage }).then(({ attachment, dataUrl }) => {
+                                                editorManager.addImage(attachment, dataUrl)
+                                            })
+                                            e.target.value = ""
+                                        }
+                                    }}
+                                />
+                                <button
+                                    type="button"
+                                    className="btn p-2 text-muted hover:text-base-content hover:bg-base-200 transition-colors"
+                                    onClick={() => fileInputRef.current?.click()}
+                                    title="Attach image"
+                                >
+                                    <ImagePlus size={16} />
+                                </button>
+                            </>
+                        )}
                         <HarnessPicker value={codeStore.defaultHarnessId} onChange={(id) => codeStore.setDefaultHarnessId(id)} />
                         <ModelPicker value={codeStore.defaultModel} onChange={(m) => codeStore.setDefaultModel(m)} harnessId={codeStore.defaultHarnessId} />
                         <ThinkingPicker value={codeStore.defaultThinking} onChange={(t) => codeStore.setDefaultThinking(t)} />
@@ -699,17 +861,17 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                     </div>
 
                     {/* Center section: Worktree toggle + branch selector */}
-                    {showBranchSelector && (
+                    {showWorktreeControls && (
                         <div className="flex items-center gap-3 border-l border-border pl-4">
                             <div className="flex items-center gap-2">
                                 <span className="text-xs text-muted">Worktree</span>
                                 <span className="relative inline-flex">
-                                    <Switch checked={useWorktree} onCheckedChange={setUseWorktree} aria-label="Use worktree" />
+                                    <Switch checked={useWorktree} onCheckedChange={handleUseWorktreeChange} aria-label="Use worktree" />
                                     <ShortcutBadge label={WORKTREE_SHORTCUT_LABEL} visible={showKeyboardHints} variant="corner" />
                                 </span>
                             </div>
 
-                            {useWorktree && (
+                            {useWorktree && showBranchSelector && (
                                 <div className="flex items-center gap-2">
                                     <GitBranch size={14} className="text-muted" />
                                     <Select
@@ -736,6 +898,17 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                                         </span>
                                     )}
                                 </div>
+                            )}
+                            {useWorktree && !showBranchSelector && (
+                                <button
+                                    type="button"
+                                    className="btn flex h-8 items-center gap-1 bg-base-200 px-2 text-xs text-muted hover:text-base-content"
+                                    disabled={branchesLoading}
+                                    onClick={() => void loadBranches()}
+                                >
+                                    {branchesLoading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                                    {branchesLoading ? "Loading" : "Load Branches"}
+                                </button>
                             )}
                         </div>
                     )}
@@ -797,81 +970,109 @@ export const TaskCreatePage = observer(({ workspaceId, repo }: TaskCreatePagePro
                             </Popover.Portal>
                         </Popover.Root>
 
-                        {/* Action buttons */}
-                        <button
-                            type="button"
-                            onClick={() => handleCreate("do")}
-                            disabled={isDisabled}
-                            title="Do (⌘1)"
-                            className={cx(
-                                "btn relative flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
-                                isDisabled
-                                    ? "bg-success/40 text-success-content/50 cursor-not-allowed"
-                                    : "bg-success text-success-content hover:bg-success/90 cursor-pointer"
-                            )}
-                        >
-                            <Code size={14} />
-                            Do
-                            <ShortcutBadge
-                                label={String(CREATE_MODE_SHORTCUTS.do)}
-                                visible={showKeyboardHints}
-                                variant="corner"
-                                className="bg-base-100/20 text-current shadow-none"
-                            />
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => handleCreate("plan")}
-                            disabled={isDisabled}
-                            title="Plan (⌘2)"
-                            className={cx(
-                                "btn relative flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
-                                isDisabled
-                                    ? "bg-primary/40 text-primary-content/50 cursor-not-allowed"
-                                    : "bg-primary text-primary-content hover:bg-primary/90 cursor-pointer"
-                            )}
-                        >
-                            <FileText size={14} />
-                            Plan
-                            <ShortcutBadge
-                                label={String(CREATE_MODE_SHORTCUTS.plan)}
-                                visible={showKeyboardHints}
-                                variant="corner"
-                                className="bg-base-100/20 text-current shadow-none"
-                            />
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setShowHyperPlan(true)}
-                            disabled={isDisabled}
-                            title="HyperPlan (⌘4)"
-                            className={cx(
-                                "btn relative flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
-                                isDisabled
-                                    ? "text-muted/50 cursor-not-allowed"
-                                    : "text-base-content hover:bg-base-200 active:bg-base-300 active:scale-95 cursor-pointer"
-                            )}
-                        >
-                            <Zap size={14} />
-                            HyperPlan
-                            <ShortcutBadge label={String(CREATE_MODE_SHORTCUTS.hyperplan)} visible={showKeyboardHints} variant="corner" />
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => handleCreate("ask")}
-                            disabled={isDisabled}
-                            title="Ask (⌘3)"
-                            className={cx(
-                                "btn relative flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
-                                isDisabled
-                                    ? "bg-base-200/40 text-base-content/50 cursor-not-allowed"
-                                    : "bg-base-200 text-base-content hover:bg-base-300 active:bg-base-300 active:scale-95 cursor-pointer"
-                            )}
-                        >
-                            <MessageCircle size={14} />
-                            Ask
-                            <ShortcutBadge label={String(CREATE_MODE_SHORTCUTS.ask)} visible={showKeyboardHints} variant="corner" />
-                        </button>
+                        {canCreateWithoutTurn ? (
+                            <button
+                                type="button"
+                                onClick={() => handleCreate("do")}
+                                disabled={isDisabled}
+                                title="Create Task (⌘1)"
+                                className={cx(
+                                    "btn relative flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
+                                    isDisabled
+                                        ? "bg-primary/40 text-primary-content/50 cursor-not-allowed"
+                                        : "bg-primary text-primary-content hover:bg-primary/90 cursor-pointer"
+                                )}
+                            >
+                                <FileText size={14} />
+                                Create Task
+                                <ShortcutBadge
+                                    label={String(CREATE_MODE_SHORTCUTS.do)}
+                                    visible={showKeyboardHints}
+                                    variant="corner"
+                                    className="bg-base-100/20 text-current shadow-none"
+                                />
+                            </button>
+                        ) : (
+                            <>
+                                <button
+                                    type="button"
+                                    onClick={() => handleCreate("do")}
+                                    disabled={isDisabled}
+                                    title="Do (⌘1)"
+                                    className={cx(
+                                        "btn relative flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
+                                        isDisabled
+                                            ? "bg-success/40 text-success-content/50 cursor-not-allowed"
+                                            : "bg-success text-success-content hover:bg-success/90 cursor-pointer"
+                                    )}
+                                >
+                                    <Code size={14} />
+                                    Do
+                                    <ShortcutBadge
+                                        label={String(CREATE_MODE_SHORTCUTS.do)}
+                                        visible={showKeyboardHints}
+                                        variant="corner"
+                                        className="bg-base-100/20 text-current shadow-none"
+                                    />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => handleCreate("plan")}
+                                    disabled={isDisabled}
+                                    title="Plan (⌘2)"
+                                    className={cx(
+                                        "btn relative flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
+                                        isDisabled
+                                            ? "bg-primary/40 text-primary-content/50 cursor-not-allowed"
+                                            : "bg-primary text-primary-content hover:bg-primary/90 cursor-pointer"
+                                    )}
+                                >
+                                    <FileText size={14} />
+                                    Plan
+                                    <ShortcutBadge
+                                        label={String(CREATE_MODE_SHORTCUTS.plan)}
+                                        visible={showKeyboardHints}
+                                        variant="corner"
+                                        className="bg-base-100/20 text-current shadow-none"
+                                    />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (isDisabled) return
+                                        setShowHyperPlan(true)
+                                    }}
+                                    disabled={isDisabled}
+                                    title="HyperPlan (⌘4)"
+                                    className={cx(
+                                        "btn relative flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
+                                        isDisabled
+                                            ? "text-muted/50 cursor-not-allowed"
+                                            : "text-base-content hover:bg-base-200 active:bg-base-300 active:scale-95 cursor-pointer"
+                                    )}
+                                >
+                                    <Zap size={14} />
+                                    HyperPlan
+                                    <ShortcutBadge label={String(CREATE_MODE_SHORTCUTS.hyperplan)} visible={showKeyboardHints} variant="corner" />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => handleCreate("ask")}
+                                    disabled={isDisabled}
+                                    title="Ask (⌘3)"
+                                    className={cx(
+                                        "btn relative flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all",
+                                        isDisabled
+                                            ? "bg-base-200/40 text-base-content/50 cursor-not-allowed"
+                                            : "bg-base-200 text-base-content hover:bg-base-300 active:bg-base-300 active:scale-95 cursor-pointer"
+                                    )}
+                                >
+                                    <MessageCircle size={14} />
+                                    Ask
+                                    <ShortcutBadge label={String(CREATE_MODE_SHORTCUTS.ask)} visible={showKeyboardHints} variant="corner" />
+                                </button>
+                            </>
+                        )}
                     </div>
                 </div>
             </div>

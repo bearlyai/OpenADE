@@ -1,19 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { OpenADEClientOptions } from "../../../openade-client/src"
+import { OPENADE_METHOD, OPENADE_REMOTE_METHOD, type OpenADEClientOptions } from "../../../openade-client/src"
 import type {
     OpenADECronDefinitionsReadRequest,
+    OpenADECronInstallStateListResult,
     OpenADECronInstallStateReadRequest,
     OpenADECronInstallStateReplaceRequest,
+    OpenADECronRunRequest,
     OpenADEMCPServer,
     OpenADEPersonalSettingsReplaceRequest,
     OpenADEQueuedTurn,
+    OpenADEQueuedTurnEnqueueRequest,
     OpenADESnapshot,
     OpenADETask,
     OpenADETaskPreview,
     OpenADETurnStartResult,
 } from "../../../openade-module/src"
 import type { RuntimeClientOptions } from "../../../runtime-client/src"
-import { type RemoteConfig, __setRemoteClientConstructorsForTest, getRemoteProductStore, retryRemoteRead, subscribeRemoteChanges } from "./client"
+import type { RuntimeCapabilities } from "../../../runtime-protocol/src"
+import {
+    type RemoteConfig,
+    __setRemoteClientConstructorsForTest,
+    getRemoteProductStore,
+    getRemoteRuntimeCapabilities,
+    retryRemoteRead,
+    subscribeRemoteChanges,
+} from "./client"
 
 const runtimeClients: RuntimeClient[] = []
 const openadeClients: OpenADEClient[] = []
@@ -24,16 +35,30 @@ let getTaskFailures = 0
 let restoreClientConstructors: (() => void) | undefined
 
 class RuntimeClient {
+    readonly capabilities: RuntimeCapabilities = { methods: [], notifications: [], agentProviders: [] }
     close = vi.fn()
+    connect = vi.fn(async () => undefined)
     request = vi.fn()
     subscribe = vi.fn(() => () => undefined)
 
     constructor(readonly options: RuntimeClientOptions) {
         runtimeClients.push(this)
     }
+
+    hasMethod(method: string): boolean {
+        return this.capabilities.methods.includes(method)
+    }
 }
 
 class OpenADEClient {
+    hasMethod = vi.fn((_method: string) => true)
+    ensureMethodAvailable = vi.fn(async (method: string) => {
+        if (!this.hasMethod(method)) throw new Error(`OpenADE runtime method unavailable: ${method}`)
+    })
+    hasRuntimeMethod = vi.fn((method: string) => this.hasMethod(method))
+    ensureRuntimeMethodAvailable = vi.fn(async (method: string) => {
+        if (!this.hasRuntimeMethod(method)) throw new Error(`OpenADE runtime method unavailable: ${method}`)
+    })
     getSnapshot = vi.fn(
         async (): Promise<OpenADESnapshot> => ({
             repos: [],
@@ -94,6 +119,19 @@ class OpenADEClient {
         repoId: "repo-1",
         matches: [],
         truncated: false,
+    }))
+    inspectRepoPath = vi.fn(async (args: { path: string }) => ({
+        path: args.path,
+        resolvedPath: args.path,
+        exists: true,
+        isDirectory: true,
+        isGitRepo: false,
+    }))
+    readProjectSdkCapabilities = vi.fn(async () => ({
+        slash_commands: [],
+        skills: [],
+        plugins: [],
+        cachedAt: Date.now(),
     }))
     readProjectGitInfo = vi.fn(async () => ({
         repoId: "repo-1",
@@ -342,6 +380,11 @@ class OpenADEClient {
         serverId: args.serverId,
         deleted: true,
     }))
+    listCronInstallStateRepos = vi.fn(
+        async (): Promise<OpenADECronInstallStateListResult> => ({
+            repoIds: [],
+        })
+    )
     readCronInstallState = vi.fn(async (args: OpenADECronInstallStateReadRequest) => ({
         repoId: args.repoId,
         installations: {},
@@ -359,6 +402,11 @@ class OpenADEClient {
         repoId: args.repoId,
         installations: args.installations,
         replacedInstallations: Object.keys(args.installations).length,
+    }))
+    runCron = vi.fn(async (args: OpenADECronRunRequest) => ({
+        repoId: args.repoId,
+        cronId: args.cronId,
+        taskId: "task-1",
     }))
     readPersonalSettings = vi.fn(async () => ({
         settings: {
@@ -409,27 +457,19 @@ class OpenADEClient {
         taskId: args.taskId,
     }))
     interruptTurn = vi.fn(async () => undefined)
-    enqueueQueuedTurn = vi.fn(
-        async (args: {
-            taskId: string
-            type: "do" | "ask"
-            input: string
-            queuedTurnId?: string
-            clientRequestId?: string
-        }) => {
-            const createdAt = "2026-05-31T00:00:00.000Z"
-            const turn: OpenADEQueuedTurn = {
-                id: args.queuedTurnId ?? "queued-remote-test",
-                clientRequestId: args.clientRequestId,
-                type: args.type,
-                input: args.input,
-                status: "queued",
-                createdAt,
-                updatedAt: createdAt,
-            }
-            return { taskId: args.taskId, queuedTurnId: turn.id, queued: true, turn }
+    enqueueQueuedTurn = vi.fn(async (args: OpenADEQueuedTurnEnqueueRequest) => {
+        const createdAt = "2026-05-31T00:00:00.000Z"
+        const turn: OpenADEQueuedTurn = {
+            id: args.queuedTurnId ?? "queued-remote-test",
+            clientRequestId: args.clientRequestId,
+            type: args.type,
+            input: args.input,
+            status: "queued",
+            createdAt,
+            updatedAt: createdAt,
         }
-    )
+        return { taskId: args.taskId, queuedTurnId: turn.id, queued: true, turn }
+    })
     reorderQueuedTurns = vi.fn(async (args: { taskId: string; queuedTurnIds: string[] }) => ({
         taskId: args.taskId,
         reordered: true,
@@ -540,6 +580,23 @@ afterEach(() => {
 })
 
 describe("companion remote runtime client cache", () => {
+    it("derives typed runtime capabilities from the paired host session", () => {
+        const remote = config()
+        const capabilities = getRemoteRuntimeCapabilities(remote)
+
+        expect(runtimeClients).toHaveLength(1)
+        expect(capabilities.has(OPENADE_METHOD.taskRead)).toBe(false)
+        expect(capabilities.has(OPENADE_REMOTE_METHOD.remoteDeviceSelfRevoke)).toBe(false)
+
+        runtimeClients[0].capabilities.methods.push(OPENADE_METHOD.taskRead, OPENADE_REMOTE_METHOD.remoteDeviceSelfRevoke)
+
+        expect(capabilities.has(OPENADE_METHOD.taskRead)).toBe(true)
+        expect(capabilities.has(OPENADE_REMOTE_METHOD.remoteDeviceSelfRevoke)).toBe(true)
+        expect(capabilities.hasAll([OPENADE_METHOD.taskRead, OPENADE_REMOTE_METHOD.remoteDeviceSelfRevoke])).toBe(true)
+        expect(capabilities.hasAll([OPENADE_METHOD.taskRead, OPENADE_METHOD.taskDelete])).toBe(false)
+        expect(getRemoteRuntimeCapabilities(null).has(OPENADE_METHOD.taskRead)).toBe(false)
+    })
+
     it("reuses one runtime socket client for repeated calls to the same paired host", async () => {
         const remote = config()
         const store = getRemoteProductStore(remote)
@@ -552,7 +609,8 @@ describe("companion remote runtime client cache", () => {
 
         expect(runtimeClients).toHaveLength(1)
         expect(openadeClients).toHaveLength(1)
-        expect(openadeClients[0].getSnapshot).toHaveBeenCalledTimes(2)
+        expect(openadeClients[0].getSnapshot).toHaveBeenCalledTimes(1)
+        expect(openadeClients[0].listTasks).toHaveBeenCalledTimes(1)
         expect(openadeClients[0].getTask).toHaveBeenCalledTimes(2)
         expect(openadeClients[0].getTask).toHaveBeenCalledWith("repo-1", "task-1", {
             hydrateSessionEvents: false,

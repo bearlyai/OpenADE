@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 const (
@@ -18,6 +20,8 @@ const (
 	defaultSearchLimit          = 100
 	maxSearchFileBytes    int64 = 1024 * 1024
 	maxWalkEntries              = 10000
+	fuzzyPathIndexTTL           = 30 * time.Second
+	maxFuzzyPathIndexes         = 64
 )
 
 var generatedSkipDirs = map[string]bool{
@@ -134,6 +138,30 @@ type pathTreeNode struct {
 	isDir    bool
 	fullPath string
 	children map[string]*pathTreeNode
+}
+
+type fuzzyPathIndexKey struct {
+	root             string
+	includeHidden    bool
+	includeGenerated bool
+}
+
+type fuzzyPathIndex struct {
+	entries   []pathEntry
+	truncated bool
+	tree      *pathTreeNode
+	expiresAt time.Time
+}
+
+var fuzzyPathIndexCache = struct {
+	sync.Mutex
+	entries     map[fuzzyPathIndexKey]fuzzyPathIndex
+	loading     map[fuzzyPathIndexKey]chan struct{}
+	generations map[fuzzyPathIndexKey]int64
+}{
+	entries:     map[fuzzyPathIndexKey]fuzzyPathIndex{},
+	loading:     map[fuzzyPathIndexKey]chan struct{}{},
+	generations: map[fuzzyPathIndexKey]int64{},
 }
 
 func ListProjectFiles(root string, options FileTreeOptions) (FileTreeResult, error) {
@@ -305,6 +333,8 @@ func WriteProjectFile(root string, options FileWriteOptions) (FileWriteResult, e
 	if err := os.WriteFile(target, data, 0o644); err != nil {
 		return FileWriteResult{}, errors.New("write file failed")
 	}
+	InvalidateProjectFileIndex(root)
+	InvalidateProjectProcessConfigCache(root)
 	return FileWriteResult{Path: normalizeRelativePath(options.Path), Size: int64(len(data))}, nil
 }
 
@@ -329,19 +359,12 @@ func FuzzySearchProjectFiles(root string, options FuzzySearchOptions) (FuzzySear
 		limit = defaultSearchLimit
 	}
 	query := normalizeRelativePath(options.Query)
-	entries, truncated, err := walkProjectPaths(root, walkOptions{
-		includeDirs:        true,
-		includeFiles:       true,
-		includeHidden:      options.IncludeHidden,
-		includeGenerated:   options.IncludeGenerated,
-		maxReturnedEntries: maxWalkEntries,
-	})
+	entries, truncated, tree, err := fuzzyProjectPathIndex(root, options)
 	if err != nil {
 		return FuzzySearchResult{}, err
 	}
-	tree := buildPathTree(entries)
 	var treeMatch *FuzzyTreeMatch
-	if query == "" || pathTreeLookup(tree, query) != nil && pathTreeLookup(tree, query).isDir {
+	if node := pathTreeLookup(tree, query); query == "" || node != nil && node.isDir {
 		treeMatch = &FuzzyTreeMatch{Path: query, Children: pathTreeChildren(tree, query)}
 	}
 	ranked := []struct {
@@ -376,6 +399,103 @@ func FuzzySearchProjectFiles(root string, options FuzzySearchOptions) (FuzzySear
 		results = append(results, entry.path)
 	}
 	return FuzzySearchResult{Results: results, Truncated: truncated, TreeMatch: treeMatch}, nil
+}
+
+func fuzzyProjectPathIndex(root string, options FuzzySearchOptions) ([]pathEntry, bool, *pathTreeNode, error) {
+	key := fuzzyPathIndexKey{
+		root:             root,
+		includeHidden:    options.IncludeHidden,
+		includeGenerated: options.IncludeGenerated,
+	}
+	for {
+		now := time.Now()
+		fuzzyPathIndexCache.Lock()
+		if cached, ok := fuzzyPathIndexCache.entries[key]; ok {
+			if now.Before(cached.expiresAt) {
+				fuzzyPathIndexCache.Unlock()
+				return cached.entries, cached.truncated, cached.tree, nil
+			}
+			delete(fuzzyPathIndexCache.entries, key)
+		}
+		if loading := fuzzyPathIndexCache.loading[key]; loading != nil {
+			fuzzyPathIndexCache.Unlock()
+			<-loading
+			continue
+		}
+		loading := make(chan struct{})
+		fuzzyPathIndexCache.loading[key] = loading
+		generation := fuzzyPathIndexCache.generations[key]
+		fuzzyPathIndexCache.Unlock()
+
+		entries, truncated, err := walkProjectPaths(root, walkOptions{
+			includeDirs:        true,
+			includeFiles:       true,
+			includeHidden:      options.IncludeHidden,
+			includeGenerated:   options.IncludeGenerated,
+			maxReturnedEntries: maxWalkEntries,
+		})
+		tree := buildPathTree(entries)
+
+		fuzzyPathIndexCache.Lock()
+		if err == nil && fuzzyPathIndexCache.generations[key] == generation {
+			fuzzyPathIndexCache.entries[key] = fuzzyPathIndex{
+				entries:   entries,
+				truncated: truncated,
+				tree:      tree,
+				expiresAt: time.Now().Add(fuzzyPathIndexTTL),
+			}
+			evictFuzzyPathIndexesLocked(time.Now())
+		}
+		delete(fuzzyPathIndexCache.loading, key)
+		close(loading)
+		fuzzyPathIndexCache.Unlock()
+
+		if err != nil {
+			return nil, false, nil, err
+		}
+		return entries, truncated, tree, nil
+	}
+}
+
+func InvalidateProjectFileIndex(root string) {
+	root, err := normalizeRoot(root)
+	if err != nil {
+		return
+	}
+	fuzzyPathIndexCache.Lock()
+	defer fuzzyPathIndexCache.Unlock()
+	for key := range fuzzyPathIndexCache.entries {
+		if key.root == root {
+			delete(fuzzyPathIndexCache.entries, key)
+			fuzzyPathIndexCache.generations[key]++
+		}
+	}
+	for key := range fuzzyPathIndexCache.loading {
+		if key.root == root {
+			fuzzyPathIndexCache.generations[key]++
+		}
+	}
+}
+
+func evictFuzzyPathIndexesLocked(now time.Time) {
+	for key, entry := range fuzzyPathIndexCache.entries {
+		if !now.Before(entry.expiresAt) {
+			delete(fuzzyPathIndexCache.entries, key)
+		}
+	}
+	for len(fuzzyPathIndexCache.entries) > maxFuzzyPathIndexes {
+		var oldestKey fuzzyPathIndexKey
+		var oldest time.Time
+		first := true
+		for key, entry := range fuzzyPathIndexCache.entries {
+			if first || entry.expiresAt.Before(oldest) {
+				first = false
+				oldestKey = key
+				oldest = entry.expiresAt
+			}
+		}
+		delete(fuzzyPathIndexCache.entries, oldestKey)
+	}
 }
 
 func SearchProject(root string, options SearchOptions) (SearchResult, error) {

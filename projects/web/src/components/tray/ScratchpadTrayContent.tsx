@@ -5,7 +5,6 @@ import { observer } from "mobx-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ScratchpadMeta } from "../../persistence/scratchpadStore"
 import { useCodeStore } from "../../store/context"
-import { SdkCapabilitiesManager } from "../../store/managers/SdkCapabilitiesManager"
 import { SmartEditor, type SmartEditorRef } from "../SmartEditor"
 import { ScrollArea } from "../ui/ScrollArea"
 
@@ -29,7 +28,6 @@ const PadEditor = observer(
     }) => {
         const codeStore = useCodeStore()
         const editorRef = useRef<SmartEditorRef>(null)
-        const sdkCapabilities = useMemo(() => new SdkCapabilitiesManager(), [])
         const [contentLoading, setContentLoading] = useState(true)
 
         useEffect(() => {
@@ -85,7 +83,6 @@ const PadEditor = observer(
                 fileMentionsDir={repoPath}
                 slashCommandsDir={null}
                 resolveWorkingDir={resolveRepoPath}
-                sdkCapabilities={sdkCapabilities}
                 placeholder="Write your thoughts... Use @ to reference files"
                 className="h-full text-sm border-0 bg-transparent [&>div]:h-full [&>div]:border-0"
                 editorClassName="h-full"

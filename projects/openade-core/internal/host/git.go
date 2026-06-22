@@ -11,12 +11,15 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 const gitCommandTimeout = 10 * time.Second
 const maxGitFileAtTreeishBytes int64 = 1024 * 1024
 const maxGitPatchSize = 1024 * 1024
+const gitRepositoryInfoCacheTTL = 30 * time.Second
+const maxGitRepositoryInfoCacheItems = 128
 
 var ErrNotGitRepository = errors.New("not a git repository")
 
@@ -25,6 +28,19 @@ type GitRepositoryInfo struct {
 	RelativePath  string
 	DefaultBranch string
 	HasGhCLI      bool
+}
+
+type RepoPathInspection struct {
+	Path         string
+	ResolvedPath string
+	Exists       bool
+	IsDirectory  bool
+	IsGitRepo    bool
+	RepoRoot     string
+	RelativePath string
+	MainBranch   string
+	HasGhCLI     bool
+	Error        string
 }
 
 type GitBranch struct {
@@ -146,41 +162,302 @@ type commandResult struct {
 
 var taskEnvironmentSlugPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
+type gitRepositoryInfoCacheEntry struct {
+	info      GitRepositoryInfo
+	expiresAt time.Time
+}
+
+var gitRepositoryInfoCache = struct {
+	sync.Mutex
+	entries map[string]gitRepositoryInfoCacheEntry
+	loading map[string]chan struct{}
+}{
+	entries: map[string]gitRepositoryInfoCacheEntry{},
+	loading: map[string]chan struct{}{},
+}
+
+const defaultGitIgnore = `# Dependencies
+node_modules/
+vendor/
+bower_components/
+.pnp/
+.pnp.js
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+.nuxt/
+.output/
+*.egg-info/
+__pycache__/
+*.pyc
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.local
+
+# IDE/Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Testing
+coverage/
+.nyc_output/
+.pytest_cache/
+
+# Misc
+*.bak
+*.tmp
+*.temp
+.cache/
+`
+
+func InspectRepoPath(ctx context.Context, rawPath string) RepoPathInspection {
+	resolvedPath := ResolveUserPath(rawPath)
+	inspection := RepoPathInspection{
+		Path:         rawPath,
+		ResolvedPath: resolvedPath,
+	}
+	info, err := os.Stat(resolvedPath)
+	if err != nil {
+		return inspection
+	}
+	inspection.Exists = true
+	inspection.IsDirectory = info.IsDir()
+	if !info.IsDir() {
+		return inspection
+	}
+	gitInfo, ok, reason, err := ReadGitRepositoryInfo(ctx, resolvedPath)
+	if err != nil {
+		inspection.Error = err.Error()
+		return inspection
+	}
+	if !ok {
+		inspection.Error = reason
+		return inspection
+	}
+	inspection.IsGitRepo = true
+	inspection.RepoRoot = gitInfo.RepoRoot
+	inspection.RelativePath = gitInfo.RelativePath
+	inspection.MainBranch = gitInfo.DefaultBranch
+	inspection.HasGhCLI = gitInfo.HasGhCLI
+	return inspection
+}
+
+func ResolveUserPath(rawPath string) string {
+	resolvedPath := strings.TrimSpace(rawPath)
+	if strings.HasPrefix(resolvedPath, "~") {
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			resolvedPath = filepath.Join(homeDir, strings.TrimPrefix(resolvedPath, "~"))
+		}
+	}
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		resolvedPath = strings.ReplaceAll(resolvedPath, "$HOME", homeDir)
+		resolvedPath = strings.ReplaceAll(resolvedPath, "${HOME}", homeDir)
+		resolvedPath = strings.ReplaceAll(resolvedPath, "%USERPROFILE%", homeDir)
+		resolvedPath = strings.ReplaceAll(resolvedPath, "%HOME%", homeDir)
+	}
+	return filepath.Clean(resolvedPath)
+}
+
+func InitializeGitRepository(ctx context.Context, directory string) error {
+	info, err := os.Stat(directory)
+	if err != nil {
+		return fmt.Errorf("stat git directory: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("path is not a directory")
+	}
+	if _, err := os.Stat(filepath.Join(directory, ".git")); err == nil {
+		return fmt.Errorf("directory is already a git repository")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat .git directory: %w", err)
+	}
+	if result, err := runGit(ctx, directory, "init"); err != nil {
+		return err
+	} else if !result.success {
+		return fmt.Errorf("git init failed: %s", strings.TrimSpace(result.stderr))
+	}
+	gitignorePath := filepath.Join(directory, ".gitignore")
+	if _, err := os.Stat(gitignorePath); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(gitignorePath, []byte(defaultGitIgnore), 0o644); err != nil {
+			return fmt.Errorf("write .gitignore: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("stat .gitignore: %w", err)
+	}
+	if result, err := runGit(ctx, directory, "add", ".gitignore"); err != nil {
+		return err
+	} else if !result.success {
+		return fmt.Errorf("git add .gitignore failed: %s", strings.TrimSpace(result.stderr))
+	}
+	if result, err := runGit(ctx, directory, "-c", "user.name=OpenADE", "-c", "user.email=openade@example.invalid", "commit", "-m", "Initial commit: Add .gitignore"); err != nil {
+		return err
+	} else if !result.success {
+		return fmt.Errorf("git commit .gitignore failed: %s", strings.TrimSpace(result.stderr))
+	}
+	return nil
+}
+
 func ReadGitRepositoryInfo(ctx context.Context, directory string) (GitRepositoryInfo, bool, string, error) {
-	info, ok, reason, err := resolveGitRepository(ctx, directory)
-	if err != nil || !ok {
+	cacheKey, canCache := gitRepositoryInfoCacheKey(directory)
+	for {
+		if !canCache {
+			info, ok, reason, err := resolveGitRepository(ctx, directory)
+			if err != nil || !ok {
+				return info, ok, reason, err
+			}
+			info.HasGhCLI = checkGhCLI(ctx, info.RepoRoot)
+			return info, true, "", nil
+		}
+
+		now := time.Now()
+		gitRepositoryInfoCache.Lock()
+		if cached, ok := gitRepositoryInfoCache.entries[cacheKey]; ok {
+			if now.Before(cached.expiresAt) {
+				gitRepositoryInfoCache.Unlock()
+				return cached.info, true, "", nil
+			}
+			delete(gitRepositoryInfoCache.entries, cacheKey)
+		}
+		if loading := gitRepositoryInfoCache.loading[cacheKey]; loading != nil {
+			gitRepositoryInfoCache.Unlock()
+			<-loading
+			continue
+		}
+		loading := make(chan struct{})
+		gitRepositoryInfoCache.loading[cacheKey] = loading
+		gitRepositoryInfoCache.Unlock()
+
+		info, ok, reason, err := resolveGitRepository(ctx, directory)
+		if err == nil && ok {
+			info.HasGhCLI = checkGhCLI(ctx, info.RepoRoot)
+		}
+
+		gitRepositoryInfoCache.Lock()
+		if err == nil && ok {
+			gitRepositoryInfoCache.entries[cacheKey] = gitRepositoryInfoCacheEntry{
+				info:      info,
+				expiresAt: time.Now().Add(gitRepositoryInfoCacheTTL),
+			}
+			evictGitRepositoryInfoCacheLocked(time.Now())
+		}
+		delete(gitRepositoryInfoCache.loading, cacheKey)
+		close(loading)
+		gitRepositoryInfoCache.Unlock()
+
 		return info, ok, reason, err
 	}
-	info.HasGhCLI = checkGhCLI(ctx, info.RepoRoot)
-	return info, true, "", nil
+}
+
+func gitRepositoryInfoCacheKey(directory string) (string, bool) {
+	if strings.TrimSpace(directory) == "" {
+		return "", false
+	}
+	absDirectory, err := filepath.Abs(directory)
+	if err != nil {
+		return "", false
+	}
+	return absDirectory, true
+}
+
+func evictGitRepositoryInfoCacheLocked(now time.Time) {
+	for key, entry := range gitRepositoryInfoCache.entries {
+		if !now.Before(entry.expiresAt) {
+			delete(gitRepositoryInfoCache.entries, key)
+		}
+	}
+	for len(gitRepositoryInfoCache.entries) > maxGitRepositoryInfoCacheItems {
+		var oldestKey string
+		var oldest time.Time
+		first := true
+		for key, entry := range gitRepositoryInfoCache.entries {
+			if first || entry.expiresAt.Before(oldest) {
+				first = false
+				oldestKey = key
+				oldest = entry.expiresAt
+			}
+		}
+		delete(gitRepositoryInfoCache.entries, oldestKey)
+	}
 }
 
 func ListGitBranches(ctx context.Context, directory string, includeRemote bool) (GitBranches, bool, string, error) {
-	info, ok, reason, err := resolveGitRepository(ctx, directory)
+	info, ok, reason, err := resolveGitRepositoryBase(ctx, directory)
 	if err != nil || !ok {
 		return GitBranches{}, ok, reason, err
 	}
-	localResult, err := runGit(ctx, info.RepoRoot, "branch", "--format=%(refname:short)")
-	if err != nil {
-		return GitBranches{}, true, "", err
+	type gitCommandRead struct {
+		result commandResult
+		err    error
 	}
-	if !localResult.success {
-		return GitBranches{}, true, "", fmt.Errorf("list local branches: %s", firstNonEmpty(localResult.stderr, localResult.stdout))
+	localCh := make(chan gitCommandRead, 1)
+	remoteHeadCh := make(chan gitCommandRead, 1)
+	remoteCh := make(chan gitCommandRead, 1)
+	go func() {
+		result, err := runGit(ctx, info.RepoRoot, "branch", "--format=%(refname:short)")
+		localCh <- gitCommandRead{result: result, err: err}
+	}()
+	go func() {
+		result, err := runGit(ctx, info.RepoRoot, "symbolic-ref", "refs/remotes/origin/HEAD")
+		remoteHeadCh <- gitCommandRead{result: result, err: err}
+	}()
+	if includeRemote {
+		go func() {
+			result, err := runGit(ctx, info.RepoRoot, "branch", "-r", "--format=%(refname:short)")
+			remoteCh <- gitCommandRead{result: result, err: err}
+		}()
+	} else {
+		remoteCh <- gitCommandRead{}
+	}
+	localRead := <-localCh
+	remoteHeadRead := <-remoteHeadCh
+	remoteRead := <-remoteCh
+	if localRead.err != nil {
+		return GitBranches{}, true, "", localRead.err
+	}
+	if !localRead.result.success {
+		return GitBranches{}, true, "", fmt.Errorf("list local branches: %s", firstNonEmpty(localRead.result.stderr, localRead.result.stdout))
 	}
 
-	branches := gitBranchesFromOutput(localResult.stdout, info.DefaultBranch, false)
+	defaultBranch := defaultBranchFromBranchOutput(remoteHeadRead.result, localRead.result.stdout)
+	branches := gitBranchesFromOutput(localRead.result.stdout, defaultBranch, false)
 	localNames := map[string]bool{}
 	for _, branch := range branches {
 		localNames[branch.Name] = true
 	}
 
 	if includeRemote {
-		remoteResult, err := runGit(ctx, info.RepoRoot, "branch", "-r", "--format=%(refname:short)")
-		if err != nil {
-			return GitBranches{}, true, "", err
+		if remoteRead.err != nil {
+			return GitBranches{}, true, "", remoteRead.err
 		}
-		if remoteResult.success {
-			for _, branch := range gitBranchesFromOutput(remoteResult.stdout, info.DefaultBranch, true) {
+		if remoteRead.result.success {
+			for _, branch := range gitBranchesFromOutput(remoteRead.result.stdout, defaultBranch, true) {
 				localName := strings.TrimPrefix(branch.Name, "origin/")
 				if localNames[localName] || localNames[branch.Name] {
 					continue
@@ -191,11 +468,11 @@ func ListGitBranches(ctx context.Context, directory string, includeRemote bool) 
 	}
 
 	sortGitBranches(branches)
-	return GitBranches{Branches: branches, DefaultBranch: info.DefaultBranch}, true, "", nil
+	return GitBranches{Branches: branches, DefaultBranch: defaultBranch}, true, "", nil
 }
 
 func ListGitWorktrees(ctx context.Context, directory string) ([]GitWorktree, bool, string, error) {
-	info, ok, reason, err := resolveGitRepository(ctx, directory)
+	info, ok, reason, err := resolveGitRepositoryBase(ctx, directory)
 	if err != nil || !ok {
 		return nil, ok, reason, err
 	}
@@ -449,7 +726,7 @@ func RemoveTaskEnvironmentWorktree(ctx context.Context, directory string, target
 }
 
 func ReadGitSummary(ctx context.Context, directory string) (GitSummary, bool, string, error) {
-	info, ok, reason, err := resolveGitRepository(ctx, directory)
+	info, ok, reason, err := resolveGitRepositoryBase(ctx, directory)
 	if err != nil || !ok {
 		return GitSummary{}, ok, reason, err
 	}
@@ -790,6 +1067,15 @@ func ReadGitCommitFilePatch(
 }
 
 func resolveGitRepository(ctx context.Context, directory string) (GitRepositoryInfo, bool, string, error) {
+	info, ok, reason, err := resolveGitRepositoryBase(ctx, directory)
+	if err != nil || !ok {
+		return info, ok, reason, err
+	}
+	info.DefaultBranch = detectDefaultBranch(ctx, info.RepoRoot)
+	return info, true, "", nil
+}
+
+func resolveGitRepositoryBase(ctx context.Context, directory string) (GitRepositoryInfo, bool, string, error) {
 	if strings.TrimSpace(directory) == "" {
 		return GitRepositoryInfo{}, false, "directory is required", nil
 	}
@@ -823,10 +1109,29 @@ func resolveGitRepository(ctx context.Context, directory string) (GitRepositoryI
 
 	repoRoot := strings.TrimSpace(rootResult.stdout)
 	return GitRepositoryInfo{
-		RepoRoot:      repoRoot,
-		RelativePath:  relativePath,
-		DefaultBranch: detectDefaultBranch(ctx, repoRoot),
+		RepoRoot:     repoRoot,
+		RelativePath: relativePath,
 	}, true, "", nil
+}
+
+func defaultBranchFromBranchOutput(remoteHead commandResult, localBranchOutput string) string {
+	if remoteHead.success {
+		name := strings.TrimPrefix(strings.TrimSpace(remoteHead.stdout), "refs/remotes/origin/")
+		if name != "" {
+			return name
+		}
+	}
+	for _, name := range strings.Split(strings.TrimSpace(localBranchOutput), "\n") {
+		if strings.TrimSpace(name) == "main" {
+			return "main"
+		}
+	}
+	for _, name := range strings.Split(strings.TrimSpace(localBranchOutput), "\n") {
+		if strings.TrimSpace(name) == "master" {
+			return "master"
+		}
+	}
+	return "main"
 }
 
 func detectDefaultBranch(ctx context.Context, repoRoot string) string {
@@ -847,9 +1152,9 @@ func checkGhCLI(ctx context.Context, repoRoot string) bool {
 	if _, err := exec.LookPath("gh"); err != nil {
 		return false
 	}
-	commandCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	commandCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(commandCtx, "gh", "auth", "status")
+	cmd := exec.CommandContext(commandCtx, "gh", "--version")
 	cmd.Dir = repoRoot
 	return cmd.Run() == nil
 }

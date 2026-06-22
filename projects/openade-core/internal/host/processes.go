@@ -8,11 +8,17 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 const (
 	openADEProcsConfigFilename = "openade.toml"
 	maxProcessConfigWalkDepth  = 10
+	processConfigCacheTTL      = 30 * time.Second
+	processRootCacheTTL        = 30 * time.Second
+	maxProcessConfigCacheItems = 64
+	maxProcessRootCacheItems   = 128
 )
 
 var processConfigSkipDirs = map[string]bool{
@@ -100,30 +106,170 @@ type procsTable struct {
 	values map[string]tomlValue
 }
 
+type processConfigCacheKey struct {
+	repoRoot  string
+	cronsOnly bool
+}
+
+type processConfigCacheEntry struct {
+	configs   []ProcsConfig
+	errors    []ProcessConfigError
+	expiresAt time.Time
+}
+
+type processRootInfo struct {
+	searchRoot   string
+	repoRoot     string
+	isWorktree   bool
+	worktreeRoot string
+}
+
+type processRootCacheEntry struct {
+	info      processRootInfo
+	expiresAt time.Time
+}
+
+var processConfigCache = struct {
+	sync.Mutex
+	entries     map[processConfigCacheKey]processConfigCacheEntry
+	loading     map[processConfigCacheKey]chan struct{}
+	generations map[processConfigCacheKey]int64
+}{
+	entries:     map[processConfigCacheKey]processConfigCacheEntry{},
+	loading:     map[processConfigCacheKey]chan struct{}{},
+	generations: map[processConfigCacheKey]int64{},
+}
+
+var processRootCache = struct {
+	sync.Mutex
+	entries map[string]processRootCacheEntry
+}{
+	entries: map[string]processRootCacheEntry{},
+}
+
 func ListProjectProcesses(ctx context.Context, searchRoot string) (ProcessListResult, error) {
+	result, err := listProjectProcessConfigs(ctx, searchRoot, false)
+	if err != nil {
+		return ProcessListResult{}, err
+	}
+	processes, definitionErrors := processDefinitions(result.RepoRoot, result.Configs)
+	result.Processes = processes
+	result.Errors = append(result.Errors, definitionErrors...)
+	return result, nil
+}
+
+func ListProjectCronDefinitions(ctx context.Context, searchRoot string) (ProcessListResult, error) {
+	return listProjectProcessConfigs(ctx, searchRoot, true)
+}
+
+func listProjectProcessConfigs(ctx context.Context, searchRoot string, cronsOnly bool) (ProcessListResult, error) {
+	rootInfo, err := resolveProcessRootInfo(ctx, searchRoot)
+	if err != nil {
+		return ProcessListResult{}, err
+	}
+	configs, parseErrors, err := cachedProjectProcessConfigs(rootInfo.repoRoot, cronsOnly)
+	if err != nil {
+		return ProcessListResult{}, err
+	}
+	return ProcessListResult{
+		SearchRoot:   rootInfo.searchRoot,
+		RepoRoot:     rootInfo.repoRoot,
+		IsWorktree:   rootInfo.isWorktree,
+		WorktreeRoot: rootInfo.worktreeRoot,
+		Configs:      configs,
+		Errors:       parseErrors,
+	}, nil
+}
+
+func resolveProcessRootInfo(ctx context.Context, searchRoot string) (processRootInfo, error) {
 	resolvedSearchRoot, err := normalizeRoot(searchRoot)
 	if err != nil {
-		return ProcessListResult{}, err
+		return processRootInfo{}, err
 	}
-	repoRoot := resolvedSearchRoot
-	isWorktree := false
-	worktreeRoot := ""
-	if gitInfo, ok, _, err := resolveGitRepository(ctx, resolvedSearchRoot); err != nil {
-		return ProcessListResult{}, err
+	now := time.Now()
+	processRootCache.Lock()
+	if cached, ok := processRootCache.entries[resolvedSearchRoot]; ok {
+		if now.Before(cached.expiresAt) {
+			processRootCache.Unlock()
+			return cached.info, nil
+		}
+		delete(processRootCache.entries, resolvedSearchRoot)
+	}
+	processRootCache.Unlock()
+
+	info := processRootInfo{
+		searchRoot: resolvedSearchRoot,
+		repoRoot:   resolvedSearchRoot,
+	}
+	if gitInfo, ok, _, err := resolveGitRepositoryBase(ctx, resolvedSearchRoot); err != nil {
+		return processRootInfo{}, err
 	} else if ok {
-		repoRoot = gitInfo.RepoRoot
+		info.repoRoot = gitInfo.RepoRoot
 		gitDir, err := runGit(ctx, resolvedSearchRoot, "rev-parse", "--git-dir")
 		if err != nil {
-			return ProcessListResult{}, err
+			return processRootInfo{}, err
 		}
-		isWorktree = gitDir.success && strings.Contains(gitDir.stdout, ".git/worktrees")
-		if isWorktree {
-			worktreeRoot = repoRoot
+		info.isWorktree = gitDir.success && strings.Contains(gitDir.stdout, ".git/worktrees")
+		if info.isWorktree {
+			info.worktreeRoot = info.repoRoot
 		}
 	}
+
+	processRootCache.Lock()
+	processRootCache.entries[resolvedSearchRoot] = processRootCacheEntry{
+		info:      info,
+		expiresAt: time.Now().Add(processRootCacheTTL),
+	}
+	evictProcessRootCacheLocked(time.Now())
+	processRootCache.Unlock()
+	return info, nil
+}
+
+func cachedProjectProcessConfigs(repoRoot string, cronsOnly bool) ([]ProcsConfig, []ProcessConfigError, error) {
+	key := processConfigCacheKey{repoRoot: repoRoot, cronsOnly: cronsOnly}
+	for {
+		now := time.Now()
+		processConfigCache.Lock()
+		if cached, ok := processConfigCache.entries[key]; ok {
+			if now.Before(cached.expiresAt) {
+				processConfigCache.Unlock()
+				return cloneProcsConfigs(cached.configs), cloneProcessConfigErrors(cached.errors), nil
+			}
+			delete(processConfigCache.entries, key)
+		}
+		if loading := processConfigCache.loading[key]; loading != nil {
+			processConfigCache.Unlock()
+			<-loading
+			continue
+		}
+		loading := make(chan struct{})
+		processConfigCache.loading[key] = loading
+		generation := processConfigCache.generations[key]
+		processConfigCache.Unlock()
+
+		configs, parseErrors, err := readProjectProcessConfigs(repoRoot, cronsOnly)
+
+		processConfigCache.Lock()
+		if err == nil && processConfigCache.generations[key] == generation {
+			processConfigCache.entries[key] = processConfigCacheEntry{
+				configs:   cloneProcsConfigs(configs),
+				errors:    cloneProcessConfigErrors(parseErrors),
+				expiresAt: time.Now().Add(processConfigCacheTTL),
+			}
+			evictProcessConfigCacheLocked(time.Now())
+		}
+		delete(processConfigCache.loading, key)
+		close(loading)
+		processConfigCache.Unlock()
+
+		return configs, parseErrors, err
+	}
+}
+
+func readProjectProcessConfigs(repoRoot string, cronsOnly bool) ([]ProcsConfig, []ProcessConfigError, error) {
 	configFiles, err := findProcessConfigFiles(repoRoot)
 	if err != nil {
-		return ProcessListResult{}, err
+		return nil, nil, err
 	}
 	configs := []ProcsConfig{}
 	parseErrors := []ProcessConfigError{}
@@ -137,23 +283,90 @@ func ListProjectProcesses(ctx context.Context, searchRoot string) (ProcessListRe
 			parseErrors = append(parseErrors, ProcessConfigError{RelativePath: relativePath, Error: err.Error()})
 			continue
 		}
-		config, configErr := parseProcsConfig(string(data), relativePath)
+		config, configErr := parseProcsConfigWithMode(string(data), relativePath, cronsOnly)
 		if configErr != nil {
 			parseErrors = append(parseErrors, *configErr)
 			continue
 		}
 		configs = append(configs, config)
 	}
-	processes, definitionErrors := processDefinitions(repoRoot, configs)
-	return ProcessListResult{
-		SearchRoot:   resolvedSearchRoot,
-		RepoRoot:     repoRoot,
-		IsWorktree:   isWorktree,
-		WorktreeRoot: worktreeRoot,
-		Configs:      configs,
-		Processes:    processes,
-		Errors:       append(parseErrors, definitionErrors...),
-	}, nil
+	return configs, parseErrors, nil
+}
+
+func InvalidateProjectProcessConfigCache(root string) {
+	root, err := normalizeRoot(root)
+	if err != nil {
+		return
+	}
+	processConfigCache.Lock()
+	defer processConfigCache.Unlock()
+	for key := range processConfigCache.entries {
+		if key.repoRoot == root {
+			delete(processConfigCache.entries, key)
+			processConfigCache.generations[key]++
+		}
+	}
+	for key := range processConfigCache.loading {
+		if key.repoRoot == root {
+			processConfigCache.generations[key]++
+		}
+	}
+}
+
+func evictProcessRootCacheLocked(now time.Time) {
+	for key, entry := range processRootCache.entries {
+		if !now.Before(entry.expiresAt) {
+			delete(processRootCache.entries, key)
+		}
+	}
+	for len(processRootCache.entries) > maxProcessRootCacheItems {
+		var oldestKey string
+		var oldest time.Time
+		first := true
+		for key, entry := range processRootCache.entries {
+			if first || entry.expiresAt.Before(oldest) {
+				first = false
+				oldestKey = key
+				oldest = entry.expiresAt
+			}
+		}
+		delete(processRootCache.entries, oldestKey)
+	}
+}
+
+func evictProcessConfigCacheLocked(now time.Time) {
+	for key, entry := range processConfigCache.entries {
+		if !now.Before(entry.expiresAt) {
+			delete(processConfigCache.entries, key)
+		}
+	}
+	for len(processConfigCache.entries) > maxProcessConfigCacheItems {
+		var oldestKey processConfigCacheKey
+		var oldest time.Time
+		first := true
+		for key, entry := range processConfigCache.entries {
+			if first || entry.expiresAt.Before(oldest) {
+				first = false
+				oldestKey = key
+				oldest = entry.expiresAt
+			}
+		}
+		delete(processConfigCache.entries, oldestKey)
+	}
+}
+
+func cloneProcsConfigs(configs []ProcsConfig) []ProcsConfig {
+	cloned := make([]ProcsConfig, 0, len(configs))
+	for _, config := range configs {
+		processes := append([]ProcsProcessDef(nil), config.Processes...)
+		crons := append([]ProcsCronDef(nil), config.Crons...)
+		cloned = append(cloned, ProcsConfig{RelativePath: config.RelativePath, Processes: processes, Crons: crons})
+	}
+	return cloned
+}
+
+func cloneProcessConfigErrors(errors []ProcessConfigError) []ProcessConfigError {
+	return append([]ProcessConfigError(nil), errors...)
 }
 
 func findProcessConfigFiles(root string) ([]string, error) {
@@ -191,6 +404,10 @@ func walkProcessConfigFiles(root string, current string, depth int, files *[]str
 }
 
 func parseProcsConfig(content string, relativePath string) (ProcsConfig, *ProcessConfigError) {
+	return parseProcsConfigWithMode(content, relativePath, false)
+}
+
+func parseProcsConfigWithMode(content string, relativePath string, cronsOnly bool) (ProcsConfig, *ProcessConfigError) {
 	processes := []ProcsProcessDef{}
 	crons := []ProcsCronDef{}
 	var current *procsTable
@@ -199,6 +416,10 @@ func parseProcsConfig(content string, relativePath string) (ProcsConfig, *Proces
 			return nil
 		}
 		if current.name == "process" {
+			if cronsOnly {
+				current = nil
+				return nil
+			}
 			process, err := processDefFromValues(current.values, relativePath)
 			if err != nil {
 				return &ProcessConfigError{RelativePath: relativePath, Error: err.Error(), Line: current.line}
@@ -226,6 +447,10 @@ func parseProcsConfig(content string, relativePath string) (ProcsConfig, *Proces
 		if trimmed == "[[process]]" || trimmed == "[[cron]]" {
 			if err := finishCurrent(); err != nil {
 				return ProcsConfig{}, err
+			}
+			if trimmed == "[[process]]" && cronsOnly {
+				current = nil
+				continue
 			}
 			tableName := "process"
 			if trimmed == "[[cron]]" {

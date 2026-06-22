@@ -20,8 +20,18 @@ jobs:
         with:
           node-version: '22'
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: projects/openade-core/go.mod
+          cache-dependency-path: projects/openade-core/go.sum
+
       - name: Check first-party explicit any usage
         run: node scripts/check-no-explicit-any.mjs --self-test projects scripts
+
+      # Electron dependencies provide shared tsgo/vitest binaries for the package-level checks.
+      - name: Install electron dependencies
+        working-directory: projects/electron
+        run: yarn install --frozen-lockfile
 
       # Harness — must build first, web and electron depend on it
       - name: Install harness dependencies
@@ -40,6 +50,23 @@ jobs:
         working-directory: projects/harness
         run: yarn build
 
+      # Core/runtime contract surface
+      - name: Check OpenADE Core
+        working-directory: projects/openade-core
+        run: make check
+
+      - name: Check runtime packages
+        run: |
+          npm --prefix projects/runtime-protocol run check
+          npm --prefix projects/runtime-client run check
+          npm --prefix projects/runtime-node run check
+          npm --prefix projects/runtime run check
+
+      - name: Check OpenADE product packages
+        run: |
+          npm --prefix projects/openade-client run check
+          npm --prefix projects/openade-module run check
+
       # Web
       - name: Install web dependencies
         working-directory: projects/web
@@ -49,26 +76,27 @@ jobs:
         working-directory: projects/web
         run: npx playwright install chromium --with-deps
 
-      - name: Typecheck web
+      - name: Check web
         working-directory: projects/web
-        run: yarn typecheck
+        run: yarn check
 
-      - name: Test web
+      - name: Smoke web remote route
         working-directory: projects/web
-        run: yarn test
+        run: yarn smoke:remote-route
 
-      # Electron
-      - name: Install electron dependencies
-        working-directory: projects/electron
+      # Mobile shared shell
+      - name: Install mobile dependencies
+        working-directory: projects/mobile
         run: yarn install --frozen-lockfile
 
-      - name: Typecheck electron
-        working-directory: projects/electron
-        run: yarn typecheck
+      - name: Build mobile shared shell
+        working-directory: projects/mobile
+        run: yarn build
 
-      - name: Test electron
+      # Electron
+      - name: Check electron
         working-directory: projects/electron
-        run: yarn test
+        run: yarn check
 
   release-macos:
     needs: validate

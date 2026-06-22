@@ -7,6 +7,7 @@ import { getFileManagerName } from "../../electronAPI/platform"
 import { openPathInFileManager } from "../../electronAPI/shell"
 import { useShortcutHintsVisible } from "../../hooks/useShortcutHintsVisible"
 import { useCodeNavigate } from "../../routing"
+import { buildOpenADEShellCapabilitiesFromOpenADEMethods } from "../../shell/capabilities"
 import { useCodeStore } from "../../store/context"
 import type { Repo } from "../../types"
 import {
@@ -26,11 +27,15 @@ const RepoMenuButton = ({
     onSettings,
     onDelete,
     onToggleArchive,
+    canUpdate,
+    canDelete,
 }: {
     repo: Repo
     onSettings: () => void
     onDelete: () => void
     onToggleArchive: () => void
+    canUpdate: boolean
+    canDelete: boolean
 }) => {
     const [open, setOpen] = useState(false)
     const isTouchDevice = window.matchMedia("(hover: none) and (pointer: coarse)").matches
@@ -81,32 +86,40 @@ const RepoMenuButton = ({
                 onSettings()
             },
         },
-        {
-            id: "archive",
-            label: (
-                <div className="flex items-center gap-2">
-                    {repo.archived ? <ArchiveRestore className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
-                    <span>{repo.archived ? "Unarchive" : "Archive"}</span>
-                </div>
-            ),
-            onSelect: () => {
-                setOpen(false)
-                onToggleArchive()
-            },
-        },
-        {
-            id: "delete",
-            label: (
-                <div className="flex items-center gap-2">
-                    <Trash2 className="w-4 h-4" />
-                    <span>Delete</span>
-                </div>
-            ),
-            onSelect: () => {
-                setOpen(false)
-                onDelete()
-            },
-        },
+        ...(canUpdate
+            ? [
+                  {
+                      id: "archive",
+                      label: (
+                          <div className="flex items-center gap-2">
+                              {repo.archived ? <ArchiveRestore className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
+                              <span>{repo.archived ? "Unarchive" : "Archive"}</span>
+                          </div>
+                      ),
+                      onSelect: () => {
+                          setOpen(false)
+                          onToggleArchive()
+                      },
+                  },
+              ]
+            : []),
+        ...(canDelete
+            ? [
+                  {
+                      id: "delete",
+                      label: (
+                          <div className="flex items-center gap-2">
+                              <Trash2 className="w-4 h-4" />
+                              <span>Delete</span>
+                          </div>
+                      ),
+                      onSelect: () => {
+                          setOpen(false)
+                          onDelete()
+                      },
+                  },
+              ]
+            : []),
     ]
 
     return (
@@ -144,6 +157,8 @@ const RepoItemRow = ({
     onSettings,
     onDelete,
     onToggleArchive,
+    canUpdate,
+    canDelete,
     shortcutLabel,
     showShortcut,
 }: {
@@ -156,6 +171,8 @@ const RepoItemRow = ({
     onSettings: () => void
     onDelete: () => void
     onToggleArchive: () => void
+    canUpdate: boolean
+    canDelete: boolean
     shortcutLabel?: string
     showShortcut: boolean
 }) => {
@@ -181,7 +198,14 @@ const RepoItemRow = ({
             {isRunning ? <Loader2 className="w-4 h-4 animate-spin flex-shrink-0 text-muted" /> : <FolderOpen className="w-4 h-4 flex-shrink-0" />}
             <span className="truncate min-w-0 flex-1 select-none">{repo.name}</span>
             <ShortcutBadge label={shortcutLabel} visible={showShortcut} variant="row" />
-            <RepoMenuButton repo={repo} onSettings={onSettings} onDelete={onDelete} onToggleArchive={onToggleArchive} />
+            <RepoMenuButton
+                repo={repo}
+                onSettings={onSettings}
+                onDelete={onDelete}
+                onToggleArchive={onToggleArchive}
+                canUpdate={canUpdate}
+                canDelete={canDelete}
+            />
         </div>
     )
 }
@@ -197,6 +221,15 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
     const showKeyboardHints = useShortcutHintsVisible()
 
     const allRepos = codeStore.repos.repos
+    const shellCapabilities = buildOpenADEShellCapabilitiesFromOpenADEMethods((method) => codeStore.canUseProductMethod(method))
+    const canCreateRepo = shellCapabilities.projectRecordCapabilities.canCreate
+    const canUpdateRepo = shellCapabilities.projectRecordCapabilities.canUpdate
+    const canDeleteRepo = shellCapabilities.projectRecordCapabilities.canDelete
+    const workspaceListDeferredForRuntimeRoute =
+        allRepos.length === 0 &&
+        workspaceId !== undefined &&
+        (codeStore.shouldUseRuntimeProductTaskRoute()) &&
+        codeStore.canUseRuntimeProductTaskRouteModelSource()
     const activeRepos = useMemo(() => allRepos.filter((r) => !r.archived), [allRepos])
     const archivedRepos = useMemo(() => allRepos.filter((r) => r.archived), [allRepos])
     const visibleRepos = useMemo(() => (showArchived ? [...activeRepos, ...archivedRepos] : activeRepos), [activeRepos, archivedRepos, showArchived])
@@ -215,6 +248,7 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
     }
 
     const handleAddRepo = () => {
+        if (!canCreateRepo) return
         navigate.go("CodeWorkspaceCreate")
     }
 
@@ -266,6 +300,7 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
     }
 
     const handleDeleteRepo = async (repoId: string) => {
+        if (!canDeleteRepo) return
         await codeStore.repos.removeRepo(repoId)
         if (workspaceId === repoId) {
             navigate.go("Code")
@@ -273,6 +308,7 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
     }
 
     const handleToggleArchive = async (repoId: string) => {
+        if (!canUpdateRepo) return
         const repo = allRepos.find((r) => r.id === repoId)
         if (!repo) return
         await codeStore.repos.setRepoArchived(repoId, !repo.archived)
@@ -294,6 +330,8 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
             onSettings={() => handleSettingsRepo(repo.id)}
             onDelete={() => handleDeleteRepo(repo.id)}
             onToggleArchive={() => handleToggleArchive(repo.id)}
+            canUpdate={canUpdateRepo}
+            canDelete={canDeleteRepo}
             shortcutLabel={undefined}
             showShortcut={showKeyboardHints}
         />
@@ -309,8 +347,17 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
             )}
             {allRepos.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-8 text-muted">
-                    <FolderOpen size="1.5rem" className="mb-2 opacity-50" />
-                    <div className="text-xs">No workspaces yet</div>
+                    {workspaceListDeferredForRuntimeRoute ? (
+                        <>
+                            <Loader2 size="1.5rem" className="mb-2 opacity-50 animate-spin" />
+                            <div className="text-xs">Loading workspace...</div>
+                        </>
+                    ) : (
+                        <>
+                            <FolderOpen size="1.5rem" className="mb-2 opacity-50" />
+                            <div className="text-xs">No workspaces yet</div>
+                        </>
+                    )}
                 </div>
             ) : (
                 <div className="flex flex-col gap-1 px-1.5">
@@ -331,14 +378,16 @@ export const ReposSidebarContent = observer(({ workspaceId }: ReposSidebarConten
                     )}
                 </div>
             )}
-            <button
-                type="button"
-                className="btn flex items-center gap-2 mx-1.5 px-3 py-1.5 text-xs text-muted hover:text-base-content hover:bg-base-200 transition-colors cursor-pointer"
-                onClick={handleAddRepo}
-            >
-                <FolderPlus className="w-4 h-4" />
-                <span>Add workspace</span>
-            </button>
+            {canCreateRepo && (
+                <button
+                    type="button"
+                    className="btn flex items-center gap-2 mx-1.5 px-3 py-1.5 text-xs text-muted hover:text-base-content hover:bg-base-200 transition-colors cursor-pointer"
+                    onClick={handleAddRepo}
+                >
+                    <FolderPlus className="w-4 h-4" />
+                    <span>Add workspace</span>
+                </button>
+            )}
         </div>
     )
 })

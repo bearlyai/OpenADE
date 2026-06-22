@@ -5,6 +5,7 @@
  */
 
 import type { AnnotationSide } from "@pierre/diffs"
+import type { OpenADEHyperPlanStrategy } from "../../openade-module/src"
 import type { HarnessStreamEvent, HarnessId } from "./electronAPI/harnessEventTypes"
 import type { HyperPlanSubExecution } from "./hyperplan/types"
 
@@ -38,7 +39,7 @@ export type QueuedTurnStatus = "queued" | "running" | "completed" | "error" | "s
 export interface QueuedTurn {
     id: string
     clientRequestId?: string
-    type: "do" | "ask"
+    type: "do" | "ask" | "hyperplan"
     input: string
     status: QueuedTurnStatus
     createdAt: string
@@ -51,6 +52,7 @@ export interface QueuedTurn {
     label?: string
     includeComments?: boolean
     images?: unknown[]
+    hyperplanStrategy?: OpenADEHyperPlanStrategy
     thinking?: "low" | "med" | "high" | "max"
     fastMode?: boolean
 }

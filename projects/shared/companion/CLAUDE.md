@@ -14,6 +14,8 @@ Shared TypeScript contracts for companion-only device, pairing, and service stat
 - OpenADE product read and mutation payloads use the OpenADE module types directly over `/v1/runtime`.
 - PairingPayload uses HTTP URL data, not custom deep-link schemes.
 - RemoteDevice list/revoke/drop-all/self-revoke result DTOs describe runtime method results for desktop trusted-local admin and paired self-revoke flows; they do not imply paired-device permission to administer other devices.
+- Paired runtime method and notification grants are generated from `projects/openade-client/openade-contracts.json`; `COMPANION_RUNTIME_PERMISSIONS` and `COMPANION_RUNTIME_NOTIFICATION_PERMISSIONS` re-export that generated policy so Electron, shared-shell tests, and Core consume one contract-owned profile. Keep contract/integration tests covering the profile when grants change.
+- Paired grants may include `openade/settings/mcpServers/read` only because Core and the TypeScript OpenADE module redact read-only responses to connector summaries. Do not add MCP replace/upsert/delete grants here without a settings-admin role and real paired-runtime tests.
 - CompanionEvent is intentionally coarse. The client refreshes affected read models instead of syncing Yjs.
 - Do not add renderer request/response command DTOs here. Companion commands go through runtime protocol methods.
 - Scoped project and task host features should use OpenADE module DTOs and runtime methods (`openade/project/*`, `openade/project/process/*`, `openade/task/terminal/*`, `openade/task/changes/read`, `openade/task/diff/read`, `openade/task/git/*`, `openade/task/image/read`, `openade/task/snapshot/*`) rather than introducing companion-specific file/search/process/terminal/git/image/snapshot command shapes.

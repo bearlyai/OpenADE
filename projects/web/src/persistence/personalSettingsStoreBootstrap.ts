@@ -22,6 +22,8 @@ export interface PersonalSettingsStoreConnection {
 export interface ProductPersonalSettingsAccess {
     readPersonalSettings(): Promise<{ settings: PersonalSettingsStore["settings"]["current"] }>
     replacePersonalSettings(params: OpenADEPersonalSettingsReplaceRequest): Promise<{ settings: PersonalSettingsStore["settings"]["current"] }>
+    canReadPersonalSettings?(): boolean
+    canReplacePersonalSettings?(): boolean
 }
 
 const DEFAULT_PERSONAL_SETTINGS: PersonalSettingsStore["settings"]["current"] = {
@@ -94,9 +96,6 @@ export async function connectPersonalSettingsStore(): Promise<PersonalSettingsSt
 
     const store = createPersonalSettingsStore(doc)
 
-    // Fire initial sync (non-blocking)
-    sync().catch((e) => console.error("[PersonalSettingsStore] Initial sync failed:", e))
-
     return {
         store,
         sync,
@@ -107,12 +106,15 @@ export async function connectPersonalSettingsStore(): Promise<PersonalSettingsSt
 export async function connectProductPersonalSettingsStore(access: ProductPersonalSettingsAccess): Promise<PersonalSettingsStoreConnection> {
     let disconnected = false
     let persistQueue: Promise<void> = Promise.resolve()
-    const readResult = await access.readPersonalSettings()
+    const readResult = access.canReadPersonalSettings?.() === false ? { settings: DEFAULT_PERSONAL_SETTINGS } : await access.readPersonalSettings()
+    let initialReadFresh = true
     const handle = createProductSettingsHandle(normalizeSettings(readResult.settings), (settings) => {
         if (disconnected) return
+        if (access.canReplacePersonalSettings?.() === false) return
         persistQueue = persistQueue
             .then(async () => {
                 if (disconnected) return
+                if (access.canReplacePersonalSettings?.() === false) return
                 const result = await access.replacePersonalSettings({ settings })
                 runInAction(() => {
                     if (!disconnected) handle.current = normalizeSettings(result.settings)
@@ -126,6 +128,11 @@ export async function connectProductPersonalSettingsStore(access: ProductPersona
     return {
         store: { settings: handle },
         sync: async () => {
+            if (access.canReadPersonalSettings?.() === false) return
+            if (initialReadFresh) {
+                initialReadFresh = false
+                return
+            }
             const result = await access.readPersonalSettings()
             runInAction(() => {
                 if (!disconnected) handle.current = normalizeSettings(result.settings)

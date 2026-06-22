@@ -8,6 +8,7 @@
     "build": "npm run build:harness && npm run clean && node ./build.mjs",
     "watch": "yarn && modd",
     "start": "npm run build:harness && npm install && RELEASE=head DEBUG=1 npm run build && npx electron dist/main.js",
+    "check": "npm run typecheck && npm run test",
     "check:no-any": "node ../../scripts/check-no-explicit-any.mjs --self-test .",
     "typecheck": "npm run check:no-any && tsgo --noEmit",
     "test": "vitest run --reporter=verbose",

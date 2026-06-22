@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,8 @@ import (
 type Store struct {
 	db *sql.DB
 }
+
+const sqliteFileMaxOpenConns = 8
 
 type Repo struct {
 	ID        string
@@ -68,6 +71,52 @@ type TaskEvent struct {
 	PayloadJSON   sql.NullString
 	PayloadBlobID sql.NullString
 }
+
+const LightweightTaskEventLimit = 80
+const LightweightTaskEventPayloadTailLimit = 20
+
+const lightweightTaskEventsQuery = `WITH latest_events AS (
+    SELECT id, task_id, seq, type, status, source_type, source_label, created_at
+    FROM task_events
+    WHERE task_id = ?
+    ORDER BY seq DESC
+    LIMIT ?
+), payload_tail AS (
+    SELECT id, payload_json, payload_blob_id
+    FROM task_events
+    WHERE task_id = ?
+    ORDER BY seq DESC
+    LIMIT ?
+)
+SELECT
+    latest_events.id,
+    latest_events.task_id,
+    latest_events.seq,
+    latest_events.type,
+    latest_events.status,
+    latest_events.source_type,
+    latest_events.source_label,
+    latest_events.created_at,
+    payload_tail.payload_json,
+    payload_tail.payload_blob_id
+FROM latest_events
+LEFT JOIN payload_tail ON payload_tail.id = latest_events.id
+ORDER BY latest_events.seq ASC`
+
+const listCommentsQuery = `SELECT id, task_id, body, anchor_json, created_at, updated_at, deleted_at
+FROM comments
+WHERE task_id = ? AND deleted_at IS NULL
+ORDER BY created_at ASC`
+
+const listTaskDeviceEnvironmentsQuery = `SELECT id, task_id, device_id, worktree_dir, setup_complete, merge_base_commit, created_at, last_used_at
+FROM task_device_environments
+WHERE task_id = ?
+ORDER BY last_used_at ASC, created_at ASC, id ASC`
+
+const listQueuedTurnsQuery = `SELECT id, task_id, type, input, status, position, payload_json, created_at, updated_at
+FROM queued_turns
+WHERE task_id = ?
+ORDER BY position ASC, created_at ASC, id ASC`
 
 type TaskDeviceEnvironment struct {
 	ID              string
@@ -164,6 +213,7 @@ type TaskMetadataUpdate struct {
 	UsageJSON       sql.NullString
 	MetadataJSONSet bool
 	MetadataJSON    sql.NullString
+	UpdatedAtSet    bool
 	UpdatedAt       time.Time
 }
 
@@ -208,7 +258,12 @@ func Open(ctx context.Context, dbPath string) (*Store, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	dsn, fileBacked, err := sqliteOpenDSN(dbPath)
+	if err != nil {
+		return nil, err
+	}
+
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
@@ -223,6 +278,7 @@ func Open(ctx context.Context, dbPath string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	configureSQLiteConnectionPool(db, fileBacked)
 	return store, nil
 }
 
@@ -232,6 +288,35 @@ func (store *Store) Close() error {
 
 func (store *Store) DB() *sql.DB {
 	return store.db
+}
+
+func sqliteOpenDSN(dbPath string) (string, bool, error) {
+	query := url.Values{}
+	query.Add("_pragma", "busy_timeout(5000)")
+	query.Add("_pragma", "foreign_keys(ON)")
+	query.Add("_pragma", "journal_mode(WAL)")
+
+	if dbPath == ":memory:" {
+		return dbPath + "?" + query.Encode(), false, nil
+	}
+
+	absPath, err := filepath.Abs(dbPath)
+	if err != nil {
+		return "", false, fmt.Errorf("resolve database path: %w", err)
+	}
+	dsn := url.URL{Scheme: "file", Path: absPath}
+	dsn.RawQuery = query.Encode()
+	return dsn.String(), true, nil
+}
+
+func configureSQLiteConnectionPool(db *sql.DB, fileBacked bool) {
+	if !fileBacked {
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+		return
+	}
+	db.SetMaxOpenConns(sqliteFileMaxOpenConns)
+	db.SetMaxIdleConns(sqliteFileMaxOpenConns)
 }
 
 func (store *Store) configure(ctx context.Context) error {
@@ -783,16 +868,99 @@ FROM tasks WHERE id = ?`,
 }
 
 func (store *Store) UpdateTaskMetadata(ctx context.Context, update TaskMetadataUpdate) (Task, bool, error) {
+	task, ok, _, err := store.UpdateTaskMetadataIfChanged(ctx, update)
+	return task, ok, err
+}
+
+func (store *Store) updateTaskLastViewedAt(ctx context.Context, task Task) (Task, bool, bool, error) {
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Task{}, false, false, fmt.Errorf("begin task viewed update: %w", err)
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE tasks
+SET updated_at = ?, last_viewed_at = ?
+WHERE id = ?`,
+		formatTime(task.UpdatedAt),
+		nullTimeString(task.LastViewedAt),
+		task.ID,
+	)
+	if err != nil {
+		return Task{}, false, false, fmt.Errorf("update task viewed %s: %w", task.ID, err)
+	}
+	updatedRows, err := result.RowsAffected()
+	if err != nil {
+		return Task{}, false, false, fmt.Errorf("read task viewed update count %s: %w", task.ID, err)
+	}
+	if updatedRows == 0 {
+		return Task{}, false, false, nil
+	}
+
+	previewResult, err := tx.ExecContext(
+		ctx,
+		`UPDATE task_previews
+SET updated_at = ?, last_viewed_at = ?
+WHERE task_id = ?`,
+		formatTime(task.UpdatedAt),
+		nullTimeString(task.LastViewedAt),
+		task.ID,
+	)
+	if err != nil {
+		return Task{}, false, false, fmt.Errorf("update task preview viewed %s: %w", task.ID, err)
+	}
+	previewRows, err := previewResult.RowsAffected()
+	if err != nil {
+		return Task{}, false, false, fmt.Errorf("read task preview viewed update count %s: %w", task.ID, err)
+	}
+	if previewRows == 0 {
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO task_previews(
+    task_id, repo_id, slug, title, closed, created_at, updated_at, last_viewed_at, last_event_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(task_id) DO UPDATE SET
+    updated_at = excluded.updated_at,
+    last_viewed_at = excluded.last_viewed_at`,
+			task.ID,
+			task.RepoID,
+			task.Slug,
+			task.Title,
+			boolInt(task.Closed),
+			formatTime(task.CreatedAt),
+			formatTime(task.UpdatedAt),
+			nullTimeString(task.LastViewedAt),
+			nullTimeString(task.LastEventAt),
+		); err != nil {
+			return Task{}, false, false, fmt.Errorf("insert task preview viewed %s: %w", task.ID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return Task{}, false, false, fmt.Errorf("commit task viewed update %s: %w", task.ID, err)
+	}
+	tx = nil
+	return task, true, true, nil
+}
+
+func (store *Store) UpdateTaskMetadataIfChanged(ctx context.Context, update TaskMetadataUpdate) (Task, bool, bool, error) {
 	if update.TaskID == "" {
-		return Task{}, false, errors.New("task id is required")
+		return Task{}, false, false, errors.New("task id is required")
 	}
 	task, ok, err := store.GetTask(ctx, update.TaskID)
 	if err != nil || !ok {
-		return task, ok, err
+		return task, ok, false, err
 	}
 	if update.UpdatedAt.IsZero() {
 		update.UpdatedAt = time.Now().UTC()
 	}
+	original := task
 	if update.Title != nil {
 		task.Title = *update.Title
 	}
@@ -808,11 +976,26 @@ func (store *Store) UpdateTaskMetadata(ctx context.Context, update TaskMetadataU
 	if update.MetadataJSONSet {
 		task.MetadataJSON = update.MetadataJSON
 	}
+	usageChanged := update.UsageJSONSet
+	if update.UsageJSONSet {
+		currentUsage, previewExists, err := store.taskPreviewUsageJSON(ctx, task.ID)
+		if err != nil {
+			return Task{}, false, false, err
+		}
+		usageChanged = !previewExists || !equalNullString(currentUsage, update.UsageJSON)
+	}
+	updatedAtChanged := update.UpdatedAtSet && !original.UpdatedAt.Equal(update.UpdatedAt)
+	if !taskMetadataUpdateChanged(original, task, usageChanged, updatedAtChanged) {
+		return task, true, false, nil
+	}
 	task.UpdatedAt = update.UpdatedAt
+	if taskMetadataUpdateOnlyLastViewed(update) {
+		return store.updateTaskLastViewedAt(ctx, task)
+	}
 
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Task{}, false, fmt.Errorf("begin task metadata update: %w", err)
+		return Task{}, false, false, fmt.Errorf("begin task metadata update: %w", err)
 	}
 	defer func() {
 		if tx != nil {
@@ -834,7 +1017,7 @@ WHERE id = ?`,
 		nullTimeString(task.LastEventAt),
 		task.ID,
 	); err != nil {
-		return Task{}, false, fmt.Errorf("update task metadata %s: %w", task.ID, err)
+		return Task{}, false, false, fmt.Errorf("update task metadata %s: %w", task.ID, err)
 	}
 
 	if _, err := tx.ExecContext(
@@ -863,14 +1046,60 @@ ON CONFLICT(task_id) DO UPDATE SET
 		update.UsageJSON,
 		boolInt(update.UsageJSONSet),
 	); err != nil {
-		return Task{}, false, fmt.Errorf("update task preview metadata %s: %w", task.ID, err)
+		return Task{}, false, false, fmt.Errorf("update task preview metadata %s: %w", task.ID, err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return Task{}, false, fmt.Errorf("commit task metadata update %s: %w", task.ID, err)
+		return Task{}, false, false, fmt.Errorf("commit task metadata update %s: %w", task.ID, err)
 	}
 	tx = nil
-	return task, true, nil
+	return task, true, true, nil
+}
+
+func (store *Store) taskPreviewUsageJSON(ctx context.Context, taskID string) (sql.NullString, bool, error) {
+	var usage sql.NullString
+	err := store.db.QueryRowContext(ctx, `SELECT usage_json FROM task_previews WHERE task_id = ?`, taskID).Scan(&usage)
+	if errors.Is(err, sql.ErrNoRows) {
+		return sql.NullString{}, false, nil
+	}
+	if err != nil {
+		return sql.NullString{}, false, fmt.Errorf("read task preview usage %s: %w", taskID, err)
+	}
+	return usage, true, nil
+}
+
+func taskMetadataUpdateChanged(original Task, updated Task, usageChanged bool, updatedAtChanged bool) bool {
+	if usageChanged || updatedAtChanged {
+		return true
+	}
+	return original.Title != updated.Title ||
+		original.Closed != updated.Closed ||
+		!equalNullTime(original.LastViewedAt, updated.LastViewedAt) ||
+		!equalNullTime(original.LastEventAt, updated.LastEventAt) ||
+		!equalNullString(original.MetadataJSON, updated.MetadataJSON)
+}
+
+func taskMetadataUpdateOnlyLastViewed(update TaskMetadataUpdate) bool {
+	return update.Title == nil &&
+		update.Closed == nil &&
+		update.LastViewedAtSet &&
+		!update.LastEventAtSet &&
+		!update.UsageJSONSet &&
+		!update.MetadataJSONSet
+}
+
+func equalNullTime(left sql.NullTime, right sql.NullTime) bool {
+	if left.Valid != right.Valid {
+		return false
+	}
+	if !left.Valid {
+		return true
+	}
+	return left.Time.Equal(right.Time)
+}
+
+func equalNullString(left sql.NullString, right sql.NullString) bool {
+	return left.Valid == right.Valid && (!left.Valid || left.String == right.String)
 }
 
 func (store *Store) DeleteTask(ctx context.Context, repoID string, taskID string) (bool, error) {
@@ -1034,6 +1263,25 @@ ORDER BY closed ASC, COALESCE(last_event_at, updated_at, created_at) DESC, title
 		return nil, fmt.Errorf("iterate task previews: %w", err)
 	}
 	return previews, nil
+}
+
+func (store *Store) GetTaskPreview(ctx context.Context, taskID string) (TaskPreview, bool, error) {
+	row := store.db.QueryRowContext(
+		ctx,
+		`SELECT task_id, repo_id, slug, title, closed, created_at, updated_at,
+    last_viewed_at, last_event_at, last_event_json, usage_json
+FROM task_previews
+WHERE task_id = ?`,
+		taskID,
+	)
+	preview, err := scanTaskPreview(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return TaskPreview{}, false, nil
+		}
+		return TaskPreview{}, false, err
+	}
+	return preview, true, nil
 }
 
 func (store *Store) UpsertTaskEvent(ctx context.Context, event TaskEvent) error {
@@ -1427,10 +1675,7 @@ ON CONFLICT(task_id) DO UPDATE SET
 func (store *Store) ListTaskDeviceEnvironments(ctx context.Context, taskID string) ([]TaskDeviceEnvironment, error) {
 	rows, err := store.db.QueryContext(
 		ctx,
-		`SELECT id, task_id, device_id, worktree_dir, setup_complete, merge_base_commit, created_at, last_used_at
-FROM task_device_environments
-WHERE task_id = ?
-ORDER BY last_used_at ASC, created_at ASC, id ASC`,
+		listTaskDeviceEnvironmentsQuery,
 		taskID,
 	)
 	if err != nil {
@@ -1453,22 +1698,42 @@ ORDER BY last_used_at ASC, created_at ASC, id ASC`,
 }
 
 func (store *Store) ListTaskEvents(ctx context.Context, taskID string, hydrate bool) ([]TaskEvent, error) {
-	limitClause := ""
-	if !hydrate {
-		limitClause = " LIMIT 80"
+	return store.ListTaskEventsWithLimit(ctx, taskID, hydrate, LightweightTaskEventLimit)
+}
+
+func (store *Store) ListTaskEventsWithLimit(ctx context.Context, taskID string, hydrate bool, lightweightLimit int) ([]TaskEvent, error) {
+	if lightweightLimit <= 0 {
+		return nil, errors.New("lightweight task event limit must be positive")
 	}
-	rows, err := store.db.QueryContext(
-		ctx,
-		`SELECT id, task_id, seq, type, status, source_type, source_label, created_at, payload_json, payload_blob_id
-FROM (
-    SELECT id, task_id, seq, type, status, source_type, source_label, created_at, payload_json, payload_blob_id
-    FROM task_events
-    WHERE task_id = ?
-    ORDER BY seq DESC`+limitClause+`
-)
+	if lightweightLimit > LightweightTaskEventLimit {
+		lightweightLimit = LightweightTaskEventLimit
+	}
+	payloadTailLimit := LightweightTaskEventPayloadTailLimit
+	if payloadTailLimit > lightweightLimit {
+		payloadTailLimit = lightweightLimit
+	}
+
+	var rows *sql.Rows
+	var err error
+	if hydrate {
+		rows, err = store.db.QueryContext(
+			ctx,
+			`SELECT id, task_id, seq, type, status, source_type, source_label, created_at, payload_json, payload_blob_id
+FROM task_events
+WHERE task_id = ?
 ORDER BY seq ASC`,
-		taskID,
-	)
+			taskID,
+		)
+	} else {
+		rows, err = store.db.QueryContext(
+			ctx,
+			lightweightTaskEventsQuery,
+			taskID,
+			lightweightLimit,
+			taskID,
+			payloadTailLimit,
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list task events for task %s: %w", taskID, err)
 	}
@@ -1588,10 +1853,7 @@ WHERE id = ? AND task_id = ? AND deleted_at IS NULL`,
 func (store *Store) ListComments(ctx context.Context, taskID string) ([]Comment, error) {
 	rows, err := store.db.QueryContext(
 		ctx,
-		`SELECT id, task_id, body, anchor_json, created_at, updated_at, deleted_at
-FROM comments
-WHERE task_id = ? AND deleted_at IS NULL
-ORDER BY created_at ASC`,
+		listCommentsQuery,
 		taskID,
 	)
 	if err != nil {
@@ -1736,10 +1998,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 func (store *Store) ListQueuedTurns(ctx context.Context, taskID string) ([]QueuedTurn, error) {
 	rows, err := store.db.QueryContext(
 		ctx,
-		`SELECT id, task_id, type, input, status, position, payload_json, created_at, updated_at
-FROM queued_turns
-WHERE task_id = ?
-ORDER BY position ASC, created_at ASC, id ASC`,
+		listQueuedTurnsQuery,
 		taskID,
 	)
 	if err != nil {
@@ -2243,6 +2502,32 @@ func (store *Store) GetSetting(ctx context.Context, key string) (json.RawMessage
 		return nil, false, fmt.Errorf("setting %s contains invalid JSON", key)
 	}
 	return json.RawMessage(value), true, nil
+}
+
+func (store *Store) ListSettingKeysByPrefix(ctx context.Context, prefix string) ([]string, error) {
+	if prefix == "" {
+		return []string{}, nil
+	}
+	rows, err := store.db.QueryContext(ctx, `SELECT key FROM settings WHERE key LIKE ? ORDER BY key`, prefix+"%")
+	if err != nil {
+		return nil, fmt.Errorf("list settings with prefix %s: %w", prefix, err)
+	}
+	defer rows.Close()
+
+	keys := []string{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("scan setting key: %w", err)
+		}
+		if strings.HasPrefix(key, prefix) {
+			keys = append(keys, key)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate setting keys: %w", err)
+	}
+	return keys, nil
 }
 
 func (store *Store) UpsertRuntime(ctx context.Context, runtime RuntimeRecord) error {
@@ -3098,8 +3383,8 @@ func validateQueuedTurn(turn QueuedTurn) error {
 	if turn.TaskID == "" {
 		return errors.New("queued turn task id is required")
 	}
-	if turn.Type != "do" && turn.Type != "ask" {
-		return errors.New("queued turn type must be do or ask")
+	if turn.Type != "do" && turn.Type != "ask" && turn.Type != "hyperplan" {
+		return errors.New("queued turn type must be do, ask, or hyperplan")
 	}
 	if turn.Input == "" {
 		return errors.New("queued turn input is required")
