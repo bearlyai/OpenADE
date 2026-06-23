@@ -2,7 +2,7 @@ import { type MessageGroup, groupStreamEvents } from "../components/events/messa
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import type { ActionEvent, ActionEventSource, Task } from "../types"
 
-type TaskLike = Pick<Task, "id" | "repoId" | "title" | "description" | "events">
+export type TaskLike = Pick<Task, "id" | "repoId" | "title" | "description" | "events">
 import { type XmlNode, makeXml } from "../utils/makeXML"
 
 export interface TaskThreadFormat {

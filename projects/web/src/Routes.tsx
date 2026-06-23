@@ -3,6 +3,7 @@ import { Code, ListTodo, Loader2, Settings, Sparkles } from "lucide-react"
 import { observer } from "mobx-react"
 import { useCallback, useRef, useState } from "react"
 import { Navigate, useParams } from "react-router"
+import { CopyMarkdownButton } from "./components/CopyMarkdownButton"
 import { TaskStatsBar } from "./components/TaskStatsBar"
 import { getLastViewed } from "./constants"
 import { isCodeModuleAvailable } from "./electronAPI/capabilities"
@@ -297,7 +298,13 @@ export const CodeWorkspaceTaskRoute = observer(() => {
         taskTitle
     )
     const navbarIcon = <ListTodo size="1.25rem" className="text-muted" />
-    const navbarRight = taskModel ? <TaskStatsBar taskModel={taskModel} /> : undefined
+    const navbarRight =
+        taskModel && taskId ? (
+            <div className="flex items-center gap-3">
+                <TaskStatsBar taskModel={taskModel} />
+                <CopyMarkdownButton taskId={taskId} />
+            </div>
+        ) : undefined
 
     // Workspace not found
     if (!repo) {

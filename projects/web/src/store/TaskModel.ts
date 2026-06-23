@@ -10,6 +10,7 @@ import { DEFAULT_MODEL, getDefaultModelForHarness, resolveModelForHarness } from
 import type { GitSummaryResponse } from "../electronAPI/git"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import { computeTaskUsage } from "../persistence/taskStatsUtils"
+import { buildTaskThreadMarkdown } from "../prompts/taskThreadMarkdown"
 import { type TaskThreadFormat, type TaskThreadJson, buildTaskThreadJson, buildTaskThreadXml } from "../prompts/taskThreadSerializer"
 import { localOpenADEClient } from "../runtime/localOpenADEClient"
 import type { ActionEvent, CodeEvent, IsolationStrategy, QueuedTurn, SetupEnvironmentEvent, SnapshotEvent, Task, TaskDeviceEnvironment } from "../types"
@@ -450,6 +451,11 @@ export class TaskModel {
     getThreadXml(format: Partial<TaskThreadFormat> = {}): string {
         if (!this.task) return ""
         return buildTaskThreadXml(this.task, format)
+    }
+
+    getThreadMarkdown(format: Partial<TaskThreadFormat> = {}): string {
+        if (!this.task) return ""
+        return buildTaskThreadMarkdown(this.task, format)
     }
 
     // === Event models ===
