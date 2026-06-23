@@ -8,6 +8,16 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.80.1",
+        title: "Cleaner Agent Timelines",
+        date: "2026-06-23",
+        highlights: [
+            "Claude thinking-token telemetry now folds into the Thinking block instead of showing as unknown timeline events",
+            "Thinking blocks show approximate token counts when Claude reports them",
+            "Task timeline events now start expanded by default, while snapshots stay collapsed until opened",
+        ],
+    },
+    {
         version: "0.80.0",
         title: "Claude Fable 5",
         date: "2026-06-09",
