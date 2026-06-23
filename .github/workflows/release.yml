@@ -10,6 +10,9 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: write
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -145,7 +148,7 @@ jobs:
 
   release-windows:
     needs: validate
-    runs-on: windows-latest
+    runs-on: windows-2022
     environment: release
     steps:
       - uses: actions/checkout@v4
