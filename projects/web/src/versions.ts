@@ -8,6 +8,16 @@ export interface ReleaseNote {
 /** Hardcoded release notes, newest first. */
 export const RELEASE_NOTES: ReleaseNote[] = [
     {
+        version: "0.81.0",
+        title: "Markdown Conversation Export",
+        date: "2026-06-23",
+        highlights: [
+            "Task pages now include a Markdown export for sharing or archiving conversations outside OpenADE",
+            "You can copy the generated Markdown or download it as a .md file from a live preview",
+            "Exports include user and agent messages by default, with toggles for function calls, function results, and agent thinking",
+        ],
+    },
+    {
         version: "0.80.1",
         title: "Cleaner Agent Timelines",
         date: "2026-06-23",
