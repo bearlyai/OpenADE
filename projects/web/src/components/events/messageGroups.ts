@@ -181,6 +181,8 @@ export interface TodoWriteGroup {
 export interface ThinkingGroup {
     type: "thinking"
     text: string
+    // Peak estimated thinking-token count from the CLI's streaming thinking_tokens telemetry, when present.
+    estimatedThinkingTokens?: number
     messageIndex: number
 }
 

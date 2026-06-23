@@ -466,6 +466,57 @@ describe("groupStreamEvents unknown harness events", () => {
         expect(groups).toEqual([])
     })
 
+    it("folds Claude thinking-token estimates into the thinking group they precede", () => {
+        const thinkingTokensEvent = (estimatedTokens: number, id: string) =>
+            claudeMessageEvent(
+                {
+                    type: "raw_json",
+                    original_type: "system",
+                    original_subtype: "thinking_tokens",
+                    raw: {
+                        type: "system",
+                        subtype: "thinking_tokens",
+                        estimated_tokens: estimatedTokens,
+                        estimated_tokens_delta: 100,
+                        uuid: "4f405d63-be1f-4b0e-ae66-71cae78f4047",
+                        session_id: "f1a8462d-edee-4aca-ae64-cb2f1e317f87",
+                    },
+                },
+                id
+            )
+
+        const groups = groupStreamEvents(
+            [
+                thinkingTokensEvent(1850, "tt-1"),
+                thinkingTokensEvent(1950, "tt-2"),
+                claudeMessageEvent({ type: "assistant", message: { content: [{ type: "thinking", thinking: "Let me reason about this." }] } }, "asst-1"),
+            ],
+            "claude-code"
+        )
+
+        expect(groups).toEqual([{ type: "thinking", text: "Let me reason about this.", estimatedThinkingTokens: 1950, messageIndex: 2 }])
+    })
+
+    it("drops Claude thinking-token telemetry with no following thinking instead of showing an unknown card", () => {
+        const groups = groupStreamEvents(
+            [
+                claudeMessageEvent(
+                    {
+                        type: "raw_json",
+                        original_type: "system",
+                        original_subtype: "thinking_tokens",
+                        raw: { type: "system", subtype: "thinking_tokens", estimated_tokens: 1850, estimated_tokens_delta: 100 },
+                    },
+                    "tt-1"
+                ),
+                claudeMessageEvent({ type: "system", subtype: "thinking_tokens", estimated_tokens: 1950, estimated_tokens_delta: 100 }, "tt-2"),
+            ],
+            "claude-code"
+        )
+
+        expect(groups).toEqual([])
+    })
+
     it("renders Claude task_progress events as task system groups", () => {
         const groups = groupStreamEvents(
             [

@@ -107,11 +107,22 @@ export function groupClaudeCodeMessages(messages: ClaudeEvent[]): MessageGroup[]
         }
     }
 
+    // Peak thinking-token estimate seen since the last thinking group; folded into the next one.
+    let pendingThinkingTokens: number | null = null
+
     // Process messages in order
     for (let i = 0; i < messages.length; i++) {
         const msg = messages[i]
 
         if (isIgnoredClaudeTelemetryEvent(msg)) {
+            continue
+        }
+
+        const thinkingTokens = readThinkingTokensEvent(msg)
+        if (thinkingTokens) {
+            if (thinkingTokens.estimate !== null) {
+                pendingThinkingTokens = Math.max(pendingThinkingTokens ?? 0, thinkingTokens.estimate)
+            }
             continue
         }
 
@@ -153,6 +164,8 @@ export function groupClaudeCodeMessages(messages: ClaudeEvent[]): MessageGroup[]
 
         // Handle result messages
         if (msg.type === "result") {
+            // Turn boundary: a pending estimate with no thinking group to attach to is stale.
+            pendingThinkingTokens = null
             const resultMsg = msg as ClaudeResultEvent
             groups.push({
                 type: "result",
@@ -179,6 +192,10 @@ export function groupClaudeCodeMessages(messages: ClaudeEvent[]): MessageGroup[]
         // Handle assistant messages
         if (msg.type === "assistant") {
             const groupCountBeforeAssistant = groups.length
+            // Fold any buffered thinking-token estimate into this turn's thinking group, then clear
+            // it so it cannot leak into a later turn that happens to have no thinking of its own.
+            const estimatedThinkingTokens = pendingThinkingTokens ?? undefined
+            pendingThinkingTokens = null
             const thinking = getThinkingText(msg)
             const text = getAssistantText(msg)
             const toolUse = getToolUse(msg)
@@ -189,6 +206,7 @@ export function groupClaudeCodeMessages(messages: ClaudeEvent[]): MessageGroup[]
                 groups.push({
                     type: "thinking",
                     text: thinking,
+                    estimatedThinkingTokens,
                     messageIndex: i,
                 })
             }
@@ -306,6 +324,7 @@ export function groupClaudeCodeMessages(messages: ClaudeEvent[]): MessageGroup[]
                     groups.push({
                         type: "thinking",
                         text: "Thinking",
+                        estimatedThinkingTokens,
                         messageIndex: i,
                     })
                 } else if (!hasOnlyEmptyAssistantContent(msg)) {
@@ -383,6 +402,30 @@ function isIgnoredClaudeTelemetryEvent(msg: ClaudeEvent): boolean {
         original_subtype?: unknown
     }
     return raw.type === "rate_limit_event" || (raw.type === "raw_json" && raw.original_type === "rate_limit_event")
+}
+
+/**
+ * thinking_tokens is a streaming estimate the CLI emits roughly every ~100 thinking tokens while the
+ * model reasons. It is not transcript content, and it is not a known SDK system subtype, so it
+ * arrives as raw_json today (typed system form tolerated for forward-compat). Returns the matched
+ * estimate so the caller can fold the peak into the thinking group it precedes; returns null when the
+ * event is not a thinking_tokens event at all.
+ */
+function readThinkingTokensEvent(msg: ClaudeEvent): { estimate: number | null } | null {
+    const raw = msg as unknown as {
+        type?: unknown
+        subtype?: unknown
+        original_type?: unknown
+        original_subtype?: unknown
+        estimated_tokens?: unknown
+        raw?: { estimated_tokens?: unknown }
+    }
+    const isTyped = raw.type === "system" && raw.subtype === "thinking_tokens"
+    const isRawJson = raw.type === "raw_json" && raw.original_type === "system" && raw.original_subtype === "thinking_tokens"
+    if (!isTyped && !isRawJson) return null
+
+    const value = isTyped ? raw.estimated_tokens : raw.raw?.estimated_tokens
+    return { estimate: typeof value === "number" && Number.isFinite(value) ? value : null }
 }
 
 function getUnknownAssistantContentBlocks(msg: ClaudeEvent): unknown[] {
