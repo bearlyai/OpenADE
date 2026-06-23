@@ -12,8 +12,8 @@ import { SetupEventItem } from "./events/SetupEventItem"
 import { SnapshotEventItem } from "./events/SnapshotEventItem"
 import { HyperPlanEventItem } from "./hyperplan/HyperPlanEventItem"
 
-/** Event types that should never auto-expand (loading, isLast, etc.) - only manual toggle */
-export const NO_AUTO_EXPAND_TYPES: Set<CodeEvent["type"]> = new Set(["snapshot"])
+/** Event types that start collapsed (their bodies lazy-load on expand); everything else starts expanded. */
+const DEFAULT_COLLAPSED_TYPES: Set<CodeEvent["type"]> = new Set(["snapshot"])
 
 /** Check if an ActionEvent is a plan, revise, or hyperplan type */
 function isPlanOrRevise(event: ActionEvent): boolean {
@@ -81,22 +81,15 @@ export const EventItem = observer(
     ({
         taskId,
         event,
-        isLast,
         isLatestPlan,
     }: {
         taskId: string
         event: CodeEvent
-        isLast: boolean
         isLatestPlan: boolean
     }) => {
         const codeStore = useCodeStore()
         const taskUIState = codeStore.tasks.getTaskUIState(taskId)
-        const isInProgress = event.status === "in_progress"
-        const isExplicitlyExpanded = taskUIState.isEventExpanded(event.id)
-        const hasExplicitState = taskUIState.hasExplicitState
-        const isNoAutoExpand = NO_AUTO_EXPAND_TYPES.has(event.type)
-        // For noAutoExpand types, only expand if explicitly toggled by user
-        const expanded = isExplicitlyExpanded || (!isNoAutoExpand && (isInProgress || (isLast && !hasExplicitState)))
+        const expanded = taskUIState.isEventExpanded(event.id, !DEFAULT_COLLAPSED_TYPES.has(event.type))
 
         const handleToggle = () => {
             taskUIState.toggleEventExpanded(event.id)

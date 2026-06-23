@@ -1,32 +1,24 @@
 import { makeAutoObservable } from "mobx"
 
 export class TaskUIStateManager {
-    expandedEventIds: Set<string> = new Set()
+    // Event IDs the user has manually toggled away from their default expansion state.
+    toggledEventIds: Set<string> = new Set()
 
     constructor() {
         makeAutoObservable(this, {
-            expandedEventIds: true,
+            toggledEventIds: true,
         })
     }
 
-    isEventExpanded(eventId: string): boolean {
-        return this.expandedEventIds.has(eventId)
+    isEventExpanded(eventId: string, defaultExpanded: boolean): boolean {
+        return this.toggledEventIds.has(eventId) ? !defaultExpanded : defaultExpanded
     }
 
     toggleEventExpanded(eventId: string): void {
-        if (this.expandedEventIds.has(eventId)) {
-            this.expandedEventIds.delete(eventId)
+        if (this.toggledEventIds.has(eventId)) {
+            this.toggledEventIds.delete(eventId)
         } else {
-            this.expandedEventIds.add(eventId)
+            this.toggledEventIds.add(eventId)
         }
-    }
-
-    expandOnlyEvent(eventId: string): void {
-        this.expandedEventIds.clear()
-        this.expandedEventIds.add(eventId)
-    }
-
-    get hasExplicitState(): boolean {
-        return this.expandedEventIds.size > 0
     }
 }
