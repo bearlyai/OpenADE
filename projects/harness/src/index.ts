@@ -66,6 +66,9 @@ export { CodexHarness } from "./harnesses/codex/index.js"
 export type { CodexHarnessConfig, CodexEvent } from "./harnesses/codex/index.js"
 export { calculateCodexCostUsd } from "./harnesses/codex/pricing.js"
 
+export { OpencodeHarness } from "./harnesses/opencode/index.js"
+export type { OpencodeHarnessConfig, OpencodeEvent } from "./harnesses/opencode/index.js"
+
 // ── Utilities ──
 export { startToolServer } from "./util/tool-server.js"
 export type { ToolServerHandle, ToolServerOptions } from "./util/tool-server.js"
@@ -131,3 +134,18 @@ export type {
 } from "./harnesses/codex/types.js"
 
 export { parseCodexEvent } from "./harnesses/codex/types.js"
+
+// ── opencode sub-types (for consumers that need them) ──
+export type {
+    OpencodeStepStartEvent,
+    OpencodeTextEvent,
+    OpencodeToolUseEvent,
+    OpencodeStepFinishEvent,
+    OpencodeErrorEvent,
+    OpencodeRawJsonEvent,
+    OpencodePart,
+    OpencodeToolState,
+    OpencodeTokens,
+} from "./harnesses/opencode/types.js"
+
+export { parseOpencodeEvent } from "./harnesses/opencode/types.js"

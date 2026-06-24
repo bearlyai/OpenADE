@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { DEFAULT_MODEL, getDefaultModelForHarness } from "../constants"
+import { DEFAULT_HARNESS_ID, DEFAULT_MODEL, getDefaultModelForHarness } from "../constants"
 import type { HarnessId } from "../electronAPI/harnessEventTypes"
 import type { ActionEvent, SetupEnvironmentEvent, Task } from "../types"
 import { TaskModel } from "./TaskModel"
@@ -252,8 +252,8 @@ describe("HyperPlan handoff consistency", () => {
      * harness/model used to resume it.
      *
      * The real-world flow:
-     * 1. TaskModel constructed (defaults to claude-code + DEFAULT_MODEL)
-     * 2. HyperPlan runs — reconciler uses e.g. codex + o3
+     * 1. TaskModel constructed (defaults to DEFAULT_HARNESS_ID + DEFAULT_MODEL)
+     * 2. HyperPlan runs — reconciler uses another harness/model
      * 3. Reconciler's session ID saved on the ActionEvent
      * 4. User clicks "Run Plan" — runAction reads taskModel.harnessId/model
      *    AND getLastEventSessionId() for the session
@@ -310,10 +310,10 @@ describe("HyperPlan handoff consistency", () => {
         const model = new TaskModel(store, task.id)
 
         // Starts with defaults
-        expect(model.harnessId).toBe("claude-code")
+        expect(model.harnessId).toBe(DEFAULT_HARNESS_ID)
         expect(model.model).toBe(DEFAULT_MODEL)
 
-        // HyperPlan completes — reconciler used codex
+        // HyperPlan completes — reconciler used Codex
         const hyperplanEvent = createHyperPlanEvent({
             id: "hp-1",
             harnessId: "codex",
@@ -323,7 +323,7 @@ describe("HyperPlan handoff consistency", () => {
         task.events.push(hyperplanEvent)
 
         // Before sync: TaskModel is stale
-        expect(model.harnessId).toBe("claude-code")
+        expect(model.harnessId).toBe(DEFAULT_HARNESS_ID)
 
         // After sync: TaskModel matches the reconciler
         model.syncHarnessFromHistory()
@@ -336,14 +336,14 @@ describe("HyperPlan handoff consistency", () => {
         const store = createStore(task)
         const model = new TaskModel(store, task.id)
 
-        expect(model.harnessId).toBe("claude-code")
+        expect(model.harnessId).toBe(DEFAULT_HARNESS_ID)
         expect(model.model).toBe(DEFAULT_MODEL)
 
-        // HyperPlan reconciler used claude-code + sonnet (same harness, different model)
+        // HyperPlan reconciler used Claude Code + a different model
         task.events.push(
             createHyperPlanEvent({
                 id: "hp-1",
-                harnessId: "claude-code",
+                harnessId: DEFAULT_HARNESS_ID,
                 modelId: "sonnet",
                 sessionId: "reconciler-session-456",
             })
@@ -354,7 +354,7 @@ describe("HyperPlan handoff consistency", () => {
 
         // After sync: model matches the reconciler
         model.syncHarnessFromHistory()
-        expect(model.harnessId).toBe("claude-code")
+        expect(model.harnessId).toBe(DEFAULT_HARNESS_ID)
         expect(model.model).toBe("sonnet")
     })
 
@@ -413,7 +413,7 @@ describe("HyperPlan handoff consistency", () => {
         const taskModel = new TaskModel(store, task.id)
 
         // TaskModel starts with defaults
-        expect(taskModel.harnessId).toBe("claude-code")
+        expect(taskModel.harnessId).toBe(DEFAULT_HARNESS_ID)
         expect(taskModel.model).toBe(DEFAULT_MODEL)
 
         // HyperPlan adds event with different harness
@@ -440,7 +440,7 @@ describe("HyperPlan handoff consistency", () => {
         expect(effectiveModel).toBe("gpt-5.3-codex")
 
         // The old broken behavior would have been:
-        //   effectiveHarnessId = taskModel.harnessId = "claude-code"  (WRONG)
+        //   effectiveHarnessId = taskModel.harnessId = DEFAULT_HARNESS_ID (WRONG)
         //   effectiveModel = taskModel.model = DEFAULT_MODEL           (WRONG)
         // Verify these are indeed different to confirm the fix matters:
         expect(taskModel.harnessId).not.toBe(effectiveHarnessId)

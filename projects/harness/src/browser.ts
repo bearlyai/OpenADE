@@ -2,7 +2,7 @@
 // This entry point re-exports only pure-data modules (types + model catalog)
 // and is safe to bundle with Vite/Rollup for renderer / web contexts.
 //
-// IMPORTANT: Never import from harness index files (claude-code/index, codex/index)
+// IMPORTANT: Never import from harness index files (claude-code/index, codex/index, opencode/index)
 // as those pull in Node built-ins (child_process, fs, os, etc.).
 
 // ── Core types ──
@@ -125,3 +125,21 @@ export type {
 
 export { parseCodexEvent } from "./harnesses/codex/types.js"
 export { calculateCodexCostUsd } from "./harnesses/codex/pricing.js"
+
+// ── opencode config & event types (from leaf modules, NOT index.ts) ──
+export type { OpencodeHarnessConfig } from "./harnesses/opencode/args.js"
+
+export type {
+    OpencodeEvent,
+    OpencodeStepStartEvent,
+    OpencodeTextEvent,
+    OpencodeToolUseEvent,
+    OpencodeStepFinishEvent,
+    OpencodeErrorEvent,
+    OpencodeRawJsonEvent,
+    OpencodePart,
+    OpencodeToolState,
+    OpencodeTokens,
+} from "./harnesses/opencode/types.js"
+
+export { parseOpencodeEvent } from "./harnesses/opencode/types.js"

@@ -18,6 +18,7 @@ import { extractRawMessageEvents } from "../../electronAPI/harnessEventTypes"
 import type { ActionEventSource } from "../../types"
 import { groupClaudeCodeMessages } from "./parsers/claudeCodeParser"
 import { groupCodexMessages } from "./parsers/codexParser"
+import { groupOpencodeMessages } from "./parsers/opencodeParser"
 
 // ============================================================================
 // Render Mode Types
@@ -276,7 +277,7 @@ function collectStderrGroups(events: HarnessStreamEvent[]): StderrGroup[] {
 function groupRawMessageEvents(
     events: HarnessRawMessageEvent[],
     harnessId: HarnessId,
-    completionUsage?: { costUsd?: number; durationMs?: number }
+    completionUsage?: { costUsd?: number; durationMs?: number; inputTokens?: number; outputTokens?: number }
 ): MessageGroup[] {
     switch (harnessId) {
         case "claude-code": {
@@ -289,6 +290,12 @@ function groupRawMessageEvents(
             const messages = events.filter((e): e is HarnessRawMessageEvent & { harnessId: "codex" } => e.harnessId === "codex").map((e) => e.message)
             return groupCodexMessages(messages, completionUsage)
         }
+        case "opencode": {
+            const messages = events
+                .filter((e): e is HarnessRawMessageEvent & { harnessId: "opencode" } => e.harnessId === "opencode")
+                .map((e) => e.message)
+            return groupOpencodeMessages(messages, completionUsage)
+        }
         default: {
             const _exhaustive: never = harnessId
             return _exhaustive
@@ -296,11 +303,11 @@ function groupRawMessageEvents(
     }
 }
 
-function extractCompletionUsage(events: HarnessStreamEvent[]): { costUsd?: number; durationMs?: number } | undefined {
+function extractCompletionUsage(events: HarnessStreamEvent[]): { costUsd?: number; durationMs?: number; inputTokens?: number; outputTokens?: number } | undefined {
     for (const e of events) {
         if (e.direction === "execution" && e.type === "complete" && e.usage) {
             const usage = e.usage as HarnessUsage
-            return { costUsd: usage.costUsd, durationMs: usage.durationMs }
+            return { costUsd: usage.costUsd, durationMs: usage.durationMs, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
         }
     }
     return undefined

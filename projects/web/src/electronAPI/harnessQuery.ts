@@ -80,6 +80,7 @@ export type ClientHarnessQueryOptions = HarnessQueryOptions & {
 
 import { isCodeModuleAvailable } from "./capabilities"
 import { localRuntimeClient } from "../runtime/localRuntimeClient"
+import { DEFAULT_HARNESS_ID } from "../constants"
 
 // ============================================================================
 // HarnessQuery Class
@@ -99,7 +100,7 @@ export class HarnessQuery {
     private listeners: Map<string, EventHandler[]> = new Map()
     private toolHandlers: Map<string, ToolHandler> = new Map()
 
-    constructor(executionId: string, options: ClientHarnessQueryOptions = { harnessId: "claude-code", cwd: "" }) {
+    constructor(executionId: string, options: ClientHarnessQueryOptions = { harnessId: DEFAULT_HARNESS_ID, cwd: "" }) {
         this._executionId = executionId
         this._options = options
         this._executionState = {

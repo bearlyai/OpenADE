@@ -35,6 +35,28 @@ function claudeMessageEvent(message: Record<string, unknown>, id: string = crypt
     } as unknown as HarnessStreamEvent
 }
 
+function opencodeMessageEvent(message: Record<string, unknown>, id: string = crypto.randomUUID()): HarnessStreamEvent {
+    return {
+        id,
+        type: "raw_message",
+        executionId: "exec-1",
+        harnessId: "opencode",
+        direction: "execution",
+        message,
+    } as unknown as HarnessStreamEvent
+}
+
+function opencodeCompleteEvent(usage: { inputTokens?: number; outputTokens?: number; costUsd?: number; durationMs?: number }, id: string = crypto.randomUUID()): HarnessStreamEvent {
+    return {
+        id,
+        type: "complete",
+        executionId: "exec-1",
+        harnessId: "opencode",
+        direction: "execution",
+        usage,
+    } as unknown as HarnessStreamEvent
+}
+
 describe("groupStreamEvents stderr grouping", () => {
     it("merges adjacent stderr events into one stderr group", () => {
         const groups = groupStreamEvents(
@@ -81,6 +103,109 @@ describe("groupStreamEvents stderr grouping", () => {
         expect(stderrGroups).toHaveLength(2)
         expect(stderrGroups[0]).toMatchObject({ type: "stderr", eventId: "stderr-1", data: "user-visible line" })
         expect(stderrGroups[1]).toMatchObject({ type: "stderr", eventId: "stderr-2", data: "follow-up user-visible line" })
+    })
+})
+
+describe("groupStreamEvents opencode", () => {
+    it("renders opencode text events as one text group", () => {
+        const groups = groupStreamEvents(
+            [
+                opencodeMessageEvent({ type: "step_start", sessionID: "ses_123", part: { id: "prt_start", type: "step-start" } }, "msg-1"),
+                opencodeMessageEvent({ type: "text", sessionID: "ses_123", part: { type: "text", text: "hello " } }, "msg-2"),
+                opencodeMessageEvent({ type: "text", sessionID: "ses_123", part: { type: "text", text: "world" } }, "msg-3"),
+                opencodeMessageEvent({
+                    type: "step_finish",
+                    sessionID: "ses_123",
+                    part: { reason: "stop", cost: 0.01, tokens: { input: 10, output: 2 } },
+                }),
+            ],
+            "opencode"
+        )
+
+        expect(groups).toMatchObject([
+            { type: "system", subtype: "init" },
+            { type: "text", text: "hello world", messageIndex: 1 },
+            { type: "result", subtype: "success", totalCostUsd: 0.01, usage: { inputTokens: 10, outputTokens: 2 } },
+        ])
+    })
+
+    it("renders opencode bash tool_use events", () => {
+        const groups = groupStreamEvents(
+            [
+                opencodeMessageEvent(
+                    {
+                        type: "tool_use",
+                        sessionID: "ses_123",
+                        part: {
+                            id: "tool_1",
+                            tool: "bash",
+                            state: {
+                                status: "completed",
+                                input: { command: "pwd" },
+                                output: "/tmp/project",
+                                metadata: { exit: 0 },
+                            },
+                        },
+                    },
+                    "msg-1"
+                ),
+            ],
+            "opencode"
+        )
+
+        expect(groups).toEqual([
+            {
+                type: "bash",
+                toolUseId: "tool_1",
+                command: "pwd",
+                description: undefined,
+                result: "/tmp/project",
+                isError: false,
+                isPending: false,
+                messageIndices: [0, undefined],
+            },
+        ])
+    })
+
+    it("renders opencode JSON stream text and shell events", () => {
+        const groups = groupStreamEvents(
+            [
+                opencodeMessageEvent({ type: "message.part.delta", properties: { partID: "part_1", field: "text", delta: "hello " } }, "msg-1"),
+                opencodeMessageEvent({ type: "message.part.delta", properties: { partID: "part_1", field: "text", delta: "world" } }, "msg-2"),
+                opencodeMessageEvent({ type: "message.part.updated", properties: { part: { id: "part_1", type: "text", text: "hello world" } } }, "msg-3"),
+                opencodeMessageEvent({ type: "session.next.shell.started", properties: { callID: "call_1", command: "pwd" } }, "msg-4"),
+                opencodeMessageEvent({ type: "session.next.shell.ended", properties: { callID: "call_1", command: "pwd", output: "/tmp/project", exit: 0 } }, "msg-5"),
+                opencodeCompleteEvent({ inputTokens: 12, outputTokens: 3, costUsd: 0.02, durationMs: 500 }, "complete-1"),
+            ],
+            "opencode"
+        )
+
+        expect(groups).toEqual([
+            {
+                type: "text",
+                text: "hello world",
+                messageIndex: 0,
+            },
+            {
+                type: "bash",
+                toolUseId: "call_1",
+                command: "pwd",
+                description: undefined,
+                result: "/tmp/project",
+                isError: false,
+                isPending: false,
+                messageIndices: [4, undefined],
+            },
+            {
+                type: "result",
+                subtype: "success",
+                durationMs: 500,
+                totalCostUsd: 0.02,
+                usage: { inputTokens: 12, outputTokens: 3 },
+                isError: false,
+                messageIndex: 4,
+            },
+        ])
     })
 })
 

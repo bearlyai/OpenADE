@@ -95,6 +95,8 @@ export interface PersonalSettings {
     newTaskHarnessId?: string
     /** Last model selected on the new task page; validated against newTaskHarnessId before use. */
     newTaskModelId?: string
+    /** Default harness used for new tasks and plan generation */
+    defaultHarnessId?: string
 
     // === HyperPlan settings ===
 

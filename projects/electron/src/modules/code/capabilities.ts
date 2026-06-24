@@ -10,7 +10,7 @@
 
 import logger from "electron-log"
 import { registry } from "./harness"
-import type { HarnessId } from "@openade/harness"
+import { DEFAULT_HARNESS_ID, type HarnessId } from "@openade/harness"
 
 // ============================================================================
 // Type Definitions
@@ -40,12 +40,12 @@ function cacheKey(harnessId: HarnessId, cwd: string): string {
 }
 
 /** Get cached SDK capabilities for a (harnessId, cwd) pair */
-function getSdkCache(cwd: string, harnessId: HarnessId = "claude-code"): SdkCapabilities | null {
+function getSdkCache(cwd: string, harnessId: HarnessId = DEFAULT_HARNESS_ID): SdkCapabilities | null {
 	return sdkCapabilitiesCache.get(cacheKey(harnessId, cwd)) ?? null
 }
 
-/** Update cached SDK capabilities for a working directory (backward compat: default to claude-code) */
-export function setSdkCache(cwd: string, data: SdkCapabilities, harnessId: HarnessId = "claude-code"): void {
+/** Update cached SDK capabilities for a working directory. */
+export function setSdkCache(cwd: string, data: SdkCapabilities, harnessId: HarnessId = DEFAULT_HARNESS_ID): void {
 	sdkCapabilitiesCache.set(cacheKey(harnessId, cwd), data)
 	logger.info("[Capabilities] SDK cache updated for", harnessId, cwd, JSON.stringify({
 		slash_commands: data.slash_commands.length,
@@ -62,7 +62,7 @@ const activeProbes = new Map<string, Promise<SdkCapabilities | null>>()
  * Uses harness.discoverSlashCommands() which runs a short-lived CLI invocation
  * and aborts after receiving initial config. No API tokens are consumed.
  */
-async function runProbe(cwd: string, harnessId: HarnessId = "claude-code"): Promise<SdkCapabilities | null> {
+async function runProbe(cwd: string, harnessId: HarnessId = DEFAULT_HARNESS_ID): Promise<SdkCapabilities | null> {
 	const key = cacheKey(harnessId, cwd)
 
 	// Deduplicate concurrent probes for the same (harnessId, cwd)
